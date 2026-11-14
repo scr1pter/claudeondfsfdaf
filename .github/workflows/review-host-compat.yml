@@ -1,0 +1,109 @@
+name: Private review host checks
+
+on:
+  push:
+    branches: [build-candidate]
+    paths:
+      - .github/workflows/review-host-compat.yml
+      - packages/engine/test/review/local-admission.test.ts
+      - packages/engine/test/review/local-run.test.ts
+      - packages/engine/test/review/service.test.ts
+      - packages/engine/test/server/httpapi-review-memory.test.ts
+      - packages/engine/test/server/httpapi-review.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CI: "true"
+  RECORD: "false"
+  VECTOR_RECORDED_SCENARIO: ""
+  RECORDED_PROVIDER: ""
+
+jobs:
+  host:
+    name: Private review (${{ matrix.host }})
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Install ripgrep
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          fi
+          rg --version
+
+      - name: Install ripgrep (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          choco install ripgrep -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Installing ripgrep failed." }
+          # Use the native executable rather than Chocolatey's shim in long trusted paths.
+          $tools = Join-Path $env:ChocolateyInstall 'lib\ripgrep\tools'
+          $native = @(Get-ChildItem -LiteralPath $tools -Filter rg.exe -File -Recurse)
+          if ($native.Count -ne 1) { throw "Expected one native ripgrep executable in $tools." }
+          & ($native[0].FullName) --version
+          if ($LASTEXITCODE -ne 0) { throw "The native ripgrep executable failed." }
+          $native[0].DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure disposable Git fixtures
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      - name: Build Engine test dependencies
+        run: GITHUB_ACTIONS=false bun turbo run build --filter='@vectordevai/engine^...' --log-order=stream
+
+      - name: Check review/local-admission.test.ts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/local-admission.test.ts
+
+      - name: Check review/local-run.test.ts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/local-run.test.ts
+
+      - name: Check review/service.test.ts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/service.test.ts
+
+      - name: Check server/httpapi-review-memory.test.ts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/server/httpapi-review-memory.test.ts
+
+      - name: Check server/httpapi-review.test.ts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/server/httpapi-review.test.ts
+
+      - name: Check Engine types
+        working-directory: packages/engine
+        run: bun typecheck

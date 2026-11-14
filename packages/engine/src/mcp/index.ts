@@ -28,7 +28,7 @@ import { McpAuth } from "./auth"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
 import open from "open"
-import { Cause, Effect, Exit, Layer, Context, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Context, Option, Schema, ScopedCache, Stream } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -127,6 +127,9 @@ export const Status = Schema.Union([
   StatusNeedsClientRegistration,
 ]).annotate({ identifier: "MCPStatus", discriminator: "status" })
 export type Status = Schema.Schema.Type<typeof Status>
+
+/** Inventory can describe configuration without opening a connection or reading credentials. */
+export type SnapshotStatus = Status | { readonly status: "uninitialized" }
 
 // Store transports for OAuth servers to allow finishing auth
 type TransportWithAuth = StreamableHTTPClientTransport | SSEClientTransport
@@ -248,6 +251,8 @@ export interface ServerInstructions {
 
 export interface Interface {
   readonly status: () => Effect.Effect<Record<string, Status>>
+  /** Optional nonstarting inventory capability; legacy services may expose only the active status operation. */
+  readonly snapshot?: () => Effect.Effect<Record<string, SnapshotStatus>>
   readonly clients: () => Effect.Effect<Record<string, MCPClient>>
   readonly instructions: () => Effect.Effect<ServerInstructions[]>
   readonly tools: () => Effect.Effect<Record<string, Tool>>
@@ -801,6 +806,25 @@ const layer = Layer.effect(
       return result
     })
 
+    const snapshot = Effect.fn("MCP.snapshot")(function* () {
+      // Never use get here: an inventory read must neither start a cold lookup nor wait for one already starting.
+      // getSuccess also closes the has/read invalidation race without creating a replacement connection.
+      const cached = (yield* InstanceState.has(state))
+        ? yield* ScopedCache.getSuccess(state.cache, yield* InstanceState.directory)
+        : Option.none<State>()
+      const current = Option.getOrUndefined(cached)
+      const config = (yield* cfgSvc.get()).mcp ?? {}
+      const result: Record<string, SnapshotStatus> = {}
+      for (const [key, mcp] of Object.entries(config)) {
+        if (!validMcpName(key) || !isMcpConfigured(mcp) || current?.removed.has(key)) continue
+        result[key] = current?.status[key] ?? { status: mcp.enabled === false ? "disabled" : "uninitialized" }
+      }
+      for (const key of Object.keys(current?.config ?? {})) {
+        result[key] = current?.status[key] ?? { status: "uninitialized" }
+      }
+      return result
+    })
+
     const clients = Effect.fn("MCP.clients")(function* () {
       const s = yield* InstanceState.get(state)
       return s.clients
@@ -1338,6 +1362,7 @@ const layer = Layer.effect(
 
     return Service.of({
       status,
+      snapshot,
       clients,
       instructions,
       tools,

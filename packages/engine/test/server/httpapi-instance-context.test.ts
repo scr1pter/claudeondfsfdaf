@@ -175,16 +175,39 @@ describe("HttpApi instance context middleware", () => {
     }),
   )
 
-  it.live("falls back to the raw directory when URI decoding fails", () =>
+  it.live("routes an existing literal-percent directory through the malformed header fallback and query", () =>
     Effect.gen(function* () {
+      const dir = path.join(yield* tmpdirScoped({ git: true }), "%E0%A4%A")
+      yield* Effect.promise(() => mkdir(dir))
       yield* serveProbe()
 
-      const response = yield* HttpClient.get("/probe?directory=%25E0%25A4%25A")
+      // The header reaches decodeURIComponent's failure branch. URLSearchParams decodes the query once.
+      const header = yield* HttpClientRequest.get("/probe").pipe(
+        HttpClientRequest.setHeader("x-vector-directory", dir),
+        HttpClient.execute,
+      )
+      const query = yield* HttpClient.get(`/probe?directory=${encodeURIComponent(dir)}`)
 
-      expect(response.status).toBe(200)
-      expect(yield* response.json).toMatchObject({
-        directory: path.join(process.cwd(), "%E0%A4%A"),
-      })
+      expect(header.status).toBe(200)
+      expect(yield* header.json).toMatchObject({ directory: dir })
+      expect(query.status).toBe(200)
+      expect(yield* query.json).toMatchObject({ directory: dir })
+    }),
+  )
+
+  it.live("refuses a nonexistent raw directory after malformed header or query decoding", () =>
+    Effect.gen(function* () {
+      const missing = path.join(yield* tmpdirScoped({ git: true }), "%E0%A4%A")
+      yield* serveProbe()
+
+      const header = yield* HttpClientRequest.get("/probe").pipe(
+        HttpClientRequest.setHeader("x-vector-directory", missing),
+        HttpClient.execute,
+      )
+      const query = yield* HttpClient.get(`/probe?directory=${encodeURIComponent(missing)}`)
+
+      expect(header.status).toBe(500)
+      expect(query.status).toBe(500)
     }),
   )
 

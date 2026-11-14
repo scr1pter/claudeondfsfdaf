@@ -160,7 +160,7 @@ export interface Interface {
   readonly get: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
   readonly remove: (
     id: WorkspaceV2.ID,
-  ) => Effect.Effect<Info | undefined, PublicShareRemovalError | PublicSession.Error>
+  ) => Effect.Effect<Info | undefined, PublicShareRemovalError | PublicSession.Error | Session.BusyError>
   readonly status: () => Effect.Effect<ConnectionStatus[]>
   readonly isSyncing: (workspaceID: WorkspaceV2.ID) => Effect.Effect<boolean>
   readonly waitForSync: (

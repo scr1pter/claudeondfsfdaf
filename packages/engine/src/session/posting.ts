@@ -22,24 +22,22 @@ export const check = Effect.fn("SessionPosting.check")(function* (input: Input) 
   const sessions = yield* Session.Service
   const git = yield* Git.Service
   const place = yield* instruction.place()
-  const lineage = yield* descend(sessions, (input.sessionIDs ?? []).slice(0, SESSIONS), DEPTH)
+  const contributors = yield* lineage(input.sessionIDs ?? [], sessions.children)
   return yield* BrainPosting.run(place, {
     parts: input.parts,
     typed: input.typed,
     ...(input.untrusted ? { untrusted: true } : {}),
     ...(input.hosts ? { hosts: input.hosts } : {}),
-    sessionIDs: lineage,
+    sessionIDs: contributors,
     // A token the repository's own files hold is not private: the post goes to that repository.
     known: (tokens) =>
       Effect.forEach(
         tokens,
         (token) =>
-          git
-            .run(["grep", "-q", "-w", "-F", "-I", "-i", "-e", token, "--"], { cwd: place.root })
-            .pipe(
-              Effect.map((result) => (result.exitCode === 0 ? [token] : [])),
-              Effect.catchCause(() => Effect.succeed([] as string[])),
-            ),
+          git.run(["grep", "-q", "-w", "-F", "-I", "-i", "-e", token, "--"], { cwd: place.root }).pipe(
+            Effect.map((result) => (result.exitCode === 0 ? [token] : [])),
+            Effect.catchCause(() => Effect.succeed([] as string[])),
+          ),
         { concurrency: 4 },
       ).pipe(Effect.map((found) => new Set(found.flat()))),
   })
@@ -61,23 +59,40 @@ export const headless = Effect.fn("SessionPosting.headless")(function* (
     input.log(
       `Left out ${result.dropped.length === 1 ? "1 sentence that repeats" : `${result.dropped.length} sentences that repeat`} what Vector knows about you.`,
     )
-  if (result.links) input.log(`Left out ${result.links} ${result.links === 1 ? "link" : "links"} that point off GitHub.`)
+  if (result.links)
+    input.log(`Left out ${result.links} ${result.links === 1 ? "link" : "links"} that point off GitHub.`)
   return result.parts
 })
 
 /** A post that did not happen: the user's own text overlaps memory, and nobody is there to ask. */
 export class Refused extends Schema.TaggedErrorClass<Refused>()("PostingRefused", { message: Schema.String }) {}
 
-function descend(sessions: Session.Interface, ids: readonly string[], depth: number): Effect.Effect<string[]> {
-  if (ids.length === 0 || depth === 0) return Effect.succeed([...ids])
-  return Effect.forEach(ids, (id) =>
-    sessions.children(SessionID.make(id)).pipe(Effect.catchCause(() => Effect.succeed([] as Session.Info[]))),
-  ).pipe(
-    Effect.flatMap((children) => {
-      const next = [...new Set(children.flat().map((child) => child.id as string))].filter((id) => !ids.includes(id))
-      return descend(sessions, next.slice(0, Math.max(0, SESSIONS - ids.length)), depth - 1).pipe(
-        Effect.map((below) => [...new Set([...ids, ...below])]),
-      )
-    }),
-  )
+/** Every contributor, or a refusal. A truncated or unreadable family cannot authorize a post. */
+export function lineage(
+  ids: readonly string[],
+  children: (parentID: SessionID) => Effect.Effect<readonly Pick<Session.Info, "id">[]>,
+): Effect.Effect<string[], Refused> {
+  return Effect.gen(function* () {
+    const seen = new Set(ids)
+    if (seen.size > SESSIONS)
+      return yield* new Refused({
+        message: "Vector could not inspect every contributing session, so nothing was posted.",
+      })
+    const descend = (frontier: readonly string[], depth: number): Effect.Effect<void, Refused> =>
+      Effect.gen(function* () {
+        if (!frontier.length) return
+        // Lookup defects and interruption propagate. Neither becomes an empty family.
+        const found = yield* Effect.forEach(frontier, (id) => children(SessionID.make(id)), { concurrency: 8 })
+        const next = [...new Set(found.flat().map((child) => child.id as string))].filter((id) => !seen.has(id))
+        if (!next.length) return
+        if (depth === 0 || seen.size + next.length > SESSIONS)
+          return yield* new Refused({
+            message: "Vector could not inspect every contributing session, so nothing was posted.",
+          })
+        next.forEach((id) => seen.add(id))
+        yield* descend(next, depth - 1)
+      })
+    yield* descend([...seen], DEPTH)
+    return [...seen]
+  })
 }

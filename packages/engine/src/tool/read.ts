@@ -8,7 +8,7 @@ import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { assertExternalDirectoryEffect, readPatterns } from "./external-directory"
+import { assertExternalDirectoryEffect, filterReadListing, readPatterns } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { SessionMemory } from "../session/memory"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -106,9 +106,10 @@ export const ReadTool = Tool.define<
         Effect.catch(() => Effect.succeed([] as string[])),
       )
 
-      if (items.length > 0) {
+      const admitted = yield* filterReadListing(ctx, (yield* InstanceState.context).worktree, items, (file) => file)
+      if (admitted.length > 0) {
         return yield* Effect.fail(
-          new Error(`File not found: ${filepath}\n\nDid you mean one of these?\n${items.join("\n")}`),
+          new Error(`File not found: ${filepath}\n\nDid you mean one of these?\n${admitted.join("\n")}`),
         )
       }
 
@@ -284,7 +285,11 @@ export const ReadTool = Tool.define<
       if (!stat) return yield* miss(filepath, ctx)
 
       if (stat.type === "Directory") {
-        const items = yield* list(filepath)
+        const items = yield* list(filepath).pipe(
+          Effect.flatMap((entries) =>
+            filterReadListing(ctx, instance.worktree, entries, (entry) => path.resolve(filepath, entry)),
+          ),
+        )
         const limit = params.limit ?? DEFAULT_READ_LIMIT
         const offset = params.offset || 1
         const start = offset - 1
@@ -325,7 +330,13 @@ export const ReadTool = Tool.define<
         const entry = FileState.record(ctx.sessionID, filepath, seen)
         return entry ? { fileState: entry } : {}
       }
-      const loaded = yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, SessionMemory.linking(ctx))
+      // Bound reviewers already carry the admitted base instructions. Nearby
+      // AGENTS and repository memory are mutable ambient authority, not part of
+      // that context. The requested file itself remains ordinary tool data.
+      const loaded =
+        ctx.extra?.pinnedReviewInstructions === true
+          ? []
+          : yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, SessionMemory.linking(ctx))
       // Lines naming what is linked to the file are saved as placeholders, rendered for each request.
       const links = loaded.flatMap((item) => (item.link ? [item.link] : []))
       const sample = yield* readSample(filepath, Number(stat.size), SAMPLE_BYTES)

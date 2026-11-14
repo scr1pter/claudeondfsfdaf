@@ -59,6 +59,10 @@ export type SelectV2Props<T> = Omit<
   numeric?: boolean
   children?: (item: T) => JSX.Element
   valueClass?: string
+  /** Body-portal layer when the host is a stacked dialog. Unset keeps the shared default. */
+  overlayZIndex?: number
+  /** Keep a dialog-hosted popup inside that dialog's focus and accessibility boundary. */
+  portalMount?: HTMLElement
 }
 
 export function SelectV2<T>(props: SelectV2Props<T>) {
@@ -80,6 +84,8 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
     "numeric",
     "disabled",
     "valueClass",
+    "overlayZIndex",
+    "portalMount",
     "placement",
     "gutter",
     "sameWidth",
@@ -198,8 +204,12 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
           <ChevronDown />
         </span>
       </Kobalte.Trigger>
-      <Kobalte.Portal>
-        <Kobalte.Content data-component="menu-v2-content" data-slot="select-v2-content">
+      <Kobalte.Portal mount={local.portalMount}>
+        <Kobalte.Content
+          data-component="menu-v2-content"
+          data-slot="select-v2-content"
+          style={local.overlayZIndex === undefined ? undefined : { "z-index": local.overlayZIndex }}
+        >
           <Kobalte.Listbox data-slot="select-v2-listbox" />
         </Kobalte.Content>
       </Kobalte.Portal>

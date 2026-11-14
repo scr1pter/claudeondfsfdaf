@@ -964,12 +964,22 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
   )
     return "mcp"
   // Direct MCP content keeps its stronger hold when the same history also contains delegation.
-  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool) && !DELEGATION_TOOLS.has(tool)))
+  // A connect call is a connected tool's report only with the built-in tool's metadata; any other is an outside tool.
+  const connected = (part: (typeof calls)[number]) =>
+    part.tool === "connect" &&
+    part.state.status !== "pending" &&
+    (part.state.metadata?.connect !== undefined ||
+      ["review", "fix", "findings", "status", "cancel"].includes(part.state.metadata?.action))
+  if (
+    commands.includes("mcp") ||
+    calls.some((part) => !LOCAL_TOOLS.has(part.tool) && !DELEGATION_TOOLS.has(part.tool) && !connected(part))
+  )
     return "mcp"
   // A background subagent's report, note up, waiting or interruption arrives as a synthetic note in a user message. A
   // background command's exit note adds nothing, like a foreground command's result.
   if (
     tools.some((tool) => DELEGATION_TOOLS.has(tool)) ||
+    calls.some(connected) ||
     messages.some((message) =>
       message.parts.some(
         (part) => part.type === "text" && SUBAGENT_NOTES.some((key) => part.metadata?.[key] !== undefined),

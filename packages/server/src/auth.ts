@@ -174,6 +174,8 @@ export const refusedRequest = Effect.fnUntraced(function* (guest: boolean, forwa
 
 /** Whether a guest is refused `route`, the matched route's declared path pattern (e.g. `/session/:sessionID/shell`). */
 export function isOwnerOnlyRoute(method: string, route: string) {
+  if (route === "/experimental/review-memory" || route.startsWith("/experimental/review-memory/")) return true
+  if (/^\/experimental\/session\/[^/]+\/review(?:\/[^/]+(?:\/stop)?)?$/.test(route)) return true
   if (route === "/experimental/workflow/saved" || route === "/experimental/workflow/validate") return true
   if (method === "POST" && /^\/experimental\/session\/[^/]+\/workflow(?:\/[^/]+\/resume)?$/.test(route)) return true
   if (route === "/api/session/import" || /\/session\/[^/]+\/share(?:\/|$)/.test(route)) return true
@@ -196,6 +198,13 @@ export function isOwnerOnlyRoute(method: string, route: string) {
   if (route === "/local" || route.startsWith("/local/")) return true
   // The held prompt files are paths in the owner's home, and approving them loads what an agent may have written there.
   if (route === "/config/prompt-trust" || route.startsWith("/config/prompt-trust/")) return true
+  // Connected tools expose repository findings and can start work: every method requires the owner.
+  if (
+    route === "/experimental/connect" ||
+    route.startsWith("/experimental/connect/") ||
+    /^\/experimental\/session\/[^/]+\/connect$/.test(route)
+  )
+    return true
   if (route.startsWith("/experimental/project/") && route.includes("/copy")) return true
   // Creating a worktree runs the project's start command and an extra startup command from the request, and removing
   // or resetting one discards the owner's work in a directory outside the guest's workspace.

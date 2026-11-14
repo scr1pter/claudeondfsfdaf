@@ -88,7 +88,7 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
-import { ownerBlock, scopeOf, scopeQuery } from "@vectordevai/core/review/prompt"
+import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -138,6 +138,14 @@ const MAX_INSTRUCTION_SNAPSHOTS = 256
 const VECTORSCOPE = "vectorscope."
 // Agents whose output leaves the machine or reaches the web: research workers and the research judge.
 const OUTWARD_AGENTS = new Set(["researcher", "research-judge"])
+
+/** A pinned review cannot substitute ambient files or a lossy summary for its admitted context. */
+export class ReviewContextUnavailable extends Error {
+  constructor(reason: string) {
+    super(`Review incomplete: ${reason} Start a fresh review with the pinned context.`)
+    this.name = "ReviewContextUnavailable"
+  }
+}
 // The kinds of the owner's own entries that say how they work (section 6.4a): their rules, preferences, decisions,
 // lessons and terms.
 const HOW_YOU_WORK = new Set<string>([...Brain.HABIT_KINDS, "rule", "term"])
@@ -923,7 +931,14 @@ const layer = Layer.effect(
       message: SessionV1.Assistant
       parent: Agent.Info
       judge: Agent.Info
-      args: { prompt: string; description: string; subagent_type: string; background: false; model?: string; effort?: "default" }
+      args: {
+        prompt: string
+        description: string
+        subagent_type: string
+        background: false
+        model?: string
+        effort?: "default"
+      }
       metadata: Record<string, unknown>
       finished: (output: string) => Record<string, unknown>
       failed: string
@@ -1404,7 +1419,12 @@ const layer = Layer.effect(
             if (session.revert) {
               yield* revert.cleanup(session)
             }
-            const agent = session.internal ? yield* agents.helper(input.agent) : yield* agents.get(input.agent)
+            const agent = session.internal
+              ? yield* agents.helper(
+                  input.agent,
+                  session.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+                )
+              : yield* agents.get(input.agent)
             if (!agent) {
               const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
               const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -1632,7 +1652,10 @@ const layer = Layer.effect(
       const ag = !agentName
         ? yield* agents.defaultInfo()
         : current.internal
-          ? yield* agents.helper(agentName)
+          ? yield* agents.helper(
+              agentName,
+              current.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+            )
           : yield* agents.get(agentName)
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -2452,9 +2475,10 @@ const layer = Layer.effect(
     ) {
       const ctx = yield* InstanceState.context
       const sessionID = session.id
+      const pinnedReview = session.internal?.startsWith(PINNED_SESSION_PREFIX) === true
       let structured: unknown
       // Invalid StructuredOutput calls this run; the tool is built again for every step, so the count lives here.
-      const invalid = { count: 0 }
+      const invalid: { count: number; refused?: string } = { count: 0 }
       // A json_schema step that could not force the call ("auto" for thinking) and ended without a kept value gets one
       // closing step with thinking off and the call required.
       let closing: "due" | "done" | undefined
@@ -2504,6 +2528,13 @@ const layer = Layer.effect(
         const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
         if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+        // The durable internal identity remains restrictive when a compaction
+        // window loses the original metadata. No summary or provider request may
+        // replace the exact base instructions supplied by the owning service.
+        if (pinnedReview && tasks.some((task) => task.type === "compaction"))
+          throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
+        if (pinnedReview && reviewScope(msgs).instructions !== "provided")
+          throw new ReviewContextUnavailable("The provided review context is no longer available.")
         if (resumed && lastUser.id === resumed.parentID)
           lastUser.model = { providerID: ProviderV2.ID.openrouter, modelID: resumed.modelID }
 
@@ -2723,7 +2754,9 @@ const layer = Layer.effect(
         // An app's own quick-lane message is sized as a build request, so it runs on the build agent once it is work.
         // A helper session's agent may be a Subagent specialist Settings turned off, which only `helper` finds.
         const agentName = onBuild(lastUser) ? "build" : lastUser.agent
-        const agent = session.internal ? yield* agents.helper(agentName) : yield* agents.get(agentName)
+        const agent = session.internal
+          ? yield* agents.helper(agentName, pinnedReview ? { reviewedPrompt: true } : undefined)
+          : yield* agents.get(agentName)
         if (!agent) {
           const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
           const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -2790,7 +2823,7 @@ const layer = Layer.effect(
         // The owner's personal memory never goes to a session an invited guest has acted in, nor to a model that may
         // train on prompts.
         const guest = yield* guests.marked(sessionID)
-        const personal = !guest && !freeModelMayTrain(model)
+        const personal = !pinnedReview && !guest && !freeModelMayTrain(model)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
         if (!guest && !session.parentID && !session.internal)
@@ -2811,7 +2844,7 @@ const layer = Layer.effect(
         // A fork starts from its parent's history, which already carries all that, and must never write to it.
         if (session.parentID && !session.internal && !fork)
           msgs = yield* briefFor({ session, msgs, personal, agent: agent.name })
-        if (session.internal?.startsWith(VECTORSCOPE))
+        if (!pinnedReview && session.internal?.startsWith(VECTORSCOPE))
           msgs = yield* reviewFor({ session, msgs, personal, agent: agent.name })
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
@@ -3060,6 +3093,7 @@ const layer = Layer.effect(
               retryCount: lastUser.format.retryCount,
               invalid,
               model,
+              ...(pinnedReview ? { strict: true } : {}),
             })
           }
 
@@ -3078,7 +3112,7 @@ const layer = Layer.effect(
             LLMRequestPrep.resolveTools({ tools, agent: stepAgent, permission: rules, user: lastUser }),
           )
           const [skills, env, snapshot, mcpInstructions, modelMsgs] = yield* Effect.all([
-            quick ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
             quick
               ? Effect.succeed({ stable: [], session: [] })
               : sys.environment(model, {
@@ -3098,11 +3132,11 @@ const layer = Layer.effect(
                   },
                   tools: offered,
                   nested,
-                  workspace: !OUTWARD_AGENTS.has(agent.name),
+                  workspace: !pinnedReview && !OUTWARD_AGENTS.has(agent.name),
                   // The day the history starts on; a later day is noted on the user message that starts it.
                   date: msgs.find((message) => message.info.role === "user")?.info.time.created,
                 }),
-            quick
+            quick || pinnedReview
               ? Effect.succeed({ instructions: [], documents: false, personal: 0 })
               : sessionInstructions(
                   sessionID,
@@ -3127,7 +3161,7 @@ const layer = Layer.effect(
                       : {}),
                   },
                 ).pipe(Effect.orDie),
-            quick ? Effect.succeed(undefined) : sys.mcp(agent, rules),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
             MessageV2.toModelMessagesEffect(
               stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
@@ -3262,11 +3296,20 @@ const layer = Layer.effect(
             // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
             ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
             ...(session.internal === "brain.distill" ? { purpose: "brain" as const } : {}),
+            ...(pinnedReview ? { pinnedContext: true as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
           })
 
+          if (invalid.refused) {
+            handle.message.error = new SessionV1.StructuredOutputError({
+              message: `Model returned invalid review output: ${invalid.refused}`,
+              retries: invalid.count,
+            }).toObject()
+            yield* sessions.updateMessage(handle.message)
+            return "break" as const
+          }
           if (structured !== undefined) {
             handle.message.structured = structured
             handle.message.finish = handle.message.finish ?? "stop"
@@ -4346,7 +4389,10 @@ const layer = Layer.effect(
       const agent = !agentName
         ? yield* agents.defaultInfo()
         : currentSession.internal
-          ? yield* agents.helper(agentName)
+          ? yield* agents.helper(
+              agentName,
+              currentSession.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+            )
           : yield* agents.get(agentName)
       if (!agent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -5025,8 +5071,10 @@ export function createStructuredOutputTool(input: {
   onSuccess: (output: unknown) => void
   // Invalid calls answered with an error before a value is kept as it is (the format's retryCount, at most 5).
   retryCount?: number
+  /** Pinned reviews never keep an invalid or unchecked value after retries. */
+  strict?: true
   // The run's count of invalid calls. The tool is built again for every step, so the run keeps the count.
-  invalid?: { count: number }
+  invalid?: { count: number; refused?: string }
   // The model the schema is rendered for: bounds its provider drops are restated in descriptions.
   model?: Provider.Model
 }): AITool {
@@ -5035,7 +5083,7 @@ export function createStructuredOutputTool(input: {
   // The AI SDK does not check a JSON Schema tool's input, so Vector does, for every schema JsonSchemaCheck can enforce
   // in full. Any other schema is passed on and its value kept unchecked.
   const check = JsonSchemaCheck.accept(input.schema)
-  const invalid = input.invalid ?? { count: 0 }
+  const invalid: { count: number; refused?: string } = input.invalid ?? { count: 0 }
   const retryCount = Math.min(input.retryCount ?? 2, STRUCTURED_OUTPUT_MAX_RETRIES)
 
   return tool({
@@ -5047,6 +5095,14 @@ export function createStructuredOutputTool(input: {
     ),
     async execute(args) {
       const problems = check.ok ? JsonSchemaCheck.validate(check.schema, args) : []
+      if (input.strict && (!check.ok || (problems.length > 0 && invalid.count >= retryCount))) {
+        invalid.refused = check.ok ? JsonSchemaCheck.describe(problems) : "The review schema could not be checked."
+        return {
+          output: `Invalid review output: ${invalid.refused}`,
+          title: "Structured Output",
+          metadata: { valid: false, captured: false },
+        }
+      }
       if (problems.length > 0 && invalid.count < retryCount) {
         invalid.count++
         return {

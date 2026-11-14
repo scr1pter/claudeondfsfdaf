@@ -151,6 +151,8 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/repository.ts": GIT,
   "packages/core/src/research/export.ts":
     "The Office Open XML namespace names a .docx export writes into the file; nothing connects to them.",
+  "packages/core/src/review/fix-proposal.ts":
+    "The canonical GitHub remote accepted by the proposal validator; it connects to nothing and grants no execution.",
   "packages/core/src/review/format.ts": SHOWN,
   "packages/core/src/review/workflow.ts":
     "The GitHub App installation address used to validate a configured handle; nothing here connects to it.",

@@ -64,6 +64,7 @@ export const SessionDeleteCommand = effectCmd({
       Effect.catchIf(NotFoundError.isInstance, () => fail(`Session not found: ${args.sessionID}`)),
       Effect.catchTag("PublicShareRemovalError", (error) => fail(error.message)),
       Effect.catchTag("PublicSessionError", (error) => fail(error.message)),
+      Effect.catchTag("SessionBusyError", (error) => fail(error.detail ?? `Session is busy: ${args.sessionID}`)),
     )
     UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Session ${args.sessionID} deleted` + UI.Style.TEXT_NORMAL)
   }),

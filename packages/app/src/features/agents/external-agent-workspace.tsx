@@ -10,6 +10,7 @@ import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { DirectoryDataProvider } from "@/pages/directory-layout"
 import { externalActivityEntries, type ExternalActivityEntry } from "@/pages/session/agent-follow"
 import { externalAgentWorkspaceTabs, type ExternalAgentWorkspaceView } from "./external-agent-workspace-model"
+import { NativeDirectoryReview } from "@/features/connect/directory-review"
 import "./external-agent-chat.css"
 
 const CodespaceWorkbench = lazy(() =>
@@ -201,7 +202,10 @@ export function ExternalAgentWorkspace(props: {
               </div>
 
               <Show when={state.view === "changes"}>
-                <footer class="vector-agent-review-actions">{props.actions}</footer>
+                <footer class="vector-agent-review-actions">
+                  <NativeDirectoryReview workspaceID={props.id} directory={props.directory} running={props.running} />
+                  {props.actions}
+                </footer>
               </Show>
             </section>
           </FileProvider>

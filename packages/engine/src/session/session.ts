@@ -58,6 +58,7 @@ import { TaskPlace } from "@/task/place"
 import { TaskJobs } from "@/task/jobs"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionCleanup } from "./cleanup"
+import { ReviewLifecycle } from "@/review/lifecycle"
 import { Billing } from "@vectordevai/schema/billing"
 
 const parentTitlePrefix = "New session - "
@@ -579,6 +580,7 @@ export const getUsage = (input: {
 
 export class BusyError extends Schema.TaggedErrorClass<BusyError>()("SessionBusyError", {
   sessionID: SessionID,
+  detail: Schema.optional(Schema.String),
 }) {}
 
 export type NotFound = NotFoundError
@@ -629,7 +631,7 @@ export interface Interface {
   readonly remove: (
     sessionID: SessionID,
     options?: { acknowledgePublicShares?: boolean },
-  ) => Effect.Effect<void, NotFound | PublicShareRemovalError | PublicSession.Error>
+  ) => Effect.Effect<void, NotFound | PublicShareRemovalError | PublicSession.Error | BusyError>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
@@ -668,7 +670,12 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service | ShareNext.Service
+  | BackgroundJob.Service
+  | RuntimeFlags.Service
+  | Database.Service
+  | EventV2Bridge.Service
+  | ShareNext.Service
+  | ReviewLifecycle.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -677,6 +684,7 @@ const layer: Layer.Layer<
     const database = yield* Database.Service
     const audience = SessionAudience.make(database)
     const background = yield* BackgroundJob.Service
+    const reviews = yield* ReviewLifecycle.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
 
@@ -908,28 +916,39 @@ const layer: Layer.Layer<
         const links = yield* sharing.publicLinks(sessionID)
         if (links.length) return yield* publicShareWarning(links)
       }
-      yield* sharing.removeTree(sessionID)
-      try {
-        // `remove` needs to work in all cases, such as broken sessions that
-        // run cleanup without instance state.
-        const hasInstance = yield* InstanceState.directory.pipe(
-          Effect.as(true),
-          Effect.catchCause(() => Effect.succeed(false)),
+      return yield* reviews
+        .deleting(
+          sessionID,
+          Effect.gen(function* () {
+            yield* sharing.removeTree(sessionID)
+            try {
+              // `remove` needs to work in all cases, such as broken sessions that
+              // run cleanup without instance state.
+              const hasInstance = yield* InstanceState.directory.pipe(
+                Effect.as(true),
+                Effect.catchCause(() => Effect.succeed(false)),
+              )
+
+              if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
+              const kids = yield* children(sessionID)
+              for (const child of kids) {
+                yield* remove(child.id, options)
+              }
+
+              yield* SessionCleanup.run(session)
+              yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
+              yield* events.remove(sessionID)
+              TaskPlace.drop(sessionID)
+            } catch (error) {
+              yield* Effect.logError("failed to remove session", { sessionID, error })
+            }
+          }),
         )
-
-        if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
-        const kids = yield* children(sessionID)
-        for (const child of kids) {
-          yield* remove(child.id, options)
-        }
-
-        yield* SessionCleanup.run(session)
-        yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
-        yield* events.remove(sessionID)
-        TaskPlace.drop(sessionID)
-      } catch (error) {
-        yield* Effect.logError("failed to remove session", { sessionID, error })
-      }
+        .pipe(
+          Effect.catchTag("ReviewRequestStore.Refused", (error) =>
+            Effect.fail(new BusyError({ sessionID, detail: error.message })),
+          ),
+        )
     })
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
@@ -1693,7 +1712,14 @@ function listByProject(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node, ShareNext.node],
+  deps: [
+    BackgroundJob.node,
+    RuntimeFlags.node,
+    Database.node,
+    EventV2Bridge.node,
+    ShareNext.node,
+    ReviewLifecycle.node,
+  ],
 })
 
 export * as Session from "./session"

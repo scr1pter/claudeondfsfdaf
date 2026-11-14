@@ -40,6 +40,7 @@ import { ResearchReader } from "@vectordevai/core/research/reader"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionExecution } from "@vectordevai/core/session/execution"
 import { SessionInput } from "@vectordevai/core/session/input"
 import { SessionMessage } from "@vectordevai/core/session/message"
@@ -379,6 +380,17 @@ const setup = (input: { readonly rules?: Permission.Ruleset; readonly research?:
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
+    const stored = yield* db
+      .select({ parentID: SessionTable.parent_id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    if (!stored) return yield* Effect.die("Fixture Session was not inserted")
+    const audience = SessionAudience.make({ db })
+    if (stored.parentID && !(yield* audience.knows(stored.parentID)))
+      return yield* Effect.die("Fixture Session parent was not registered")
+    yield* audience.register({ sessionID, parentID: stored.parentID ?? undefined, actor: "owner" }).pipe(Effect.orDie)
     const agents = yield* AgentV2.Service
     const location = yield* Location.Service
     yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(

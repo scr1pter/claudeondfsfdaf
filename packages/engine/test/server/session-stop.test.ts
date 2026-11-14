@@ -210,6 +210,6 @@ it.live("capabilities report the stop route", () =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get("/experimental/capabilities").pipe(HttpClient.execute)
     expect(response.status).toBe(200)
-    expect(yield* response.json).toMatchObject({ sessionStop: true })
+    expect(yield* response.json).toMatchObject({ sessionStop: true, vectorscopeSettings: true })
   }),
 )

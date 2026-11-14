@@ -64,6 +64,7 @@ const TOP_LEVEL = [
   "pr",
   "review",
   "session",
+  "connected",
   "workflow",
   "plugin",
   "db",

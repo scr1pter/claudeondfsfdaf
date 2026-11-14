@@ -3,6 +3,122 @@
   "$id": "https://vectordev.ai/workflow.json",
   "$ref": "#/$defs/WorkflowSpec",
   "$defs": {
+    "Connect.ActionID": {
+      "type": "string",
+      "enum": [
+        "review",
+        "fix"
+      ]
+    },
+    "Connect.Target": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "uncommitted"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "staged"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "branch"
+              ]
+            },
+            "base": {
+              "type": "string",
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 256
+                },
+                {
+                  "pattern": "^(?!-)[^\\s\\u0000-\\u001f\\u007f]+$"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "task"
+              ]
+            },
+            "task": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^ses"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Connect.Budget": {
+      "type": "object",
+      "properties": {
+        "maxCostUsd": {
+          "type": "number",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            }
+          ]
+        },
+        "timeoutMinutes": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "WorkflowSpec": {
       "type": "object",
       "properties": {
@@ -5793,6 +5909,1295 @@
                 "required": [
                   "id",
                   "workflow"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "pattern": "^(?!(?:constructor|prototype)$)[a-z][a-z0-9_-]{0,31}$"
+                      }
+                    ]
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "allOf": [
+                          {
+                            "minLength": 1
+                          },
+                          {
+                            "maxLength": 60
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^(?!(?:constructor|prototype)$)[a-z][a-z0-9_-]{0,31}$"
+                            }
+                          ]
+                        },
+                        "allOf": [
+                          {
+                            "minItems": 0
+                          },
+                          {
+                            "maxItems": 32
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "if": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "equals": {}
+                                },
+                                "required": [
+                                  "equals"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "not_equals": {}
+                                },
+                                "required": [
+                                  "not_equals"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "in": {
+                                    "type": "array",
+                                    "allOf": [
+                                      {
+                                        "minItems": 0
+                                      },
+                                      {
+                                        "maxItems": 1000
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "in"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "exists": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "exists"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "contains": {}
+                                },
+                                "required": [
+                                  "contains"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "gt": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "gt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "gte": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "gte"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "lt": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "lt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "maxLength": 512
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "lte": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "lte"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "equals": {}
+                                      },
+                                      "required": [
+                                        "equals"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "not_equals": {}
+                                      },
+                                      "required": [
+                                        "not_equals"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "in": {
+                                          "type": "array",
+                                          "allOf": [
+                                            {
+                                              "minItems": 0
+                                            },
+                                            {
+                                              "maxItems": 1000
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "in"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "exists": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "exists"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "contains": {}
+                                      },
+                                      "required": [
+                                        "contains"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "gt": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "gt"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "gte": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "gte"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "lt": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "lt"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "lte": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "lte"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "allOf": [
+                                  {
+                                    "minItems": 1
+                                  },
+                                  {
+                                    "maxItems": 32
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "equals": {}
+                                      },
+                                      "required": [
+                                        "equals"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "not_equals": {}
+                                      },
+                                      "required": [
+                                        "not_equals"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "in": {
+                                          "type": "array",
+                                          "allOf": [
+                                            {
+                                              "minItems": 0
+                                            },
+                                            {
+                                              "maxItems": 1000
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "in"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "exists": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "exists"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "contains": {}
+                                      },
+                                      "required": [
+                                        "contains"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "gt": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "gt"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "gte": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "gte"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "lt": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "lt"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "maxLength": 512
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "lte": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "lte"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "allOf": [
+                                  {
+                                    "minItems": 1
+                                  },
+                                  {
+                                    "maxItems": 32
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "not": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "equals": {}
+                                    },
+                                    "required": [
+                                      "equals"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "not_equals": {}
+                                    },
+                                    "required": [
+                                      "not_equals"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "in": {
+                                        "type": "array",
+                                        "allOf": [
+                                          {
+                                            "minItems": 0
+                                          },
+                                          {
+                                            "maxItems": 1000
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "in"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "exists": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "exists"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "contains": {}
+                                    },
+                                    "required": [
+                                      "contains"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "gt": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "gt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "gte": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "gte"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "lt": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "lt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "maxLength": 512
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "lte": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "lte"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "not"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "connect": {
+                    "type": "object",
+                    "properties": {
+                      "to": {
+                        "type": "string",
+                        "allOf": [
+                          {
+                            "minLength": 1
+                          },
+                          {
+                            "maxLength": 200
+                          },
+                          {
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                          }
+                        ]
+                      },
+                      "action": {
+                        "$ref": "#/$defs/Connect.ActionID"
+                      },
+                      "input": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "target": {
+                                "$ref": "#/$defs/Connect.Target"
+                              },
+                              "security": {
+                                "type": "boolean"
+                              },
+                              "budget": {
+                                "$ref": "#/$defs/Connect.Budget"
+                              },
+                              "since": {
+                                "type": "string",
+                                "allOf": [
+                                  {
+                                    "pattern": "^cr_"
+                                  },
+                                  {
+                                    "minLength": 4
+                                  },
+                                  {
+                                    "maxLength": 64
+                                  }
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "to",
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "connect"
                 ],
                 "additionalProperties": false
               }
