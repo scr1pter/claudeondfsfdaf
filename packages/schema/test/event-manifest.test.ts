@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { FileSystem, Integration, Permission, Project, Reference, Session, Workspace } from "../src"
 import { ComputerEvent } from "../src/computer-event"
+import { Connect } from "../src/connect"
 import { EventManifest } from "../src/event-manifest"
 import { IdeEvent } from "../src/ide-event"
 import { MemoryEvent } from "../src/memory-event"
@@ -13,8 +14,8 @@ import { WorkspaceEvent } from "../src/workspace-event"
 describe("public event manifest", () => {
   test("owns the complete public event surface", () => {
     expect(EventManifest.ServerDefinitions.length).toBe(65)
-    // Hands adds computer.state to the V1 compatibility stream only, never to the server or durable definitions.
-    expect(EventManifest.Definitions.length).toBe(101)
+    // Hands and Connect add live compatibility events, never server or durable definitions.
+    expect(EventManifest.Definitions.length).toBe(102)
     expect(SessionV1.Event.Definitions).toEqual([
       SessionV1.Event.Created,
       SessionV1.Event.Updated,
@@ -27,8 +28,11 @@ describe("public event manifest", () => {
       SessionV1.Event.Diff,
       SessionV1.Event.Error,
     ])
-    expect(EventManifest.Latest.size).toBe(101)
+    expect(EventManifest.Latest.size).toBe(102)
     expect(EventManifest.Latest.get("computer.state")).toBe(ComputerEvent.State)
+    expect(EventManifest.Latest.get("connect.run.updated")).toBe(Connect.Event.RunUpdated)
+    expect(EventManifest.ServerDefinitions).not.toContain(ComputerEvent.State)
+    expect(EventManifest.ServerDefinitions).not.toContain(Connect.Event.RunUpdated)
     expect(EventManifest.Durable.size).toBe(41)
   })
 

@@ -1335,7 +1335,7 @@
             "report",
             "repair"
           ],
-          "description": "Review changed files after a run: off (default), report, or repair."
+          "description": "Review changed files after a run: off (default) or report. The reserved repair mode is not available yet and only reports findings."
         },
         "before_commit": {
           "type": "string",
