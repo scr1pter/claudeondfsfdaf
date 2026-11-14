@@ -86,8 +86,9 @@ export function AccountPage(props: { preview?: AccountState; previewWorkspaces?:
     setWorkspaces(false)
     if (!token) return
     const controller = new AbortController()
+    // Until it answers (or if it never does), the section stays hidden.
     void cloudWorkspacesClient(token)
-      .list(AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
+      .list(controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) setWorkspaces(value.enabled === true)
       })
