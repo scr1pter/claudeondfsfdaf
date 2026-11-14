@@ -1,0 +1,10 @@
+---
+import { CloudWorkspaces } from "../components/workspaces/CloudWorkspaces"
+import MarketingLayout from "../components/marketing/MarketingLayout.astro"
+
+export const prerender = true
+---
+
+<MarketingLayout title="Cloud workspaces · Vector" description="Code with Vector in your saved cloud workspaces." noindex>
+  <CloudWorkspaces client:only="react" />
+</MarketingLayout>

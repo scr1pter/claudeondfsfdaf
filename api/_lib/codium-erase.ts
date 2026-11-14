@@ -1,3 +1,4 @@
+import { closeCloudWorkspaces, cloudWorkspacesConfigured } from "./cloud-workspaces.js"
 import { codiumKeyIn, codiumKeyMode, codiumKeyPrefix, codiumKeyRoot } from "./codium-keys.js"
 import { eraseFounding } from "./codium-founding.js"
 import { notifyOwner } from "./codium-owner.js"
@@ -36,10 +37,10 @@ import { eraseAccountPushSubscriptions } from "./web-push.js"
  *   2. close: reconcile under the tombstone, so the account's snapshot is `ended`/`closing` and every service that reads
  *      it refuses new work (this is how the start and enqueue paths see the tombstone; see codium-tombstone.ts);
  *   3. cancel billing (`cancelModelPlanAccount`: checkouts expired, subscriptions cancelled, Codium keys disabled);
- *   4. erase, part by part (`eraseParts()`: `ERASE_PARTS` and any part another package registered), and only when every
- *      service part is erased, the account's own Codium records and
- *      then every other store key that still names the account (`eraseAccountKeys`); then the erase marker (`erasedAt`)
- *      is written;
+ *   4. erase, part by part (`eraseParts()`: `ERASE_PARTS` and any part another package registered), first closing the
+ *      account's cloud workspaces on their host, and only when every service part is erased, the account's own Codium
+ *      records and then every other store key that still names the account (`eraseAccountKeys`); then the erase marker
+ *      (`erasedAt`) is written;
  *   5. erase the usage counts (as before A57; a failure there is reported, not retried);
  *   6. delete the Vector identity, which waits for the erase marker.
  * Anything that fails leaves the tombstone and files the deletion as due again with a backoff; the cleanup cron
@@ -202,7 +203,9 @@ export async function eraseAccountKeys(account: string, context: EraseContext) {
 }
 
 /**
- * Every part, in the contract's order: the report index, ballots and nominations, the founders listing, push
+ * Every part. First the cloud workspaces' account fence (`closeCloudWorkspaces`: the host refuses the account from
+ * then on and reaps its workspaces itself), so a workspace stops even when a later part is slow; then, in the
+ * contract's order: the report index, ballots and nominations, the founders listing, push
  * subscriptions, relay devices, the vault (its wrapped key first, its objects later by the vault cleanup), Done by
  * Morning's queue and recordings (before the cloud computer, whose session list it reads), computers and their saved
  * disks with the sessions and the ledger's store state, the ops records (monitors, domains, incidents, cards and their
@@ -210,6 +213,12 @@ export async function eraseAccountKeys(account: string, context: EraseContext) {
  * account. The last two wait for every other part, because they delete the indexes those parts find their records by.
  */
 export const ERASE_PARTS: readonly ErasePart[] = [
+  {
+    id: "workspaces",
+    configured: () => cloudWorkspacesConfigured(),
+    erase: (account, c) =>
+      closeCloudWorkspaces(account, c.fetcher, c.deadline === undefined ? {} : { deadline: c.deadline }),
+  },
   { id: "reports", configured: storeConfigured, erase: (account, c) => eraseAccountReports(account, c.fetcher) },
   { id: "roadmap", configured: storeConfigured, erase: (account, c) => eraseAccountBallots(account, c.fetcher, c.now) },
   { id: "founding", configured: storeConfigured, erase: (account, c) => eraseFounding(account, c.fetcher) },
@@ -235,7 +244,18 @@ export const ERASE_PARTS: readonly ErasePart[] = [
   {
     id: "codium",
     configured: storeConfigured,
-    requires: ["reports", "roadmap", "founding", "push", "remote", "vault", "overnight", "computer", "ops"],
+    requires: [
+      "workspaces",
+      "reports",
+      "roadmap",
+      "founding",
+      "push",
+      "remote",
+      "vault",
+      "overnight",
+      "computer",
+      "ops",
+    ],
     erase: eraseCodiumRecords,
   },
   { id: "keys", configured: storeConfigured, requires: ["codium"], erase: eraseAccountKeys },

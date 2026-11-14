@@ -181,6 +181,20 @@
         "typescript": "catalog:",
       },
     },
+    "packages/cloud-workspaces": {
+      "name": "@vectordevai/cloud-workspaces",
+      "dependencies": {
+        "@vectordevai/schema": "workspace:*",
+      },
+      "devDependencies": {
+        "@playwright/test": "catalog:",
+        "@tsconfig/node22": "catalog:",
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/core": {
       "name": "@vectordevai/core",
       "version": "1.17.14",
@@ -2361,6 +2375,8 @@
     "@vectordevai/cli-dev": ["@vectordevai/cli-dev@workspace:packages/cli"],
 
     "@vectordevai/client": ["@vectordevai/client@workspace:packages/client"],
+
+    "@vectordevai/cloud-workspaces": ["@vectordevai/cloud-workspaces@workspace:packages/cloud-workspaces"],
 
     "@vectordevai/core": ["@vectordevai/core@workspace:packages/core"],
 
