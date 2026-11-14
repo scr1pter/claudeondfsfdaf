@@ -1,4 +1,5 @@
 #include "user_input.h"
+#include "privileged_self_test.h"
 #include <algorithm>
 #include <deque>
 #include <map>
@@ -88,6 +89,12 @@ size_t run_user_input_tests(){
     source.originId=IMO_SYSTEM;check(classify_user_input_origin(source,true,RIM_TYPEMOUSE)==UserInputOrigin::unknown,"user-input-system-source-is-not-invented-physical-input");});
   test([]{Fixture f(false);check(f.starts==0 && f.samples==0 && f.probes.empty() && !f.service->features().GetNamedBoolean(L"userInput.detect"),"user-input.constructor-is-inert");f.service->close();check(f.closes==1,"user-input.inert-close-is-bounded-and-idempotent");});
   test([]{Fixture f(false);f.start_ok=false;check(!f.service->start() && !f.service->start() && f.starts==1 && !f.service->features().GetNamedBoolean(L"stop.chord"),"user-input.failed-start-never-replaces-listener");});
+  test([]{Fixture f(false);f.start_ok=false;f.listener.failure=UserInputFailure::native_register;check(!f.service->start(),"user-input.diagnostic-fixture-start-refused");const auto diagnostic=f.service->diagnostic();
+    check(diagnostic.start_attempted && !diagnostic.start_succeeded && diagnostic.failure==UserInputFailure::native_register && diagnostic.listener.alive,"user-input.failed-start-keeps-diagnostic-snapshot-only");
+    check(!f.service->setup_start() && !f.service->features().GetNamedBoolean(L"userInput.detect") && !f.service->foreground_ready(f.session),"user-input.healthy-failed-backend-snapshot-never-enters-authoritative-listener");});
+  test([]{for(size_t index=1;index<static_cast<size_t>(UserInputFailure::count);++index){const auto stage=user_input_failure_stage(static_cast<UserInputFailure>(index));
+      check(!stage.empty() && std::find(windows_privileged_stages.begin(),windows_privileged_stages.end(),stage)!=windows_privileged_stages.end(),"user-input.every-closed-failure-stage-is-whitelisted");}
+    check(user_input_failure_stage(UserInputFailure::none).empty() && user_input_failure_stage(static_cast<UserInputFailure>(-1)).empty() && user_input_failure_stage(UserInputFailure::count).empty(),"user-input.unknown-diagnostics-never-invent-stage-text");});
   test([]{Fixture f(false);check(f.service->start(),"user-input.listener-installs");f.drain();check(f.service->setup_status().state==UserInputSetupState::needs_calibration && !f.service->listener_health_ready() && f.probes.empty(),"user-input.registration-and-pump-alone-never-arm-setup");f.service->session_changed(f.session);f.advance(100);check(!f.service->foreground_ready(f.session) && f.probes.empty(),"user-input.accepted-session-cannot-auto-calibrate-or-inject-probe");});
   test([]{Fixture f(false);check(f.service->start() && f.service->setup_start(),"user-input.setup-explicit-arm");f.advance(200);f.ack();check(f.service->listener_health_ready() && f.service->setup_status().state==UserInputSetupState::calibrating && !f.service->setup_status().mouse && !f.service->setup_status().keyboard && !f.service->foreground_ready(f.session),"user-input.real-typed-health-is-independent-of-hardware-calibration");});
   test([]{Fixture f(false);check(f.service->start() && f.service->setup_start(),"user-input.setup-arm");f.advance(200);f.ack();f.point(0,0);f.point(2,0);f.key(VK_LSHIFT,UserInputModifier::shift_left);check(f.service->setup_status().mouse && !f.service->setup_status().keyboard,"user-input.shift-down-is-not-complete-keyboard-calibration");f.key(VK_LSHIFT,UserInputModifier::shift_left,UserInputOrigin::hardware,false);check(f.service->setup_status().state==UserInputSetupState::ready && !f.service->foreground_ready(f.session),"user-input.setup-never-creates-or-resumes-agent-session");});

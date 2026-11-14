@@ -7,8 +7,8 @@
   "ownerApprovedW9": true,
   "w9": {
     "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
-    "nativeGroups": 48,
-    "nativeExecution": "pending",
+    "nativeGroups": 50,
+    "nativeExecution": "At 6f53a6ec native units passed; passive listener setup failed on two VMs. New closed startup diagnostics pending.",
     "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
     "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
   },
@@ -17,8 +17,16 @@
     "job": 131020775740,
     "headRevision": "6d23cdb58a1bafba09230643bc8a4ddfc4d3a7c9",
     "testedMergeRevision": "2eea3fa83c1a2959e8cb366e65c2269aa7c0fb0d",
-    "core": { "passed": 30, "failed": 0, "skipped": 1 },
-    "isolated": { "passed": 36, "failed": 0, "skipped": 11 },
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 36,
+      "failed": 0,
+      "skipped": 11
+    },
     "artifact": 13922397057,
     "artifactBytes": 1354,
     "archiveSha256": "3bc69e634074c0730fe980e38d5df651b9b0786f06a5645bd5dff17c2f18cd1b",
@@ -32,17 +40,54 @@
     "qualification": "Explicit entropy-domain change, not a claim of 64-bit event entropy. Private channel nonce remains separate. Runtime results pending."
   },
   "localChecks": {
-    "coreComputerSchema": { "passed": 90, "failed": 0, "assertions": 657 },
+    "coreComputerSchema": {
+      "passed": 90,
+      "failed": 0,
+      "assertions": 657
+    },
     "appTypecheck": "passed",
     "desktopTypecheck": "passed",
-    "startup": { "passed": 33, "failed": 0, "assertions": 198 },
-    "setup": { "passed": 2, "failed": 0, "assertions": 20 },
-    "helperClient": { "passed": 43, "failed": 0, "assertions": 219 },
-    "fakeHelper": { "passed": 149, "failed": 0, "assertions": 1411 },
-    "signatureVerifier": { "passed": 22, "failed": 0, "assertions": 164 },
-    "signer": { "passed": 9, "failed": 0, "assertions": 81 },
-    "focusedWorkflow": { "passed": 4, "failed": 0, "filtered": 27, "assertions": 553 },
-    "selftestWrapper": { "passed": 48, "failed": 0, "assertions": 1031 },
+    "startup": {
+      "passed": 33,
+      "failed": 0,
+      "assertions": 198
+    },
+    "setup": {
+      "passed": 2,
+      "failed": 0,
+      "assertions": 20
+    },
+    "helperClient": {
+      "passed": 43,
+      "failed": 0,
+      "assertions": 219
+    },
+    "fakeHelper": {
+      "passed": 149,
+      "failed": 0,
+      "assertions": 1411
+    },
+    "signatureVerifier": {
+      "passed": 22,
+      "failed": 0,
+      "assertions": 164
+    },
+    "signer": {
+      "passed": 9,
+      "failed": 0,
+      "assertions": 81
+    },
+    "focusedWorkflow": {
+      "passed": 4,
+      "failed": 0,
+      "filtered": 27,
+      "assertions": 553
+    },
+    "selftestWrapper": {
+      "passed": 48,
+      "failed": 0,
+      "assertions": 1089
+    },
     "scope": "Serial provider-free named files and package typechecks only; no native or owner desktop execution."
   },
   "native84Observation": {
@@ -56,5 +101,24 @@
     "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
     "stagedStop": "not run because units failed"
   },
-  "pending": "Exact-source Windows native runtime, Stop receipt and passive health; broad CI and final packaging; actual device calibration/takeover, Mac grants, signing and owner publication gates."
+  "pending": "Passive listener startup/health, broad CI and final packaging; actual device calibration/takeover, Mac grants, signing and owner publication gates.",
+  "native6fObservation": {
+    "revision": "6f53a6ec9130220bf3fe7a03cc256802d227ee89",
+    "run": 43547207683,
+    "baselineJob": 132301309020,
+    "probeJob": 132301309018,
+    "baselineStop": "passed: stop.ok=true, exit 0",
+    "probeStop": "passed, MOVE-PROBE-ONLY",
+    "core": "30 passed / 0 failed / 1 skipped",
+    "isolated": "36 passed / 2 failed / 10 skipped",
+    "failure": "privileged.input-listener-health: input-listener-setup / assertion_failed",
+    "independentPRRun": 43547212497,
+    "independentPRJob": 132301572371,
+    "signature": "actual PowerShell 7 observer: NotSigned, both VMs",
+    "reportArtifact": 14094612864,
+    "reportArchiveSha256": "b945dd09bad376969a7ff2fb2d643de276b6960874143fb4debd447f0ca69786",
+    "baselineStopArtifact": 14095032090,
+    "baselineStopArchiveSha256": "b4633f89a04391260ee0928f45f05dda3745b3daf0508c53a352f594029fb454",
+    "qualification": "Overall successful job does not erase failed diagnostic rows. Closed startup diagnostics pending; no startup budget or admission change."
+  }
 }

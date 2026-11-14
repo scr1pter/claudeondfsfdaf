@@ -10,6 +10,14 @@ enum class UserInputKind { pointer, click, scroll, key_down, key_up, configurati
 enum class UserInputModifier : uint8_t { none, control_left, control_right, alt_left, alt_right, shift_left, shift_right, meta_left, meta_right };
 enum class UserInputReadiness { unavailable, pending, ready };
 enum class UserInputSetupState { needs_calibration, calibrating, ready, unavailable };
+// Closed diagnostic metadata only. These values never participate in readiness or input ownership.
+enum class UserInputFailure {
+  none, runtime_events, runtime_observations, runtime_timer, native_owner, native_generation,
+  native_events, native_thread, native_class, native_window, native_routes_query, native_routes_existing,
+  native_register, native_readback, native_ready_timeout, native_status, native_failed, native_wait,
+  native_route_lost, native_quit, service_start, service_closed, count
+};
+std::wstring_view user_input_failure_stage(UserInputFailure)noexcept;
 struct UserInputSetupStatus {
   UserInputSetupState state=UserInputSetupState::needs_calibration;
   bool mouse=false,keyboard=false;
@@ -36,6 +44,12 @@ struct UserInputListenerStatus {
   bool installed=false,registered=false,alive=false;
   uint64_t generation=0;
   uint64_t context_generation=0;
+  UserInputFailure failure=UserInputFailure::none;
+};
+struct UserInputDiagnostic {
+  bool start_attempted=false,start_succeeded=false,closed=false;
+  UserInputFailure failure=UserInputFailure::none;
+  UserInputListenerStatus listener;
 };
 struct UserInputChord { WORD key=0; uint32_t modifiers=0; bool operator==(const UserInputChord&)const=default; };
 std::optional<UserInputChord> parse_user_input_chord(std::wstring_view);
@@ -89,6 +103,7 @@ class UserInputService final {
   UserInputSetupStatus setup_status()const;
   // Private diagnostic metadata only; a healthy pump never grants hardware calibration or mutation.
   bool listener_health_ready()const;
+  UserInputDiagnostic diagnostic()const;
   bool setup_start();
   void setup_reset();
   // Metadata/enqueue only: safe from Dispatcher authority. Every accepted phase gets a new ticket.

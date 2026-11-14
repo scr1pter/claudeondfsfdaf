@@ -863,8 +863,22 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
       // fabricating hardware calibration or enabling a foreground mutation.
       const auto detector = native->state->detector;
       struct ResetSetup { std::shared_ptr<UserInputService> detector; ~ResetSetup() { detector->setup_reset(); } } reset{detector};
+      diagnostic_stage(L"input-listener-authority", [&] { require(native->state->available()); });
+      diagnostic_stage(L"input-listener-target", [&] { require(target->current()); });
+      const auto diagnostic = detector->diagnostic();
+      if (!diagnostic.start_succeeded || diagnostic.closed || diagnostic.failure != UserInputFailure::none) {
+        const auto failure = diagnostic.closed ? UserInputFailure::service_closed : diagnostic.failure;
+        const auto stage = user_input_failure_stage(failure);
+        diagnostic_stage(stage.empty() ? L"input-listener-start-outcome" : stage, [&] { require(false); });
+      }
+      diagnostic_stage(L"input-listener-start-outcome", [&] { require(diagnostic.start_attempted && diagnostic.start_succeeded); });
+      diagnostic_stage(L"input-listener-installed", [&] { require(diagnostic.listener.installed); });
+      diagnostic_stage(L"input-listener-registered", [&] { require(diagnostic.listener.registered); });
+      diagnostic_stage(L"input-listener-alive", [&] { require(diagnostic.listener.alive); });
+      diagnostic_stage(L"input-listener-generation", [&] { require(diagnostic.listener.generation != 0); });
+      diagnostic_stage(L"input-listener-context", [&] { require(diagnostic.listener.context_generation != 0); });
       diagnostic_stage(L"input-listener-setup", [&] {
-        require(native->state->available() && target->current() && detector->setup_start());
+        require(detector->setup_start());
       });
       diagnostic_stage(L"input-listener-health", [&] {
         const auto deadline = GetTickCount64() + 750;

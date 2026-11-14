@@ -51,8 +51,9 @@ struct UserInputRuntime : std::enable_shared_from_this<UserInputRuntime> {
   }
   void start() {
     if (started) return; started=true;
-    std::thread([queue=events]{run(queue);}).detach(); std::thread([queue=observations]{run(queue);}).detach();
-    std::thread([clock=timers] {
+    try{std::thread([queue=events]{run(queue);}).detach();}catch(...){throw UserInputFailure::runtime_events;}
+    try{std::thread([queue=observations]{run(queue);}).detach();}catch(...){throw UserInputFailure::runtime_observations;}
+    try{std::thread([clock=timers] {
       try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) { std::lock_guard lock(clock->mutex); clock->closed=true;clock->wake.notify_all(); return; }
       std::unique_lock lock(clock->mutex);
       clock->ready=true;clock->wake.notify_all();
@@ -63,9 +64,9 @@ struct UserInputRuntime : std::enable_shared_from_this<UserInputRuntime> {
         auto body=std::move(selected->second.second); clock->jobs.erase(selected); lock.unlock(); try { body(); } catch (...) {} lock.lock();
       }
       lock.unlock(); winrt::uninit_apartment();
-    }).detach();
-    for(const auto& queue:{events,observations}) {std::unique_lock lock(queue->mutex);if(!queue->wake.wait_for(lock,std::chrono::milliseconds(100),[&]{return queue->ready || queue->closed;}) || !queue->ready)throw Failure{L"unavailable",L"The independent input detector worker is unavailable."};}
-    std::unique_lock lock(timers->mutex);if(!timers->wake.wait_for(lock,std::chrono::milliseconds(100),[&]{return timers->ready || timers->closed;}) || !timers->ready)throw Failure{L"unavailable",L"The independent input detector timer is unavailable."};
+    }).detach();}catch(...){throw UserInputFailure::runtime_timer;}
+    for(const auto& queue:{events,observations}) {std::unique_lock lock(queue->mutex);if(!queue->wake.wait_for(lock,std::chrono::milliseconds(100),[&]{return queue->ready || queue->closed;}) || !queue->ready)throw queue==events?UserInputFailure::runtime_events:UserInputFailure::runtime_observations;}
+    std::unique_lock lock(timers->mutex);if(!timers->wake.wait_for(lock,std::chrono::milliseconds(100),[&]{return timers->ready || timers->closed;}) || !timers->ready)throw UserInputFailure::runtime_timer;
   }
   UserInputService::Execute execute(bool observe) {
     return [queue=observe?observations:events](Task task) { std::lock_guard lock(queue->mutex);
@@ -80,6 +81,17 @@ struct UserInputRuntime : std::enable_shared_from_this<UserInputRuntime> {
   void close() { for (const auto& queue:{events,observations}) { std::lock_guard lock(queue->mutex); queue->closed=true;queue->jobs.clear();queue->wake.notify_all(); }
     std::lock_guard lock(timers->mutex);timers->closed=true;timers->jobs.clear();timers->wake.notify_all(); }
 };
+}
+
+std::wstring_view user_input_failure_stage(UserInputFailure failure)noexcept {
+  constexpr std::array<std::wstring_view,static_cast<size_t>(UserInputFailure::count)> stages{
+    L"",L"input-start-runtime-events",L"input-start-runtime-observations",L"input-start-runtime-timer",
+    L"input-start-native-owner",L"input-start-native-generation",L"input-start-native-events",L"input-start-native-thread",
+    L"input-start-native-class",L"input-start-native-window",L"input-start-native-routes-query",L"input-start-native-routes-existing",
+    L"input-start-native-register",L"input-start-native-readback",L"input-start-native-ready-timeout",L"input-start-native-status",
+    L"input-listener-native-failed",L"input-listener-native-wait",L"input-listener-native-route-lost",L"input-listener-native-quit",
+    L"input-start-service",L"input-listener-service-closed"};
+  const auto index=static_cast<size_t>(failure);return index<stages.size()?stages[index]:std::wstring_view{};
 }
 
 std::optional<UserInputChord> parse_user_input_chord(std::wstring_view value) {
@@ -124,6 +136,7 @@ struct UserInputService::State : std::enable_shared_from_this<UserInputService::
   UserInputCallbacks callbacks; UserInputBackend backend; Execute execute,observe; Schedule schedule; std::function<uint64_t()> now;
   std::shared_ptr<UserInputRuntime> runtime; mutable std::mutex mutex;
   bool started=false,closed=false,observation_busy=false;
+  bool start_succeeded=false;UserInputFailure start_failure=UserInputFailure::none;UserInputListenerStatus start_snapshot;
   uint64_t sequence=0,scope_ticket=0; UserInputListenerStatus listener;
   std::optional<UserInputEnvironment> environment;
   std::shared_ptr<Scope> scope,setup_scope; std::optional<Challenge> challenge;
@@ -324,12 +337,14 @@ struct UserInputService::State : std::enable_shared_from_this<UserInputService::
   }
   bool start() {
     {std::lock_guard lock(mutex);if(closed || started)return started && !closed && healthy(listener);started=true;}
-    bool installed=false;
+    bool installed=false;UserInputListenerStatus snapshot;UserInputFailure failure=UserInputFailure::none;
     try{if(runtime)runtime->start();installed=backend.start([weak=weak_from_this()](UserInputSample sample){if(const auto state=weak.lock())state->sample(std::move(sample));},
-      [weak=weak_from_this()](UserInputHealthReceipt receipt){if(const auto state=weak.lock())state->health_receipt(std::move(receipt));});const auto status=backend.status();installed=installed && healthy(status);
+      [weak=weak_from_this()](UserInputHealthReceipt receipt){if(const auto state=weak.lock())state->health_receipt(std::move(receipt));});const auto status=backend.status();snapshot=status;installed=installed && healthy(status);
+      if(!installed)failure=status.failure==UserInputFailure::none?UserInputFailure::native_status:status.failure;
       std::lock_guard lock(mutex);installed=installed && !closed;listener=installed?status:UserInputListenerStatus{};
       if(installed && scope){const auto accepted=scope->session;scope=make_scope_locked(false,accepted);if(scope)scope->revoked=true;}
-    }catch(...){installed=false;}
+    }catch(UserInputFailure reason){failure=reason;installed=false;}catch(...){failure=UserInputFailure::service_start;installed=false;}
+    {std::lock_guard lock(mutex);start_succeeded=installed;start_snapshot=snapshot;start_failure=closed?UserInputFailure::service_closed:failure;if(!installed)listener={};}
     if(!installed){try{backend.close();}catch(...){}if(runtime)runtime->close();return false;}
     tick();return true;
   }
@@ -340,6 +355,7 @@ struct UserInputService::State : std::enable_shared_from_this<UserInputService::
     return {state,calibration.mouse,calibration.keyboard};
   }
   bool listener_health_ready()const {std::lock_guard lock(mutex);return health_ready_locked(selected_locked(),now());}
+  UserInputDiagnostic diagnostic()const {std::lock_guard lock(mutex);return {started,start_succeeded,closed,start_failure!=UserInputFailure::none?start_failure:listener.failure,start_succeeded?listener:start_snapshot};}
   bool setup_start() {
     // Called inside the trusted UI's short Dispatcher fence: retire authority now, but
     // leave cancellation, native observation and user/Dispatcher callbacks to the timer.
@@ -379,6 +395,7 @@ UserInputService::~UserInputService(){close();}
 bool UserInputService::start(){return state_->start();}
 UserInputSetupStatus UserInputService::setup_status()const{return state_->setup_status();}
 bool UserInputService::listener_health_ready()const{return state_->listener_health_ready();}
+UserInputDiagnostic UserInputService::diagnostic()const{return state_->diagnostic();}
 bool UserInputService::setup_start(){return state_->setup_start();}
 void UserInputService::setup_reset(){state_->setup_reset();}
 void UserInputService::session_changed(std::optional<ServerSession> session){state_->session_changed(std::move(session));}

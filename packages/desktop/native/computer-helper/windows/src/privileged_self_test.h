@@ -21,7 +21,7 @@ inline constexpr std::array<std::wstring_view, 17> windows_privileged_checks{
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
   L"capture-isolated-window-worker", L"input-listener-health"};
-inline constexpr std::array<std::wstring_view, 159> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 188> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -73,7 +73,15 @@ inline constexpr std::array<std::wstring_view, 159> windows_privileged_stages{
   L"capture-color-unmasked-unknown", L"capture-color-mask-unknown-screen", L"capture-color-mask-unknown-window",
   L"capture-color-mask-unknown-unknown",
   L"affinity-sample-plan", L"affinity-fixture-current", L"affinity-native-sample-missing", L"affinity-native-sample-mismatch", L"affinity-display-proof",
-  L"input-listener-setup", L"input-listener-health", L"input-calibration-required"};
+  L"input-listener-setup", L"input-listener-health", L"input-calibration-required",
+  L"input-listener-authority", L"input-listener-target", L"input-listener-start-outcome", L"input-listener-installed",
+  L"input-listener-registered", L"input-listener-alive", L"input-listener-generation", L"input-listener-context",
+  L"input-start-runtime-events", L"input-start-runtime-observations", L"input-start-runtime-timer",
+  L"input-start-native-owner", L"input-start-native-generation", L"input-start-native-events", L"input-start-native-thread",
+  L"input-start-native-class", L"input-start-native-window", L"input-start-native-routes-query", L"input-start-native-routes-existing",
+  L"input-start-native-register", L"input-start-native-readback", L"input-start-native-ready-timeout", L"input-start-native-status",
+  L"input-listener-native-failed", L"input-listener-native-wait", L"input-listener-native-route-lost", L"input-listener-native-quit",
+  L"input-start-service", L"input-listener-service-closed"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",
