@@ -208,8 +208,12 @@ export async function setup(page: Page, input: Setup = {}) {
       localStorage.setItem(
         "vector.global.dat:server",
         JSON.stringify({
-          projects: { local: [{ worktree: directory, expanded: true }] },
-          lastProject: { local: directory },
+          list: [server],
+          projects: {
+            local: [{ worktree: directory, expanded: true }],
+            [server]: [{ worktree: directory, expanded: true }],
+          },
+          lastProject: { local: directory, [server]: directory },
         }),
       )
       localStorage.setItem(
