@@ -193,6 +193,21 @@ const fixture = (read?: Record<string, "allow" | "deny" | "ask">) =>
       pollWithTimeout(
         permission.list().pipe(Effect.map((rows) => rows.find((row) => row.metadata.runID === id))),
         "The actual review model consent did not arrive",
+      ).pipe(
+        // Say whether the run is still slow or already ended without asking, so the two failures stay distinguishable.
+        Effect.catch((error) =>
+          owner
+            .get(id)
+            .pipe(
+              Effect.flatMap((run) =>
+                Effect.fail(
+                  new Error(
+                    `${error.message} (run ${run.status}${run.result ? `: ${run.result.state}, refusal ${run.result.refusal ?? "none"}, notes ${JSON.stringify(run.result.notes)}` : ""}${run.progress ? `, progress ${JSON.stringify(run.progress.message)}` : ""})`,
+                  ),
+                ),
+              ),
+            ),
+        ),
       )
     const ended = (id: string) =>
       pollWithTimeout(
