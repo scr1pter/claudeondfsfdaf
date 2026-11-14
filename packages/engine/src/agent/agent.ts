@@ -41,6 +41,7 @@ import { Plugin } from "@/plugin"
 import { Skill } from "../skill"
 import { Effect, Context, Layer, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import { AbsolutePath, type DeepMutable } from "@vectordevai/core/schema"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -230,6 +231,8 @@ const layer = Layer.effect(
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
     const locations = yield* LocationServiceMap.Service
+    // Connected tools' fix child exists only while connected tools are on (VECTOR_EXPERIMENTAL_CONNECT).
+    const connect = (yield* RuntimeFlags.Service).experimentalConnect
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
@@ -544,17 +547,22 @@ const layer = Layer.effect(
             native: true,
           },
           // Fixes chosen VectorScope findings in its own worktree, for connected tools. Hidden and native, so only
-          // connect launches it (the task tool refuses a model); it is rebuilt after the config below.
-          [ConnectPolicy.FIX_AGENT]: {
-            name: ConnectPolicy.FIX_AGENT,
-            description: connectFixDescription,
-            permission: connectFix(user, Permission.merge(defaults, user)),
-            prompt: PROMPT_CONNECT_FIX,
-            options: {},
-            mode: "subagent",
-            native: true,
-            hidden: true,
-          },
+          // connect launches it (the task tool refuses a model); it is rebuilt after the config below. With connected
+          // tools off it is not registered at all, so no agent list shows it.
+          ...(connect
+            ? {
+                [ConnectPolicy.FIX_AGENT]: {
+                  name: ConnectPolicy.FIX_AGENT,
+                  description: connectFixDescription,
+                  permission: connectFix(user, Permission.merge(defaults, user)),
+                  prompt: PROMPT_CONNECT_FIX,
+                  options: {},
+                  mode: "subagent" as const,
+                  native: true,
+                  hidden: true,
+                } satisfies Info,
+              }
+            : {}),
           explore: {
             name: "explore",
             permission: readonlySpecialist("explore", user),
@@ -839,6 +847,8 @@ const layer = Layer.effect(
         // Nor does any config pick its model, prompt, steps or options (a trusted project's included): it runs on its
         // parent's model, as the task tool picks it, under the prompt that frames the findings as data. It reads as
         // the build agent does, now that the build agent's own config and ceiling are applied.
+        // With connected tools off the name stays Vector's: a config agent of that name is dropped, not created.
+        if (!connect) delete agents[ConnectPolicy.FIX_AGENT]
         if (agents[ConnectPolicy.FIX_AGENT])
           agents[ConnectPolicy.FIX_AGENT] = {
             name: ConnectPolicy.FIX_AGENT,
@@ -860,7 +870,7 @@ const layer = Layer.effect(
         // Only connect launches the fix child, naming it in `invokedAgents`, which passes this deny: no agent's own task
         // call starts it, and the task tool never lists it as one to pick. Only where task may launch it, as for the
         // research judge below, so a deny for this one agent is never the last word on task for an agent with none.
-        for (const [name, item] of Object.entries(agents)) {
+        for (const [name, item] of connect ? Object.entries(agents) : []) {
           if (name === ConnectPolicy.FIX_AGENT) continue
           if (Permission.evaluate("task", ConnectPolicy.FIX_AGENT, item.permission).action === "deny") continue
           item.permission = Permission.merge(
@@ -1142,7 +1152,7 @@ const locationServiceMapNode = LayerNode.make({
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode],
+  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode, RuntimeFlags.node],
 })
 
 export * as Agent from "./agent"
