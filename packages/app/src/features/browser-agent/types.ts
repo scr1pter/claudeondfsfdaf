@@ -9,6 +9,20 @@ export type BrowserAgentPageEvent = {
   loading: boolean
 }
 
+/**
+ * What the agent's browser for one task is doing, as the desktop tells every main window whether or not a Preview shows
+ * it (desktop browser-agent.ts emitActivity). `closed` once it is gone.
+ */
+export type BrowserAgentActivity = {
+  contextId: string
+  url: string
+  title: string
+  tabs: number
+  busy: boolean
+  shown: boolean
+  closed: boolean
+}
+
 export type BrowserAgentCommand =
   | "attach"
   | "setBounds"
@@ -163,6 +177,7 @@ export type BrowserAutomationRun = {
 export type BrowserAgentApi = {
   runBrowserAgent: (input: BrowserAgentInput) => Promise<BrowserAutomationRun>
   onBrowserAgentPageEvent?: (cb: (event: BrowserAgentPageEvent) => void) => () => void
+  onBrowserAgentActivity?: (cb: (event: BrowserAgentActivity) => void) => () => void
 }
 
 export function browserAgentApi(): BrowserAgentApi | undefined {

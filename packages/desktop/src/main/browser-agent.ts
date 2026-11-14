@@ -38,6 +38,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import type {
   BrowserAgentDialog,
   BrowserAgentInput,
+  BrowserAgentActivity,
   BrowserAgentPageEvent,
   BrowserAgentRequest,
   BrowserAgentTab,
@@ -223,6 +224,7 @@ function getContext(id: string, create = true) {
     busy: 0,
   }
   contexts.set(id, context)
+  watchIdle()
   return context
 }
 
@@ -437,8 +439,72 @@ const PAGE_ISSUE_HOOK = `(() => {
   return true;
 })()`
 
+// The windows the agent browser's activity is announced to: the main windows (windows.ts), set at startup.
+let activityTargets: () => readonly BrowserWindow[] = () => []
+export function setActivityTargets(targets: () => readonly BrowserWindow[]) {
+  activityTargets = targets
+}
+
+/**
+ * Tells every main window what this task's browser is doing, whether or not a Preview shows it: with Preview closed,
+ * or for a helper's browser that no Preview shows, the app's indicator is the user's only sign that the agent drives a
+ * page, and its Stop closes the browser.
+ */
+function emitActivity(context: BrowserContext, closed = false) {
+  const tab = activeTab(context)
+  const contents = tab && !tab.view.webContents.isDestroyed() ? tab.view.webContents : undefined
+  const payload: BrowserAgentActivity = {
+    contextId: context.id,
+    url: contents?.getURL() ?? "",
+    title: contents?.getTitle() ?? "",
+    tabs: closed ? 0 : context.tabs.length,
+    busy: !closed && context.busy > 0,
+    shown: !closed && Boolean(context.hostWindow && !context.hostWindow.isDestroyed()),
+    closed,
+  }
+  for (const window of activityTargets()) {
+    if (window.isDestroyed()) continue
+    try {
+      window.webContents.send("browser-agent-activity", payload)
+    } catch {
+      // A window closing as it is told: it has nothing left to show.
+    }
+  }
+}
+
+/** How long a browser no Preview shows and no command uses stays open: its pages keep running, unthrottled, until then. */
+export const IDLE_CLOSE_MS = 15 * 60 * 1000
+let idleTimer: ReturnType<typeof setInterval> | undefined
+
+/**
+ * Closes the browsers idle for IDLE_CLOSE_MS that no Preview shows and no command is using, as the research browsers
+ * close when idle. A Preview showing one keeps it open. Returns the ids it closed.
+ */
+export function closeIdleContexts(at = Date.now()) {
+  const idle = Array.from(contexts.values()).filter(
+    (context) =>
+      context.busy === 0 &&
+      !(context.hostWindow && !context.hostWindow.isDestroyed()) &&
+      at - context.lastUsedAt >= IDLE_CLOSE_MS,
+  )
+  idle.forEach(destroyContext)
+  return idle.map((context) => context.id)
+}
+
+function watchIdle() {
+  if (idleTimer || contexts.size === 0) return
+  idleTimer = setInterval(() => {
+    closeIdleContexts()
+    if (contexts.size > 0) return
+    clearInterval(idleTimer)
+    idleTimer = undefined
+  }, 60_000)
+  idleTimer.unref?.()
+}
+
 function emitPageEvent(context: BrowserContext, tab = activeTab(context)) {
   if (!tab || tab.id !== context.active) return
+  emitActivity(context)
   const contents = tab.view.webContents
   if (contents.isDestroyed() || !context.hostWindow || context.hostWindow.isDestroyed()) return
   const payload: BrowserAgentPageEvent = {
@@ -861,6 +927,7 @@ function destroyContext(context: BrowserContext) {
   ]
   contexts.delete(context.id)
   releasePark()
+  emitActivity(context, true)
 }
 
 function ensureTab() {
@@ -1556,7 +1623,10 @@ export async function runBrowserAgent(
     }
   }
   const immediate = PANEL_COMMANDS.has(command) || command === "closeBrowser" || user
+  // The app's indicator shows a command running on the agent's browser; the Preview's own resizing says nothing.
+  const announced = !PANEL_COMMANDS.has(command) && command !== "closeBrowser"
   context.busy++
+  if (announced) emitActivity(context)
   // One command at a time on a page; the number of pages stays uncapped.
   const report = immediate
     ? run()
@@ -1568,6 +1638,7 @@ export async function runBrowserAgent(
       })
   return report.finally(() => {
     context.busy--
+    if (announced && contexts.get(context.id) === context) emitActivity(context)
     // Its last tab closed, the browser is closed, as closeBrowser closes it.
     if (command === "closeTab" && context.tabs.length === 0 && contexts.get(context.id) === context)
       destroyContext(context)

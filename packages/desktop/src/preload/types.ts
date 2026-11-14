@@ -448,6 +448,20 @@ export type BrowserAgentPageEvent = {
   loading: boolean
 }
 
+/**
+ * What the agent's browser for one task is doing, sent to every main window whether or not a Preview shows it: its
+ * active page, its tab count, whether a command runs, whether a Preview shows it, and `closed` once it is gone.
+ */
+export type BrowserAgentActivity = {
+  contextId: string
+  url: string
+  title: string
+  tabs: number
+  busy: boolean
+  shown: boolean
+  closed: boolean
+}
+
 export type BrowserAgentBounds = { x: number; y: number; width: number; height: number }
 
 export type BrowserAutomationRun = {
@@ -976,6 +990,7 @@ export type ElectronAPI = {
   runBrowserAgent: (input: BrowserAgentInput) => Promise<BrowserAutomationRun>
   prepareAgentTask: (root: string, task: string) => Promise<AgentTaskPreparation>
   onBrowserAgentPageEvent: (cb: (event: BrowserAgentPageEvent) => void) => () => void
+  onBrowserAgentActivity: (cb: (event: BrowserAgentActivity) => void) => () => void
   parallelWorkspaces: {
     list: (scope?: { sourcePath?: string; parentSessionId?: string }) => Promise<ParallelWorkspaceRecord[]>
     create: (input: CreateParallelWorkspaceInput) => Promise<ParallelWorkspaceRecord>

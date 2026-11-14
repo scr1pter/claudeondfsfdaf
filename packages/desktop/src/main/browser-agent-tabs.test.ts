@@ -772,3 +772,51 @@ describe("dialogs", () => {
     await run({ contextId: "ses_dialogs", command: "closeBrowser" })
   })
 })
+
+describe("the agent browser's activity and lifetime", () => {
+  const activity = (window: FakeWindow) =>
+    window.sent
+      .filter((item) => item.channel === "browser-agent-activity")
+      .map((item) => item.payload as unknown as Record<string, unknown>)
+
+  test("every main window hears what a browser no Preview shows is doing, and that it closed", async () => {
+    const main = new FakeWindow()
+    agent.setActivityTargets(() => [main as never])
+    try {
+      await run({ contextId: "ses_activity", command: "openUrl", url: "http://localhost:3000/" })
+      const events = activity(main)
+      expect(events.some((item) => item.busy === true)).toBe(true)
+      expect(events.at(-1)).toMatchObject({
+        contextId: "ses_activity",
+        url: "http://localhost:3000/",
+        tabs: 1,
+        busy: false,
+        shown: false,
+        closed: false,
+      })
+      // The Preview's own resizing announces nothing.
+      const before = activity(main).length
+      await run({ contextId: "ses_activity", command: "setBounds", bounds: BOUNDS })
+      expect(activity(main)).toHaveLength(before)
+      // Stop in the app closes the browser, and every window hears it is gone.
+      await run({ contextId: "ses_activity", command: "closeBrowser" })
+      expect(activity(main).at(-1)).toMatchObject({ contextId: "ses_activity", closed: true, tabs: 0, busy: false })
+    } finally {
+      agent.setActivityTargets(() => [])
+    }
+  })
+
+  test("a browser idle past IDLE_CLOSE_MS that no Preview shows is closed; one a Preview shows stays", async () => {
+    await run({ contextId: "ses_idle", command: "openUrl", url: "http://localhost:3000/" })
+    const { event } = panel()
+    await run({ contextId: "ses_shown", command: "attach", bounds: BOUNDS }, event)
+    await run({ contextId: "ses_shown", command: "openUrl", url: "http://localhost:3000/" })
+    expect(agent.closeIdleContexts(Date.now())).toEqual([])
+    const closed = agent.closeIdleContexts(Date.now() + agent.IDLE_CLOSE_MS + 1)
+    expect(closed).toContain("ses_idle")
+    expect(closed).not.toContain("ses_shown")
+    expect((await run({ contextId: "ses_idle", command: "listTabs" })).tabs).toEqual([])
+    expect((await run({ contextId: "ses_shown", command: "listTabs" })).tabs).toHaveLength(1)
+    await run({ contextId: "ses_shown", command: "closeBrowser" })
+  })
+})

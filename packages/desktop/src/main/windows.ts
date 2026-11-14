@@ -145,6 +145,11 @@ export function getMainWindow() {
   return win
 }
 
+/** Every open main window: never a helper window, such as the research browsers' hidden host. */
+export function getMainWindows() {
+  return registry.all().filter((win) => !win.isDestroyed())
+}
+
 /** How many main windows are open: helper windows, such as the research browsers' hidden host, do not count. */
 export function getMainWindowCount() {
   return registry.count()
