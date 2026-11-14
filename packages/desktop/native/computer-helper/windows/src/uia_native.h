@@ -4,6 +4,7 @@
 #include <memory>
 #include <atomic>
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,17 +39,23 @@ inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
 };
 struct WindowsUiaDiagnostic {
   std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none};
-  std::atomic<WindowsUiaPhase> timeout_phase{WindowsUiaPhase::none};
+  // Zero means unobserved; every sampled phase, including none, has a distinct nonzero encoding.
+  std::atomic<uint32_t> timeout_observation{0};
   // The first deadline observer samples before expiry/retirement. Late work cannot rewrite this observation.
   void note_timeout() noexcept {
-    auto empty = WindowsUiaPhase::none;
-    timeout_phase.compare_exchange_strong(empty, phase.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    uint32_t empty = 0;
+    const auto observed = uint32_t{1} + static_cast<uint32_t>(phase.load(std::memory_order_relaxed));
+    timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed);
   }
   WindowsUiaPhase failure_phase(bool available) const noexcept {
-    return (available ? phase : timeout_phase).load(std::memory_order_relaxed);
+    if (available) return phase.load(std::memory_order_relaxed);
+    const auto observed = timeout_observation.load(std::memory_order_relaxed);
+    if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none;
+    return static_cast<WindowsUiaPhase>(observed - 1);
   }
 };
 static_assert(std::atomic<WindowsUiaPhase>::is_always_lock_free);
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
 static_assert(windows_uia_phases.size() == static_cast<size_t>(WindowsUiaPhase::actor_com_expired) + 1);
 class NativeUia;
 class WindowsUiaElement final {

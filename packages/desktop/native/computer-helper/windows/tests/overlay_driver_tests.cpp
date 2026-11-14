@@ -227,6 +227,20 @@ size_t run_overlay_driver_tests() {
     }
   });
   test([] {
+    for (const auto first : {WindowsUiaPhase::none, static_cast<WindowsUiaPhase>(255)}) {
+      const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+      diagnostic->phase.store(first);
+      diagnostic->note_timeout();
+      const auto recorded = diagnostic->timeout_observation.load();
+      require(recorded != 0, "overlay-driver.unknown-first-timeout-is-distinct-from-an-unobserved-snapshot");
+      diagnostic->phase.store(WindowsUiaPhase::root_element);
+      diagnostic->note_timeout();
+      require(diagnostic->timeout_observation.load() == recorded && diagnostic->failure_phase(false) == WindowsUiaPhase::none,
+        "overlay-driver.none-or-invalid-first-timeout-cannot-be-overwritten-by-late-provider-progress");
+      require(!overlay_driver_uia_stage(diagnostic->failure_phase(false)), "overlay-driver.unknown-snapshot-never-fabricates-a-closed-stage");
+    }
+  });
+  test([] {
     require(!overlay_driver_uia_stage(WindowsUiaPhase::none) && !overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(windows_uia_phases.size())), "overlay-driver.uia-unknown-phases-have-no-stage");
     for (size_t index = 1; index < windows_uia_phases.size(); ++index) {
       const auto stage = overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(index));

@@ -143,11 +143,13 @@ describe("independent overlay source admission", () => {
     expect(implementation).not.toMatch(/WindowsUiaDiagnostic\s*[*&]/)
     expect(driver).toContain("std::make_shared<WindowsUiaDiagnostic>()")
     expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic)")
-    expect(header).toContain("std::atomic<WindowsUiaPhase> timeout_phase{WindowsUiaPhase::none}")
-    expect(header).toContain(
-      "timeout_phase.compare_exchange_strong(empty, phase.load(std::memory_order_relaxed), std::memory_order_relaxed)",
-    )
-    expect(header).toContain("return (available ? phase : timeout_phase).load(std::memory_order_relaxed)")
+    expect(header).toContain("std::atomic<uint32_t> timeout_observation{0}")
+    expect(header).toContain("std::atomic<uint32_t>::is_always_lock_free")
+    expect(header).toContain("uint32_t{1} + static_cast<uint32_t>(phase.load(std::memory_order_relaxed))")
+    expect(header).toContain("timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed)")
+    expect(header).toContain("if (available) return phase.load(std::memory_order_relaxed)")
+    expect(header).toContain("if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none")
+    expect(header).toContain("return static_cast<WindowsUiaPhase>(observed - 1)")
     expect(driver).toContain("diagnostic->failure_phase(available)")
     const timeout = implementation.slice(
       implementation.indexOf("if (result.wait_until(deadline)"),
