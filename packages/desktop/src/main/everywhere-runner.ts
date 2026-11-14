@@ -84,7 +84,15 @@ export type RunnerDeps = {
   readonly openPr: (input: { job: EverywhereJob; branch: string; base: string; summary: string; held: number }) => Promise<string | undefined>
   readonly now?: () => number
   readonly every?: (ms: number, work: () => Promise<void>) => () => void
+  /** Local diagnostics with fixed text only: no repository output, paths or job content. */
+  readonly log?: (message: string) => void
 }
+
+const MAPPING_LOG = {
+  "unsafe-config": "Vector everywhere declined a job: the project folder's local git settings include a key it never runs unattended (a filter, include, URL rewrite, helper or command).",
+  "other-repository": "Vector everywhere declined a job: the project folder's git remote is not the allowed repository.",
+  unavailable: "Vector everywhere declined a job: git could not read the project folder.",
+} as const
 
 function settingsValid(settings: RunnerSettings) {
   return Number.isFinite(settings.maxUsd) && settings.maxUsd > 0 && settings.maxUsd <= COMPUTER_CAPS.maxUsd.max &&
@@ -132,7 +140,9 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         return
       }
       const git = deps.git(project.directory, project.repository, controller.signal)
-      if (!await git.mapped()) {
+      const mapping = await git.mapping()
+      if (mapping !== "mapped") {
+        deps.log?.(MAPPING_LOG[mapping])
         await deps.jobs.decline(jid, "not-mapped", job.lease.id)
         settled = true
         return
