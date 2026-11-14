@@ -16,6 +16,7 @@ import {
 
 const root = fileURLToPath(new URL("../../..", import.meta.url))
 const read = (path: string) => Bun.file(`${root}/${path}`).text()
+const bash = process.env.VECTOR_TEST_BASH ?? "bash"
 
 describe("release workflow supply-chain policy", () => {
   for (const [file, guard] of [
@@ -57,7 +58,7 @@ describe("release workflow supply-chain policy", () => {
           printf '%s\\n' "$FIXTURE_RESPONSE"
         }
         ${script}`
-        const child = Bun.spawn(["bash", "-c", command], {
+        const child = Bun.spawn([bash, "--noprofile", "--norc", "-c", command], {
           env: { PATH: process.env.PATH ?? "", GITHUB_REPOSITORY: "fixture/repo", FIXTURE_RESPONSE: response },
           stdout: "ignore",
           stderr: "ignore",
@@ -549,7 +550,7 @@ describe("Codium CI lane", () => {
     // Actions supplies a regular file. Linux cannot reopen Bun's socket-backed stdout via /dev/stdout.
     await writeFile(file, "")
     try {
-      const child = Bun.spawn(["bash", "-c", script], {
+      const child = Bun.spawn([bash, "--noprofile", "--norc", "-c", script], {
         env: { PATH: process.env.PATH ?? "", GITHUB_OUTPUT: file, ...env },
         stdout: "pipe",
         stderr: "ignore",
@@ -931,7 +932,8 @@ describe("Hosted deploy workflows", () => {
   const workflow = async (file: string) => Bun.YAML.parse(await read(`.github/workflows/${file}`)) as Workflow
   const step = (job: Job | undefined, name: string) => job?.steps?.find((entry) => entry.name === name)
   const at = (job: Job | undefined, name: string) => job?.steps?.findIndex((entry) => entry.name === name) ?? -1
-  const needs = (job: Job | undefined) => [job?.needs].flat().filter((value): value is string => typeof value === "string")
+  const needs = (job: Job | undefined) =>
+    [job?.needs].flat().filter((value): value is string => typeof value === "string")
   const checkoutRoot = fileURLToPath(new URL("../../..", import.meta.url))
 
   // Runs a workflow step's own shell; only GitHub's commands, inputs and output files are substituted.
@@ -940,7 +942,7 @@ describe("Hosted deploy workflows", () => {
     const output = path.join(directory, "output")
     await writeFile(output, "")
     try {
-      const child = Bun.spawn(["bash", "-c", script], {
+      const child = Bun.spawn([bash, "--noprofile", "--norc", "-c", script], {
         cwd: cwd ?? directory,
         env: { PATH: process.env.PATH ?? "", HOME: directory, GITHUB_OUTPUT: output, RUNNER_TEMP: directory, ...env },
         stdout: "pipe",
@@ -966,7 +968,10 @@ describe("Hosted deploy workflows", () => {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: path.join(directory, "gitconfig"),
     }
-    await writeFile(env.GIT_CONFIG_GLOBAL, "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[commit]\n\tgpgsign = false\n")
+    await writeFile(
+      env.GIT_CONFIG_GLOBAL,
+      "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[commit]\n\tgpgsign = false\n",
+    )
     const git = (cwd: string, ...args: string[]) => {
       const result = Bun.spawnSync(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" })
       if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`)
@@ -1001,7 +1006,10 @@ describe("Hosted deploy workflows", () => {
         .map((line) => line.match(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/)?.[1])
         .filter((value): value is string => typeof value === "string" && !value.startsWith("./"))
       expect(actions.length).toBeGreaterThan(0)
-      expect({ file, unpinned: actions.filter((action) => !/@[a-f0-9]{40}$/.test(action)) }).toEqual({ file, unpinned: [] })
+      expect({ file, unpinned: actions.filter((action) => !/@[a-f0-9]{40}$/.test(action)) }).toEqual({
+        file,
+        unpinned: [],
+      })
       const parsed = Bun.YAML.parse(text) as Workflow
       for (const [name, job] of Object.entries(parsed.jobs))
         expect({ file, job: name, runner: job["runs-on"] }).toEqual({ file, job: name, runner: "ubuntu-24.04" })
@@ -1016,8 +1024,12 @@ describe("Hosted deploy workflows", () => {
           if (!entry.run) continue
           const expressions = entry.run.match(/\$\{\{[^}]*\}\}/g) ?? []
           // The one exception is the typecheck matrix's own fixed command.
-          expect({ file, job: name, step: entry.name, expressions: expressions.filter((value) => value !== "${{ matrix.command }}") })
-            .toEqual({ file, job: name, step: entry.name, expressions: [] })
+          expect({
+            file,
+            job: name,
+            step: entry.name,
+            expressions: expressions.filter((value) => value !== "${{ matrix.command }}"),
+          }).toEqual({ file, job: name, step: entry.name, expressions: [] })
         }
     }
   })
@@ -1109,7 +1121,9 @@ describe("Hosted deploy workflows", () => {
           [directory, "bun run dry-run"],
           [directory, "bun run smoke"],
         ])
-        const manifest = (await Bun.file(`${root}/${directory}/package.json`).json()) as { scripts: Record<string, string> }
+        const manifest = (await Bun.file(`${root}/${directory}/package.json`).json()) as {
+          scripts: Record<string, string>
+        }
         expect(manifest.scripts["dry-run"]).toBe("wrangler deploy --dry-run --outdir dist")
         expect(ci.jobs[job]?.env?.WRANGLER_SEND_METRICS).toBe("false")
       }
@@ -1130,7 +1144,9 @@ describe("Hosted deploy workflows", () => {
         uses: "./.github/workflows/vector-hosted-ci.yml",
         with: { services_only: true },
       })
-      expect((ci.on.workflow_call as { inputs: Record<string, { type: string; default: boolean }> }).inputs.services_only).toMatchObject({
+      expect(
+        (ci.on.workflow_call as { inputs: Record<string, { type: string; default: boolean }> }).inputs.services_only,
+      ).toMatchObject({
         type: "boolean",
         default: false,
       })
@@ -1222,7 +1238,12 @@ describe("Hosted deploy workflows", () => {
         const others = Object.entries(parsed.jobs).filter(([name]) => name !== "preflight")
         expect(others.length).toBeGreaterThan(0)
         for (const [name, job] of others) {
-          expect({ job: name, environment: job.environment, needs: needs(job), permissions: job.permissions ?? null }).toEqual({
+          expect({
+            job: name,
+            environment: job.environment,
+            needs: needs(job),
+            permissions: job.permissions ?? null,
+          }).toEqual({
             job: name,
             environment: "hosted-production",
             needs: ["preflight"],
@@ -1243,7 +1264,9 @@ describe("Hosted deploy workflows", () => {
           const text = JSON.stringify(job)
           expect(text).not.toContain("./.github/actions/setup-bun")
           expect(text).not.toContain("actions/cache")
-          expect(step(job, "Install the locked dependencies")?.run).toBe("bun install --frozen-lockfile --ignore-scripts")
+          expect(step(job, "Install the locked dependencies")?.run).toBe(
+            "bun install --frozen-lockfile --ignore-scripts",
+          )
           // Secrets reach only the steps that need them, never the whole job.
           expect(JSON.stringify(job.env ?? {})).not.toContain("secrets.")
         }
@@ -1251,7 +1274,10 @@ describe("Hosted deploy workflows", () => {
       })
 
       test("refuses an unprotected or missing hosted-production environment", async () => {
-        const script = step((await workflow(file)).jobs.preflight, "Require protected hosted-production environment")?.run
+        const script = step(
+          (await workflow(file)).jobs.preflight,
+          "Require protected hosted-production environment",
+        )?.run
         expect(script).toBeDefined()
         for (const response of ["1", "2", "0", "", "invalid", "missing"]) {
           const { status } = await shell(
@@ -1268,7 +1294,10 @@ describe("Hosted deploy workflows", () => {
       })
 
       test("refuses a hosted-production environment that would take an unprotected branch", async () => {
-        const script = step((await workflow(file)).jobs.preflight, "Require hosted-production to take protected branches only")?.run
+        const script = step(
+          (await workflow(file)).jobs.preflight,
+          "Require hosted-production to take protected branches only",
+        )?.run
         expect(script).toBeDefined()
         for (const response of ["true", "false", "", "null", "missing"]) {
           const { status } = await shell(
@@ -1285,9 +1314,9 @@ describe("Hosted deploy workflows", () => {
         // It reads the environment's own branch rule, which a workflow file on another branch cannot change.
         expect(script).toContain("--jq '.deployment_branch_policy.protected_branches // false'")
         const steps = (await workflow(file)).jobs.preflight?.steps ?? []
-        expect(steps.findIndex((entry) => entry.name === "Require hosted-production to take protected branches only")).toBeLessThan(
-          steps.findIndex((entry) => entry.name === "Require a commit on protected main"),
-        )
+        expect(
+          steps.findIndex((entry) => entry.name === "Require hosted-production to take protected branches only"),
+        ).toBeLessThan(steps.findIndex((entry) => entry.name === "Require a commit on protected main"))
       })
 
       test("passes only a commit on main, and only while main is protected", async () => {
@@ -1303,12 +1332,20 @@ describe("Hosted deploy workflows", () => {
               printf '%s\\n' "$FIXTURE_PROTECTED"
             }
             ${script}`,
-            { ...repository.env, GITHUB_REPOSITORY: "fixture/repo", GITHUB_SHA: sha, FIXTURE_PROTECTED: protectedAnswer },
+            {
+              ...repository.env,
+              GITHUB_REPOSITORY: "fixture/repo",
+              GITHUB_SHA: sha,
+              FIXTURE_PROTECTED: protectedAnswer,
+            },
             repository.work,
           )
         }
         const passed = await run(repository.onMain, "true")
-        expect({ status: passed.status, output: passed.output.trim() }).toEqual({ status: 0, output: `sha=${repository.onMain}` })
+        expect({ status: passed.status, output: passed.output.trim() }).toEqual({
+          status: 0,
+          output: `sha=${repository.onMain}`,
+        })
         for (const [sha, answer] of [
           [repository.offMain, "true"],
           [repository.onMain, "false"],
@@ -1325,11 +1362,15 @@ describe("Hosted deploy workflows", () => {
         }
         // A checkout that is not the dispatched commit is refused too.
         repository.checkout(repository.offMain)
-        const moved = await shell(`gh() { printf 'true\\n'; }\n${script}`, {
-          ...repository.env,
-          GITHUB_REPOSITORY: "fixture/repo",
-          GITHUB_SHA: repository.onMain,
-        }, repository.work)
+        const moved = await shell(
+          `gh() { printf 'true\\n'; }\n${script}`,
+          {
+            ...repository.env,
+            GITHUB_REPOSITORY: "fixture/repo",
+            GITHUB_SHA: repository.onMain,
+          },
+          repository.work,
+        )
         expect(moved.status).toBe(1)
       })
     })
@@ -1338,8 +1379,9 @@ describe("Hosted deploy workflows", () => {
   describe("vector-hosted-deploy.yml", () => {
     test("deploys the relay, the ops Worker or both, each only when picked", async () => {
       const deploy = await workflow("vector-hosted-deploy.yml")
-      const target = (deploy.on.workflow_dispatch as { inputs: { target: { type: string; options: string[]; required: boolean } } })
-        .inputs.target
+      const target = (
+        deploy.on.workflow_dispatch as { inputs: { target: { type: string; options: string[]; required: boolean } } }
+      ).inputs.target
       expect(target).toMatchObject({ type: "choice", options: ["relay", "ops", "all"], required: true })
       expect(Object.keys(deploy.jobs).sort()).toEqual(["ops", "preflight", "relay"])
       expect(deploy.jobs.relay?.if).toBe("inputs.target == 'relay' || inputs.target == 'all'")
@@ -1358,18 +1400,28 @@ describe("Hosted deploy workflows", () => {
         const dry = at(entry, `Dry-run the ${label} deploy`)
         const secrets = at(entry, `Require the ${label}'s secrets`)
         const ship = at(entry, `Deploy the ${label}`)
-        expect({ job, order: [config, dry, secrets, ship].every((value, index, all) => value > 0 && (index === 0 || value > all[index - 1]!)) })
-          .toEqual({ job, order: true })
+        expect({
+          job,
+          order: [config, dry, secrets, ship].every(
+            (value, index, all) => value > 0 && (index === 0 || value > all[index - 1]!),
+          ),
+        }).toEqual({ job, order: true })
         expect(entry?.steps?.[config]?.run).toBe(`bun packages/cloud/src/hosted-workers.ts config ${target}`)
         expect(entry?.steps?.[dry]).toMatchObject({ "working-directory": directory, run: "bun run dry-run" })
         expect(entry?.steps?.[secrets]).toMatchObject({ "working-directory": directory })
-        expect(entry?.steps?.[secrets]?.run).toContain(`bun run secret-names | bun ../cloud/src/hosted-workers.ts secrets ${target}`)
+        expect(entry?.steps?.[secrets]?.run).toContain(
+          `bun run secret-names | bun ../cloud/src/hosted-workers.ts secrets ${target}`,
+        )
         expect(entry?.steps?.[ship]).toMatchObject({ "working-directory": directory, run: "bun run deploy" })
         expect(entry?.env?.WRANGLER_SEND_METRICS).toBe("false")
         // Only the secrets check and the deploy see the Cloudflare credentials.
         for (const [index, item] of (entry?.steps ?? []).entries()) {
           const sees = JSON.stringify(item).includes("secrets.")
-          expect({ job, step: item.name, sees }).toEqual({ job, step: item.name, sees: index === secrets || index === ship })
+          expect({ job, step: item.name, sees }).toEqual({
+            job,
+            step: item.name,
+            sees: index === secrets || index === ship,
+          })
         }
         for (const index of [secrets, ship])
           expect(entry?.steps?.[index]?.env).toEqual({
@@ -1377,7 +1429,9 @@ describe("Hosted deploy workflows", () => {
             CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}",
           })
         // The scripts it runs are exactly these wrangler commands.
-        const manifest = (await Bun.file(`${root}/${directory}/package.json`).json()) as { scripts: Record<string, string> }
+        const manifest = (await Bun.file(`${root}/${directory}/package.json`).json()) as {
+          scripts: Record<string, string>
+        }
         expect(manifest.scripts.deploy).toBe("wrangler deploy")
         expect(manifest.scripts["secret-names"]).toBe("wrangler secret list --format json")
       }
@@ -1394,7 +1448,9 @@ describe("Hosted deploy workflows", () => {
       expect(runs.length).toBeGreaterThan(0)
       for (const run of runs) expect({ run, writes: writes.test(run) }).toEqual({ run, writes: false })
       for (const directory of ["packages/relay", "packages/ops-worker"]) {
-        const manifest = (await Bun.file(`${root}/${directory}/package.json`).json()) as { scripts: Record<string, string> }
+        const manifest = (await Bun.file(`${root}/${directory}/package.json`).json()) as {
+          scripts: Record<string, string>
+        }
         for (const [name, script] of Object.entries(manifest.scripts))
           expect({ directory, name, writes: writes.test(script) }).toEqual({ directory, name, writes: false })
       }
@@ -1406,7 +1462,8 @@ describe("Hosted deploy workflows", () => {
   describe("vector-hosted-image.yml", () => {
     test("takes the generation and an exact CLI release, and checks them before anything is built", async () => {
       const image = await workflow("vector-hosted-image.yml")
-      const inputs = (image.on.workflow_dispatch as { inputs: Record<string, { required: boolean; default?: string }> }).inputs
+      const inputs = (image.on.workflow_dispatch as { inputs: Record<string, { required: boolean; default?: string }> })
+        .inputs
       expect(Object.keys(inputs).sort()).toEqual(["cli_version", "generation", "min_disk_generation"])
       expect(inputs.min_disk_generation?.default).toBe("1")
       const script = step(image.jobs.preflight, "Check the inputs")?.run
@@ -1476,10 +1533,14 @@ describe("Hosted deploy workflows", () => {
         'git merge-base --is-ancestor "$VECTOR_CLI_SOURCE" origin/main',
       )
       expect(step(job, "Build the image")?.run).toContain("docker build --platform linux/amd64 --file image/Dockerfile")
-      expect(step(job, "Boot the image and check it from inside")?.run).toContain("bun test --timeout 600000 ./test/image.test.ts")
+      expect(step(job, "Boot the image and check it from inside")?.run).toContain(
+        "bun test --timeout 600000 ./test/image.test.ts",
+      )
       const bake = step(job, "Bake the base snapshot")
       expect(bake?.["working-directory"]).toBe("packages/hosted-computer")
-      expect(bake?.run).toContain('bun script/bake-snapshot.ts --image "$VECTOR_HOSTED_IMAGE" --generation "$VECTOR_IMAGE_GENERATION"')
+      expect(bake?.run).toContain(
+        'bun script/bake-snapshot.ts --image "$VECTOR_HOSTED_IMAGE" --generation "$VECTOR_IMAGE_GENERATION"',
+      )
       expect(bake?.env?.VECTOR_HOSTED_IMAGE).toBe("${{ steps.push.outputs.image }}")
       expect(bake?.run).toContain("GITHUB_STEP_SUMMARY")
     })
@@ -1504,7 +1565,10 @@ describe("Hosted deploy workflows", () => {
     })
 
     test("refuses a generation the registry already has, or a lookup it cannot read, and hands the bake the pushed digest", async () => {
-      const script = step((await workflow("vector-hosted-image.yml")).jobs.image, "Push the image to the hosted team's registry")?.run
+      const script = step(
+        (await workflow("vector-hosted-image.yml")).jobs.image,
+        "Push the image to the hosted team's registry",
+      )?.run
       expect(script).toBeDefined()
       const repository = "vcr.vercel.com/vector-hosted/computers/vector-computer"
       const digest = `${repository}@sha256:${"e".repeat(64)}`
@@ -1550,7 +1614,12 @@ describe("Hosted deploy workflows", () => {
       expect(pushed.log.indexOf("login")).toBeLessThan(pushed.log.indexOf("docker manifest inspect"))
       for (const registry of ["present", "unreadable"]) {
         const refused = await run(registry)
-        expect({ registry, status: refused.status, pushed: refused.log.includes("docker push"), output: refused.output }).toEqual({
+        expect({
+          registry,
+          status: refused.status,
+          pushed: refused.log.includes("docker push"),
+          output: refused.output,
+        }).toEqual({
           registry,
           status: 1,
           pushed: false,
