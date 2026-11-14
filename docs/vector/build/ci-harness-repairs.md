@@ -1,6 +1,6 @@
 # Integrated CI harness repairs
 
-2026-11-14; isolated `ci-fixture-repairs` branch from `641db1209`. No production store, erasure ordering, model call, feature flag or paid evaluation behavior is changed.
+2026-11-14; isolated `ci-fixture-repairs` branch from `641db1209`. No production store, erasure ordering, external model call, feature flag or paid evaluation behavior is changed.
 
 ## Desktop account fixture
 
@@ -20,6 +20,12 @@ Current-head cloud-workspace job [132535485451](https://github.com/scr1pter/clau
 
 The case now uses its existing `markRevoked(w)` helper, which stores the exact account mark with the same 100-day expiry already used by the deletion-route and cron fixtures. It additionally checks that mark while billing is still unavailable. The explicit failed-revoke case and the original workspace-fencing and identity-completion assertions remain. No production revocation, erasure, readiness or identity guard changed.
 
+## Native Node connected-review fixture
+
+The `57f6bf0c1` desktop bundle job [132535486900](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43623926779/job/132535486900) executed ordinary turns under native Node, then timed out waiting for the connected-review approval. Its fixture selected a chat model but omitted the owner's required explicit VectorScope model selection.
+
+`packages/engine/script/smoke-node-bundle.ts` now sets `agent.vectorscope.model` in its synthetic owner-global configuration to its existing loopback-only smoke provider/model. All ordinary model identities, approval/readiness/privacy checks and smoke assertions remain unchanged. This adds no application fallback. Build and native smoke execution remain GitHub-CI-only; the local package typecheck is source evidence, not a native smoke pass.
+
 ## Validation
 
 Windows; Bun 1.3.14. Frozen installation with scripts disabled completed in 35.23 seconds; the lockfile did not change. The coordinated local Bun slot was released after these checks:
@@ -27,6 +33,7 @@ Windows; Bun 1.3.14. Frozen installation with scripts disabled completed in 35.2
 - From `packages/web`, `bun test --timeout 30000 ./test/desktop-account.test.ts`: exit 0, 12 passed, 156 assertions, zero failures or skips.
 - From `packages/engine`, `bun run typecheck --project ../../script/vectorscope-eval/tsconfig.json`: exit 0, no diagnostics. This checks types only; it does not execute a model or evaluation.
 - From `packages/web`, `bun test --timeout 30000 ../../test/account-delete.test.ts`: exit 0, 37 passed, 454 assertions; one explicit CI-only Valkey test was not run locally. The real one-second HTTP deadline case also passed.
+- From `packages/engine`, `bun run typecheck` after the Node owner-model fixture repair: exit 0, no diagnostics. No local smoke build or execution ran.
 
 The first fixture repair run identified one further test-harness mismatch: Redis command arguments can arrive as numbers in JSON (the Lua key count), while the old fixture cast every argument to a string without conversion. The handler now normalizes command elements to strings, matching Redis's representation; the complete named file then passed. The production command format and scripts are unchanged.
 

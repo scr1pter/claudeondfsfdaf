@@ -326,6 +326,8 @@ function providerConfig(baseURL: string) {
     $schema: "https://vectordev.ai/config.json",
     model: `${PROVIDER}/${MODEL}`,
     small_model: `${PROVIDER}/${MODEL}`,
+    // Connected reviews require the owner's explicit review model, independently of the ordinary chat model.
+    agent: { vectorscope: { model: `${PROVIDER}/${MODEL}` } },
     formatter: false,
     lsp: false,
     permission: {
