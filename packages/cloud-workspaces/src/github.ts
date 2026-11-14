@@ -54,7 +54,7 @@ export async function publishWorkspaceChanges(input: PublishWorkspaceInput, fetc
         authorization: `Bearer ${input.token}`,
         accept: "application/vnd.github+json",
         "x-github-api-version": "2022-11-28",
-        "user-agent": "Vector-Cloud-Workspaces",
+        "user-agent": "Vector/cloud-workspaces",
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
