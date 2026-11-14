@@ -65,9 +65,10 @@ function section(page: string, id: string, level = "h2") {
   return page.slice(start, end === -1 ? undefined : end)
 }
 
-// A number constant as its engine source writes it, for modules this package does not depend on.
+// A number constant as its engine source writes it, for modules this package does not depend on. A Windows checkout
+// may end its lines with CRLF.
 function constant(source: string, name: string) {
-  const found = new RegExp(`export const ${name} = ([\\d_ *]+)\\n`).exec(source)
+  const found = new RegExp(`export const ${name} = ([\\d_ *]+)\\r?\\n`).exec(source)
   if (!found) throw new Error(`${name} is not a number constant in its file`)
   return found[1]!
     .replaceAll("_", "")
@@ -205,7 +206,7 @@ test("the workflow numbers on the pages are WorkflowLimits", async () => {
 
 test("the workflows page shows the guide's three examples, and says it is not Workflow insights", async () => {
   const guide = await read("packages/engine/src/orchestration/guide.txt")
-  const expected = [...guide.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => JSON.parse(match[1]!))
+  const expected = [...guide.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)].map((match) => JSON.parse(match[1]!))
   const raw = await read("packages/web/src/pages/docs/workflows.astro")
   const shown = [...raw.matchAll(/<pre data-sample="workflow"><code>\{`([\s\S]*?)`\}<\/code><\/pre>/g)].map((match) =>
     JSON.parse(match[1]!),
