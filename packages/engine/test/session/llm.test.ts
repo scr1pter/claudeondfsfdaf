@@ -2053,6 +2053,7 @@ describe("session.llm.stream", () => {
         yield* Effect.promise(() =>
           Effect.runPromise(
             Effect.gen(function* () {
+              yield* ordinarySession(sessionID)
               const llm = yield* LLM.Service
               for (const turn of [0, 1]) {
                 yield* llm
