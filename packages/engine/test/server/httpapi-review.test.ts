@@ -169,6 +169,8 @@ type Diagnostic = {
   phase: "fixture" | "post" | "get-run" | "get-list" | "idle"
   runID?: string
   runStatus: ReviewRun.Status | "unavailable"
+  reviewOrdinal: number
+  completedReviews: number
   modelRequests: number | "unavailable"
   backgroundRunning: number | "unavailable"
   stores: Map<string, BackgroundJobStore.Interface>
@@ -195,6 +197,8 @@ const diagnostic = (kind: Diagnostic["case"]): Diagnostic | undefined => {
     case: kind,
     phase: "fixture",
     runStatus: "unavailable",
+    reviewOrdinal: 0,
+    completedReviews: 0,
     modelRequests: "unavailable",
     backgroundRunning: "unavailable",
     jobStatus: "unavailable",
@@ -237,6 +241,8 @@ const reportPassiveDiagnostic = (state: Diagnostic, trigger: "watchdog" | "failu
       phase: state.phase,
       runStatus: state.runStatus,
       runKnown: state.runID !== undefined,
+      reviewOrdinal: state.reviewOrdinal,
+      completedReviews: state.completedReviews,
       // The captured test server implements this as Effect.sync(() => hits.length).
       modelRequests: state.calls ? Effect.runSync(state.calls) : "unavailable",
       backgroundRunning: "unavailable",
@@ -542,6 +548,7 @@ describe("owner local review HTTP boundary", () => {
         yield* captureDiagnostic(state, f)
         const ids: string[] = []
         for (let n = 0; n < 3; n++) {
+          if (state?.passive) state.reviewOrdinal = n + 1
           const request = { ...f.request, requestID: `request_http_page_${n}` }
           yield* f.llm.push(
             reply()
@@ -577,6 +584,7 @@ describe("owner local review HTTP boundary", () => {
           }
           ids.push(started.runID)
           const complete = yield* finished(f, started.runID, state)
+          if (state?.passive && complete.status === "completed") state.completedReviews = n + 1
           expect(complete.status).toBe("completed")
           const decoded = yield* call(() => decodeLocalRun(complete, { parentID, request, runID: started.runID }))
           expect(decoded?.result?.outcome?.selection.inline).toHaveLength(1)
@@ -637,6 +645,7 @@ describe("owner local review HTTP boundary", () => {
         yield* f.llm.push(reply().tool("read", { filePath: "private.ts" }))
         yield* f.llm.push(reply().tool("StructuredOutput", report()))
         if (state) {
+          if (state.passive) state.reviewOrdinal = 1
           state.phase = "post"
           state.runID = undefined
           state.runStatus = "unavailable"
@@ -651,6 +660,7 @@ describe("owner local review HTTP boundary", () => {
           state.phase = "idle"
         }
         const complete = yield* finished(f, started.runID, state)
+        if (state?.passive && complete.status === "completed") state.completedReviews = 1
         const decoded = yield* call(() =>
           decodeLocalRun(complete, { parentID, request: f.request, runID: started.runID }),
         )
