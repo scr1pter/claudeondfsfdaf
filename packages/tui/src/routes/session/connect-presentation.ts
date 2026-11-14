@@ -39,3 +39,19 @@ export function connectedConsent(permission: string, metadata: Record<string, un
     return undefined
   return sanitizeTerminalText(metadata.description)
 }
+
+/** A merge approval must show the patch the owner is being asked to apply. */
+export function connectedDiff(permission: string, metadata: Record<string, unknown> | undefined) {
+  if (
+    permission !== "connect_write" ||
+    typeof metadata?.runID !== "string" ||
+    !metadata.runID.startsWith("cr_") ||
+    typeof metadata.diff !== "string" ||
+    !metadata.diff
+  )
+    return undefined
+  return metadata.diff
+    .split("\n")
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n")
+}

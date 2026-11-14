@@ -24,7 +24,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { VECTOR_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
-import { connectedConsent } from "./connect-presentation"
+import { connectedConsent, connectedDiff } from "./connect-presentation"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -478,6 +478,7 @@ function PermissionRequestPrompt(props: { request: PermissionRequest; directory?
 
             const connected = connectedConsent(permission, props.request.metadata)
             if (connected !== undefined) {
+              const diff = connectedDiff(permission, props.request.metadata)
               return {
                 icon: "↔",
                 title:
@@ -487,8 +488,11 @@ function PermissionRequestPrompt(props: { request: PermissionRequest; directory?
                       ? "Use this review model"
                       : "Connected review",
                 body: (
-                  <box paddingLeft={1}>
+                  <box paddingLeft={1} flexDirection="column" gap={1}>
                     <text fg={theme.text}>{connected}</text>
+                    <Show when={diff}>
+                      <EditBody request={{ ...props.request, metadata: { ...props.request.metadata, diff } }} />
+                    </Show>
                   </box>
                 ),
               }

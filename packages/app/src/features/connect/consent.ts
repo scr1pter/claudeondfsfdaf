@@ -22,3 +22,10 @@ export function connectConsentDetails(request: Pick<PermissionRequest, "permissi
   if (!text) return undefined
   return text.length > MAX_DETAILS ? `${text.slice(0, MAX_DETAILS - 1)}…` : text
 }
+
+/** Keep the full patch available for an explicit write decision; render it as text, never HTML. */
+export function connectConsentDiff(request: Pick<PermissionRequest, "permission" | "metadata">): string | undefined {
+  if (request.permission !== "connect_write" || connectConsentDetails(request) === undefined) return undefined
+  const diff = request.metadata?.diff
+  return typeof diff === "string" && diff.length > 0 ? diff : undefined
+}

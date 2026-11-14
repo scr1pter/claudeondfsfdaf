@@ -1,10 +1,22 @@
 import { describe, expect, test } from "bun:test"
-import { connectConsentDetails, MAX_DETAILS } from "./consent"
+import { connectConsentDetails, connectConsentDiff, MAX_DETAILS } from "./consent"
 
 const description =
   "Review your changes with VectorScope on openai/gpt-test. Why this asks: it is priced. Where the diff goes: openai/gpt-test sends it to the provider openai. The review stops at $2.00."
 
 describe("connectConsentDetails", () => {
+  test("a write approval exposes its complete multiline patch while other permission metadata does not", () => {
+    const diff = "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-before\n+<script>literal text</script>\n"
+    const metadata = { runID: "cr_1", description: "Merge the reviewed fix.", diff }
+    expect(connectConsentDiff({ permission: "connect_write", metadata })).toBe(diff)
+    expect(connectConsentDiff({ permission: "connect_model", metadata })).toBeUndefined()
+    expect(
+      connectConsentDiff({ permission: "connect_write", metadata: { ...metadata, runID: "not-a-run" } }),
+    ).toBeUndefined()
+    expect(connectConsentDiff({ permission: "connect_write", metadata: { ...metadata, diff: 3 } })).toBeUndefined()
+    expect(connectConsentDiff({ permission: "connect_write", metadata: { ...metadata, diff: "" } })).toBeUndefined()
+  })
+
   test("shows the hub's sentence for connect_model: the model, where the diff goes and the cap", () => {
     const details = connectConsentDetails({
       permission: "connect_model",
