@@ -34,6 +34,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
+import { ReviewGit } from "@/review/git"
 import { ReviewModel, type ResolvedModel } from "@/review/model"
 import { Review } from "@/review/run"
 import { SessionPrompt } from "@/session/prompt"
@@ -1413,14 +1414,20 @@ describe("the same review from the CLI and from connect", () => {
         }
         const request = run.request as Connect.ReviewRequest
         const head = yield* git(directory, "rev-parse", "HEAD")
-        const cli = yield* executeLocalReview(
-          {
-            ...VectorScopeAdapter.reviewOptions({ request, maxCost: viaConnect.input.config.maxCostUsd, env: {} }),
-            // Compare the same admitted policy snapshot. Connect's service pins settings to HEAD, while an
-            // ordinary standalone CLI call deliberately reads the owner's current working-tree settings.
-            context: { expectedHead: head, settingsRef: head, stateless: true, identity: "vectorscope" },
-          },
-          deps,
+        // The "vectorscope" identity requires the private Git view; bind the placement as the review service does.
+        const bound = yield* ReviewGit.root(directory).pipe(Effect.flatMap(ReviewGit.metadata))
+        const cli = yield* ReviewGit.within(
+          bound,
+          head,
+          executeLocalReview(
+            {
+              ...VectorScopeAdapter.reviewOptions({ request, maxCost: viaConnect.input.config.maxCostUsd, env: {} }),
+              // Compare the same admitted policy snapshot. Connect's service pins settings to HEAD, while an
+              // ordinary standalone CLI call deliberately reads the owner's current working-tree settings.
+              context: { expectedHead: head, settingsRef: head, stateless: true, identity: "vectorscope" },
+            },
+            deps,
+          ),
         ).pipe(Effect.provideService(Git.Service, yield* Git.Service))
         expect(cli.exitCode).toBe(0)
         expect(viaConnect.input.rulesSource).toBe("base branch")
