@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
-import { codiumUsageRows, createUsageRefresh, usageForecast, usageFreshness, usageShare } from "./codium-usage-model"
+import {
+  codiumUsageRows,
+  createUsageRefresh,
+  HISTORY_STRIP_DAYS,
+  renewalCard,
+  usageForecast,
+  usageFreshness,
+  usageHistoryStrip,
+  usageShare,
+} from "./codium-usage-model"
 
 const status: ModelPlanStatus.Status = {
   signedIn: true,
@@ -60,6 +69,86 @@ describe("Codium percentage usage", () => {
     expect(usageFreshness(undefined, 0)).toBe("Not updated yet")
     expect(usageFreshness(10_000, 10_001)).toBe("Updated just now")
     expect(usageFreshness(10_000, 250_000)).toBe("Updated 4 min ago")
+  })
+})
+
+// WP A32: the 31-day strip and the renewal card. Status's history starts on the period's first UTC date and lists
+// every date through today as a whole-percent share of the month.
+describe("Codium usage history", () => {
+  const period = (days: number, used: (index: number) => number) =>
+    Array.from({ length: days }, (_, index) => ({
+      day: new Date(Date.UTC(2026, 9, 20 + index)).toISOString().slice(0, 10),
+      used: used(index),
+    }))
+  const now = Date.UTC(2026, 9, 25, 12)
+
+  test("the strip ends on the newest date, marks dates before the period, and reads <1% for shares that round to 0", () => {
+    const history = period(6, (index) => [0, 0, 0.04, 0.2, 0, 0.1][index]!)
+    const strip = usageHistoryStrip({ ...status, history }, now)!
+    expect(strip.days).toHaveLength(HISTORY_STRIP_DAYS)
+    expect(strip.days.at(-1)).toMatchObject({ day: "2026-10-25", today: true, period: true, height: 50 })
+    expect(strip.days.at(-6)).toMatchObject({ day: "2026-10-20", period: true, height: 0 })
+    expect(strip.days.at(-7)).toMatchObject({ day: "2026-10-19", period: false, height: 0 })
+    expect(strip.days.at(-7)!.label).toContain("before this period")
+    expect(strip.days.at(-6)!.label).toContain("<1% of this month")
+    expect(strip.days.at(-4)!.label).toContain("4% of this month")
+    expect(strip.days.at(-3)).toMatchObject({ height: 100 })
+    expect(strip.days.filter((day) => day.today)).toHaveLength(1)
+    // Shares, dates and whole percents only: no amount, token or price.
+    expect(JSON.stringify(strip)).not.toMatch(/\$|usd|credit|token|cents/i)
+  })
+
+  test("a full period shows its last 31 dates", () => {
+    const history = period(32, () => 0.03)
+    const strip = usageHistoryStrip({ ...status, history }, now)!
+    expect(strip.days).toHaveLength(31)
+    expect(strip.days.every((day) => day.period && day.height === 100)).toBe(true)
+    expect(strip.days[0]!.day).toBe(history[1]!.day)
+  })
+
+  test("no strip without a plan, a history or a good read", () => {
+    expect(usageHistoryStrip(status, now)).toBeUndefined()
+    expect(usageHistoryStrip({ ...status, history: [] }, now)).toBeUndefined()
+    const history = period(3, () => 0.1)
+    expect(usageHistoryStrip({ ...status, history, plan: undefined }, now)).toBeUndefined()
+    expect(usageHistoryStrip({ ...status, history, error: "Unavailable" }, now)).toBeUndefined()
+    expect(usageHistoryStrip(undefined, now)).toBeUndefined()
+  })
+
+  test("the renewal card counts this computer's Codium work since the period started, in counts only", () => {
+    const history = period(6, () => 0.05)
+    const summary = {
+      days: [
+        { date: "2026-10-18", codium: 40 }, // before the period: not counted
+        { date: "2026-10-20", codium: 12 },
+        { date: "2026-10-21" },
+        { date: "2026-10-23", codium: 1_200 },
+      ],
+    }
+    const card = renewalCard({ ...status, history }, summary)!
+    expect(card).toEqual({
+      title: "Before your plan renews",
+      rows: [
+        { label: "Codium responses", value: (1_212).toLocaleString() },
+        { label: "Days with Codium work", value: "2" },
+      ],
+      note: expect.stringContaining("Counted on this computer since"),
+    })
+    expect(card.note).toContain("Oct 20")
+    expect(
+      renewalCard({ ...status, history, plan: { ...status.plan!, cancelAtPeriodEnd: true } }, summary)?.title,
+    ).toBe("Before your plan ends")
+    // Counts only: no share, token, price or amount reaches the card.
+    expect(JSON.stringify(card)).not.toMatch(/%|\$|usd|credit|token|cents/i)
+  })
+
+  test("no renewal card without a plan and history, or from a server that cannot attribute Codium by day", () => {
+    const history = period(3, () => 0.1)
+    const summary = { days: [{ date: "2026-10-21", codium: 3 }] }
+    expect(renewalCard(status, summary)).toBeUndefined()
+    expect(renewalCard({ ...status, history }, undefined)).toBeUndefined()
+    expect(renewalCard({ ...status, history }, { ...summary, legacyCodium: true })).toBeUndefined()
+    expect(renewalCard({ ...status, history, plan: undefined }, summary)).toBeUndefined()
   })
 })
 

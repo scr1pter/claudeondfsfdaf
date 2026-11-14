@@ -48,6 +48,12 @@ import type {
   EventSubscribeData,
   EventSubscribeErrors,
   EventSubscribeResponses,
+  ExperimentalBrainImportProposalsData,
+  ExperimentalBrainImportProposalsErrors,
+  ExperimentalBrainImportProposalsResponses,
+  ExperimentalBrainPreviewData,
+  ExperimentalBrainPreviewErrors,
+  ExperimentalBrainPreviewResponses,
   ExperimentalCapabilitiesGetData,
   ExperimentalCapabilitiesGetErrors,
   ExperimentalCapabilitiesGetResponses,
@@ -63,6 +69,18 @@ import type {
   ExperimentalControlPlaneMoveSessionData,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalHostedAttachData,
+  ExperimentalHostedAttachErrors,
+  ExperimentalHostedAttachResponses,
+  ExperimentalHostedJobsData,
+  ExperimentalHostedJobsErrors,
+  ExperimentalHostedJobsResponses,
+  ExperimentalPlaybooksInstallData,
+  ExperimentalPlaybooksInstallErrors,
+  ExperimentalPlaybooksInstallResponses,
+  ExperimentalPlaybooksListData,
+  ExperimentalPlaybooksListErrors,
+  ExperimentalPlaybooksListResponses,
   ExperimentalProjectCopyGenerateNameData,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
@@ -297,6 +315,12 @@ import type {
   McpStatusData,
   McpStatusErrors,
   McpStatusResponses,
+  MemoryBackupData,
+  MemoryBackupErrors,
+  MemoryBackupResponses,
+  MemoryBootstrapPrepareData,
+  MemoryBootstrapPrepareErrors,
+  MemoryBootstrapPrepareResponses,
   MemoryCreateData,
   MemoryCreateErrors,
   MemoryCreateResponses,
@@ -405,6 +429,9 @@ import type {
   MemoryResearchSourceData,
   MemoryResearchSourceErrors,
   MemoryResearchSourceResponses,
+  MemoryRestoreData,
+  MemoryRestoreErrors,
+  MemoryRestoreResponses,
   MemoryReviewListData,
   MemoryReviewListErrors,
   MemoryReviewListResponses,
@@ -1444,6 +1471,110 @@ export class Task extends HeyApiClient {
   }
 }
 
+export class Brain extends HeyApiClient {
+  /**
+   * Preview explicitly selected repository Brain bytes without uploading
+   */
+  public preview<ThrowOnError extends boolean = false>(options?: Options<ExperimentalBrainPreviewData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainPreviewResponses,
+      ExperimentalBrainPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-bundle/preview",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Stage owner-selected returned Brain drafts for review
+   */
+  public importProposals<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalBrainImportProposalsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainImportProposalsResponses,
+      ExperimentalBrainImportProposalsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-proposals/import",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Playbooks extends HeyApiClient {
+  /**
+   * List owner Playbooks for personal installation
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ExperimentalPlaybooksListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ExperimentalPlaybooksListResponses,
+      ExperimentalPlaybooksListErrors,
+      ThrowOnError
+    >({ url: "/experimental/workflow/playbooks", ...options })
+  }
+
+  /**
+   * Install a selected Playbook in owner configuration
+   */
+  public install<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalPlaybooksInstallData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalPlaybooksInstallResponses,
+      ExperimentalPlaybooksInstallErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks/install",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Hosted extends HeyApiClient {
+  /**
+   * Reconnect hosted jobs to their original owner conversation
+   */
+  public jobs<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedJobsData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalHostedJobsResponses,
+      ExperimentalHostedJobsErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/hosted-jobs", ...options })
+  }
+
+  /**
+   * Return a current-account hosted job report to this owner conversation
+   */
+  public attach<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedAttachData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalHostedAttachResponses,
+      ExperimentalHostedAttachErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
 export class Workflow extends HeyApiClient {
   /**
    * List trusted saved workflows
@@ -1720,6 +1851,21 @@ export class Experimental extends HeyApiClient {
   private _task?: Task
   get task(): Task {
     return (this._task ??= new Task({ client: this.client }))
+  }
+
+  private _brain?: Brain
+  get brain(): Brain {
+    return (this._brain ??= new Brain({ client: this.client }))
+  }
+
+  private _playbooks?: Playbooks
+  get playbooks(): Playbooks {
+    return (this._playbooks ??= new Playbooks({ client: this.client }))
+  }
+
+  private _hosted?: Hosted
+  get hosted(): Hosted {
+    return (this._hosted ??= new Hosted({ client: this.client }))
   }
 
   private _workflow?: Workflow
@@ -3113,6 +3259,28 @@ export class Documents extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Prepare a repository Brain bootstrap
+   *
+   * Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<MemoryBootstrapPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      MemoryBootstrapPrepareResponses,
+      MemoryBootstrapPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/memory/bootstrap",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
 export class Distill extends HeyApiClient {
   /**
    * Estimate finding more with a model
@@ -3130,7 +3298,7 @@ export class Distill extends HeyApiClient {
   /**
    * Find more with a model
    *
-   * Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
+   * Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
    */
   public run<ThrowOnError extends boolean = false>(options: Options<MemoryDistillRunData, ThrowOnError>) {
     return (options.client ?? this.client).post<MemoryDistillRunResponses, MemoryDistillRunErrors, ThrowOnError>({
@@ -3465,6 +3633,34 @@ export class Memory extends HeyApiClient {
   }
 
   /**
+   * Memory for a Brain Vault backup
+   *
+   * Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.
+   */
+  public backup<ThrowOnError extends boolean = false>(options?: Options<MemoryBackupData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<MemoryBackupResponses, MemoryBackupErrors, ThrowOnError>({
+      url: "/memory/backup",
+      ...options,
+    })
+  }
+
+  /**
+   * Restore memory from your Brain Vault
+   *
+   * Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.
+   */
+  public restore<ThrowOnError extends boolean = false>(options?: Options<MemoryRestoreData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<MemoryRestoreResponses, MemoryRestoreErrors, ThrowOnError>({
+      url: "/memory/restore",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
    * Tidy memory now
    *
    * Merge duplicates, drop what waited for review too long, archive what goes unused and mark stale entries.
@@ -3523,6 +3719,11 @@ export class Memory extends HeyApiClient {
   private _documents?: Documents
   get documents(): Documents {
     return (this._documents ??= new Documents({ client: this.client }))
+  }
+
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
   }
 
   private _distill?: Distill

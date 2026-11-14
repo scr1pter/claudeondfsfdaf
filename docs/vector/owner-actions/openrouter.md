@@ -1,5 +1,14 @@
 # OpenRouter free access — owner actions
 
+## Two accounts: free models and Codium
+
+Vector uses two OpenRouter accounts, with opposite settings. Never use one account's key for the other.
+
+- **The free-models account** (`OPENROUTER_FREE_API_KEY`) is what this page is about. Its balance must never go negative; keep automatic top-ups, cards, paid BYOK keys and paid plugins off, and keep "ZDR endpoints only" off, or every free model is refused.
+- **The Codium account** (`OPENROUTER_MANAGEMENT_KEY`) serves Vector Codium's paid models. It holds a balance refilled by OpenRouter's own auto top-up, with a backup card, ZDR on for every model group, and prompt logging and input/output use off. Its setup is [codium-payments.md, section 2](codium-payments.md#2-openrouter). Vector cannot buy OpenRouter credit itself: the funding check pauses Codium sales when this balance cannot cover what customers may still spend, and emails you when auto top-up is late ([codium-owner-guards.md](codium-owner-guards.md#funding)).
+
+## The free-models account
+
 **Superseded on 17 October 2026.** The owner decided that the free-model budget on Vector's own OpenRouter account is the free path for every signed-in Vector user ("i want it so that the vector app is connected to my openrouter account no matter who uses the free models"), and bought $10 of OpenRouter credits for it; see [Free models of 17 October 2026: owner steps](#free-models-of-17-october-2026-owner-steps). The rest of this paragraph and the sections after those steps are the history.
 
 Decision (1.99.99): use each user's own free OpenRouter account for the upcoming **1.99.99** release. Personal free-model discovery and setup work independently of `FREE_MODELS_ENABLED=false`. Leave the shared service off; do not add a shared key, activate KV for this feature, or purchase credits. The currently downloadable desktop **1.99.8** does not include this guarded setup.

@@ -370,6 +370,21 @@ describe("BrainExport and learned skills", () => {
     }
   })
 
+  test("a private imported skill keeps its privacy marker while waiting for review", async () => {
+    const text = await withKnowledge((setup) => Effect.gen(function* () {
+      const skills = yield* skillsOf(setup)
+      yield* learned(setup, skills)
+      const file = yield* BrainExport.collect({ brain: setup.brain, knowledge: setup.knowledge, place: setup.place, scope: "repository", skills })
+      return JSON.stringify({ ...file, skills: file.skills?.map((skill) => ({ ...skill, private: true })) })
+    }))
+    const result = await withKnowledge((setup) => Effect.gen(function* () {
+      const skills = yield* skillsOf(setup)
+      return yield* BrainExport.importText({ brain: setup.brain, skills, place: setup.place, text })
+    }))
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0]).toMatchObject({ kind: "skill", status: "proposed", private: true })
+  })
+
   test("1.99.111 still decodes a JSON export that carries a skill, and imports its entries", async () => {
     // 1.99.111's export file as it decodes one: its own kinds and evidence types, without "skill" and "run".
     const Evidence = BrainSchema.Evidence.mapFields((fields) => ({

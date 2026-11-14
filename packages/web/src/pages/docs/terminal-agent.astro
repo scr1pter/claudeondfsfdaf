@@ -68,7 +68,7 @@ vector run -c "now fix it" --variant high</code><button class="doc-cmd-copy" typ
             From the next CLI release, <code>--max-cost</code> caps one run in US dollars, counted at the charge the provider
             reported for a step, as OpenRouter does, or else from its tokens at catalog list price, and
             <code>--max-steps</code> caps its model steps. Steps a plan pays for, such as a ChatGPT sign-in, are not
-            counted in dollars, and Vector Codium steps, which spend Codium credits, count as unpriced. Vector stops within one step of the cap for each agent
+            counted in dollars, and neither are Vector Codium steps; step limits still apply to both. Vector stops within one step of the cap for each agent
             running at the time, says why, and exits
             with code 3, so a script can tell a budget stop from a failure. See
             <a href="/docs/tokenomics">Tokenomics</a> for the Run Guard.

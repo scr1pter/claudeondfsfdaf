@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Live view</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #f6f5f8; --fg: #1d1b22; --muted: #6b6775; --edge: #7c3aed; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #141218; --fg: #ece9f1; --muted: #a29eab; } }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+      main { display: flex; flex-direction: column; height: 100%; }
+      header { display: flex; gap: 12px; align-items: center; padding: 8px 16px; }
+      #mode { font-weight: 600; }
+      #status { color: var(--muted); }
+      #frame { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 0 16px 16px; }
+      canvas { max-width: 100%; max-height: 100%; border: 2px solid var(--edge); border-radius: 6px; background: #000; outline: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><span id="mode">Live view</span><span id="status">Connecting…</span></header>
+      <div id="frame"><canvas id="screen" width="1280" height="800" tabindex="0" aria-label="The cloud computer's screen"></canvas></div>
+    </main>
+    <script src="/viewer.js"></script>
+  </body>
+</html>

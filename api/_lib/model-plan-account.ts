@@ -32,6 +32,19 @@ import {
   stripeObjectId,
 } from "./codium-risk.js"
 import { codiumKey, openRouterKeyName } from "./codium-keys.js"
+import { accountDeleting, deletingRefusal } from "./codium-tombstone.js"
+import {
+  eraseFounding,
+  FOUNDING,
+  foundingCredits,
+  foundingToken,
+  readFoundingMember,
+  releaseFoundingSlot,
+  reserveFoundingSlot,
+  settleFounding,
+  validFoundingToken,
+} from "./codium-founding.js"
+import { listedPerks } from "./codium-perks.js"
 import { codiumKeyLimitUsd, renewalGraceMinutes, TRUST_RAMP, POOL_RAMP } from "./codium-limits.js"
 import { enqueueAction, registerAction, saveAccountAndReconcile } from "./codium-provision.js"
 import { checkoutConsentFields, CODIUM_TERMS_DATE, sendCodiumConfirmation } from "./codium-consent.js"
@@ -90,18 +103,22 @@ import {
   type PoolTicket,
 } from "./codium-pool.js"
 import {
+  modelPlanForPrice,
   modelPlanOrigin,
   modelPlans,
   modelPlansEnabled,
   MODEL_PLAN_ROOT,
   requireCodiumCheckoutUser,
   subscriptionPlanCredits,
+  subscriptionSoldCredits,
 } from "./model-plan-config.js"
 import { listStripe, modelPlanStripe, stripeMode, stripeRecord } from "./model-plan-stripe.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
-// `reservation` names the checkout's hold on Vector's OpenRouter balance (see reserveCodiumSale).
+// `reservation` names the checkout's hold on Vector's OpenRouter balance (see reserveCodiumSale); `founding`, the
+// founding slot a first checkout reserved (WP A31), given back when the checkout expires or is replaced;
+// `foundingRefused`, that founding was offered but no slot was free, so the open session is reused as it is.
 const Checkout = Schema.Struct({
   id: Schema.String,
   plan: Schema.String,
@@ -109,6 +126,8 @@ const Checkout = Schema.Struct({
   expires: Schema.Number,
   reservation: Schema.optional(Schema.String),
   supersedes: Schema.optional(Schema.String),
+  founding: Schema.optional(Schema.String),
+  foundingRefused: Schema.optional(Schema.Boolean),
 })
 const Micro = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const CarryOrigin = Schema.Struct({ charge: Schema.String, micro: Micro })
@@ -495,6 +514,9 @@ export async function readEntitlement(
   })
   if (fresh) return fresh
   if (stored) return stored
+  // An account whose records deletion erased (WP A57) has no snapshot and keeps none: it is closing, not "no plan".
+  if (await accountDeleting(account, fetcher))
+    return buildSnapshot(closingFacts(account, undefined, undefined, "request"), undefined, now)
   for (let waited = 0; waited < MISSING_WAIT_MS; waited += MISSING_STEP_MS) {
     await new Promise((resolve) => setTimeout(resolve, MISSING_STEP_MS))
     const written = await readSnapshot(account, fetcher)
@@ -526,6 +548,11 @@ export async function reconcileModelPlanAccount(
     async (verify) => {
       const stored = await readSnapshotForWrite(id, fetcher)
       const account = await readModelPlanAccount(id, fetcher)
+      // Account deletion (WP A57) sets a tombstone before anything else: from then on nothing reconcile does may reopen
+      // the account, and once its records are erased reconcile answers "closing" and writes nothing back.
+      const deleting = await accountDeleting(id, fetcher)
+      if (!account && deleting)
+        return buildSnapshot(closingFacts(id, undefined, stored.previous, source), stored.previous, now, stored.version)
       if (!account)
         return commitSnapshot(
           { account: id, state: "none", plan: null, periodStart: 0, periodEnd: 0, cancelAtPeriodEnd: false, source },
@@ -534,7 +561,11 @@ export async function reconcileModelPlanAccount(
           now,
           verify,
         )
-      if (account.closing) {
+      if (account.closing || deleting) {
+        if (!account.closing) {
+          await verify()
+          await saveAccount(id, { ...account, closing: true }, fetcher)
+        }
         // The snapshot that ends access goes first, as for every state that stops the key (see below).
         const closed = await commitSnapshot(
           closingFacts(id, account, stored.previous, source),
@@ -586,6 +617,37 @@ export async function reconcileModelPlanAccount(
         })
       const governing = standing.governing
       const planned = standing.state !== "none"
+      // WP A31: the first paid month carrying a founding token gets its number; an upgrade carries the membership; a
+      // deleted subscription ends it; a frozen plan hides a listed founder from the founders page. Accounts without a
+      // founding token make no store call here.
+      const founding = planned
+        ? await settleFounding(
+            {
+              account: id,
+              ...(standing.state === "active" && governing?.paid
+                ? { paid: { id: governing.paid.id, token: governing.paid.founding } }
+                : {}),
+              ...(governing ? { governing: { id: governing.id, plan: governing.plan } } : {}),
+              frozen: standing.state === "frozen",
+              subscriptions: current.flatMap((subscription) =>
+                typeof subscription.id === "string"
+                  ? [
+                      {
+                        id: subscription.id,
+                        status: String(subscription.status),
+                        ...(stripeRecord(subscription.metadata) &&
+                        validFoundingToken(subscription.metadata.vector_founding)
+                          ? { token: subscription.metadata.vector_founding }
+                          : {}),
+                      },
+                    ]
+                  : [],
+              ),
+              now,
+            },
+            fetcher,
+          )
+        : undefined
       const snapshot = await commitSnapshot(
         {
           account: id,
@@ -607,6 +669,7 @@ export async function reconcileModelPlanAccount(
                 ),
               }
             : {}),
+          ...(founding ? { founding } : {}),
           ...history(updated),
           ...(updated.poolRamp
             ? {
@@ -638,7 +701,7 @@ export async function reconcileModelPlanAccount(
             metadata?.vector_account_id === id &&
             invoice?.paid === true &&
             plan
-            ? sum + usdToMicro(codiumKeyLimitUsd(plan.credits))
+            ? sum + usdToMicro(codiumKeyLimitUsd(foundingCredits(plan.credits, plan.id, metadata.vector_founding)))
             : sum
         }, 0)
         const previous = updated.key
@@ -730,7 +793,7 @@ function history(account: Account) {
 /** A deleted account's snapshot: ended for good, keeping the plan and period it last had for the owner's records. */
 function closingFacts(
   id: string,
-  account: Account,
+  account: Account | undefined,
   previous: EntitlementSnapshot | undefined,
   source: SnapshotSource,
 ): SnapshotFacts {
@@ -743,7 +806,7 @@ function closingFacts(
     periodStart: previous?.periodStart ?? 0,
     periodEnd: previous?.periodEnd ?? 0,
     cancelAtPeriodEnd: false,
-    ...history(account),
+    ...(account ? history(account) : {}),
     source,
   }
 }
@@ -1143,9 +1206,12 @@ type StandingContext = {
   known?: readonly { subscription: string; start: number; end: number }[]
 }
 
-/** The Codium plan a subscription is for: its price as configured, or the plan checkout recorded in its metadata. */
+/**
+ * The Codium plan a subscription is for: its price as configured (current or legacy), or the plan checkout recorded in
+ * its metadata.
+ */
 function subscriptionPlanId(price: Record<string, unknown> | undefined, metadata: Record<string, unknown> | undefined) {
-  const configured = modelPlans().find((plan) => plan.priceID && plan.priceID === price?.id)
+  const configured = modelPlanForPrice(price?.id)
   if (configured && isPlanId(configured.id)) return configured.id
   return isPlanId(metadata?.vector_plan) ? metadata.vector_plan : undefined
 }
@@ -1441,7 +1507,9 @@ function monthlyCreditsMicro(account: Account, paid: NonNullable<ReturnType<type
  * The paid month a subscription grants now, or undefined: an active subscription of this account on one configured
  * plan at its exact monthly price, whose latest invoice is paid in full for the current period by a charge that is
  * paid, not fully refunded and not disputed (a won dispute is lifted before this is asked). A partial refund leaves the
- * month paid. Collection paused on the subscription does not change a month already paid.
+ * month paid. Collection paused on the subscription does not change a month already paid. A plan's legacy price counts
+ * at exactly its own old amount (the founding lock, WP A31), and a founding subscription's credits carry the boost
+ * (`subscriptionPlanCredits`); `founding` is its token.
  */
 export function paidModelPlan(subscription: unknown, accountID: string, now = Date.now()) {
   if (!stripeRecord(subscription) || typeof subscription.id !== "string" || subscription.status !== "active")
@@ -1458,17 +1526,27 @@ export function paidModelPlan(subscription: unknown, accountID: string, now = Da
   const item = items[0]
   const price = stripeRecord(item.price) ? item.price : undefined
   const recurring = price && stripeRecord(price.recurring) ? price.recurring : undefined
-  const configured = modelPlans().find((plan) => plan.priceID && plan.priceID === price?.id)
-  const credits = subscriptionPlanCredits(metadata, configured)
+  const matched = modelPlanForPrice(price?.id)
+  // The credits sold must fit the plan's price; the founding boost comes on top of them (it may pass the price).
+  const sold = matched ? subscriptionSoldCredits(metadata, matched) : undefined
+  const credits = matched ? subscriptionPlanCredits(metadata, matched) : undefined
   const plan =
-    configured && credits !== undefined && Number.isFinite(credits) && credits > 0 && credits <= configured.price
-      ? { ...configured, credits }
+    matched &&
+    sold !== undefined &&
+    Number.isFinite(sold) &&
+    sold > 0 &&
+    sold <= matched.price &&
+    credits !== undefined &&
+    Number.isFinite(credits)
+      ? { id: matched.id, name: matched.name, price: matched.price, credits, priceID: matched.priceID }
       : undefined
+  const cents = matched?.cents
+  const legacy = matched?.legacy === true
   if (
     !plan?.credits ||
     item.quantity !== 1 ||
     price?.currency !== "usd" ||
-    price.unit_amount !== plan.price * 100 ||
+    price.unit_amount !== cents ||
     recurring?.interval !== "month" ||
     recurring.interval_count !== 1
   )
@@ -1489,7 +1567,8 @@ export function paidModelPlan(subscription: unknown, accountID: string, now = Da
   const charge = stripeRecord(invoice.charge) ? invoice.charge : undefined
   if (
     typeof invoice.amount_paid !== "number" ||
-    invoice.amount_paid < plan.price * 100 ||
+    cents === undefined ||
+    invoice.amount_paid < cents ||
     !charge ||
     charge.paid !== true ||
     charge.refunded !== false ||
@@ -1533,6 +1612,8 @@ export function paidModelPlan(subscription: unknown, accountID: string, now = Da
     ...(typeof metadata.vector_supersedes === "string" && metadata.vector_supersedes
       ? { supersedes: metadata.vector_supersedes }
       : {}),
+    ...(validFoundingToken(metadata.vector_founding) ? { founding: metadata.vector_founding } : {}),
+    ...(legacy ? { legacy: true as const } : {}),
   }
 }
 
@@ -2338,6 +2419,12 @@ export async function auditModelPlanKey(id: string, fetcher: typeof fetch = fetc
 /** A hold on an account's pool for a charge made outside OpenRouter: a hosted block, or any other pool charge. */
 export type PoolHold = {
   ticket: string
+  /**
+   * The pool (key hash) the hold was placed on. A producer that settles in a later invocation (hosted blocks, WP A51)
+   * keeps it with the ticket, to give the hold back or record its debit with codium-pool.ts's `releaseHold` and
+   * `recordDebit` exactly as `settle` and `release` would.
+   */
+  pool: string
   micro: number
   expiresAt: number
   /**
@@ -2423,6 +2510,7 @@ export async function holdPool(
   if (!ticket) throw monthlyShortfall()
   return {
     ticket: ticket.ticket,
+    pool: ticket.pool,
     micro: ticket.micro,
     expiresAt: now + ttlMs,
     release: () => releaseHold(ticket, fetcher),
@@ -2979,6 +3067,7 @@ export async function modelPlanChange(
     user.id,
     async (verify) => {
       const account = await readModelPlanAccount(user.id, fetcher)
+      if (account && (await accountDeleting(user.id, fetcher))) throw deletingRefusal()
       if (!account || account.closing || riskState(account)) throw changeUnavailable()
       const listed = await subscriptions(account.customer, fetcher)
       const standing = planStanding(user.id, account, listed, now)
@@ -3029,6 +3118,12 @@ export async function modelPlanChange(
       const funding = await requireCodiumSales(fetcher, now)
       const riskFields = await checkoutRiskFields(user.id, account.customer, target.price, fetcher)
       const requires3DS = "payment_method_options[card][request_three_d_secure]" in riskFields
+      // WP A31: a founding membership moves to the upgrade. The server copies the token, so the new subscription keeps
+      // the mark and the lock, and the boost where the new plan has one (Pro); it is never taken from the request.
+      const founding =
+        stripeRecord(current.metadata) && validFoundingToken(current.metadata.vector_founding)
+          ? current.metadata.vector_founding
+          : undefined
       const earlier = account.checkout && account.checkout.expires > now ? account.checkout : undefined
       const pending = earlier
         ? await modelPlanStripe(`checkout/sessions/${encodeURIComponent(earlier.id)}`, {}, fetcher)
@@ -3042,7 +3137,8 @@ export async function modelPlanChange(
         pending.metadata.vector_price_id === target.priceID &&
         pending.metadata.vector_model_credits_usd === String(target.credits) &&
         pending.metadata.vector_terms_date === CODIUM_TERMS_DATE &&
-        pending.metadata.vector_3ds_requested === String(requires3DS)
+        pending.metadata.vector_3ds_requested === String(requires3DS) &&
+        pending.metadata.vector_founding === founding
       )
         return { url: earlier.url }
       if (pending?.status === "open") {
@@ -3054,12 +3150,12 @@ export async function modelPlanChange(
         )
       }
       const closes = (Math.floor(now / 1_800_000) + 2) * 1_800_000
-      const idempotency = `vector-upgrade-${digest(`${user.id}:${paid.id}:${target.priceID}:${target.credits}:${earlier?.id ?? "new"}`)}-${Math.floor(now / 1_800_000)}`
+      const idempotency = `vector-upgrade-${digest(`${user.id}:${paid.id}:${target.priceID}:${target.credits}:${earlier?.id ?? "new"}${founding ? `:${founding}` : ""}`)}-${Math.floor(now / 1_800_000)}`
       await reserveCodiumSale(
         funding,
         {
           id: idempotency,
-          credits: target.credits,
+          credits: foundingCredits(target.credits, target.id, founding),
           closes,
           released: pending?.status === "expired" || pending?.status === "open" ? earlier?.reservation : undefined,
         },
@@ -3088,6 +3184,12 @@ export async function modelPlanChange(
             "subscription_data[metadata][vector_plan]": target.id,
             "subscription_data[metadata][vector_model_credits_usd]": String(target.credits),
             "subscription_data[metadata][vector_supersedes]": paid.id,
+            ...(founding
+              ? {
+                  "metadata[vector_founding]": founding,
+                  "subscription_data[metadata][vector_founding]": founding,
+                }
+              : {}),
             success_url: `${modelPlanOrigin()}/account?model_plan=success&change=upgrade`,
             cancel_url: `${modelPlanOrigin()}/account?model_plan=cancelled`,
             expires_at: String(closes / 1000),
@@ -3142,7 +3244,8 @@ export async function modelPlanCheckout(
     user.id,
     async (verify) => {
       const previous = await readModelPlanAccount(user.id, fetcher)
-      if (previous?.closing)
+      // A tombstone (WP A57) refuses checkout for an account being deleted even when it has no Codium record yet.
+      if (previous?.closing || (await accountDeleting(user.id, fetcher)))
         throw new ApiError(409, "MODEL_PLAN_ACCOUNT_CLOSING", "This account is being deleted. Checkout is closed.")
       // An account a lost dispute, a fraud warning or the owner holds buys nothing: reconcile would never grant what it
       // paid for. Refused before any customer, reservation or session is made.
@@ -3173,6 +3276,14 @@ export async function modelPlanCheckout(
         throw new ApiError(409, "MODEL_PLAN_EXISTS", "You already have a subscription. Manage it from your account.")
       const riskFields = await checkoutRiskFields(user.id, customer, plan.price, fetcher)
       const requires3DS = "payment_method_options[card][request_three_d_secure]" in riskFields
+      // WP A31: founding is offered only while it is listed, which includes its window being open (codium-perks.ts),
+      // and only to an account that never had a founding record, since the slot script refuses every other one.
+      const offerFounding =
+        (await listedPerks(fetcher)).has("founding") &&
+        (await readFoundingMember(user.id, fetcher).then(
+          (member) => member === undefined,
+          () => false,
+        ))
       const earlier = account.checkout && account.checkout.expires > now ? account.checkout : undefined
       const pending = earlier
         ? await modelPlanStripe(`checkout/sessions/${encodeURIComponent(earlier.id)}`, {}, fetcher)
@@ -3191,7 +3302,10 @@ export async function modelPlanCheckout(
         pending.metadata.vector_model_credits_usd === String(plan.credits) &&
         pending.metadata.vector_price_id === priceID &&
         pending.metadata.vector_terms_date === CODIUM_TERMS_DATE &&
-        pending.metadata.vector_3ds_requested === String(requires3DS)
+        pending.metadata.vector_3ds_requested === String(requires3DS) &&
+        // A checkout opened before founding was offered is replaced by one that offers it; one holding a slot is kept,
+        // and so is one whose slot request was refused, until it closes (no new session, and no slot churn, per click).
+        (!offerFounding || validFoundingToken(pending.metadata.vector_founding) || earlier.foundingRefused === true)
       )
         return { url: earlier.url }
       if (pending?.status === "open") await verify()
@@ -3213,21 +3327,32 @@ export async function modelPlanCheckout(
         recurring.interval_count !== 1
       )
         throw new ApiError(503, "MODEL_PLAN_PRICE_MISMATCH", "This subscription price is not configured correctly.")
+      // The founding slot of a checkout that can no longer be paid goes back before this one asks for its own.
+      if (closed?.status === "expired" && earlier?.founding) await releaseFoundingSlot(earlier.founding, fetcher)
       const closes = (Math.floor(now / 1_800_000) + 2) * 1_800_000
-      const idempotency = `vector-model-checkout-${user.id}-${plan.id}-${createHash("sha256").update(`${priceID}:${plan.credits}`).digest("hex").slice(0, 12)}-${account.checkout?.id ?? "new"}-${Math.floor(now / 1_800_000)}`
+      const idempotency = `vector-model-checkout-${user.id}-${plan.id}-${createHash("sha256")
+        .update(`${priceID}:${plan.credits}${offerFounding ? ":founding" : ""}`)
+        .digest("hex")
+        .slice(0, 12)}-${account.checkout?.id ?? "new"}-${Math.floor(now / 1_800_000)}`
+      const offered = offerFounding ? foundingToken(idempotency) : undefined
       // Only a checkout that can no longer be paid gives its reservation back. A paid one keeps counting until it
       // lapses, because the reading this sale is measured against may not count its credits as owed yet.
       await reserveCodiumSale(
         funding,
         {
           id: idempotency,
-          credits: plan.credits,
+          credits: foundingCredits(plan.credits, plan.id, offered),
           closes,
           released: closed?.status === "expired" ? earlier?.reservation : undefined,
         },
         fetcher,
         now,
       )
+      // The token goes on the checkout only once its slot is held, so every paid founding token can get a number.
+      const founding =
+        offered && (await reserveFoundingSlot(offered, closes + FOUNDING.reservationGraceMs, user.id, fetcher, now))
+          ? offered
+          : undefined
       await verify()
       const checkout = await modelPlanStripe(
         "checkout/sessions",
@@ -3249,6 +3374,12 @@ export async function modelPlanCheckout(
             "subscription_data[metadata][vector_account_id]": user.id,
             "subscription_data[metadata][vector_plan]": plan.id,
             "subscription_data[metadata][vector_model_credits_usd]": String(plan.credits),
+            ...(founding
+              ? {
+                  "metadata[vector_founding]": founding,
+                  "subscription_data[metadata][vector_founding]": founding,
+                }
+              : {}),
             success_url: `${modelPlanOrigin()}/account?model_plan=success`,
             cancel_url: `${modelPlanOrigin()}/account?model_plan=cancelled`,
             expires_at: String(closes / 1000),
@@ -3273,6 +3404,8 @@ export async function modelPlanCheckout(
             url: checkout.url,
             expires: checkout.expires_at * 1000,
             reservation: idempotency,
+            ...(founding ? { founding } : {}),
+            ...(offered && !founding ? { foundingRefused: true } : {}),
           },
         },
         fetcher,
@@ -3856,6 +3989,8 @@ export async function cancelModelPlanAccount(id: string, fetcher: typeof fetch =
       // Every service reads the snapshot, so the account is ended/closing everywhere from here (contract §4.4).
       const stored = await readSnapshotForWrite(id, fetcher)
       await commitSnapshot(closingFacts(id, closing, stored.previous, "request"), stored, fetcher, Date.now(), verify)
+      // P5: the founding record, the founders page entry and the display name go with the account (WP A31).
+      await eraseFounding(id, fetcher)
       if (account.key)
         await openRouterManagement(`/${encodeURIComponent(account.key.hash)}`, { disabled: true }, fetcher, "PATCH")
       await verify()

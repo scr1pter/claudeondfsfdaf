@@ -107,6 +107,8 @@ export type FollowupDraft = {
   // When LLM-as-a-judge is on: which runs Vector judges. A draft queued before this field existed carries llmJudge.
   judge?: "thorough" | "changes"
   llmJudge?: boolean
+  // Second opinion (WP A35): with the judge on, Vector Codium work is judged on the plan's judge from another lab.
+  secondOpinion?: boolean
   // The composer's Quick mode: the person picked the quick lane, so the engine answers there and never escalates it.
   // In Deep research the Depth chip sets it: Focused is Work and Deep is Thorough.
   size?: "chat" | "standard" | "thorough"
@@ -215,6 +217,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   // told to, so a build prompt still carries the policy. A current engine reads the setting, drops the policy before
   // the model sees it, and judges only large tasks.
   const legacyJudge = judge !== undefined && agent === "build"
+  // Only with the judge on: the engine reads it when it launches the judge, and an older engine ignores it.
+  const secondOpinion = judge !== undefined && input.draft.secondOpinion === true
   const setBusy = () => {
     if (!input.optimisticBusy) return
     input.serverSync.session.set("session_status", input.draft.sessionID, { type: "busy" })
@@ -286,6 +290,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         executionMode: input.draft.executionMode,
         ...(budget ? { budget } : {}),
         ...(judge ? { judge } : {}),
+        ...(secondOpinion ? { secondOpinion } : {}),
         parts: images.map((attachment) => ({
           id: Identifier.ascending("part"),
           type: "file" as const,
@@ -387,6 +392,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       executionMode: input.draft.executionMode,
       ...(budget ? { budget } : {}),
       ...(judge ? { judge } : {}),
+      ...(secondOpinion ? { secondOpinion } : {}),
       ...(input.draft.size && sized(agent, input.draft.size) ? { size: input.draft.size } : {}),
     })
     return true
@@ -683,6 +689,8 @@ type PromptSubmitInput = {
   researchScope?: Accessor<Research.Scope>
   llmJudge?: Accessor<boolean>
   judgeScope?: Accessor<"thorough" | "changes">
+  /** Second opinion (WP A35), sent only while the judge is on. */
+  secondOpinion?: Accessor<boolean>
   autoModelRouting?: Accessor<boolean>
   connectProvider?: () => void
   /** Asks once before the first prompt to a free model whose provider may train on prompts; false keeps it unsent. */
@@ -1003,6 +1011,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       available: local.agent.list(),
     })
     const judge = input.llmJudge?.() ? (input.judgeScope?.() ?? "thorough") : undefined
+    const secondOpinion = judge !== undefined && input.secondOpinion?.() === true
     const agent = resolveExecutionAgent({
       planMode: isPlanMode,
       quickRequested: requestedExecutionMode === "quick",
@@ -1151,6 +1160,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       executionMode,
       ...(pasted.length ? { pasted } : {}),
       ...(judge ? { judge } : {}),
+      ...(secondOpinion ? { secondOpinion } : {}),
       ...(requestedExecutionMode === "quick" && agent === "quick" ? { size: "chat" as const } : {}),
       ...(researchSize ? { size: researchSize } : {}),
       ...(researchScope ? { research: { scope: researchScope } } : {}),
@@ -1245,6 +1255,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             variant,
             executionMode,
             ...(judge ? { judge } : {}),
+            ...(secondOpinion ? { secondOpinion } : {}),
             parts: images.map((attachment) => ({
               id: Identifier.ascending("part"),
               type: "file" as const,

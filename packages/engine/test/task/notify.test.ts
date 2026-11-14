@@ -16,6 +16,7 @@ import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import type { TaskPromptOps } from "@/tool/task"
 import type { SessionPrompt } from "@/session/prompt"
 import { TaskNotify } from "@/task/notify"
+import { HostedResult } from "@vectordevai/core/hosted-result"
 import { disposeAllInstances, disposeAllInstancesEffect } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
@@ -634,4 +635,52 @@ describe("TaskNotify", () => {
       expect(record?.notification).toBeUndefined()
     }),
   )
+})
+
+describe("hosted result notes", () => {
+  slow.instance("a durable report is quiet and retries repair its same partial message once", () => Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const notes = yield* TaskNotify.Service
+    const chat = yield* parent()
+    const view = { id: `jb_${"a".repeat(26)}`, state: "reported" as const,
+      createdAt: Date.now() - 1000, endedAt: Date.now() }
+    const receipt = HostedResult.receipt(chat.id, view)
+    const messageID = MessageID.make(receipt.messageID)
+    const partID = PartID.make(receipt.partID)
+    const text = HostedResult.note(view)
+    const prompts: SessionPrompt.PromptInput[] = []
+    const ops: TaskPromptOps = {
+      ...recorder().ops,
+      prompt: (input) => Effect.gen(function* () {
+        prompts.push(input)
+        yield* sessions.updateMessage({ id: input.messageID!, sessionID: input.sessionID, role: "user",
+          agent: input.agent ?? "build", model: input.model ?? model, time: { created: Date.now() } })
+        // Simulate an engine stopping after its message exists but before its report part was saved.
+        if (prompts.length === 1) return yield* Effect.die(new Error("fixture stopped before part"))
+        for (const part of input.parts) {
+          if (part.type !== "text") continue
+          yield* sessions.updatePart({ ...part, id: part.id ?? PartID.ascending(), messageID: input.messageID!, sessionID: input.sessionID })
+        }
+        return reply(input)
+      }),
+    }
+    const post = () => notes.post({ parentID: chat.id, agent: "build", ops, notes: [{
+      kind: "hosted", hostedID: view.id, state: view.state, text, wake: true,
+      receipt: { messageID, partID }, hold: "subagent",
+    }] })
+    yield* post()
+    expect(yield* sessions.getPart({ sessionID: chat.id, messageID, partID })).toBeUndefined()
+    yield* post()
+    yield* post()
+    expect(prompts).toHaveLength(2)
+    expect(prompts.every((input) => input.noReply === true && input.messageID === messageID)).toBe(true)
+    expect(prompts[1]?.model).toEqual(model)
+    const part = yield* sessions.getPart({ sessionID: chat.id, messageID, partID })
+    expect(part?.type).toBe("text")
+    if (part?.type === "text") {
+      expect(part.text).toBe(text)
+      expect(part.metadata?.hostedJobNotification).toEqual({ jobID: view.id, state: "reported" })
+      expect(part.metadata?.[SessionTaskSize.QUIET]).toBe(true)
+    }
+  }))
 })

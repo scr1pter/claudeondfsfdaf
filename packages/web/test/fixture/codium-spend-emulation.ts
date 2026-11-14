@@ -1,10 +1,12 @@
 import { POOL_SCRIPTS } from "../../../../api/_lib/codium-pool"
 import { MODEL_SPEND_SCRIPTS } from "../../../../api/_lib/codium-spend-ledger"
+import { USAGE_HISTORY_SCRIPTS } from "../../../../api/_lib/codium-usage-history"
 
 /*
  * The A17 spend scripts as TypeScript, step for step, for the in-memory stores that run the root `test/` suite without
- * Valkey (test.yml): GENESIS, the ledger's READ, status's read-only DAY figure and the common pool HOLD, with the
- * shared ledger read and fence they are built from (codium-spend-ledger.ts MODEL_SPEND_LUA). Model ADMIT and SETTLE are
+ * Valkey (test.yml): GENESIS, the ledger's READ, status's read-only DAY figure, status's HISTORY of day buckets
+ * (codium-usage-history.ts) and the common pool HOLD, with the shared ledger read and fence they are built from
+ * (codium-spend-ledger.ts MODEL_SPEND_LUA). Model ADMIT and SETTLE are
  * deliberately not emulated: their money and race assertions run only on real Lua. test/codium-pool.test.ts runs the
  * same HOLD/READ cases both in memory and on Valkey (VECTOR_TEST_REDIS_URL), which is the check that this emulation and
  * the Lua agree; DAY's agreement with ADMIT is checked on real Lua in model-plans-api.test.ts.
@@ -488,6 +490,33 @@ export function spendScripts(store: SpendStore): [string, Script][] {
           if (Number(debit.at) >= dayStart && Number(debit.at) < dayStart + 86_400_000)
             daily = plus(daily, Number(debit.micro))
         return daily ?? -1
+      },
+    ],
+    [
+      USAGE_HISTORY_SCRIPTS.HISTORY,
+      ([debitsKey, ...dayKeys], [rawFirst]) => {
+        const first = integer(rawFirst)
+        if (first === undefined || !typed(debitsKey!, "hash")) return -1
+        const totals: (number | undefined)[] = []
+        for (const key of dayKeys) {
+          if (!typed(key, "hash")) return -1
+          const total = integer(hget(key, "total") ?? "0")
+          if (total === undefined) return -1
+          totals.push(total)
+        }
+        for (const [, raw] of entries(debitsKey!)) {
+          const debit = object(raw)
+          if (!debit) return -1
+          const micro = integer(debit.micro)
+          const at = integer(debit.at)
+          if (micro === undefined || at === undefined) return -1
+          const index = Math.floor((at - first) / 86_400_000)
+          if (at >= first && index < totals.length) {
+            totals[index] = plus(totals[index], micro)
+            if (totals[index] === undefined) return -1
+          }
+        }
+        return totals
       },
     ],
     [

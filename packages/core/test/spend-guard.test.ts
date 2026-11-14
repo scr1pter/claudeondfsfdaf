@@ -523,6 +523,28 @@ describe("SpendGuard.afterStep", () => {
   })
 })
 
+// Label plan §3.2: a saved research report is a document people share, so its Spend line names own dollars only.
+describe("SpendGuard.reportSpend", () => {
+  test("a run that spent no dollars gets no Spend line, a Codium-only run included", () => {
+    expect(SpendGuard.reportSpend(undefined)).toBeUndefined()
+    expect(SpendGuard.reportSpend({ spentUsd: 0, codiumSteps: 0 })).toBeUndefined()
+    const codium = play(
+      { usd: 1 },
+      Array.from({ length: 45 }, () => step({ costKind: "codium", costUsd: 100 })),
+    )
+    expect(codium.run.codiumSteps).toBe(45)
+    expect(SpendGuard.reportSpend(codium.run)).toBeUndefined()
+  })
+
+  test("own dollars read at list prices, with + Codium beside Codium steps", () => {
+    expect(SpendGuard.reportSpend({ spentUsd: 0.42, codiumSteps: 0 })).toBe("$0.42 at list prices")
+    expect(SpendGuard.reportSpend({ spentUsd: 0.12, codiumSteps: 3 })).toBe("$0.12 at list prices + Codium")
+    expect(SpendGuard.reportSpend({ spentUsd: 0.004, codiumSteps: 1 })).toBe("<$0.01 at list prices + Codium")
+    const mixed = play({}, [step({ costKind: "codium", costUsd: 99 }), step({ costUsd: 0.12 })])
+    expect(SpendGuard.reportSpend(mixed.run)).toBe("$0.12 at list prices + Codium")
+  })
+})
+
 const it = testEffect(LayerNode.compile(LayerNode.group([SpendGuard.node, EventV2.node])))
 
 describe("SpendGuard service", () => {

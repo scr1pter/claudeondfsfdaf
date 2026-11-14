@@ -123,6 +123,10 @@ export const SkillDrafter = Schema.Literals(["off", "local-only", "always"]).ann
 })
 export type SkillDrafter = typeof SkillDrafter.Type
 
+/** The owner's explicit permission for Codium Brain calls; subscribing never grants it. */
+export const CodiumHelpers = Schema.Literals(["ask", "on", "off"]).annotate({ identifier: "MemoryCodiumHelpers" })
+export type CodiumHelpers = typeof CodiumHelpers.Type
+
 /** What Vector does with workflow insights: apply learned defaults, only record runs, or nothing. */
 export const WorkflowLearning = Schema.Literals(["apply", "observe", "off"]).annotate({
   identifier: "MemoryWorkflowLearning",

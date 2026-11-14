@@ -390,6 +390,9 @@ export const User = Schema.Struct({
   size: Schema.optional(TaskSize.Choice),
   // When Vector runs LLM-as-a-judge after the run this message starts.
   judge: Schema.optional(TaskSize.JudgeMode),
+  // WP A35: the sender has Second opinion on, so the judge of Vector Codium work runs on the plan's judge from another
+  // lab when one is listed for the worker's model and no judge model is configured.
+  secondOpinion: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "UserMessage" })
 export type User = Types.DeepMutable<Schema.Schema.Type<typeof User>>
 

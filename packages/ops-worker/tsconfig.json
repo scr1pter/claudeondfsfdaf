@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@tsconfig/bun/tsconfig.json",
+  "compilerOptions": {
+    // The Worker runs on Cloudflare's runtime, not Bun or Node: src/ uses only web platform APIs (fetch, WebCrypto,
+    // TextEncoder) plus the Durable Object pieces typed in src/runtime.ts. test/source.test.ts checks that no Bun or
+    // Node module reaches src/. Bun's types are here for the tests only.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src", "test"]
+}

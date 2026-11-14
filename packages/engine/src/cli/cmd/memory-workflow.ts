@@ -27,7 +27,7 @@ export const MemoryWorkflowCommand = effectCmd({
       .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.workflow")(function* (args) {
     const memory = yield* where
-    const insights = yield* memory.workflow.insights(memory.place)
+    const insights = BrainWorkflow.displayInsights(yield* memory.workflow.insights(memory.place))
     const tiers = insights.tiers.filter((item) => !args.tier || item.tier === args.tier)
     if (args.json) return void process.stdout.write(`${JSON.stringify({ ...insights, tiers }, null, 2)}${EOL}`)
     UI.println(`Mode: ${MODE[insights.mode]}. Exploring: ${insights.explore ? "on" : "off"}.`)
@@ -130,6 +130,7 @@ function row(stats: BrainWorkflow.ArmStats) {
   const split =
     arm.split === "solo" ? "solo" : arm.subagentModel === "small" ? "subagents on the small model" : "subagents"
   const rate = stats.passRate === undefined ? "no checked runs" : `${Math.round(stats.passRate * 100)}% passed`
-  const cost = stats.costUsd === undefined ? "cost unknown" : `avg $${stats.costUsd.toFixed(2)}`
+  const own = stats.costUsd === undefined ? "cost unknown" : `avg $${stats.costUsd.toFixed(2)}`
+  const cost = stats.codium === "only" ? "Codium" : stats.codium === "mixed" ? `${own} + Codium` : own
   return `${arm.effort} effort · ${split} · ${arm.providerID}/${arm.modelID}: ${stats.rows} run${stats.rows === 1 ? "" : "s"}, ${rate}, ${Math.round(stats.checkedShare * 100)}% checked, ${cost}`
 }

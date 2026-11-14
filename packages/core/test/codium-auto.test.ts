@@ -17,6 +17,26 @@ const auto = (roles = { floor: floor.id, default: middle.id, ceiling: ceiling.id
 const catalog = (models: ModelPlans.Model[]): ModelPlans.Catalog => ({ enabled: true, models })
 const plan = catalog([middle, auto(), floor, ceiling])
 
+test("learned roles still obey the current catalog, context window and saving threshold", () => {
+  const learned = [{ instead: middle.id, model: floor.id, saving: 0.3 }]
+  expect(CodiumAuto.resolve({ catalog: plan, tier: "standard", contextTokens: 100, learned })?.id).toBe(floor.id)
+  expect(CodiumAuto.resolve({ catalog: plan, tier: "standard", contextTokens: 9_000, learned })?.id).toBe(middle.id)
+  for (const extra of [{ manualOnly: true as const }, { locked: { plan: "vector-50", name: "Pro" } }])
+    expect(CodiumAuto.resolve({ catalog: catalog([auto(), middle, { ...floor, ...extra }]), tier: "standard", contextTokens: 10, learned })?.id).toBe(middle.id)
+  expect(CodiumAuto.resolve({ catalog: plan, tier: "standard", contextTokens: 10, learned: [{ ...learned[0]!, saving: 0.19 }] })?.id).toBe(middle.id)
+  expect(CodiumAuto.resolve({ catalog: plan, tier: "standard", contextTokens: 10, learned: [{ ...learned[0]!, model: "not-listed" }] })?.id).toBe(middle.id)
+})
+
+test("relative usage is known only for entirely measured Codium work", () => {
+  const weighted = catalog([{ ...floor, weight: 1 }, { ...middle, weight: 2 }])
+  const step = { providerID: ModelPlans.PROVIDER_ID, modelID: floor.id, input: 100, output: 20, reasoning: 10, cacheRead: 100 }
+  expect(CodiumAuto.units(weighted, [step, { ...step, modelID: middle.id }])).toBe(420)
+  for (const bad of [{ providerID: "own-key" }, { modelID: "unknown" }, { input: NaN }, { output: -1 }])
+    expect(CodiumAuto.units(weighted, [step, { ...step, ...bad }])).toBeUndefined()
+  expect(CodiumAuto.units(weighted, [])).toBeUndefined()
+  expect(CodiumAuto.units(plan, [step])).toBeUndefined()
+})
+
 test("a message starts on the role its size names", () => {
   const pick = (tier: "chat" | "light" | "standard" | "thorough") =>
     CodiumAuto.resolve({ catalog: plan, tier, contextTokens: 100 })?.id
@@ -70,4 +90,22 @@ test("a helper call uses Auto's floor, then its default, and is skipped when nei
   ])
   expect(CodiumAuto.helper(neither)).toBeUndefined()
   expect(CodiumAuto.helper(catalog([floor, middle]))).toBeUndefined()
+})
+
+test("Brain requires a qualified actual floor and a current plan, never Auto's substituted default", () => {
+  const ready = { ...catalog([{ ...floor, role: "floor" }, middle, auto()]), plan: "vector-10" }
+  expect(CodiumAuto.brain(ready)?.id).toBe(floor.id)
+  expect(CodiumAuto.brain({ ...ready, enabled: false })).toBeUndefined()
+  expect(CodiumAuto.brain({ ...ready, plan: null })).toBeUndefined()
+  expect(CodiumAuto.brain({ ...ready, plan: undefined })).toBeUndefined()
+  expect(
+    CodiumAuto.brain({
+      ...ready,
+      models: [middle, auto({ floor: middle.id, default: middle.id, ceiling: middle.id })],
+    }),
+  ).toBeUndefined()
+  for (const extra of [{ manualOnly: true as const }, { locked: { plan: "vector-50", name: "Pro" } }])
+    expect(
+      CodiumAuto.brain({ ...ready, models: [{ ...floor, role: "floor", ...extra }, middle, auto()] }),
+    ).toBeUndefined()
 })

@@ -130,6 +130,12 @@ export const docsNav: DocGroup[] = [
           "Sign in to Vector for free models, connect a provider account or API key, or add an OpenAI-compatible server of your own.",
       },
       {
+        id: "codium",
+        title: "Vector Codium",
+        blurb:
+          "Vector's optional monthly plan: coding models without provider keys, usage shown as a percentage, and no top-ups.",
+      },
+      {
         id: "local",
         title: "Vector Local",
         blurb: `${release111.since} run Vector's AI features on model servers you or your company host, with a log of what Vector sent.`,
@@ -244,6 +250,9 @@ export const docsMoved: Record<string, string> = {
   faq: "troubleshooting#faq",
   "delete-account": "troubleshooting#delete-account",
   "local-memory": "brain",
+  // Plans and pricing have no pages of their own: Vector Codium covers both.
+  plans: "codium",
+  pricing: "codium",
 }
 
 export const groupOf = (id: string) => docsNav.find((group) => group.links.some((link) => link.id === id))?.label ?? ""
