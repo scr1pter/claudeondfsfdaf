@@ -270,10 +270,20 @@ const layer = Layer.effect(
         return {
           built: {
             ...built,
-            stages: built.stages?.map((entry) => ({ ...entry, stage: { ...entry.stage,
-              ...(roleStages[entry.stage.id]?.producer ? { model: roleStages[entry.stage.id]!.producer } : {}),
-              ...(entry.stage.verify && roleStages[entry.stage.id]?.verifier ? { verify: { ...entry.stage.verify, model: roleStages[entry.stage.id]!.verifier } } : {}),
-            } })),
+            stages: built.stages?.map((entry) => {
+              const stage = entry.stage
+              if ("connect" in stage) return entry
+              return {
+                ...entry,
+                stage: {
+                  ...stage,
+                  ...(roleStages[stage.id]?.producer ? { model: roleStages[stage.id]!.producer } : {}),
+                  ...(stage.verify && roleStages[stage.id]?.verifier
+                    ? { verify: { ...stage.verify, model: roleStages[stage.id]!.verifier } }
+                    : {}),
+                },
+              }
+            }),
             ok: issues.length === 0,
             issues,
             plan,

@@ -2215,6 +2215,7 @@ describe("ReviewEval.project", () => {
           preconnect: () => Effect.die("booted a provider"),
           closest: () => Effect.die("booted a provider"),
           getSmallModel: () => Effect.die("booted a provider"),
+          getBrainModel: () => Effect.die("booted a provider"),
           defaultModel: () => Effect.die("booted a provider"),
           savedModel: () => Effect.die("booted a provider"),
           freeSignIn: () => Effect.die("booted a provider"),
