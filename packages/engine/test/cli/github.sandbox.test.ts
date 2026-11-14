@@ -5,9 +5,13 @@ import path from "node:path"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import {
   copyBundleFile,
+  engineLaunch,
+  namespaceProbeFailure,
   prepare,
+  preparedFor,
   run,
   finish,
   sandboxEnvironment,
@@ -158,7 +162,7 @@ test("private credential holders keep the captured process boundary after enviro
     GITHUB_ACTIONS: "true",
     VECTOR_MODE: "own-key",
     VECTOR_SECRET_CHANNEL: "stdin",
-    [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid",
+    [GithubAgents.TOOL_PID_NAMESPACE_ENV]: GithubSecrets.toolBoundary(),
   }
   const holder = GithubSecrets.createGithubSecrets()
   expect(holder.isolatedTools()).toBe(false)
@@ -171,6 +175,115 @@ test("private credential holders keep the captured process boundary after enviro
   env[GithubAgents.TOOL_PID_NAMESPACE_ENV] = "off"
   env.GITHUB_ACTIONS = "false"
   expect(holder.isolatedTools()).toBe(true)
+})
+
+test("the launcher names the tool boundary its build has, and a holder accepts only that one", async () => {
+  expect(GithubSecrets.toolBoundary(true)).toBe("pid")
+  expect(GithubSecrets.toolBoundary(false)).toBe("guard")
+  expect(GithubSecrets.toolBoundary()).toBe(ProcessIsolation.FLOOR ? "pid" : "guard")
+  const channel = async function* () {
+    yield JSON.stringify({ v: 1, githubToken: "fixture-github", cliToken: "vct_fixture.signature", keys: {} }) + "\n"
+  }
+  for (const floor of [true, false]) {
+    const env = (boundary: string) => ({
+      GITHUB_ACTIONS: "true",
+      VECTOR_MODE: "own-key",
+      VECTOR_SECRET_CHANNEL: "stdin",
+      [GithubAgents.TOOL_PID_NAMESPACE_ENV]: boundary,
+    })
+    const accepted = GithubSecrets.createGithubSecrets(undefined, floor)
+    await accepted.load(env(GithubSecrets.toolBoundary(floor)), channel())
+    expect(accepted.isolatedTools()).toBe(true)
+    const mismatched = GithubSecrets.createGithubSecrets(undefined, floor)
+    await expect(mismatched.load(env(GithubSecrets.toolBoundary(!floor)), channel())).rejects.toThrow()
+    expect(mismatched.loaded()).toBe(false)
+  }
+})
+
+test("a Codium session proof needs the launcher's boundary and descriptor, with or without the floor", async () => {
+  for (const floor of [true, false]) {
+    const load = async (env: Record<string, string>) => {
+      let activated = 0
+      const holder = GithubSecrets.createGithubSecrets(() => activated++, floor)
+      await holder.load(
+        { GITHUB_ACTIONS: "true", VECTOR_MODE: "codium", VECTOR_SECRET_CHANNEL: "stdin", ...env },
+        (async function* () {
+          yield JSON.stringify({ v: 1, githubToken: "fixture-github", runToken: "vrt_fixture.signature", keys: {} }) +
+            "\n"
+        })(),
+      )
+      return { holder, activated }
+    }
+    const boundary = { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: GithubSecrets.toolBoundary(floor) }
+    const proven = await load({ ...boundary, [GithubAgents.SESSION_PROOF_ENV]: "fd3" })
+    expect(proven.holder.sessionProof()).toBe(true)
+    expect(proven.activated).toBe(1)
+    const unmarked = await load({ [GithubAgents.SESSION_PROOF_ENV]: "fd3" })
+    expect(unmarked.holder.sessionProof()).toBe(false)
+    // Codium still applies the hosted tool guards without a marker.
+    expect(unmarked.activated).toBe(1)
+    expect((await load(boundary)).holder.sessionProof()).toBe(false)
+  }
+})
+
+test("a run needs prepared private state, and only a floor build needs its verified tool namespace", () => {
+  const state = {
+    v: 1 as const,
+    workspace: "/runner/work/repo",
+    container: "/mnt/vector-agent-sandbox",
+    created: true,
+    mode: "codium" as const,
+    sudo: false,
+    uid: 1001,
+    gid: 1001,
+    prepared: true,
+  }
+  const target = { workspace: state.workspace, mode: "codium" }
+  expect(preparedFor(state, target, false)).toBe(true)
+  expect(preparedFor(state, target, true)).toBe(false)
+  expect(preparedFor({ ...state, isolatedTools: true }, target, true)).toBe(true)
+  expect(preparedFor({ ...state, mode: "own-key", sudo: true }, { ...target, mode: "own-key" }, true)).toBe(true)
+  for (const floor of [true, false]) {
+    const verified = { ...state, isolatedTools: true }
+    expect(preparedFor(undefined, target, floor)).toBe(false)
+    expect(preparedFor({ ...verified, prepared: false }, target, floor)).toBe(false)
+    expect(preparedFor({ ...verified, created: false }, target, floor)).toBe(false)
+    expect(preparedFor({ ...verified, uid: undefined }, target, floor)).toBe(false)
+    expect(preparedFor({ ...verified, gid: undefined }, target, floor)).toBe(false)
+    expect(preparedFor(verified, { ...target, workspace: "/runner/work/other" }, floor)).toBe(false)
+    expect(preparedFor(verified, { ...target, mode: "own-key" }, floor)).toBe(false)
+  }
+})
+
+test("only a floor build wraps the engine in its empty-proc mount namespace", () => {
+  const inner = ["/usr/bin/prlimit", "--core=0:0", "--", "/usr/bin/setpriv", "--no-new-privs", "--", "/bin/true"]
+  expect(engineLaunch(inner, "/runner/work/repo", false, false)).toEqual(["-n", ...inner])
+  expect(engineLaunch(inner, "/runner/work/repo", true, true)).toEqual(["-n", ...inner])
+  expect(engineLaunch(inner, "/runner/work/repo", false, true)).toEqual([
+    "-n",
+    ProcessIsolation.BINARY,
+    ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), "/runner/work/repo"),
+  ])
+  const locations = { node: "/opt/node/bin/node", home: "/home/agent", temporary: "/home/agent/tmp", event: "/e.json" }
+  const env = { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", VECTOR_MODE: "codium" }
+  for (const boundary of ["pid", "guard"] as const)
+    expect(
+      sandboxEnvironment(env, { ...locations, toolIsolation: boundary })[GithubAgents.TOOL_PID_NAMESPACE_ENV],
+    ).toBe(boundary)
+})
+
+test("a refused namespace probe names its kind with bounded, control-free stderr", () => {
+  const error = namespaceProbeFailure("tool PID/proc", {
+    code: 1,
+    stderr: "\x1b[31mbwrap: setting up uid map: Permission denied\x1b[0m\r\n\x07extra\tline\n",
+  })
+  expect(error.message).toBe(
+    "The mandatory tool PID/proc namespace probe failed (exit 1): bwrap: setting up uid map: Permission denied extra line. The run is refused.",
+  )
+  const long = namespaceProbeFailure("engine mount", { code: 2, stderr: "x".repeat(5000) }).message
+  expect(long).toContain("x".repeat(800) + ". The run is refused.")
+  expect(long).not.toContain("x".repeat(801))
+  expect(namespaceProbeFailure("engine mount", { code: -1, stderr: "" }).message).toContain("no diagnostic")
 })
 
 test("Codium never downgrades the tool process boundary to a legacy unset marker", async () => {

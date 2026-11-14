@@ -233,8 +233,17 @@ async function* streamChunks(stream: Readable): AsyncGenerator<Uint8Array | stri
   }
 }
 
+/**
+ * The hosted tool boundary the trusted launcher names after preparing a sandbox: "pid" when the build has the
+ * bubblewrap floor, "guard" when it holds the floor off and only the kernel path guard and native loader refusal apply.
+ */
+export function toolBoundary(floor = ProcessIsolation.FLOOR) {
+  return floor ? "pid" : "guard"
+}
+
 /** One holder per CLI process. Tests create a separate holder, never replace process.env or a global service. */
-export function createGithubSecrets(activateIsolation?: () => void) {
+export function createGithubSecrets(activateIsolation?: () => void, floor = ProcessIsolation.FLOOR) {
+  const boundary = toolBoundary(floor)
   let held: Channel | undefined
   let outputPattern: RegExp | undefined
   let authorized = false
@@ -249,7 +258,8 @@ export function createGithubSecrets(activateIsolation?: () => void) {
     const supplied = env.VECTOR_SECRET_ENV_NAMES?.split(",").filter(Boolean) ?? []
     let capture: unknown
     try {
-      if (isolation !== undefined && isolation !== "pid") throw unavailable()
+      // A boundary this build does not produce is a launcher mismatch, never a lower boundary.
+      if (isolation !== undefined && isolation !== boundary) throw unavailable()
       if (proof !== undefined && proof !== "fd3") throw unavailable()
       await assertNoDebugger(env)
       capture =
@@ -288,8 +298,8 @@ export function createGithubSecrets(activateIsolation?: () => void) {
       .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     outputPattern = patterns.length ? new RegExp(patterns.join("|"), "g") : undefined
     // Capture authority once, before project/tool environments can change. Codium never permits the sudo exception.
-    isolatedTools = parsed.data.runToken !== undefined || isolation === "pid"
-    sessionProof = parsed.data.runToken !== undefined && isolation === "pid" && proof === "fd3"
+    isolatedTools = parsed.data.runToken !== undefined || isolation === boundary
+    sessionProof = parsed.data.runToken !== undefined && isolation === boundary && proof === "fd3"
     if (isolatedTools) activateIsolation?.()
     held = parsed.data
   }

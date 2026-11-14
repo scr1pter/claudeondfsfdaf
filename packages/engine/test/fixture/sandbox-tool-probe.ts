@@ -2,9 +2,15 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
-/** CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. */
+/**
+ * CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. A build without the
+ * bubblewrap floor has no such namespace: its tools share the engine's UID and PID namespace, so the probe records what
+ * they can see with signal 0, which leaves the target's inspector closed, and asserts only the guards that build keeps.
+ */
 export async function probeToolProcesses() {
+  const floor = ProcessIsolation.FLOOR
   const root = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP!, "tool-process-probe-"))
   for (const [name, directory] of Object.entries({
     XDG_DATA_HOME: "data",
@@ -166,7 +172,8 @@ export async function probeToolProcesses() {
       const loaderReport = message("report")
       dummy.send("report")
       if ((await loaderReport).opened !== false) throw new Error("A refused loader signalled the disposable engine")
-      const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),'SIGUSR1');sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
+      const signal = floor ? "'SIGUSR1'" : "0"
+      const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),${signal});sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
       const output = await Effect.runPromise(
         Effect.gen(function* () {
@@ -200,15 +207,19 @@ export async function probeToolProcesses() {
         }).pipe(Effect.scoped, Effect.provide(layer), Effect.timeout("20 seconds")),
       )
       const actual: unknown = JSON.parse(output.output)
+      const observed: { visible: boolean; sent: boolean }[] = []
       function assertBlocked(value: unknown, label: string) {
         if (
           !value ||
           typeof value !== "object" ||
           !("visible" in value) ||
-          value.visible !== false ||
+          typeof value.visible !== "boolean" ||
           !("sent" in value) ||
-          value.sent !== false
+          typeof value.sent !== "boolean"
         )
+          throw new Error(`The ${label} did not report its view of the disposable engine`)
+        observed.push({ visible: value.visible, sent: value.sent })
+        if (floor && (value.visible || value.sent))
           throw new Error(`The ${label} can reach or signal the disposable engine`)
       }
       assertBlocked(actual, "actual ShellTool")
@@ -273,6 +284,7 @@ export async function probeToolProcesses() {
       assertBlocked(JSON.parse(backend), "formatter/shared Effect spawn backend")
 
       const pseudo = ["/proc/self/fd/3", "/dev/fd/3", `/proc/${process.pid}/mem`]
+      let engineProcHidden = true
       for (const target of pseudo) {
         const opened = await fs.open(target, "r").then(
           async (file) => {
@@ -281,7 +293,8 @@ export async function probeToolProcesses() {
           },
           () => false,
         )
-        if (opened) throw new Error("The engine can still open its process filesystem")
+        if (opened && floor) throw new Error("The engine can still open its process filesystem")
+        if (opened) engineProcHidden = false
       }
       const alias = path.join(process.cwd(), "probe-process-alias")
       await fs.symlink("/proc/self/fd/3", alias)
@@ -361,11 +374,14 @@ export async function probeToolProcesses() {
         throw new Error("A running Node inspector was not refused before private-channel loading")
       if (network.attempts().some((attempt) => !attempt.allowed))
         throw new Error("The tool process probe attempted external network access")
+      if (observed.length !== 5) throw new Error("A tool launch path did not report")
       return {
+        floor,
         actualShellTool: true,
         sameUid: true,
-        targetInvisible: true,
-        signalBlocked: true,
+        // Observed values: without the floor these may be false, and the runner asserts them only for a floor build.
+        targetInvisible: observed.every((value) => !value.visible),
+        signalBlocked: observed.every((value) => !value.sent),
         inspectorStayedClosed: true,
         controlInspectorOpened: true,
         activeInspectorRefused: true,
@@ -373,7 +389,7 @@ export async function probeToolProcesses() {
         lspLaunch: true,
         mcpLaunch: true,
         effectLaunch: true,
-        engineProcHidden: true,
+        engineProcHidden,
         actualFileToolsRefused: true,
         nativeLoaderRefused: true,
         ordinaryEnvironmentPreserved: true,

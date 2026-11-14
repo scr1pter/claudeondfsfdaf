@@ -184,11 +184,17 @@ if (process.argv[2] === "--module-load-check") {
     throw new Error("The artifact boundary gate did not match cleanup")
   if (!report.crash?.hardZero || !report.crash?.noDump || !report.crash?.noNewPrivileges)
     throw new Error("Missing crash isolation evidence")
+  // The bubblewrap floor's own fields hold only in a build that has it; every other guard holds in both.
+  if (report.toolProcess?.floor !== ProcessIsolation.FLOOR)
+    throw new Error("The tool probe's floor does not match this build")
+  if (
+    ProcessIsolation.FLOOR &&
+    (!report.toolProcess.targetInvisible || !report.toolProcess.signalBlocked || !report.toolProcess.engineProcHidden)
+  )
+    throw new Error("Missing actual ShellTool process-namespace acceptance")
   if (
     !report.toolProcess?.actualShellTool ||
     !report.toolProcess?.sameUid ||
-    !report.toolProcess?.targetInvisible ||
-    !report.toolProcess?.signalBlocked ||
     !report.toolProcess?.inspectorStayedClosed ||
     !report.toolProcess?.controlInspectorOpened ||
     !report.toolProcess?.activeInspectorRefused ||
@@ -196,7 +202,6 @@ if (process.argv[2] === "--module-load-check") {
     !report.toolProcess?.lspLaunch ||
     !report.toolProcess?.mcpLaunch ||
     !report.toolProcess?.effectLaunch ||
-    !report.toolProcess?.engineProcHidden ||
     !report.toolProcess?.actualFileToolsRefused ||
     !report.toolProcess?.nativeLoaderRefused ||
     !report.toolProcess?.ordinaryEnvironmentPreserved ||
