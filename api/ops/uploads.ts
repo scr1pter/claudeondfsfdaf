@@ -47,6 +47,7 @@ export async function handleOpsUploads(
   fetcher: typeof fetch = fetch,
   clock: () => number = Date.now,
   context: Omit<ShipDeskContext, "fetcher" | "now"> = {},
+  registry?: Parameters<typeof requireModelPlanCaller>[3],
 ) {
   try {
     if (request.method !== "POST") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Use POST for this endpoint.")
@@ -63,7 +64,7 @@ export async function handleOpsUploads(
 
     if (bearer.startsWith("vrt_")) {
       if (input.action !== "ticket") throw signInRequired()
-      const caller = await requireModelPlanCaller(request, fetcher, now)
+      const caller = await requireModelPlanCaller(request, fetcher, now, registry)
       if (caller.kind !== "run" || caller.run?.service !== "cloud-agents") throw signInRequired()
       await enforceRateLimit(
         request,

@@ -178,7 +178,7 @@ On this account, do not:
 - add a payment method;
 - create a management key or an API key.
 
-Do not rename, disable or delete any existing key either. Codium's funding check counts keys named `Vector <account id> …` and `Codium <account id> …`, and the privacy policy describes that naming. Credits, top-ups and the management key are mine (`docs/vector/owner-actions/codium-payments.md` section 2, steps 2 to 6).
+Do not rename, disable or delete any existing key either. Codium's funding check counts keys named `Vector <account id> …` and `Codium <account id> …`, and the privacy policy describes that naming. OpenRouter credits, automatic top-ups and the management key are mine (`docs/vector/owner-actions/codium-payments.md` section 2, steps 2 to 6).
 
 **3.2 Settings.** Open Settings → Observability and [Settings → Privacy](https://openrouter.ai/settings/privacy). Match the page's real labels to the intended settings below. Show each proposed change and wait for my yes before each Save:
 
@@ -319,7 +319,7 @@ Steps:
    - **Email and owner access:** `RESEND_API_KEY`, `VECTOR_PURCHASE_EMAIL_FROM`, `CODIUM_OWNER_EMAIL` and `CODIUM_OWNER_SECRET`.
    - **Client gates:** `MODEL_PLANS_MIN_CLIENT` (default `1.99.113`), `MODEL_PLAN_GLOBAL_INFLIGHT` and `MODEL_PLAN_PRIORITY_RESERVE=0.2`.
    - The optional `CODIUM_*` tuning values in `.env.example`.
-6. **Doc and code disagree.** codium-payments.md sections 1 and 3 still name top-up prices (`STRIPE_MODEL_TOPUP_*`) and a plan-change portal (`STRIPE_MODEL_PLAN_CHANGE_PORTAL_CONFIG_ID`). Neither should be set:
+6. **Doc and code disagree.** codium-payments.md sections 1 and 3 still name legacy top-up prices (`STRIPE_MODEL_TOPUP_*`) and a plan-change portal (`STRIPE_MODEL_PLAN_CHANGE_PORTAL_CONFIG_ID`). Neither should be set:
    - top-ups were removed on 27 October (`codium-tiers-v3-changes.md` section 3);
    - the build contract's section 4.16 lists both as removed;
    - the code on `codium` reads neither, and the setup script prints neither.
@@ -393,7 +393,7 @@ Steps:
 | `packages/desktop/src/main/github-auth.ts` (on `main`)                                                                                                                             | The separate Device Flow OAuth App and its scopes                                                                                                     |
 | `docs/vector/build/codium-build-spec.md` on `codium`, sections 2, 4.16, 4.17, 6 and 8.2                                                                                            | Codium's switches, variable names, the `codium-test` environment, Stripe and App owner steps                                                          |
 | `api/_lib/model-plan-chat.ts`, `model-plan-stripe.ts`, `model-plan-config.ts`, `packages/web/scripts/setup-model-plans.ts`, `.env.example` (on `codium`)                           | Gateway privacy guards, the 20 Stripe events and API version, price and credit variables, the 1.99.113 client minimum                                 |
-| `docs/vector/owner-actions/codium-payments.md` (on `codium`), section 2 step 7 and sections 1, 3 and 4                                                                             | Codium's separate OpenRouter account and privacy settings; Stripe and the test run (with the top-up mismatch in B.6)                                  |
+| `docs/vector/owner-actions/codium-payments.md` (on `codium`), section 2 step 7 and sections 1, 3 and 4                                                                             | Codium's separate OpenRouter account and privacy settings; Stripe and the test run (with the legacy top-up mismatch in B.6)                           |
 | `docs/vector/owner-actions/openrouter.md` (on `main`), "Free models of 17 October 2026"                                                                                            | The free-model account's different settings                                                                                                           |
 | `packages/web/src/pages/legal/terms.astro#codium-data`; `privacy.astro#codium` and `#codium-retention` (on `main`, unchanged on `codium` and `vector-at-mention`)                  | The published routing promise and its exceptions                                                                                                      |
 | `.github/workflows/vector-codium-e2e.yml` (on `codium`)                                                                                                                            | `codium-test` guard and secret names                                                                                                                  |

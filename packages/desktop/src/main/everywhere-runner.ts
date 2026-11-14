@@ -89,9 +89,9 @@ export type RunnerDeps = {
 }
 
 const MAPPING_LOG = {
-  "unsafe-config": "Vector everywhere declined a job: the project folder's local git settings include a key it never runs unattended (a filter, include, URL rewrite, helper or command).",
-  "other-repository": "Vector everywhere declined a job: the project folder's git remote is not the allowed repository.",
-  unavailable: "Vector everywhere declined a job: git could not read the project folder.",
+  "unsafe-config": "Vector everywhere declined a job: the workspace folder's local git settings include a key it never runs unattended (a filter, include, URL rewrite, helper or command).",
+  "other-repository": "Vector everywhere declined a job: the workspace folder's git remote is not the allowed repository.",
+  unavailable: "Vector everywhere declined a job: git could not read the workspace folder.",
 } as const
 
 function settingsValid(settings: RunnerSettings) {
