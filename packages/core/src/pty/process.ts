@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { Effect } from "effect"
 
 export * as PtyProcess from "./process"
@@ -40,6 +41,21 @@ export function signal(pid: number, name: "SIGINT" | "SIGTERM" | "SIGKILL") {
     } catch {
       return false
     }
+  }
+}
+
+/**
+ * The terminal's foreground process group: the job an interactive shell runs right now (its own group, apart from the
+ * shell's), or the program's own group when nothing else holds the terminal. Read with `ps -o tpgid=`, on macOS and
+ * Linux alike; the program's pid when that cannot be read. Never on Windows.
+ */
+export function foreground(pid: number) {
+  if (process.platform === "win32" || !usable(pid)) return pid
+  try {
+    const group = Number(execFileSync("ps", ["-o", "tpgid=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 }).trim())
+    return usable(group) ? group : pid
+  } catch {
+    return pid
   }
 }
 

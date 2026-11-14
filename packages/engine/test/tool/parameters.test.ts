@@ -140,6 +140,11 @@ describe("tool parameters", () => {
         true,
       )
       expect(accepts(Terminal, { action: "wait", id: "pty_1", pattern: "ready", timeout: 1000, cursor: 0 })).toBe(true)
+      expect(accepts(Terminal, { action: "signal", id: "pty_1", signal: "interrupt" })).toBe(true)
+      expect(accepts(Terminal, { action: "rename", id: "pty_1", title: "dev server" })).toBe(true)
+      expect(
+        accepts(Terminal, { action: "open", command: "npm run dev", notify: true, notify_pattern: "error|ready" }),
+      ).toBe(true)
     })
     test("rejects unknown actions and keys, long titles and out-of-range numbers", () => {
       expect(accepts(Terminal, { action: "evaluate" })).toBe(false)
@@ -148,6 +153,8 @@ describe("tool parameters", () => {
       expect(accepts(Terminal, { action: "open", title: "x".repeat(81) })).toBe(false)
       expect(accepts(Terminal, { action: "read", id: "pty_1", cursor: -1 })).toBe(false)
       expect(accepts(Terminal, { action: "read", id: "pty_1", lines: 0 })).toBe(false)
+      expect(accepts(Terminal, { action: "signal", id: "pty_1", signal: "hangup" })).toBe(false)
+      expect(accepts(Terminal, { action: "open", notify: true, notify_pattern: "x".repeat(501) })).toBe(false)
     })
   })
 

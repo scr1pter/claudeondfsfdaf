@@ -37,6 +37,7 @@ import { Watcher } from "@vectordevai/core/filesystem/watcher"
 import { Location } from "@vectordevai/core/location"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { Pty } from "@vectordevai/core/pty"
+import { PtyProcess } from "@vectordevai/core/pty/process"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
@@ -572,53 +573,10 @@ export const closeTerminalsIn = Effect.fn("TaskIsolation.closeTerminalsIn")(func
     }),
   )
   const running = closed.flat()
-  yield* Effect.forEach(running, (info) => ended(info.pid), { concurrency: "unbounded", discard: true })
+  // Each program closed above is waited for, and killed with its group if it ignores the hangup (PtyProcess.ended).
+  yield* Effect.forEach(running, (info) => PtyProcess.ended(info.pid), { concurrency: "unbounded", discard: true })
   return running.length
 })
-
-// The close sent the terminal's program the terminal library's hangup or terminate. One that ignores it is killed, with
-// its process group, after a second; on Windows the close already ends the console's processes. Waiting probes with
-// signal 0, which sends nothing.
-const ended = Effect.fn("TaskIsolation.ended")(function* (pid: number) {
-  // The pid comes from the terminal library unchecked (bun-pty reports -1 until it has one), and `process.kill` reads
-  // 0 or less as a process group or every process: 0 would probe and then kill the engine's own group, -1 every
-  // process the user may signal. Such a pid is neither probed nor killed. `alive` and `kill` are reached only here.
-  if (!Number.isInteger(pid) || pid <= 0)
-    return yield* Effect.logWarning("a closed terminal reported no usable pid; its program was not waited for", { pid })
-  if (yield* exited(pid, 50)) return
-  if (process.platform !== "win32") kill(pid)
-  if (yield* exited(pid, 100)) return
-  yield* Effect.logWarning("a closed terminal's program is still running", { pid })
-})
-
-const exited = (pid: number, polls: number) =>
-  Effect.gen(function* () {
-    for (let poll = 0; poll < polls; poll++) {
-      if (!alive(pid)) return true
-      yield* Effect.sleep("20 millis")
-    }
-    return !alive(pid)
-  })
-
-function alive(pid: number) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code === "EPERM"
-  }
-}
-
-// The program may end between the probe and the kill; then there is nothing left to kill.
-function kill(pid: number) {
-  try {
-    process.kill(-pid, "SIGKILL")
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL")
-    } catch {}
-  }
-}
 
 export const make = Effect.gen(function* () {
   const git = yield* Git.Service
@@ -2845,7 +2803,31 @@ export const complete = Effect.fn("TaskIsolation.complete")(function* (input: {
   }
   yield* save
 })
-export const layer = Layer.effect(Service, make)
+/**
+ * An agent's terminals end with its session: deleting a conversation closes the ones each of its sessions opened, at
+ * home or in a helper's checkout, and waits for their programs, killing one that ignores the hangup with its group.
+ * Session.remove runs this for every session it deletes, children first.
+ */
+export const closeSessionTerminals =
+  (locations: LocationServiceMap.Service["Service"]) =>
+  (session: Pick<Session.Info, "id" | "directory">) => {
+    const place = TaskPlace.get(session.id)
+    return closeTerminalsIn(
+      [session.directory, ...(place ? [place.work.directory] : [])],
+      (info) => info.owner?.kind === "agent" && info.owner.sessionID === session.id,
+      locations,
+    ).pipe(Effect.asVoid)
+  }
+
+const registerCleanup = Effect.gen(function* () {
+  const locations = yield* LocationServiceMap.Service
+  yield* Effect.acquireRelease(
+    Effect.sync(() => SessionCleanup.register(closeSessionTerminals(locations))),
+    (unregister) => Effect.sync(unregister),
+  )
+})
+
+export const layer = Layer.effect(Service, registerCleanup.pipe(Effect.andThen(make)))
 // The location services the terminal tool opens terminals in (tool/registry.ts), the same instance by the shared layer,
 // so a retiring checkout's terminals are closed where they were opened.
 const locationServiceMapNode = LayerNode.make({

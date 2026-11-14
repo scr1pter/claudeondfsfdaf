@@ -18,12 +18,16 @@ import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { PtyProcess } from "@vectordevai/core/pty/process"
 import { Truncate } from "@/tool/truncate"
 import { Agent } from "../../src/agent/agent"
 import { Permission } from "../../src/permission"
 import { Plugin } from "../../src/plugin"
 import { MessageID, SessionID } from "../../src/session/schema"
+import { TaskIsolation } from "../../src/task/isolation"
+import { TaskNotify } from "../../src/task/notify"
 import { TaskPlace } from "../../src/task/place"
+import * as TerminalModule from "../../src/tool/terminal"
 import { TerminalTool } from "../../src/tool/terminal"
 import type { Tool } from "../../src/tool/tool"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
@@ -137,6 +141,10 @@ const syntheticPty = (frames: { text: string; exitCode?: number }[], onRead?: (c
     created,
     reads,
     layer: Layer.mock(Pty.Service, {
+      list: () => Effect.sync(() => [...created]),
+      // The tool's hold on the terminal's location (PtyHold): a watch that never hears anything.
+      attach: () =>
+        Effect.succeed({ replay: "", cursor: 0, write: () => {}, activate: () => {}, detach: () => {} }),
       create: (input, owner) =>
         Effect.sync(() => {
           const info: Pty.Info = {
@@ -1342,6 +1350,166 @@ describe("tool.terminal input safety", () => {
         const result = yield* tool.execute({ action: "open", ...bun(IDLE), pattern: "a".repeat(501) }, context())
         expect(result.output).toContain("longer than 500 characters")
         expect(yield* pty.list()).toEqual([])
+      }),
+    ),
+  )
+})
+
+// A program deaf to the hangup and terminate a terminal's close sends.
+const DEAF = `process.on("SIGHUP", () => {}); process.on("SIGTERM", () => {}); console.log("deaf"); ${IDLE}`
+
+describe("tool.terminal lifecycle", () => {
+  ptyTest("close ends a program deaf to the hangup, with its process group", () =>
+    project(() =>
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", ...bun(DEAF), pattern: "deaf" }, context())
+        const pid = Number(/pid (\d+)/.exec(opened.output)?.[1])
+        expect(PtyProcess.alive(pid)).toBe(true)
+        const closed = yield* tool.execute({ action: "close", id: opened.metadata.id }, context())
+        expect(closed.output).toContain("Closed Terminal")
+        expect(PtyProcess.alive(pid)).toBe(false)
+      }),
+    ),
+  )
+
+  ptyTest("signal interrupts or terminates the program and keeps the terminal and its output", () =>
+    project(({ pty }) =>
+      Effect.gen(function* () {
+        const tool = yield* init()
+        for (const signal of ["interrupt", "terminate", "kill"] as const) {
+          const opened = yield* tool.execute(
+            { action: "open", ...bun(`console.log("up"); ${IDLE}`), pattern: "up" },
+            context(),
+          )
+          const result = yield* tool.execute({ action: "signal", id: opened.metadata.id, signal }, context())
+          expect(result.metadata.signal).toBe(signal)
+          const waited = yield* tool.execute({ action: "wait", id: opened.metadata.id, exit: true }, context())
+          expect(waited.metadata.status).toBe("exited")
+          expect((yield* pty.get(PtyID.make(opened.metadata.id!))).status).toBe("exited")
+          const read = yield* tool.execute({ action: "read", id: opened.metadata.id }, context())
+          expect(read.output).toContain("up")
+        }
+      }),
+    ),
+  )
+
+  ptyTest("rename sets the tab title; another session's terminal asks first", () =>
+    project(({ pty }) =>
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", ...bun(IDLE) }, context())
+        const asked: Ask[] = []
+        const renamed = yield* tool.execute({ action: "rename", id: opened.metadata.id, title: "dev server" }, context(asked))
+        expect(renamed.title).toBe("dev server")
+        expect(asked).toEqual([])
+        expect((yield* pty.get(PtyID.make(opened.metadata.id!))).title).toBe("dev server")
+        yield* tool.execute(
+          { action: "rename", id: opened.metadata.id, title: "mine" },
+          context(asked, { sessionID: "ses_other" }),
+        )
+        expect(asked.map((ask) => [ask.permission, ask.patterns])).toEqual([["terminal", [`other:${opened.metadata.id}`]]])
+        yield* tool.execute({ action: "close", id: opened.metadata.id }, context())
+      }),
+    ),
+  )
+
+  ptyTest("a conversation's agents run at most LIMIT terminals here; the next open is refused before any ask", () =>
+    project(() =>
+      Effect.gen(function* () {
+        const tool = yield* init()
+        TaskPlace.inherit("ses_limit_helper", "ses_terminal")
+        yield* Effect.addFinalizer(() => Effect.sync(() => TaskPlace.drop("ses_limit_helper")))
+        for (let index = 0; index < 4; index++) yield* tool.execute({ action: "open", ...bun(IDLE) }, context())
+        // A helper's terminals count toward its conversation's.
+        for (let index = 4; index < TerminalModule.LIMIT; index++)
+          yield* tool.execute(
+            { action: "open", ...bun(IDLE) },
+            context([], { sessionID: "ses_limit_helper", parentID: "ses_terminal" }),
+          )
+        const asked: Ask[] = []
+        const refused = yield* tool.execute({ action: "open", ...bun(IDLE) }, context(asked)).pipe(Effect.exit)
+        expect(failure(refused)).toContain(TerminalModule.LIMIT_REFUSAL)
+        expect(asked).toEqual([])
+        // Another conversation is not counted against this one.
+        yield* tool.execute({ action: "open", ...bun(IDLE) }, context([], { sessionID: "ses_elsewhere" }))
+      }),
+    ),
+  )
+
+  ptyTest("with background subagents off, a helper opens no terminal; the main agent still does", () =>
+    project(() =>
+      Effect.gen(function* () {
+        const tool = yield* init().pipe(Effect.provide(RuntimeFlags.layer({ backgroundSubagents: false })))
+        const asked: Ask[] = []
+        const refused = yield* tool
+          .execute({ action: "open", ...bun(IDLE) }, context(asked, { sessionID: "ses_child", parentID: "ses_terminal" }))
+          .pipe(Effect.exit)
+        expect(failure(refused)).toContain(TerminalModule.SUBAGENT_REFUSAL)
+        expect(asked).toEqual([])
+        const opened = yield* tool.execute({ action: "open", ...bun(IDLE) }, context())
+        expect(opened.metadata.status).toBe("running")
+      }),
+    ),
+  )
+
+  ptyTest("notify sends one note when notify_pattern appears and one when the program exits", () =>
+    project(() =>
+      Effect.gen(function* () {
+        const notes: Parameters<TaskNotify.Interface["enqueue"]>[0][] = []
+        const tool = yield* init().pipe(
+          Effect.provide(
+            Layer.mock(TaskNotify.Service, { enqueue: (input) => Effect.sync(() => void notes.push(input)) }),
+          ),
+        )
+        const ops = {} as never
+        // Without notes at hand (no prompt ops), notify is refused and nothing opens.
+        const refused = yield* tool.execute({ action: "open", ...bun(IDLE), notify: true }, context())
+        expect(refused.output).toContain("notify cannot be used")
+        const withOps = { ...context(), extra: { promptOps: ops } }
+        const opened = yield* tool.execute(
+          {
+            action: "open",
+            ...bun(`console.log("compiling"); setTimeout(() => console.log("ERROR in app"), 300); setTimeout(() => process.exit(3), 900)`),
+            notify: true,
+            notify_pattern: "ERROR",
+          },
+          withOps,
+        )
+        for (let poll = 0; poll < 100 && notes.length < 2; poll++) yield* Effect.sleep("50 millis")
+        expect(notes.map((note) => [note.parentID, note.note.kind, note.note.state, note.note.terminalID])).toEqual([
+          ["ses_terminal", "terminal", "matched", opened.metadata.id],
+          ["ses_terminal", "terminal", "exited", opened.metadata.id],
+        ])
+        expect(notes[1].note).toMatchObject({ exitCode: 3, wake: true })
+        expect(notes[1].note.text).toContain(`exited with code 3`)
+        // A terminal the agent closes itself sends no exit note.
+        const closed = yield* tool.execute({ action: "open", ...bun(IDLE), notify: true }, withOps)
+        yield* tool.execute({ action: "close", id: closed.metadata.id }, context())
+        yield* Effect.sleep("200 millis")
+        expect(notes).toHaveLength(2)
+      }),
+    ),
+  )
+
+  ptyTest("deleting a session closes the terminals its agent opened, and only those", () =>
+    project(({ directory, pty }) =>
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const mine = yield* tool.execute({ action: "open", ...bun(DEAF), pattern: "deaf" }, context())
+        const theirs = yield* tool.execute({ action: "open", ...bun(IDLE) }, context([], { sessionID: "ses_kept" }))
+        const user = yield* pty.create({ command: process.execPath, args: ["-e", IDLE] })
+        const pid = Number(/pid (\d+)/.exec(mine.output)?.[1])
+        const locations = yield* LocationServiceMap.Service
+        yield* TaskIsolation.closeSessionTerminals(locations)({
+          id: SessionID.make("ses_terminal"),
+          directory,
+        })
+        const left = (yield* pty.list()).map((info) => info.id)
+        expect(left).not.toContain(mine.metadata.id)
+        expect(left).toEqual(expect.arrayContaining([theirs.metadata.id, user.id]))
+        expect(PtyProcess.alive(pid)).toBe(false)
+        yield* pty.remove(user.id)
       }),
     ),
   )
