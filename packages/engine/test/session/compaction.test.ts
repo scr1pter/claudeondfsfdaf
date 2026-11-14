@@ -1451,6 +1451,40 @@ describe("session.compaction.process", () => {
     }),
   )
 
+  // 5.E.3: a fork's compaction takes floor fork.from. The messages before it are its parent's, so an overflow on the
+  // fork's first own request never replays one of them as the fork's own.
+  it.instance(
+    "a fork's overflow never replays a user message from before its floor",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "root")
+      yield* createUserMessage(session.id, "INHERITED_REQUEST")
+      const msg = yield* createUserMessage(session.id, "fork assignment")
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: msg.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: true,
+        overflow: true,
+        floor: msg.id,
+      })
+
+      const all = yield* ssn.messages({ sessionID: session.id })
+      const last = all.at(-1)
+      expect(result).toBe("continue")
+      expect(last?.info.role).toBe("user")
+      expect(last?.parts[0]?.type === "text" ? last.parts[0].text : "").toContain(
+        "previous request exceeded the provider's size limit",
+      )
+      // Only the original stays: nothing after the fork's request carries the inherited text.
+      const after = all.filter((item) => item.info.id > msg.id)
+      expect(JSON.stringify(after)).not.toContain("INHERITED_REQUEST")
+    }),
+  )
+
   it.instance(
     "falls back to overflow guidance when no replayable turn exists",
     Effect.gen(function* () {
@@ -1970,6 +2004,49 @@ describe("SessionNs.getUsage", () => {
     expect(result.cost).toBe(0.04473525)
   })
 
+  test.each([0, 0.0005])("uses the provider-reported OpenRouter cost of $%s instead of catalog rates", (cost) => {
+    const result = SessionNs.getUsage({
+      model: createModel({
+        context: 100_000,
+        output: 32_000,
+        cost: { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } },
+      }),
+      usage: usage({ inputTokens: 1_000, outputTokens: 100, totalTokens: 1_100 }),
+      metadata: { openrouter: { usage: { cost } } },
+    })
+    expect(result).toMatchObject({ cost, billed: true, unpriced: false })
+    expect(result.tokens).toMatchObject({ input: 1_000, output: 100 })
+  })
+
+  test.each([0, 0.0005])("keeps the provider-reported OpenRouter cost of $%s when token counters are missing", (cost) => {
+    const result = SessionNs.getUsage({
+      model: createModel({
+        context: 100_000,
+        output: 32_000,
+        cost: { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } },
+      }),
+      usage: usage({}),
+      metadata: { openrouter: { usage: { cost } } },
+    })
+    expect(result).toMatchObject({ cost, billed: true, unpriced: true })
+  })
+
+  test.each([-1, Number.NaN, Number.POSITIVE_INFINITY, "0.0005", null, undefined])(
+    "falls back to catalog rates for invalid OpenRouter reported cost %s",
+    (cost) => {
+      const model = createModel({
+        context: 100_000,
+        output: 32_000,
+        cost: { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } },
+      })
+      const metadata = { openrouter: { usage: { cost } } }
+      const complete = SessionNs.getUsage({ model, usage: usage({ inputTokens: 1_000, outputTokens: 100 }), metadata })
+      const partial = SessionNs.getUsage({ model, usage: usage({ inputTokens: 1_000 }), metadata })
+      expect(complete).toMatchObject({ cost: 0.003, billed: false, unpriced: false })
+      expect(partial).toMatchObject({ cost: 0.002, billed: false, unpriced: true })
+    },
+  )
+
   test("uses matching context cost tier before over-200k fallback", () => {
     const model = createModel({
       context: 1_000_000,
@@ -2057,8 +2134,11 @@ describe("SessionNs.getUsage", () => {
     expect(SessionNs.getUsage({ model: unpriced, usage: used })).toMatchObject({ cost: 0, unpriced: true })
     // An explicit zero price is a free model, not an unknown one.
     expect(SessionNs.getUsage({ model: free, usage: used })).toMatchObject({ cost: 0, unpriced: false })
-    // A step that used no tokens owes nothing whatever the price.
-    expect(SessionNs.getUsage({ model: unpriced, usage: usage({}) }).unpriced).toBe(false)
+    // Explicit zero counters are known; absent counters may hide a billed response.
+    expect(SessionNs.getUsage({ model: unpriced, usage: usage({ inputTokens: 0, outputTokens: 0 }) }).unpriced).toBe(
+      false,
+    )
+    expect(SessionNs.getUsage({ model: unpriced, usage: usage({}) }).unpriced).toBe(true)
     // Copilot's billed nano-AIU prices the step even without listed rates.
     expect(
       SessionNs.getUsage({ model: unpriced, usage: used, metadata: { copilot: { totalNanoAiu: 4_000_000_000 } } }),
@@ -2067,10 +2147,10 @@ describe("SessionNs.getUsage", () => {
     expect(
       SessionNs.getUsage({ model: unpriced, usage: used, metadata: { openrouter: { usage: { cost: 0.0123 } } } }),
     ).toMatchObject({ cost: 0.0123, unpriced: false })
-    // A model with a listed price keeps the catalog's rates.
+    // A valid provider-reported cost takes precedence even over an explicit zero catalog price.
     expect(
       SessionNs.getUsage({ model: free, usage: used, metadata: { openrouter: { usage: { cost: 0.0123 } } } }),
-    ).toMatchObject({ cost: 0, unpriced: false })
+    ).toMatchObject({ cost: 0.0123, billed: true, unpriced: false })
   })
 
   test("uses over-200k pricing when the catalog lists no exact tiers", () => {

@@ -9,30 +9,17 @@ import { useParams } from "@solidjs/router"
 import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
 import { usePlatform, type DisplayBackend } from "@/context/platform"
-import { useServerSync } from "@/context/server-sync"
-import { useServerSDK } from "@/context/server-sdk"
 import { useUpdaterAction } from "./updater-action"
 import { useSettings } from "@/context/settings"
 import { decode64 } from "@/utils/base64"
 import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
 import { SettingsList } from "./settings-list"
+import { useShellPicker } from "./settings-v2/shell-picker"
 
 let demoSoundState = {
   cleanup: undefined as (() => void) | undefined,
   timeout: undefined as NodeJS.Timeout | undefined,
   run: 0,
-}
-
-type ShellOption = {
-  path: string
-  name: string
-  acceptable: boolean
-}
-
-type ShellSelectOption = {
-  id: string
-  value: string
-  label: string
 }
 
 // To prevent audio from overlapping/playing very quickly when navigating the settings menus,
@@ -100,17 +87,7 @@ export const SettingsGeneral: Component = () => {
   }
   const desktop = createMemo(() => platform.platform === "desktop")
 
-  const serverSync = useServerSync()
-  const serverSdk = useServerSDK()
-
-  const [shells] = createResource(
-    () =>
-      serverSdk()
-        .client.pty.shells()
-        .then((res) => res.data ?? [])
-        .catch(() => [] as ShellOption[]),
-    { initialValue: [] as ShellOption[] },
-  )
+  const shell = useShellPicker()
 
   const [displayBackend, { refetch: refetchDisplayBackend }] = createResource(
     () => (linux() && platform.getDisplayBackend ? true : false),
@@ -123,40 +100,6 @@ export const SettingsGeneral: Component = () => {
     () => Promise.resolve(platform.getPinchZoomEnabled?.() ?? false).catch(() => false),
     { initialValue: false },
   )
-
-  const autoOption = { id: "auto", value: "", label: language.t("settings.general.row.shell.autoDefault") }
-  const currentShell = createMemo(() => serverSync().data.config.shell ?? "")
-
-  const shellOptions = createMemo<ShellSelectOption[]>(() => {
-    const list = shells.latest
-    const current = serverSync().data.config.shell
-
-    const nameCounts = new Map<string, number>()
-    for (const s of list) {
-      nameCounts.set(s.name, (nameCounts.get(s.name) || 0) + 1)
-    }
-
-    const options = [
-      autoOption,
-      ...list.map((s) => {
-        const ambiguousName = (nameCounts.get(s.name) || 0) > 1
-        const text = ambiguousName ? s.path : s.name
-        const label = s.acceptable ? text : `${text} (${language.t("settings.general.row.shell.terminalOnly")})`
-        return {
-          id: s.path,
-          // Prefer name over path - "bash" is much cleaner than the explicit full route even when it may change due to PATH.
-          value: ambiguousName ? s.path : s.name,
-          label,
-        }
-      }),
-    ]
-
-    if (current && !options.some((o) => o.value === current)) {
-      options.push({ id: current, value: current, label: current })
-    }
-
-    return options
-  })
 
   const onDisplayBackendChange = (checked: boolean) => {
     const update = platform.setDisplayBackend?.(checked ? "wayland" : "auto")
@@ -224,15 +167,11 @@ export const SettingsGeneral: Component = () => {
         >
           <Select
             data-action="settings-shell"
-            options={shellOptions()}
-            current={shellOptions().find((o) => o.value === currentShell()) ?? autoOption}
+            options={shell.options()}
+            current={shell.selected()}
             value={(o) => o.id}
             label={(o) => o.label}
-            onSelect={(option) => {
-              if (!option) return
-              if (option.value === currentShell()) return
-              serverSync().updateConfig({ shell: option.value })
-            }}
+            onSelect={shell.select}
             variant="secondary"
             size="small"
             triggerVariant="settings"

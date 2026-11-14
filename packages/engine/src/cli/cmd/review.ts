@@ -1,3 +1,5 @@
+import { Billing } from "@vectordevai/schema/billing"
+import { codiumPass, reviewForOutput } from "./review-output"
 // `vector review` (section 3.13): the review CI runs, on your own branch, your uncommitted or staged changes, or a
 // pull request, printed here rather than posted. Your own changes are reviewed in place with the settings in your
 // working tree. A pull request is reviewed untrusted: its commit is fetched into FETCH_HEAD only, its files go in the
@@ -47,6 +49,8 @@ import {
   encodeState,
   nextState,
   priorFromState,
+  reviewCostHasCodium,
+  reviewCostIsCodium,
   SUMMARY_MARKER,
 } from "@vectordevai/core/review/state"
 import type {
@@ -140,7 +144,11 @@ export interface LocalReviewDeps<RunR = never, ModelR = never> {
   // The posting check --post goes through (section 6.4a): what repeats the owner's memory is left out, and a check
   // that cannot run posts nothing. Required, so a new caller cannot post unchecked; a test that means to skip it passes
   // one that sends every part as it is.
-  posting: (input: { parts: readonly string[]; sessionIDs: readonly string[]; untrusted: boolean }) => Promise<readonly string[]>
+  posting: (input: {
+    parts: readonly string[]
+    sessionIDs: readonly string[]
+    untrusted: boolean
+  }) => Promise<readonly string[]>
 }
 
 // What --post needs from GitHub: a token for the remote's host, who it belongs to, and the two writes it makes.
@@ -267,7 +275,9 @@ export function executeLocalReview<RunR, ModelR>(
       const last = stored?.outcome?.head === range.head ? stored.outcome : undefined
       if (!last) return yield* early(note, open)
       if (options.json)
-        yield* print(JSON.stringify({ version: 1, target, outcome: last, cached: true }, null, 2) + "\n")
+        yield* print(
+          JSON.stringify({ version: 1, target, outcome: reviewForOutput(last), cached: true }, null, 2) + "\n",
+        )
       else
         yield* print(
           `${note}\n\n(from the last review of ${short(range.head)})\n` +
@@ -337,6 +347,11 @@ export function executeLocalReview<RunR, ModelR>(
     const triage = config.triageModel
       ? yield* deps.resolveModel({ trigger: "local", exact: config.triageModel, env })
       : undefined
+    // The panel's judge (WP A35); on Vector Codium the runner uses the plan's panel judge when judgeModel is unset.
+    const judge =
+      config.panel && config.judgeModel
+        ? yield* deps.resolveModel({ trigger: "local", exact: config.judgeModel, env })
+        : undefined
     const modelName = `${model.providerID}/${model.modelID}`
     if (options.checks) {
       const start = target.kind === "branch" ? range.mergeBase : yield* branchStart(git, root, range.head, base)
@@ -349,6 +364,7 @@ export function executeLocalReview<RunR, ModelR>(
           })
       }
     }
+    if (Billing.isCodium(model.providerID)) say("Runs on your Vector Codium plan.")
     if (review.length > ESTIMATE_FILES && model.price) {
       const chars = Math.min(renderPatch(review).length, diffBudgetChars(model.context, config.maxDiffChars))
       const estimate = estimateCostUsd({
@@ -431,6 +447,7 @@ export function executeLocalReview<RunR, ModelR>(
       config,
       model,
       ...(triage ? { triage } : {}),
+      ...(judge ? { judge } : {}),
       ...(options.checks ? { checks: true } : {}),
       knownPath,
       onProgress: (event) => {
@@ -439,16 +456,24 @@ export function executeLocalReview<RunR, ModelR>(
       baseRef: target.baseRef,
       rulesSource: trust === "trusted" ? "working tree" : "base branch",
     })
-    const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify")
+    const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
     if (!reviewers.some((entry) => entry.status !== "failed")) {
       const detail = (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no report").replace(
         /[.\s]+$/,
         "",
       )
+      const visible = reviewForOutput(reviewed)
+      if (options.json) yield* print(JSON.stringify({ version: 1, target, outcome: visible }, null, 2) + "\n")
+      const spent =
+        visible.cost && !("input" in visible.cost)
+          ? `Used before it stopped: ${"costUsd" in visible.cost && visible.cost.costUsd > 0 ? `${formatUsd(visible.cost.costUsd)} + ` : ""}Codium.`
+          : reviewed.cost
+            ? failedSpend(reviewed.cost)
+            : undefined
       return {
         exitCode: 2,
         // The reviewers' sessions are hidden, so this is where what they spent before failing shows.
-        error: `Vector could not finish this review: ${detail}${reviewed.cost ? `. ${failedSpend(reviewed.cost)}` : ""}`,
+        error: `Vector could not finish this review: ${detail}${spent ? `. ${spent}` : ""}`,
         target,
         outcome: reviewed,
       } satisfies LocalReviewResult
@@ -486,7 +511,8 @@ export function executeLocalReview<RunR, ModelR>(
       outcome,
     )
 
-    if (options.json) yield* print(JSON.stringify({ version: 1, target, outcome }, null, 2) + "\n")
+    if (options.json)
+      yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
     else
       yield* print(
         renderLocalReview({
@@ -1073,7 +1099,46 @@ function readLocalState(file: string) {
     if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
     const state = decodeState(data.state)
     if (!state) return undefined
-    return isOutcome(data.outcome) ? { state, outcome: data.outcome } : { state }
+    if (!isOutcome(data.outcome)) return { state }
+    // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.
+    const outcome = data.outcome
+    const mixed =
+      (outcome.cost && reviewCostHasCodium(outcome.cost)) || outcome.passes?.some((pass) => codiumPass(pass))
+    const pure =
+      outcome.cost &&
+      (reviewCostIsCodium(outcome.cost) ||
+        (outcome.cost.codium !== true &&
+          !!outcome.passes?.length &&
+          outcome.passes.every((pass) => codiumPass(pass)) &&
+          !outcome.cost.model
+            .split(" + ")
+            .some((model) => model.includes("/") && Billing.hasOwnIdentity({ providerID: model.split("/")[0] }))))
+    return {
+      state,
+      outcome: {
+        ...outcome,
+        ...(outcome.cost
+          ? {
+              cost: {
+                ...outcome.cost,
+                tokensOwnOnly: false,
+                ...(mixed ? { codium: true, kind: pure ? ("codium" as const) : outcome.cost.kind } : {}),
+              },
+            }
+          : {}),
+        ...(mixed && outcome.passes
+          ? {
+              passes: outcome.passes.map((pass) => ({
+                ...pass,
+                usageMissing: true,
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+              })),
+            }
+          : {}),
+      },
+    }
   })
 }
 

@@ -1,11 +1,17 @@
-import type { SessionUsageSummary } from "@vectordevai/sdk/v2"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { Component, For, Match, Show, Switch, createMemo, createResource, createSignal } from "solid-js"
 import { useServerSDK } from "@/context/server-sdk"
 import { useLanguage } from "@/context/language"
 import { formatSessionCost } from "@/utils/session-cost"
 import { formatServerError } from "@/utils/server-errors"
-import { helperUsage, normalizeUsageSummary, usageStreakCalendar } from "@/utils/usage-summary"
+import {
+  helperUsage,
+  normalizeUsageSummary,
+  usageStreakCalendar,
+  usageTokens,
+  type DisplayUsageSummary,
+} from "@/utils/usage-summary"
 import { SettingsVectorCodium } from "../settings-vector-codium"
 import "./settings-v2.css"
 
@@ -13,6 +19,8 @@ type UsageView = "daily" | "weekly" | "cumulative"
 type CalendarDay = {
   date: string
   tokens: number
+  codium?: number
+  tokensUnknown?: boolean
   tasks: number
   cost: number
   placeholder?: boolean
@@ -50,7 +58,7 @@ const duration = (milliseconds: number) => {
   return `${hours}h ${minutes}m`
 }
 
-const calendar = (summary: SessionUsageSummary, view: UsageView) => {
+const calendar = (summary: DisplayUsageSummary, view: UsageView) => {
   const today = new Date()
   today.setHours(12, 0, 0, 0)
   const start = addDays(today, -364)
@@ -58,24 +66,42 @@ const calendar = (summary: SessionUsageSummary, view: UsageView) => {
   const days: CalendarDay[] = Array.from({ length: 365 }, (_, index) => {
     const date = localDateKey(addDays(start, index))
     const usage = byDate.get(date)
-    return { date, tokens: usage?.tokens ?? 0, tasks: usage?.tasks ?? 0, cost: usage?.cost ?? 0 }
+    return {
+      date,
+      tokens: usage?.tokens ?? 0,
+      codium: usage?.codium ?? 0,
+      tokensUnknown: summary.legacyCodium && !!usage,
+      tasks: usage?.tasks ?? 0,
+      cost: usage?.cost ?? 0,
+    }
   })
 
   if (view === "daily") return days
   if (view === "cumulative") {
-    let tokens = 0
-    return days.map((day) => ({ ...day, tokens: (tokens += day.tokens) }))
+    const total = { tokens: 0, codium: 0, tokensUnknown: false }
+    return days.map((day) => ({
+      ...day,
+      tokens: (total.tokens += day.tokens),
+      codium: (total.codium += day.codium ?? 0),
+      tokensUnknown: (total.tokensUnknown ||= !!day.tokensUnknown),
+    }))
   }
 
-  const weeks = new Map<string, number>()
+  const weeks = new Map<string, { tokens: number; codium: number; tokensUnknown: boolean }>()
   days.forEach((day) => {
     const date = new Date(`${day.date}T12:00:00`)
     const week = localDateKey(addDays(date, -date.getDay()))
-    weeks.set(week, (weeks.get(week) ?? 0) + day.tokens)
+    const previous = weeks.get(week)
+    weeks.set(week, {
+      tokens: (previous?.tokens ?? 0) + day.tokens,
+      codium: (previous?.codium ?? 0) + (day.codium ?? 0),
+      tokensUnknown: !!previous?.tokensUnknown || !!day.tokensUnknown,
+    })
   })
   return days.map((day) => {
     const date = new Date(`${day.date}T12:00:00`)
-    return { ...day, tokens: weeks.get(localDateKey(addDays(date, -date.getDay()))) ?? 0 }
+    const week = weeks.get(localDateKey(addDays(date, -date.getDay())))
+    return { ...day, tokens: week?.tokens ?? 0, codium: week?.codium ?? 0, tokensUnknown: week?.tokensUnknown }
   })
 }
 
@@ -147,8 +173,8 @@ export const SettingsUsageV2: Component = () => {
           <p class="settings-v2-page-kicker">Local usage</p>
           <h2 class="settings-v2-page-title">Usage & streaks</h2>
           <p class="settings-v2-page-subtitle">
-            Tokens and activity reflect assistant responses stored by this Vector server. Recorded cost also includes
-            title generation; unpriced or incomplete model work is marked as unknown or partial.
+            Tokens and cost cover models you use with your own keys, plus free and local models. Work on Vector Codium
+            models shows as Codium; your plan's usage is the percentage above.
           </p>
         </div>
         <ButtonV2 variant="neutral" icon="reset" onClick={() => void refetch()} disabled={summary.loading}>
@@ -156,7 +182,15 @@ export const SettingsUsageV2: Component = () => {
         </ButtonV2>
       </div>
 
-      <SettingsVectorCodium />
+      <SettingsVectorCodium
+        summary={summary.state === "ready" || summary.state === "refreshing" ? summary.latest : undefined}
+      />
+      <Show when={summary()?.legacyCodium}>
+        <p class="text-12-regular text-text-weak">
+          This server combines Codium and own token totals. Update the server to see separate own tokens and daily
+          Codium activity. Recorded dollars still cover your own models.
+        </p>
+      </Show>
 
       <Switch>
         <Match when={summary.loading}>
@@ -175,7 +209,14 @@ export const SettingsUsageV2: Component = () => {
             <>
               <div class="settings-usage-metrics">
                 <div>
-                  <strong>{number.format(usage.lifetimeTokens)}</strong>
+                  <strong>
+                    {CodiumUsage.withCodium(
+                      usage.lifetimeTokens > 0 || !usage.codiumResponses
+                        ? number.format(usage.lifetimeTokens)
+                        : undefined,
+                      usage.codiumResponses,
+                    )}
+                  </strong>
                   <span>Lifetime tokens</span>
                 </div>
                 <div>
@@ -199,6 +240,7 @@ export const SettingsUsageV2: Component = () => {
                     {formatSessionCost({
                       cost: usage.lifetimeCost,
                       unpricedSteps: usage.unpricedResponses,
+                      codiumSteps: usage.codiumResponses,
                       format: (value) => money.format(value),
                       t: language.t,
                     })}
@@ -210,8 +252,15 @@ export const SettingsUsageV2: Component = () => {
                   <span>Average time per run</span>
                 </div>
                 <div>
-                  <strong>{number.format(usage.averageTokensPerChat)}</strong>
-                  <span>Average tokens per chat</span>
+                  <strong>
+                    {CodiumUsage.withCodium(
+                      usage.lifetimeTokens > 0 || !usage.codiumResponses
+                        ? number.format(usage.averageTokensPerChat)
+                        : undefined,
+                      usage.codiumResponses,
+                    )}
+                  </strong>
+                  <span>Average own tokens per chat</span>
                 </div>
               </div>
 
@@ -262,7 +311,8 @@ export const SettingsUsageV2: Component = () => {
                           "settings-usage-streak-day--active": day.active,
                           "settings-usage-streak-day--today": day.today,
                         }}
-                        title={`${day.date}: ${day.tokens.toLocaleString()} tokens`}
+                        title={`${day.date}: ${usageTokens(day.tokens, day.codium, undefined, day.tokensUnknown)}`}
+                        data-codium={day.codium ? "true" : undefined}
                       >
                         <span>{day.label}</span>
                         <i aria-hidden="true">{day.day}</i>
@@ -277,12 +327,12 @@ export const SettingsUsageV2: Component = () => {
                   <div class="settings-usage-card-header">
                     <div>
                       <h3>Favorite models</h3>
-                      <p>Top five by share of all-time token use</p>
+                      <p>Own models ranked by token use</p>
                     </div>
                     <span>{number.format(usage.modelResponses)} responses</span>
                   </div>
                   <Show
-                    when={usage.favoriteModels.length > 0}
+                    when={usage.favoriteModels.length > 0 || (usage.codiumResponses ?? 0) > 0}
                     fallback={
                       <div class="settings-usage-empty settings-usage-empty--compact">No model activity yet.</div>
                     }
@@ -297,17 +347,29 @@ export const SettingsUsageV2: Component = () => {
                                 <strong>{modelLabel(model.modelID)}</strong>
                                 <span>{model.providerID}</span>
                               </div>
-                              <div class="settings-usage-bar">
-                                <i style={{ width: `${Math.max(model.percentage, 2)}%` }} />
-                              </div>
+                              <Show when={!usage.legacyCodium}>
+                                <div class="settings-usage-bar">
+                                  <i style={{ width: `${Math.max(model.percentage, 2)}%` }} />
+                                </div>
+                              </Show>
                             </div>
                             <div class="settings-usage-ranking-value">
-                              <strong>{model.percentage.toFixed(1)}%</strong>
+                              <Show when={!usage.legacyCodium}>
+                                <strong>{model.percentage.toFixed(1)}%</strong>
+                              </Show>
                               <span>{number.format(model.tokens)}</span>
                             </div>
                           </div>
                         )}
                       </For>
+                      <Show when={(usage.codiumResponses ?? 0) > 0}>
+                        <div class="settings-usage-ranking-row" data-slot="codium-model-activity">
+                          <div class="settings-usage-ranking-copy">
+                            <strong>Vector Codium</strong>
+                            <span>Codium</span>
+                          </div>
+                        </div>
+                      </Show>
                     </div>
                   </Show>
                 </div>
@@ -373,14 +435,24 @@ export const SettingsUsageV2: Component = () => {
                             <div>
                               <strong>{helper.label}</strong>
                               <span>
-                                {helper.sessions} run{helper.sessions === 1 ? "" : "s"} · {number.format(helper.tokens)}{" "}
-                                tokens
+                                {helper.sessions} run{helper.sessions === 1 ? "" : "s"} ·{" "}
+                                {usageTokens(
+                                  helper.tokens,
+                                  helper.codiumSteps,
+                                  (value) => number.format(value),
+                                  usage.legacyCodium,
+                                )}
                               </span>
                             </div>
                           </div>
                           <div class="settings-usage-ranking-value">
                             <strong>
-                              {(helper.cost > 0 && helper.cost < 0.01 ? smallMoney : money).format(helper.cost)}
+                              {CodiumUsage.withCodium(
+                                helper.cost > 0 || !helper.codiumSteps
+                                  ? (helper.cost > 0 && helper.cost < 0.01 ? smallMoney : money).format(helper.cost)
+                                  : undefined,
+                                helper.codiumSteps,
+                              )}
                             </strong>
                           </div>
                         </div>
@@ -393,10 +465,13 @@ export const SettingsUsageV2: Component = () => {
               <div class="settings-usage-card">
                 <div class="settings-usage-card-header">
                   <div>
-                    <h3>Token activity</h3>
+                    <h3>Model activity</h3>
                     <p>
-                      {usage.activeDays} active days · {number.format(usage.averageTokensPerChat)} average tokens per
-                      task
+                      {usage.activeDays} active days ·{" "}
+                      {usageTokens(usage.averageTokensPerChat, usage.codiumResponses, (value) => number.format(value))}
+                      {usage.lifetimeTokens > 0 || !usage.codiumResponses
+                        ? " on average per own-model chat"
+                        : " activity"}
                     </p>
                   </div>
                   <div class="settings-usage-view" role="tablist" aria-label="Usage aggregation">
@@ -430,11 +505,21 @@ export const SettingsUsageV2: Component = () => {
                         <div
                           class="settings-usage-day"
                           classList={{ "settings-usage-day--placeholder": !!day.placeholder }}
-                          data-level={intensity(day.tokens, peak())}
+                          data-level={
+                            (day.codium || (day.tokensUnknown && day.tasks)) && !day.tokens
+                              ? 1
+                              : intensity(day.tokens, peak())
+                          }
+                          data-codium={day.codium ? "true" : undefined}
+                          style={
+                            day.codium && !day.tokens
+                              ? { outline: "1px solid var(--text-interactive-base)", "outline-offset": "-1px" }
+                              : undefined
+                          }
                           aria-label={
                             day.placeholder
                               ? undefined
-                              : `${day.date}, ${day.tokens.toLocaleString()} tokens, ${day.tasks} runs`
+                              : `${day.date}, ${usageTokens(day.tokens, day.codium, undefined, day.tokensUnknown)}, ${day.tasks} runs`
                           }
                           onMouseEnter={(event) => {
                             if (day.placeholder) return
@@ -447,26 +532,41 @@ export const SettingsUsageV2: Component = () => {
                     </For>
                   </div>
                 </Show>
+                <Show when={(usage.codiumResponses ?? 0) > 0}>
+                  <p class="text-12-regular text-text-weak">
+                    + Codium work. Token breakdown below covers own, free and local models only.
+                  </p>
+                </Show>
                 <div class="settings-usage-breakdown">
                   <div>
                     <span>Input</span>
-                    <strong>{number.format(usage.inputTokens)}</strong>
+                    <strong>
+                      {usage.lifetimeTokens > 0 || !usage.codiumResponses ? number.format(usage.inputTokens) : "—"}
+                    </strong>
                   </div>
                   <div>
                     <span>Output</span>
-                    <strong>{number.format(usage.outputTokens)}</strong>
+                    <strong>
+                      {usage.lifetimeTokens > 0 || !usage.codiumResponses ? number.format(usage.outputTokens) : "—"}
+                    </strong>
                   </div>
                   <div>
                     <span>Reasoning</span>
-                    <strong>{number.format(usage.reasoningTokens)}</strong>
+                    <strong>
+                      {usage.lifetimeTokens > 0 || !usage.codiumResponses ? number.format(usage.reasoningTokens) : "—"}
+                    </strong>
                   </div>
                   <div>
                     <span>Cache</span>
-                    <strong>{number.format(usage.cachedTokens)}</strong>
+                    <strong>
+                      {usage.lifetimeTokens > 0 || !usage.codiumResponses ? number.format(usage.cachedTokens) : "—"}
+                    </strong>
                   </div>
                   <div>
                     <span>Peak day</span>
-                    <strong>{number.format(usage.peakTokens)}</strong>
+                    <strong>
+                      {usage.lifetimeTokens > 0 || !usage.codiumResponses ? number.format(usage.peakTokens) : "—"}
+                    </strong>
                   </div>
                   <div>
                     <span>Longest run</span>
@@ -486,7 +586,9 @@ export const SettingsUsageV2: Component = () => {
             style={{ left: `${active().left}px`, top: `${active().top}px` }}
             role="tooltip"
           >
-            <strong>{active().day.tokens.toLocaleString()} tokens</strong>
+            <strong>
+              {usageTokens(active().day.tokens, active().day.codium, undefined, active().day.tokensUnknown)}
+            </strong>
             <span>
               {tooltipWhen(active().day)}
               <Show when={view() === "daily"}>

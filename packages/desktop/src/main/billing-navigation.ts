@@ -71,19 +71,19 @@ export function billingNavigation(url: string) {
 }
 
 /**
- * What a request to the site means. The return URLs are the ones api/_lib/model-plan-account.ts gives Stripe: checkout
- * and top-ups return to /account?model_plan= or ?model_topup= success or cancelled, a finished plan change or
- * cancellation in the portal returns with model_plan=updated or ending, and the portal's own link back is the bare
- * /account. Any other page of the site opens in the browser; undefined means the URL is not the site's.
+ * What a request to the site means. The return URLs are the ones api/_lib/model-plan-account.ts gives Stripe: a plan's
+ * checkout and an upgrade's (with change=upgrade) return to /account?model_plan=success or cancelled, a card update or
+ * a cancellation in the portal returns with model_plan=updated or ending, and the portal's own link back is the bare
+ * /account. Codium sells no top-ups, so ?model_topup= means nothing here. Any other page of the site opens in the
+ * browser; undefined means the URL is not the site's.
  */
 export function billingReturn(url: string, origin: string): ReturnOutcome | "external" | undefined {
   const parsed = URL.parse(url)
   if (!parsed || parsed.origin !== origin) return undefined
   if (parsed.pathname !== "/account" && parsed.pathname !== "/account/") return "external"
   const plan = parsed.searchParams.get("model_plan")
-  const topup = parsed.searchParams.get("model_topup")
-  if (plan === "success" || topup === "success" || plan === "updated" || plan === "ending") return "completed"
-  if (plan === "cancelled" || topup === "cancelled") return "cancelled"
+  if (plan === "success" || plan === "updated" || plan === "ending") return "completed"
+  if (plan === "cancelled") return "cancelled"
   return "closed"
 }
 

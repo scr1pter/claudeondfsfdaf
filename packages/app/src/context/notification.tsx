@@ -24,6 +24,8 @@ import { showToast } from "@/utils/toast"
 import { codiumActions, codiumErrorText } from "@/components/codium-error"
 import { useCodiumPurchase } from "@/components/codium-purchase"
 import { createNotificationEventGate, sessionNotificationAllowed } from "./notification-event-gate"
+import { alertTitle, sendPhoneAlert } from "./phone-alerts"
+import { helperPhoneAlert } from "./helper-phone-alert"
 
 type NotificationBase = {
   directory?: string
@@ -217,7 +219,7 @@ function createServerNotificationState(input: {
   directory: Accessor<string | undefined>
   sessionID: Accessor<string | undefined>
   platform: ReturnType<typeof usePlatform>
-  /** Opens the Codium plans and top-ups, for a notice about running out of credits. */
+  /** Opens the Codium plans, for a notice about this month's usage or a plan the model needs. */
   purchase: () => void
   settings: ReturnType<typeof useSettings>
   language: ReturnType<typeof useLanguage>
@@ -362,6 +364,30 @@ function createServerNotificationState(input: {
           force: true,
         })
       }
+      // The paired phones hear of it too, unless the person is looking at this session here (WP A41).
+      if (!viewedInCurrentSession(directory, sessionID))
+        void sendPhoneAlert(platform, settings.notifications, {
+          event: "finished",
+          title: alertTitle("Finished", session.title),
+          route: "sessions",
+        })
+    })
+  }
+
+  // Run Guard's first warning in a session reaches the paired phones (WP A41); its figures stay on this computer.
+  const runGuardWarned = new Set<string>()
+  const handleSpend = (directory: string, properties: { sessionID?: string; state?: string }) => {
+    const sessionID = properties.sessionID
+    if (!sessionID || properties.state !== "warn" || runGuardWarned.has(sessionID)) return
+    runGuardWarned.add(sessionID)
+    if (runGuardWarned.size > 500) runGuardWarned.delete(runGuardWarned.values().next().value!)
+    void lookup(directory, sessionID).then((session) => {
+      if (meta.disposed || !session || !sessionNotificationAllowed(sessionID, session)) return
+      void sendPhoneAlert(platform, settings.notifications, {
+        event: "runGuard",
+        title: alertTitle("Run Guard: close to its limit", session.title),
+        route: "sessions",
+      })
     })
   }
 
@@ -401,8 +427,17 @@ function createServerNotificationState(input: {
           description: codium ? codiumErrorText(description, platform) : description,
           variant: "error",
           duration: 10_000,
-          // A Codium notice offers what fixes it, such as signing in to Vector again.
-          ...(codium ? { actions: codiumActions(codium, platform, input.purchase) } : {}),
+          // A Codium notice offers what fixes it, such as Update card or signing in to Vector again; its gateway code
+          // tells a subscriber's used-up month from no plan at all.
+          ...(codium
+            ? {
+                actions: codiumActions(
+                  { action: codium, text: description, code: ModelPlanStatus.failureCode(error) },
+                  platform,
+                  input.purchase,
+                ),
+              }
+            : {}),
         })
       }
       if (settings.notifications.errors()) {
@@ -411,8 +446,20 @@ function createServerNotificationState(input: {
     })
   }
 
+  const helperAlerts = new Set<string>()
   const unsub = serverSDK().event.listen((e) => {
     const event = e.details
+    if (event.type === "session.updated") {
+      const notice = helperPhoneAlert(event.properties.info, Date.now())
+      if (!notice || helperAlerts.has(notice.key)) return
+      helperAlerts.add(notice.key)
+      if (helperAlerts.size > 500) helperAlerts.delete(helperAlerts.values().next().value!)
+      void lookup(e.name, notice.parent).then((session) => {
+        if (meta.disposed || !session || !sessionNotificationAllowed(notice.parent, session) || viewedInCurrentSession(e.name, notice.parent)) return
+        void sendPhoneAlert(platform, settings.notifications, { event: "needsYou", title: alertTitle(notice.label, session.title), route: "sessions" })
+      })
+      return
+    }
     if (event.type === "tui.toast.show") {
       showToast({
         title: event.properties.title,
@@ -424,6 +471,10 @@ function createServerNotificationState(input: {
             : "error",
         duration: event.properties.duration,
       })
+      return
+    }
+    if (event.type === "session.spend") {
+      handleSpend(e.name, event.properties)
       return
     }
     if (event.type !== "session.idle" && event.type !== "session.error") return

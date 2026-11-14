@@ -712,6 +712,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Dostęp do plików poza repozytorium",
   "settings.permissions.tool.doom_loop.title": "Zapętlenie",
   "settings.permissions.tool.doom_loop.description": "Wykrywanie powtarzających się wywołań narzędzi (doom loop)",
+  "settings.permissions.tool.terminal.description":
+    "Odczyt, oczekiwanie, zmiana rozmiaru lub zamknięcie terminala, którego agent nie otworzył: Twojego lub innej sesji",
+  "settings.permissions.tool.terminal_input.description":
+    "Wpisywanie tekstu lub naciskanie klawiszy w terminalu. Każdy wysłany wiersz jest też sprawdzany jako polecenie powłoki",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Odczytaj jego wyjście",
+  "session.permission.terminal.action.wait": "Poczekaj na wyjście",
+  "session.permission.terminal.action.resize": "Zmień jego rozmiar",
+  "session.permission.terminal.action.close": "Zamknij go i zakończ proces",
+  "session.permission.terminal.text": "Tekst do wpisania",
+  "session.permission.terminal.enter": "Następnie naciska Enter",
+  "session.permission.terminal.keys": "Klawisze do naciśnięcia",
   "session.delete.failed.title": "Nie udało się usunąć sesji",
   "session.delete.title": "Usuń sesję",
   "session.delete.confirm": 'Usunąć sesję "{{name}}"?',

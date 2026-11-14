@@ -1,33 +1,28 @@
 ---
 import { AuthPage } from "../components/marketing/account/AuthPage"
-import MatrixRain from "../components/marketing/account/MatrixRain.astro"
 import MarketingLayout from "../components/marketing/MarketingLayout.astro"
 import vectorMark from "../assets/vector-mark.webp"
+import { wordmarkCells, wordmarkWidth } from "../lib/wordmark"
 import "../components/marketing/account/account.css"
 
 export const prerender = true
 ---
 
 <MarketingLayout title="Sign in to Vector" description="Sign in or create a free Vector account to download the desktop app and use the CLI." noindex>
-  <div class="account-environment auth-environment">
-    <MatrixRain />
-    <div class="login-shell">
-      <header class="login-top">
-        <a class="login-brand" href="/" aria-label="Vector home">
-          <img src={vectorMark.src} alt="" width="26" height="26" />
-          <span>Vector</span>
-        </a>
-        <a class="login-top-link" href="/docs">Docs</a>
-      </header>
-      <main class="login-main">
-        <AuthPage client:only="react">
-          <div slot="fallback" class="auth-card auth-card-loading" role="status">Loading sign-in…</div>
-        </AuthPage>
-        <p class="login-aside">
-          No account yet? Create a free one, then download any installer from
-          <a href="/download">vectordev.ai/download</a>.
-        </p>
-      </main>
-    </div>
+  <div class="signin">
+    <header class="signin-top">
+      <a class="signin-logo" href="/" aria-label="Vector home">
+        <img src={vectorMark.src} alt="" width="26" height="26" />
+        <svg viewBox={`0 0 ${wordmarkWidth} 7`} fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+          {wordmarkCells.map((cell) => <rect x={cell.x} y={cell.y} width="1" height="1" />)}
+        </svg>
+      </a>
+    </header>
+    <div class="signin-art" aria-hidden="true"></div>
+    <main class="signin-panel">
+      <AuthPage client:only="react">
+        <div slot="fallback" class="signin-form signin-loading" role="status">Loading sign-in…</div>
+      </AuthPage>
+    </main>
   </div>
 </MarketingLayout>

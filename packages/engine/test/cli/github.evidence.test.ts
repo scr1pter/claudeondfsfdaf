@@ -343,3 +343,91 @@ describe("fmtTokens", () => {
     expect(fmtTokens(2_500_000)).toBe("2.5M")
   })
 })
+
+for (const mixed of [false, true]) {
+  test(`Codium evidence ${mixed ? "retains own subtotals" : "omits every private figure"}`, () => {
+    const messages = [
+      withParts({
+        ...assistant({ providerID: "vector-plan", modelID: "vector-flash", cost: 99, tokens: { input: 987654 } }),
+        billing: "codium",
+      }),
+      ...(mixed ? [withParts(assistant({ cost: 0.12, tokens: { input: 100, output: 20 } }))] : []),
+    ]
+    const measured = measureCost(messages)
+    expect(measured).toMatchObject({ codium: true, costUsd: mixed ? 0.12 : 0, input: mixed ? 100 : 0 })
+    const body = buildEvidenceBody({
+      response: "done",
+      changes: [],
+      messages,
+      runUrl: "https://github.com/acme/widgets/actions/runs/42",
+    })
+    expect(body).toContain("Codium")
+    expect(body).not.toContain("987")
+    expect(body).not.toContain("$99")
+    expect(body).not.toContain("$0.00")
+    if (mixed) {
+      expect(body).toContain("$0.12")
+      expect(body).toContain("100 in / 20 out")
+    } else expect(body).toContain("**Cost:** Codium · Vector Codium · vector-flash · 1 turn")
+  })
+}
+
+test("evidence does not treat blank or padded provider identity as own usage", () => {
+  for (const providerID of ["", " ", "vector-plan "]) {
+    const messages = [withParts(assistant({ providerID, cost: 99, tokens: { input: 987654 } }))]
+    expect(measureCost(messages)).toMatchObject({ costUsd: 0, input: 0, unknownTurns: 1 })
+    const body = buildEvidenceBody({
+      response: "done",
+      changes: [],
+      messages,
+      runUrl: "https://github.com/acme/widgets/actions/runs/42",
+    })
+    expect(body).not.toContain("987")
+    expect(body).not.toContain("$99")
+    expect(body).not.toContain("0 in / 0 out")
+  }
+})
+
+test("stamped Codium steps override an older own-provider assistant aggregate", () => {
+  const info = assistant({ cost: 99, tokens: { input: 987654 } })
+  const part: SessionV1.StepFinishPart = {
+    id: PartID.ascending(),
+    messageID: info.id,
+    sessionID,
+    type: "step-finish",
+    billing: "codium",
+    reason: "stop",
+    cost: 99,
+    tokens: info.tokens,
+  }
+  const messages = [withParts(info, [part])]
+  expect(measureCost(messages)).toMatchObject({ codium: true, ownTurns: 0, costUsd: 0, input: 0 })
+  const body = buildEvidenceBody({
+    response: "done",
+    changes: [],
+    messages,
+    runUrl: "https://github.com/acme/widgets/actions/runs/42",
+  })
+  expect(body).toContain("Codium")
+  expect(body).not.toContain("987")
+  expect(body).not.toContain("$99")
+})
+
+test("mixed evidence retains an own charge without inventing missing token counters", () => {
+  const messages = [
+    withParts(assistant({ providerID: "vector-plan", tokens: { input: 987654 } })),
+    withParts(assistant({ cost: 0.12 })),
+  ]
+  expect(measureCost(messages)).toMatchObject({ codium: true, costUsd: 0.12, usageMissing: true, ownTurns: 1 })
+  const body = buildEvidenceBody({
+    response: "done",
+    changes: [],
+    messages,
+    runUrl: "https://github.com/acme/widgets/actions/runs/42",
+  })
+  expect(body).toContain("$0.12")
+  expect(body).toContain("Codium")
+  expect(body).toContain("token usage unavailable")
+  expect(body).not.toContain("0 in / 0 out")
+  expect(body).not.toContain("987")
+})

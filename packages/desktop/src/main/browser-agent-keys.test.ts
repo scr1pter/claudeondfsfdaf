@@ -54,6 +54,19 @@ describe("parseKeyPress", () => {
     expect(parseKeyPress("Meta+c", "linux")).toMatchObject({ kind: "key" })
   })
 
+  test("Shift+Delete, which cuts on Windows and Linux, is refused there and is a key on macOS", () => {
+    for (const platform of ["win32", "linux"])
+      for (const key of ["Shift+Delete", "shift+delete", "Control+Shift+Delete", "Shift+Del"])
+        expect({ platform, key, press: parseKeyPress(key, platform) }).toEqual({
+          platform,
+          key,
+          press: { kind: "clipboard" },
+        })
+    expect(parseKeyPress("Delete", "linux")).toMatchObject({ kind: "key", keyCode: "Delete", modifiers: [] })
+    expect(parseKeyPress("Control+Delete", "win32")).toMatchObject({ kind: "key", modifiers: ["control"] })
+    expect(parseKeyPress("Shift+Delete", "darwin")).toMatchObject({ kind: "key", modifiers: ["shift"] })
+  })
+
   test("refuses a modifier it does not know, and modifiers with no key", () => {
     expect(() => parseKeyPress("Hyper+a", "linux")).toThrow("Vector does not know the modifier Hyper.")
     expect(() => parseKeyPress("Control+", "linux")).toThrow("Name a key to press after the modifiers.")

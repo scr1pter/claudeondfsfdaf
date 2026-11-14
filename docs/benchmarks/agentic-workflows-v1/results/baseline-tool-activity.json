@@ -1,0 +1,176 @@
+{
+  "kind": "Workflow Runner baseline tool counts, original paid attempts",
+  "codex": [
+    {
+      "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+      "observedToolCalls": 35,
+      "recognizedEventRecords": {
+        "codex": 35
+      },
+      "invalidRecords": 0,
+      "tools": {
+        "shell": {
+          "calls": 25,
+          "errors": 6,
+          "knownInputBytes": 10429,
+          "inputObservations": 25,
+          "knownTextOutputBytes": 70196,
+          "textOutputObservations": 25,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "file_change": {
+          "calls": 10,
+          "errors": 0,
+          "knownInputBytes": 0,
+          "inputObservations": 0,
+          "knownTextOutputBytes": 0,
+          "textOutputObservations": 0,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        }
+      },
+      "terminalActions": {},
+      "repeatedIdenticalToolInputs": 2,
+      "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+    }
+  ],
+  "vector": [
+    {
+      "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+      "observedToolCalls": 57,
+      "recognizedEventRecords": {
+        "vector": 57
+      },
+      "invalidRecords": 0,
+      "tools": {
+        "read": {
+          "calls": 17,
+          "errors": 0,
+          "knownInputBytes": 1196,
+          "inputObservations": 17,
+          "knownTextOutputBytes": 52988,
+          "textOutputObservations": 17,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "glob": {
+          "calls": 1,
+          "errors": 0,
+          "knownInputBytes": 48,
+          "inputObservations": 1,
+          "knownTextOutputBytes": 87,
+          "textOutputObservations": 1,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "shell": {
+          "calls": 19,
+          "errors": 3,
+          "knownInputBytes": 4892,
+          "inputObservations": 19,
+          "knownTextOutputBytes": 18103,
+          "textOutputObservations": 19,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "todowrite": {
+          "calls": 3,
+          "errors": 0,
+          "knownInputBytes": 1338,
+          "inputObservations": 3,
+          "knownTextOutputBytes": 117,
+          "textOutputObservations": 3,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "apply_patch": {
+          "calls": 9,
+          "errors": 0,
+          "knownInputBytes": 81582,
+          "inputObservations": 9,
+          "knownTextOutputBytes": 1921,
+          "textOutputObservations": 9,
+          "knownPatchBytes": 79012,
+          "patchObservations": 9
+        },
+        "terminal": {
+          "calls": 8,
+          "errors": 0,
+          "knownInputBytes": 1342,
+          "inputObservations": 8,
+          "knownTextOutputBytes": 1178,
+          "textOutputObservations": 8,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        }
+      },
+      "terminalActions": {
+        "open": 2,
+        "read": 2,
+        "keys": 2,
+        "close": 2
+      },
+      "repeatedIdenticalToolInputs": 8,
+      "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+    },
+    {
+      "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+      "observedToolCalls": 24,
+      "recognizedEventRecords": {
+        "vector": 24
+      },
+      "invalidRecords": 0,
+      "tools": {
+        "read": {
+          "calls": 5,
+          "errors": 0,
+          "knownInputBytes": 309,
+          "inputObservations": 5,
+          "knownTextOutputBytes": 23817,
+          "textOutputObservations": 5,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "shell": {
+          "calls": 11,
+          "errors": 1,
+          "knownInputBytes": 5203,
+          "inputObservations": 11,
+          "knownTextOutputBytes": 20638,
+          "textOutputObservations": 11,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "terminal": {
+          "calls": 4,
+          "errors": 0,
+          "knownInputBytes": 674,
+          "inputObservations": 4,
+          "knownTextOutputBytes": 597,
+          "textOutputObservations": 4,
+          "knownPatchBytes": 0,
+          "patchObservations": 0
+        },
+        "apply_patch": {
+          "calls": 4,
+          "errors": 0,
+          "knownInputBytes": 12078,
+          "inputObservations": 4,
+          "knownTextOutputBytes": 834,
+          "textOutputObservations": 4,
+          "knownPatchBytes": 11750,
+          "patchObservations": 4
+        }
+      },
+      "terminalActions": {
+        "open": 1,
+        "read": 1,
+        "keys": 1,
+        "close": 1
+      },
+      "repeatedIdenticalToolInputs": 3,
+      "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+    }
+  ]
+}

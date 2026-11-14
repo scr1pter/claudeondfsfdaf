@@ -35,6 +35,13 @@ const bundle = async () => {
     format: "esm",
     outdir: directory,
     naming: "[name].mjs",
+    // As the engine build names guard-worker.ts: strict mode starts no Worker without its preload, which Node ignores
+    // but a bundle in a temporary folder would not have beside it.
+    define: {
+      VECTOR_GUARD_WORKER_PATH: JSON.stringify(
+        path.join(import.meta.dir, "../../../core/src/local-mode/guard-worker.ts"),
+      ),
+    },
   })
   if (!built.success) throw new AggregateError(built.logs, "The guard smoke did not bundle")
   return {

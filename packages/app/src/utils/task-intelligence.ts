@@ -28,6 +28,8 @@ type RoutableModel = {
   modalities?: { input?: string[] }
   limit?: { context?: number; output?: number }
   variants?: Record<string, unknown>
+  /** What Vector Codium's list says about the entry: Auto, locked or manual-only entries are never routed to. */
+  codium?: ModelPlanStatus.Listing
 }
 
 export function supportsImageInput(model: RoutableModel) {
@@ -147,8 +149,13 @@ export function routeModelForTask<T extends RoutableModel>(input: {
   available: T[]
 }) {
   if (input.difficulty !== "complex") return { model: input.current, routed: false }
+  // Codium Auto already picks a model for each message's size.
+  if (input.current.provider.id === ModelPlanStatus.PROVIDER_ID && ModelPlanStatus.isAuto(input.current))
+    return { model: input.current, routed: false }
   const candidates = input.available
     .filter((model) => model.provider.id === input.current.provider.id)
+    // Never onto Codium Auto, a model the plan does not include, or one the person only chooses by name (§4.12).
+    .filter((model) => model.id === input.current.id || codiumTarget(model))
     .filter((model) => !isFreeModelSelection(input.current) || model.freeModel)
     // Routing never moves a prompt onto a free model whose provider may train on it; the person picks one themselves.
     .filter((model) => model.id === input.current.id || !freeModelMayTrain(model))
@@ -173,6 +180,7 @@ export function routeModelForImages<T extends RoutableModel>(input: {
   const candidates = input.available
     .filter((model) => supportsImageInput(model))
     .filter((model) => codium || model.provider.id !== ModelPlanStatus.PROVIDER_ID)
+    .filter(codiumTarget)
     .filter((model) => model.status !== "deprecated" && model.capabilities?.toolcall !== false)
     .toSorted((left, right) => {
       const leftProvider = left.provider.id === input.current.provider.id ? 1 : 0
@@ -181,6 +189,12 @@ export function routeModelForImages<T extends RoutableModel>(input: {
     })
   const selected = candidates[0]
   return { model: selected, routed: !!selected }
+}
+
+// A Codium entry routing may move a prompt onto: never Auto, a locked or a manual-only one. Other providers' models
+// carry no Codium listing.
+function codiumTarget(model: RoutableModel) {
+  return model.provider.id !== ModelPlanStatus.PROVIDER_ID || ModelPlanStatus.automatic(model)
 }
 
 export function routeVariantForTask(input: { difficulty: TaskDifficulty; selected?: string; variants: string[] }) {

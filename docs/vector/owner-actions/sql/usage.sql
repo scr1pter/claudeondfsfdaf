@@ -391,9 +391,40 @@ begin
     return null;
   end if;
   return (
-    with links as (
+    -- The dashboard owners' own accounts, named by email in request.excludeEmails: every install ever linked to
+    -- them, their CLI days, tokens and downloads, and the accounts themselves are left out of every count.
+    with excluded_accounts as (
+      select u.id
+      from auth.users u
+      where lower(u.email) in (
+        select lower(emails.value)
+        from jsonb_array_elements_text(
+          case when jsonb_typeof(request->'excludeEmails') = 'array' then request->'excludeEmails' else '[]'::jsonb end
+        ) as emails(value)
+      )
+    ),
+    excluded_keys as (
+      select d.key from public.vector_usage_daily d where d.account_id in (select id from excluded_accounts)
+      union
+      select t.key from public.vector_usage_tokens t where t.account_id in (select id from excluded_accounts)
+    ),
+    counted_daily as (
+      select d.* from public.vector_usage_daily d where d.key not in (select key from excluded_keys)
+    ),
+    counted_tokens as (
+      select t.* from public.vector_usage_tokens t
+      where t.key not in (select key from excluded_keys)
+        and (t.account_id is null or t.account_id not in (select id from excluded_accounts))
+    ),
+    counted_downloads as (
+      select dl.* from public.vector_usage_downloads dl where dl.account_id not in (select id from excluded_accounts)
+    ),
+    counted_users as (
+      select u.* from auth.users u where u.id not in (select id from excluded_accounts)
+    ),
+    links as (
       select d.key, max(d.account_id::text) as account
-      from public.vector_usage_daily d
+      from counted_daily d
       group by d.key
     ),
     activity as (
@@ -401,7 +432,7 @@ begin
         d.day - (extract(isodow from d.day)::integer - 1) as week,
         date_trunc('month', d.day::timestamp)::date as month,
         d.version, d.platform, d.arch, d.sessions, d.subagent_sessions
-      from public.vector_usage_daily d
+      from counted_daily d
       join links on links.key = d.key
     ),
     daily as (
@@ -469,9 +500,9 @@ begin
       select u.id,
         (u.created_at at time zone 'utc')::date
           - (extract(isodow from (u.created_at at time zone 'utc')::date)::integer - 1) as week,
-        exists (select 1 from public.vector_usage_downloads dl where dl.account_id = u.id) as downloaded,
-        exists (select 1 from public.vector_usage_daily ud where ud.account_id = u.id) as active
-      from auth.users u
+        exists (select 1 from counted_downloads dl where dl.account_id = u.id) as downloaded,
+        exists (select 1 from counted_daily ud where ud.account_id = u.id) as active
+      from counted_users u
       where u.created_at >= ((this_week - 77)::timestamp at time zone 'utc')
     ),
     funnel as (
@@ -485,7 +516,7 @@ begin
     ),
     latest as (
       select distinct on (d.key) d.key, d.client, d.version, d.platform, d.arch
-      from public.vector_usage_daily d
+      from counted_daily d
       where d.day > today - 7
       order by d.key, d.day desc
     ),
@@ -493,7 +524,7 @@ begin
     -- and a second computer may hold far less, so the account keeps the largest report any of them sent.
     snapshots as (
       select distinct on (d.key) d.key, d.day, d.usage, coalesce(links.account, d.key) as actor
-      from public.vector_usage_daily d
+      from counted_daily d
       join links on links.key = d.key
       where d.usage is not null
       order by d.key,
@@ -515,7 +546,7 @@ begin
     ),
     token_days as (
       select t.day, sum(t.tokens) as tokens, sum(t.cost) as cost, sum(t.tasks) as tasks
-      from public.vector_usage_tokens t
+      from counted_tokens t
       where t.day > today - 90
       group by t.day
     ),
@@ -525,7 +556,7 @@ begin
         coalesce(sum(t.tokens) filter (where t.day <= today - 7), 0) as previous_tokens7,
         coalesce(sum(t.cost) filter (where t.day > today - 7), 0) as cost7,
         coalesce(sum(t.cost) filter (where t.day <= today - 7), 0) as previous_cost7
-      from public.vector_usage_tokens t
+      from counted_tokens t
       where t.day > today - 14
     ),
     -- Each report lists its install's five most-used models, so this is an estimate that misses the tail.
@@ -547,7 +578,7 @@ begin
     -- such report counts, so a person's longest current streak wins over another computer's shorter one.
     streaks as (
       select coalesce(links.account, d.key) as actor, max((d.usage->'currentStreak')::numeric) as streak
-      from public.vector_usage_daily d
+      from counted_daily d
       join links on links.key = d.key
       where d.usage is not null and d.day >= today - 1
       group by coalesce(links.account, d.key)
@@ -556,11 +587,11 @@ begin
       'generatedAt', to_char(pg_catalog.now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
       'today', today,
       'totals', jsonb_build_object(
-        'accounts', (select count(*) from auth.users),
-        'installs', (select count(distinct d.key) from public.vector_usage_daily d where d.client = 'desktop'),
-        'cliAccounts', (select count(distinct d.key) from public.vector_usage_daily d where d.client = 'cli'),
-        'downloads', (select count(*) from public.vector_usage_downloads),
-        'downloadAccounts', (select count(distinct dl.account_id) from public.vector_usage_downloads dl),
+        'accounts', (select count(*) from counted_users),
+        'installs', (select count(distinct d.key) from counted_daily d where d.client = 'desktop'),
+        'cliAccounts', (select count(distinct d.key) from counted_daily d where d.client = 'cli'),
+        'downloads', (select count(*) from counted_downloads),
+        'downloadAccounts', (select count(distinct dl.account_id) from counted_downloads dl),
         'activeToday', rolling.active_today,
         'active7', rolling.active7,
         'previous7', rolling.previous7,

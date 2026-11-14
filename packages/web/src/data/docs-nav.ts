@@ -1,6 +1,6 @@
 // The documentation's shape: groups in order, each leaf a page under /docs.
 // Edit here and the sidebar, the pager and the search index all follow.
-import { release111 } from "./vector-releases"
+import { release111, release113 } from "./vector-releases"
 
 export type DocLink = { id: string; title: string; blurb: string }
 export type DocGroup = { label: string; links: DocLink[] }
@@ -9,6 +9,12 @@ export const docsNav: DocGroup[] = [
   {
     label: "Get started",
     links: [
+      {
+        id: "first-launch",
+        title: "First launch, step by step",
+        blurb:
+          "For anyone new to Vector: download it, get past the first-launch warnings, sign in, pick a model and run a first task.",
+      },
       {
         id: "install",
         title: "Install Vector",
@@ -32,7 +38,12 @@ export const docsNav: DocGroup[] = [
       {
         id: "subagents",
         title: "Subagents and subagent specialists",
-        blurb: "Vector's agent hands self-contained pieces of a task to other agents that run at the same time.",
+        blurb: `Vector's agent hands self-contained pieces of a task to other agents that run at the same time. ${release113.since} on ordinary requests too, within limits you set, with Stop including helpers, worktrees and background commands.`,
+      },
+      {
+        id: "workflows",
+        title: "Workflows",
+        blurb: `${release113.since} a declarative plan of stages that runs many subagents with ceilings you approve first, and reports once.`,
       },
       {
         id: "parallel-agents",
@@ -73,8 +84,7 @@ export const docsNav: DocGroup[] = [
       {
         id: "tokenomics",
         title: "Vector Tokenomics Engine",
-        blurb:
-          "Measures what each run spends from the tokens your provider reports, and stops starting automations once your daily cap is spent.",
+        blurb: `Measures what each run spends from the tokens your provider reports, and stops starting automations once your daily cap is spent. ${release113.since} learned defaults that only make work cheaper.`,
       },
       {
         id: "mcp-and-plugins",
@@ -99,8 +109,7 @@ export const docsNav: DocGroup[] = [
       {
         id: "brain",
         title: "Vector Brain",
-        blurb:
-          "From desktop 1.99.110: rules, memory and what Vector learns, kept on your computer and sent only when they bear on a request.",
+        blurb: `From desktop 1.99.110: rules, memory and what Vector learns, kept on your computer and sent only when they bear on a request. ${release113.since} skills learned from your own runs, waiting for your review.`,
       },
       {
         id: "documents",
@@ -117,7 +126,14 @@ export const docsNav: DocGroup[] = [
       {
         id: "models",
         title: "Models, free models and your own keys",
-        blurb: "Sign in to Vector for free models, or connect a provider account or API key.",
+        blurb:
+          "Sign in to Vector for free models, connect a provider account or API key, or add an OpenAI-compatible server of your own.",
+      },
+      {
+        id: "codium",
+        title: "Vector Codium",
+        blurb:
+          "Vector's optional monthly plan: coding models without provider keys, usage shown as a percentage, and no top-ups.",
       },
       {
         id: "local",
@@ -159,6 +175,12 @@ export const docsNav: DocGroup[] = [
   {
     label: "Reference",
     links: [
+      {
+        id: "configuration",
+        title: "Configuration files",
+        blurb:
+          "Where vector.json lives for the desktop app, the terminal and a repository, how it takes values from the environment, and where each key is described.",
+      },
       {
         id: "permissions",
         title: "Permissions",
@@ -228,6 +250,9 @@ export const docsMoved: Record<string, string> = {
   faq: "troubleshooting#faq",
   "delete-account": "troubleshooting#delete-account",
   "local-memory": "brain",
+  // Plans and pricing have no pages of their own: Vector Codium covers both.
+  plans: "codium",
+  pricing: "codium",
 }
 
 export const groupOf = (id: string) => docsNav.find((group) => group.links.some((link) => link.id === id))?.label ?? ""

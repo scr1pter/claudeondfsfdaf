@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -13,15 +14,120 @@ export const prerender = true
 
           <h2 id="skills">Skills</h2>
           <p>
-            Vector finds a skill as a <code>SKILL.md</code> (or <code>&lt;name&gt;.md</code>) in a skill folder, in the repository or global, and the agent calls it by name from the list of available skills.
+            A skill is a folder with a Markdown file named <code>SKILL.md</code>, in capitals, since on Linux the case
+            matters. Its frontmatter gives the skill's <code>name</code> and <code>description</code>, and its body
+            holds the instructions. Vector reads no other file name, so a skill saved as <code>&lt;name&gt;.md</code>
+            is not found, and a <code>SKILL.md</code> without a <code>name</code> is skipped. The name comes from the
+            frontmatter, not the folder; give each skill its own, because when two share one Vector logs a warning and
+            keeps only one. The agent sees each skill that has a description, by name and description, and loads one
+            by name, along with a sample of the files beside it.
+          </p>
+          <p>Vector looks for <code>SKILL.md</code> files at any depth under these folders:</p>
+          <ul>
+            <li>
+              <code>skill/</code> or <code>skills/</code> in Vector's own config folder (beside the
+              <code>AGENTS.md</code> that <a href="/docs/vector-agent#repository-rules">Repository rules</a>
+              describes), in a <code>.vector</code> folder in your home folder, and in the repository's
+              <code>.vector</code> folders, from the folder you work in up to the repository's root.
+            </li>
+            <li>
+              <code>.claude/skills/</code> and <code>.agents/skills/</code>, in your home folder and in the repository,
+              from the folder you work in up to its root. Setting <code>VECTOR_DISABLE_EXTERNAL_SKILLS</code> turns
+              these off.
+            </li>
+            <li>
+              Each folder listed in <code>skills.paths</code> in your settings. A path starting with <code>~/</code> is
+              in your home folder, and a relative path starts from the folder you work in.
+            </li>
+            <li>The skills downloaded from each address in <code>skills.urls</code>.</li>
+          </ul>
+          <p>
+            The repository's folders are read only once you trust the repository. A permission rule for
+            <code>skill</code>, whose pattern is the skill's name, can keep a skill from an agent: a skill it denies is
+            left out of that agent's list.
           </p>
           <p>
-            Downloaded skills are cached under a versioned directory, so updating one is clean rather than a manual copy. Skills are a Vector mechanism, not an MCP server.
+            An address in <code>skills.urls</code> serves an <code>index.json</code> that lists its skills and their
+            files, and Vector downloads them into its cache, one folder for each address and skill. When the index
+            gives a skill a <code>version</code>, a changed version is downloaded whole and replaces the old folder;
+            without one, files already downloaded are not fetched again. A downloaded skill too loads only from its
+            <code>SKILL.md</code>. Skills are a Vector mechanism, not an MCP server.
+          </p>
+
+          <h2 id="learned">Learned skills</h2>
+          <p>
+            {release113.since} Vector can also draft a skill from your own runs: when a run turns a failing check green,
+            it keeps the steps that worked for this repository, in <code>brain.db</code> on this computer rather than as a
+            file. A draft waits for your review in Settings → Memory → Skills, and the agent sees a learned skill only
+            once it is in use. A learned skill is guidance the agent may load, never a rule. A disk or built-in skill of
+            the same name wins. See <a href="/docs/brain#learned-skills">Learned skills</a> in Vector Brain.
+          </p>
+          <p>
+            {release113.since} loading any skill asks the <code>skill</code> permission, as your rules set it. A learned
+            skill that Vector put in use on its own, after a second matching success with Apply automatically on, also
+            asks <code>learned_skill</code> before it loads; one you approved does not. Every command in a skill still
+            goes through your permission rules.
+          </p>
+          <p>
+            {release113.since} a learned skill reaches your team only when you choose <strong>Share to
+            repository</strong> in Settings → Memory → Skills, or run <code>vector memory skills share</code> in a
+            terminal outside Vector. Sharing writes one file in <code>.vector/skills/</code> that you commit yourself. It
+            carries no error excerpt, session ids, stats or evidence, and Vector checks it against your personal memory
+            first. The file is a skill like any other in the repository, so it changes the repository's settings: Vector
+            asks you to trust them again once your running sessions finish, and from the terminal you approve them with
+            <code>vector trust approve</code> in a terminal outside Vector.
           </p>
 
           <h2 id="commands">Custom commands</h2>
           <p>
-            Your own commands are Markdown files in a <code>command/</code> or <code>commands/</code> folder, in the repository or in your global config. Frontmatter carries the metadata, the body is the prompt template, and the file's path becomes the name — so <code>command/review/api.md</code> is available as <code>review/api</code>.
+            Your own commands are Markdown files in a <code>command/</code> or <code>commands/</code> folder: the
+            repository's <code>.vector/commands/</code>, <code>~/.vector/commands/</code>, or <code>commands/</code> in
+            Vector's own config folder. Frontmatter carries the metadata, the body is the prompt template, and the
+            file's path becomes the name, so <code>.vector/commands/review/api.md</code> is available as
+            <code>review/api</code>. Type <code>/</code> and the name in the composer or the terminal, followed by the
+            command's arguments, or run it with <code>vector run --command</code>. A repository's commands load once you
+            trust it.
           </p>
           <p class="doc-cmd"><code>vector run --command review/api "the new billing endpoints"</code><button class="doc-cmd-copy" type="button" aria-label="Copy this command">Copy</button></p>
+          <h3 id="command-templates">Template syntax</h3>
+          <p>Before the prompt is sent, Vector fills in the template:</p>
+          <dl class="doc-rows">
+            <div><dt>$ARGUMENTS</dt><dd>Everything typed after the command's name, as typed.</dd></div>
+            <div><dt>$1, $2 …</dt><dd>The arguments one at a time. Arguments are separated by spaces, and a phrase in double or single quotes counts as one, without its quotes. The highest-numbered placeholder in the template takes its argument and every one after it, and a placeholder with no argument is left empty.</dd></div>
+            <div><dt>No placeholder</dt><dd>A template with neither <code>$ARGUMENTS</code> nor a numbered placeholder gets the arguments added at its end, after a blank line.</dd></div>
+            <div><dt>!`command`</dt><dd>Vector runs the shell command in the folder you work in and puts its output in place of the snippet. Inside a snippet, <code>$1</code> and <code>$ARGUMENTS</code> insert each argument as one quoted shell word, so an argument cannot become shell syntax; one the shell cannot quote safely stops the command with an error. Because the command is your own, from your settings or a repository you trust, its snippets run without asking; only a <a href="/docs/permissions">deny rule</a> stops one. Snippets in an MCP server's prompt or a skill ask like any other shell command.</dd></div>
+            <div><dt>@path</dt><dd>Attaches that file or folder, with the path taken from the repository's root, or from your home folder when it starts with <code>~/</code>. When no such file exists and an agent has that name, Vector hands the request to that agent, as <code>@</code> and an agent's name does in the composer.</dd></div>
+          </dl>
+          <pre><code>{`---
+description: Fix a GitHub issue by its number
+---
+Fix issue #$1. This is the issue:
+
+!\`gh issue view $1\`
+
+Follow @CONTRIBUTING.md, and run the tests before you finish.`}</code></pre>
+          <h3 id="command-fields">Frontmatter</h3>
+          <dl class="doc-rows">
+            <div><dt>description</dt><dd>Shown beside the command in the list of commands.</dd></div>
+            <div><dt>agent</dt><dd>The agent that runs the command. When it is a subagent, the command runs as a separate subagent task that reports back, unless <code>subtask</code> is <code>false</code>.</dd></div>
+            <div><dt>subtask</dt><dd><code>true</code> runs the command as a subagent task, and <code>false</code> keeps it in the conversation.</dd></div>
+            <div><dt>model</dt><dd>The model the command runs on, as <code>provider/model</code>. Without it, a command that names an agent uses that agent's model. A session on a free model keeps that model.</dd></div>
+            <div><dt>size</dt><dd>How much harness the run gets: <code>chat</code>, <code>light</code>, <code>standard</code> or <code>thorough</code>. Without it the run is standard, unless the arguments ask for a thorough job; only thorough offers subagents.</dd></div>
+          </dl>
+          <p>
+            The <code>command</code> key in <code>vector.json</code> takes the same fields, with the template in
+            <code>template</code>. A command of your own named <code>init</code> or <code>review</code> replaces Vector's.
+            Prompts from your MCP servers are listed as commands too, named <code>&lt;server&gt;:&lt;prompt&gt;</code>
+            with their arguments as <code>$1</code>, <code>$2</code> and so on, and so is each skill, under its own
+            name, unless a command already has that name.
+          </p>
+          <pre><code>{`{
+  "command": {
+    "changelog": {
+      "description": "Draft release notes since a tag",
+      "template": "Write release notes for the changes since $1:\\n\\n!\`git log --oneline $1..HEAD\`",
+      "model": "anthropic/claude-sonnet-5"
+    }
+  }
+}`}</code></pre>
 </DocsPage>

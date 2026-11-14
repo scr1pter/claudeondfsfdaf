@@ -786,6 +786,18 @@ export const dict = {
   "settings.permissions.tool.doom_loop.title": "Doom Loop",
   "settings.permissions.tool.doom_loop.description":
     "Обнаружение повторяющихся вызовов инструментов с одинаковыми входными данными",
+  "settings.permissions.tool.terminal.description":
+    "Чтение, ожидание, изменение размера или закрытие терминала, который агент не открывал: вашего или терминала другой сессии",
+  "settings.permissions.tool.terminal_input.description":
+    "Ввод текста или нажатие клавиш в терминале. Каждая отправленная строка также проверяется как команда оболочки",
+  "session.permission.terminal.name": "Терминал",
+  "session.permission.terminal.action.read": "Прочитать вывод",
+  "session.permission.terminal.action.wait": "Дождаться вывода",
+  "session.permission.terminal.action.resize": "Изменить размер",
+  "session.permission.terminal.action.close": "Закрыть и завершить процесс",
+  "session.permission.terminal.text": "Текст для ввода",
+  "session.permission.terminal.enter": "Затем нажимает Enter",
+  "session.permission.terminal.keys": "Клавиши для нажатия",
 
   "session.delete.failed.title": "Не удалось удалить сессию",
   "session.delete.title": "Удалить сессию",

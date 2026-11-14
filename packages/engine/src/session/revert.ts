@@ -11,8 +11,20 @@ import { SessionRunState } from "./run-state"
 import { SessionSummary } from "./summary"
 import { BackgroundJob } from "@/background/job"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Instruction } from "./instruction"
+import { FileState } from "@/tool/file-state"
+import { TaskIsolation } from "@/task/isolation"
+
+export class IsolatedError extends Schema.TaggedErrorClass<IsolatedError>()("SessionRevert.IsolatedError", {
+  message: Schema.String,
+}) {}
+
+export class WorkflowError extends Schema.TaggedErrorClass<WorkflowError>()("SessionRevert.WorkflowError", {
+  message: Schema.String,
+}) {}
 
 export const RevertInput = Schema.Struct({
   sessionID: SessionID,
@@ -27,10 +39,16 @@ export interface Interface {
   // reporting a successful undo that restored nothing.
   readonly revert: (
     input: RevertInput,
-  ) => Effect.Effect<Session.Info, Session.BusyError | Snapshot.SnapshotUnavailableError>
+  ) => Effect.Effect<
+    Session.Info,
+    Session.BusyError | Snapshot.SnapshotUnavailableError | IsolatedError | WorkflowError
+  >
   readonly unrevert: (input: {
     sessionID: SessionID
-  }) => Effect.Effect<Session.Info, Session.BusyError | Snapshot.SnapshotUnavailableError>
+  }) => Effect.Effect<
+    Session.Info,
+    Session.BusyError | Snapshot.SnapshotUnavailableError | IsolatedError | WorkflowError
+  >
   readonly cleanup: (session: Session.Info) => Effect.Effect<void>
 }
 
@@ -47,10 +65,25 @@ const layer = Layer.effect(
     const state = yield* SessionRunState.Service
     const background = yield* BackgroundJob.Service
     const knowledge = yield* BrainKnowledge.Service
+    const skills = yield* BrainSkill.Service
+    const workflow = yield* BrainWorkflow.Service
     const instruction = yield* Instruction.Service
     const guests = yield* FreeModelGuests.Service
+    const isolation = yield* TaskIsolation.Service
+    const refuseProtected = Effect.fn("SessionRevert.refuseProtected")(function* (sessionID: SessionID) {
+      if ((yield* sessions.get(sessionID).pipe(Effect.orDie)).agent === "workflow")
+        return yield* new WorkflowError({
+          message: "Workflow runs cannot be reverted; resume them with the workflow tool.",
+        })
+      if (yield* isolation.find(sessionID).pipe(Effect.orDie))
+        return yield* new IsolatedError({
+          message:
+            "Review isolated changes with task_manage inspect (diff: true), then merge or discard them; session revert cannot change this checkout.",
+        })
+    })
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
+      yield* refuseProtected(input.sessionID)
       yield* state.assertNotBusy(input.sessionID)
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       let lastUser: SessionV1.User | undefined
@@ -99,16 +132,20 @@ const layer = Layer.effect(
           files: diffs.length,
         },
       })
+      // Files went back, so what the session read or wrote is seeded again from the messages that remain.
+      FileState.forget(input.sessionID)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
     const unrevert = Effect.fn("SessionRevert.unrevert")(function* (input: { sessionID: SessionID }) {
+      yield* refuseProtected(input.sessionID)
       yield* Effect.logInfo("unreverting", { sessionID: input.sessionID })
       yield* state.assertNotBusy(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       if (!session.revert) return session
       if (session.revert.snapshot) yield* snap.restore(session.revert.snapshot)
       yield* sessions.clearRevert(input.sessionID)
+      FileState.forget(input.sessionID)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
@@ -134,8 +171,9 @@ const layer = Layer.effect(
       const partID = session.revert.partID
       const idx = target && partID ? target.parts.findIndex((part) => part.id === partID) : -1
       const removeParts = target && idx >= 0 ? target.parts.slice(idx) : []
-      // A background task launched by a call the commit removes would keep spending and editing on top of the undo,
-      // and its result has nowhere to go. While the revert was pending it ran on, so a redo still got its result.
+      // A background task or command launched by a call the commit removes would keep spending and editing on top of
+      // the undo, and its result has nowhere to go. While the revert was pending it ran on, so a redo still got its
+      // result.
       const removed = new Set<string>(remove.map((msg) => msg.info.id))
       const calls = new Set(removeParts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])))
       const launched = (job: BackgroundJob.Info) => {
@@ -150,7 +188,7 @@ const layer = Layer.effect(
       yield* Effect.forEach(
         jobs.filter(
           (job) =>
-            job.type === "task" &&
+            (job.type === "task" || job.type === "shell") &&
             job.status === "running" &&
             job.metadata?.parentSessionId === sessionID &&
             launched(job),
@@ -158,15 +196,24 @@ const layer = Layer.effect(
         (job) => background.cancel(job.id),
         { concurrency: "unbounded", discard: true },
       )
-      // What the reverted runs cited loses the credit they gave it: the undo says they did not work out. A session a
-      // guest is in takes no credit back, as it gives none: a guest's undo cannot lower the owner's records.
+      // What the reverted runs cited loses the credit they gave it: the undo says they did not work out. So do the
+      // learned skills they passed, what they drafted is withdrawn, and their workflow runs count as failures. A session
+      // a guest is in takes no credit back, as it gives none: a guest's undo cannot lower the owner's records.
       const requests = [
         ...remove.flatMap((msg) => (msg.info.role === "user" ? [msg.info.id] : [])),
-        ...(target && removeParts.length > 0 ? [target.info.role === "user" ? target.info.id : target.info.parentID] : []),
+        ...(target && removeParts.length > 0
+          ? [target.info.role === "user" ? target.info.id : target.info.parentID]
+          : []),
       ]
       if (requests.length > 0 && !(yield* guests.marked(sessionID)))
         yield* instruction.place().pipe(
-          Effect.flatMap((place) => knowledge.reverted(place, { sessionID, requests })),
+          Effect.flatMap((place) =>
+            Effect.all([
+              knowledge.reverted(place, { sessionID, requests }),
+              skills.reverted(place, { sessionID, requests }),
+              workflow.reverted(place, { sessionID, requests }),
+            ]),
+          ),
           Effect.catchCause((cause) => Effect.logWarning("brain revert credit failed", { cause })),
         )
       for (const msg of remove) {
@@ -189,6 +236,7 @@ export const node = LayerNode.make({
   service: Service,
   layer: layer,
   deps: [
+    TaskIsolation.node,
     Session.node,
     Snapshot.node,
     Storage.node,
@@ -197,6 +245,8 @@ export const node = LayerNode.make({
     SessionRunState.node,
     BackgroundJob.node,
     BrainKnowledge.node,
+    BrainSkill.node,
+    BrainWorkflow.node,
     Instruction.node,
     FreeModelGuests.node,
   ],

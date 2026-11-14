@@ -6,6 +6,10 @@ import type { ServerConnection } from "./server"
 import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
+import type { ReportsPlatform } from "../support-reports"
+import type { PhoneAlertEvent } from "./settings"
+import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
+import type { HostedRequest } from "../features/cloud/hosted/hosted-requests"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -19,6 +23,161 @@ type OpenAttachmentPickerOptions = {
 type SaveFilePickerOptions = { title?: string; defaultPath?: string }
 type PlatformName = "web" | "desktop"
 type DesktopOS = "macos" | "windows" | "linux"
+
+/** What a computer sends its phones (WP A41 implements it; the phone app opens it, packages/app/src/phone/alerts.ts). */
+export type PhoneAlertsPlatform = {
+  send(alert: { event: PhoneAlertEvent; title: string; route?: "sessions" | "approvals" }): Promise<void>
+}
+
+/** Vector Remote on this computer, as the desktop's main process reports it (WP A41; Settings → Remote is A42). */
+export type RemoteStatus = {
+  enabled: boolean
+  state:
+    | "off"
+    | "ready"
+    | "signed-out"
+    | "connecting"
+    | "online"
+    | "paused"
+    | "not-in-plan"
+    | "unavailable"
+    | "device-limit"
+    | "fair-use"
+    | "revoked"
+    | "replaced"
+    | "local-off"
+  message?: string
+  phones: { device: string; name: string; pairedAt: number; connected: boolean; watching: boolean }[]
+  limit: number
+  viewers: number
+  pairing:
+    | { state: "idle" }
+    | { state: "waiting"; link: string; expiresAt: number }
+    | { state: "confirm"; code: string; phone: string; expiresAt: number }
+    | { state: "paired"; phone: string }
+    | { state: "failed"; message: string }
+}
+
+export type RemotePlatform = {
+  status(): Promise<RemoteStatus>
+  setEnabled(enabled: boolean): Promise<RemoteStatus>
+  /** A pairing offer: `link` is what the QR code shows. */
+  startPairing(): Promise<{ link: string; expiresAt: number; status: RemoteStatus }>
+  /** The person saw the same six digits on the phone. */
+  confirmPairing(code?: string): Promise<RemoteStatus>
+  cancelPairing(): Promise<RemoteStatus>
+  unpair(device: string): Promise<RemoteStatus>
+  /** "Disconnect all phones": a new identity on this computer, and every relay connection closed. */
+  disconnectAll(): Promise<RemoteStatus & { killed: boolean }>
+  /** Whether a phone started the turn any of these sessions runs (auto-accept leaves those to a person, S6). */
+  isPhoneTurn(sessionIDs: string[]): Promise<boolean>
+  onChange(callback: (status: RemoteStatus) => void): () => void
+}
+
+/** Brain Vault on this computer, as the desktop's main process reports it (WP A45). No key, code or content. */
+export type VaultStatus = {
+  /** The OS credential store can keep the vault key; without it no vault is made on this computer. */
+  secure: boolean
+  /** The nightly backup while the app is open. */
+  enabled: boolean
+  backend: "vector" | "github"
+  githubRepo?: string
+  hasVault: boolean
+  running?: "backup" | "restore" | "forget" | "delete"
+  last?: { version: string; at: number; files: number; sentBytes: number }
+  error?: string
+  warning?: string
+  /** GitHub: the bytes the vault takes in the repository. */
+  storedBytes?: number
+  nextAt?: number
+}
+
+export type VaultResult = { ok: boolean; message: string; status: VaultStatus; code?: string }
+
+export type VaultVersions =
+  | {
+      ok: true
+      label: string
+      snapshots: readonly { id: string; createdAt: number; bytes: number }[]
+      usage?: { usedBytes: number; quotaBytes: number }
+      storedBytes?: number
+      readOnly?: boolean
+      deleteAt?: number
+      mine: boolean
+      status: VaultStatus
+    }
+  | { ok: false; message: string; status: VaultStatus }
+
+export type VaultRestoreResult = VaultResult & {
+  needsCode?: boolean
+  totals?: {
+    restored: number
+    active: number
+    pinned: number
+    waiting: number
+    known: number
+    refused: number
+    documents: number
+    unreadable: number
+    version: string
+    newer: boolean
+  }
+}
+
+export type VaultPlatform = {
+  status(): Promise<VaultStatus>
+  configure(input: { enabled?: boolean; backend?: "vector" | "github"; githubRepo?: string }): Promise<VaultResult>
+  /** Backs up now; the first backup answers the new vault's recovery code once. */
+  backup(): Promise<VaultResult>
+  versions(): Promise<VaultVersions>
+  /** Restores a version (the newest by default) with this computer's key, or with the recovery code. */
+  restore(input: { version?: string; code?: string }): Promise<VaultRestoreResult>
+  forget(version: string): Promise<VaultResult>
+  /** Deletes the whole vault where backups go now. */
+  remove(): Promise<VaultResult>
+  onChange(callback: (status: VaultStatus) => void): () => void
+}
+
+/** Production checks through the desktop's main process (WP A50): Settings → Production. No token reaches the app. */
+export type OpsPlatform = {
+  /** One of the requests in features/cloud/ops/ops-requests.ts, answered with vectordev.ai's body or its refusal. */
+  request(
+    input: OpsRequest,
+  ): Promise<
+    { ok: true; body: Record<string, unknown> } | { ok: false; status?: number; code?: string; message: string }
+  >
+  /** A Ship Desk screenshot as a data URL (PNG or WebP only). */
+  image(input: { card: string; n: number }): Promise<{ ok: true; src: string } | { ok: false; message: string }>
+  /** Undo or Approve merged with the person's own GitHub sign-in, at the commit the card showed. */
+  merge(input: OpsMergeRequest): Promise<{ ok: true; message: string } | { ok: false; code?: string; message: string }>
+}
+
+/**
+ * The cloud computer through the desktop's main process (WP A56): the composer's "Run on my cloud computer", the bar
+ * above the composer and the live view window. No token reaches the app.
+ */
+export type HostedPlatform = {
+  /** One of the requests in features/cloud/hosted/hosted-requests.ts, answered with vectordev.ai's body or its refusal. */
+  request(
+    input: HostedRequest,
+  ): Promise<
+    { ok: true; body: Record<string, unknown> } | { ok: false; status?: number; code?: string; message: string }
+  >
+  /** Opens the session's live view in its own sandboxed window: watch, or control during a take-over. */
+  liveView(input: {
+    id: string
+    mode: "view" | "control"
+  }): Promise<{ ok: true } | { ok: false; status?: number; code?: string; message: string }>
+  /** Asks for the session's files and opens the download in the browser once they are packed. */
+  files(input: {
+    id: string
+  }): Promise<{ ok: true; ready?: boolean } | { ok: false; status?: number; code?: string; message: string }>
+  /** Opens a job's pull request or a recording link in the browser. */
+  open(input: {
+    kind: "pull-request" | "recording"
+    url: string
+  }): Promise<{ ok: true } | { ok: false; message: string }>
+}
 
 export type FatalRendererErrorLog = {
   error: string
@@ -73,6 +232,28 @@ type PlatformBase = {
 
   /** Desktop account status and sign-in; credentials stay in the main process. */
   vectorAccount?: VectorAccountPlatform
+
+  /** Bug reports this computer sent and what became of each (desktop only); the report ids stay in the main process. */
+  reports?: ReportsPlatform
+
+  /**
+   * Alerts from this computer to the account's phones (desktop only; Remote's desktop half, WP A41, provides it): each
+   * alert is encrypted end to end to the paired phones' alert keys before vectordev.ai relays it. Settings →
+   * Notifications offers the phone events and quiet hours only where it exists.
+   */
+  phoneAlerts?: PhoneAlertsPlatform
+
+  /** Vector Remote on this computer (desktop only; WP A41): pairing, the paired phones and "Disconnect all phones". */
+  remote?: RemotePlatform
+
+  /** Brain Vault on this computer (desktop only; WP A45): Settings → Memory → Backup and the nightly backup. */
+  vault?: VaultPlatform
+
+  /** Production checks (desktop only; WP A50): Settings → Production, with merges from the person's own GitHub sign-in. */
+  ops?: OpsPlatform
+
+  /** The cloud computer (desktop only; WP A56): "Run on my cloud computer", take-over and the live view window. */
+  hosted?: HostedPlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

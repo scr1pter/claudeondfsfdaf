@@ -11,9 +11,10 @@ import { NetworkGuard } from "../../../core/test/lib/network-guard"
 
 // The research routes under /memory/research, over a real listener with an owner and an invited guest, as the app's
 // Settings > Memory > Research reads them: the list, one run, a source's saved text, Keep, export, and Forget for a
-// source, a run and all of a repository's research. No route starts a run, so runs are written through the store the
-// research tools use. The listener builds its own services, so both open the brain as a file in the test's data
-// folder rather than in memory, where each would have a brain of its own.
+// source, a run and all of a repository's research, and the memory erases that forget research with what they erase.
+// No route starts a run, so runs are written through the store the research tools use. The listener builds its own
+// services, so both open the brain as a file in the test's data folder rather than in memory, where each would have a
+// brain of its own.
 
 const guard = NetworkGuard.use()
 
@@ -184,6 +185,8 @@ describe("memory research routes", () => {
       ["POST", `/memory/research/${run}/keep`],
       ["GET", `/memory/research/${run}/export`],
       ["GET", `/memory/research/${run}/export?format=json`],
+      ["GET", `/memory/research/${run}/export?format=docx`],
+      ["GET", `/memory/research/${run}/export?format=pdf`],
       ["GET", `/memory/research/${run}/sources/S1`],
       ["DELETE", `/memory/research/${run}/sources/S1`],
     ]
@@ -205,6 +208,8 @@ describe("memory research routes", () => {
     const source = await get(directory, `/memory/research/${run}/sources/S1`)
     const markdown = await send(directory, `/memory/research/${run}/export`, "GET")
     const json = await send(directory, `/memory/research/${run}/export?format=json`, "GET")
+    const word = await send(directory, `/memory/research/${run}/export?format=docx`, "GET")
+    const pdf = await send(directory, `/memory/research/${run}/export?format=pdf`, "GET")
     const kept = await send(directory, `/memory/research/${run}/keep`, "POST")
     const forgotSource = await send(directory, `/memory/research/${run}/sources/S1`, "DELETE")
     const after = await get(directory, `/memory/research/${run}`)
@@ -235,6 +240,17 @@ describe("memory research routes", () => {
     expect((await json.json()).notes[0].quote).toBe(
       "Delivered heating energy fell by 61 percent compared with the gas boilers",
     )
+    expect(word.status).toBe(200)
+    expect(word.headers.get("content-type")).toContain(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    expect(word.headers.get("content-disposition")).toEndWith('.docx"')
+    expect(new TextDecoder().decode(new Uint8Array(await word.arrayBuffer()).slice(0, 2))).toBe("PK")
+    expect(pdf.status).toBe(200)
+    expect(pdf.headers.get("content-type")).toBe("application/pdf")
+    expect(pdf.headers.get("content-disposition")).toEndWith('.pdf"')
+    expect(new TextDecoder().decode(new Uint8Array(await pdf.arrayBuffer()).slice(0, 5))).toBe("%PDF-")
+    expect(pdf.headers.get("cache-control")).toBe("no-store")
     expect(kept.status).toBe(200)
     expect((await kept.json()).run.kept).toBe(true)
     expect(forgotSource.status).toBe(200)
@@ -283,5 +299,34 @@ describe("memory research routes", () => {
     expect((await get(directory, "/memory/research")).runs.map((item: { run: { id: string } }) => item.run.id)).toEqual(
       [run],
     )
+  }, 30_000)
+
+  test("erasing what Vector learned in a session forgets the runs it started, and erasing all forgets every run", async () => {
+    await using tmp = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
+    const directory = tmp.path
+    const where = await place(directory)
+    const ids = async () =>
+      (await get(directory, "/memory/research")).runs.map((item: { run: { id: string } }) => item.run.id)
+    const one = await seed(where, "ses_one")
+    const two = await seed(where, "ses_two")
+    // The guest may not erase a session's memory, nor its research.
+    expect((await send(directory, "/memory/sessions/ses_one", "DELETE", guest)).status).toBe(403)
+    expect((await ids()).toSorted()).toEqual([one, two].toSorted())
+
+    const erased = await send(directory, "/memory/sessions/ses_one", "DELETE")
+    expect(erased.status).toBe(200)
+    // The answer is still the count of entries: the session taught Vector nothing, and its run went all the same.
+    expect(await erased.json()).toBe(0)
+    expect(await ids()).toEqual([two])
+    expect((await send(directory, `/memory/research/${one}`, "GET")).status).toBe(400)
+
+    const all = await call(at(directory, "/memory/erase"), {
+      method: "POST",
+      headers: { ...owner, "content-type": "application/json" },
+      body: JSON.stringify({ scope: "all" }),
+    })
+    expect(all.status).toBe(200)
+    expect(await ids()).toEqual([])
+    expect(guard.outside()).toEqual([])
   }, 30_000)
 })

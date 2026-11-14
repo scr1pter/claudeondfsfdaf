@@ -85,9 +85,9 @@ export const prerender = true
         <p>AI review on GitHub, desktop and CLI, with a verify pass that re-checks blocking findings. No Vector fee.</p>
       </div>
       <div class="ip-milestone">
-        <span class="ip-stage">In development</span>
+        <span class="ip-stage">Planned</span>
         <h3>Vector Velocity</h3>
-        <p>A 550B-parameter model built for Vector's own loop, designed to cost significantly less to run than other very large coding models. No weights or benchmarks yet.</p>
+        <p>A planned model with 550B+ parameters for Vector's own coding loop. No weights or benchmarks yet.</p>
       </div>
       <div class="ip-milestone">
         <span class="ip-stage">Today · desktop</span>
@@ -155,7 +155,7 @@ export const prerender = true
   </section>
 
   <footer class="ip-foot">
-    <p class="ip-footnote"><strong>* Benchmark method.</strong> Vector's offline efficiency benchmark, archived at docs/benchmarks/vector-efficiency-2026-10: Vector's runtime at an 11 October 2026 revision (commit 6f7f3c2ea) and Claude Code 2.1.215 performed identical scripted tool steps against a local fake model server, with the same number of model requests, in three fix tasks. Medians of three repetitions at the same list rates ($3 per million input tokens, $3.75 cache write, $0.30 cache read, $15 output), with caching modelled and tokens estimated as characters ÷ 4; a second session, run as a new process, came out 75% lower. It measures what each agent sends, not the quality of answers or a provider's real bill, and it does not show that Vector is cheaper than other agents in general.</p>
+    <p class="ip-footnote"><strong>* Benchmark method.</strong> Vector's offline efficiency benchmark: Vector's runtime as of 11 October 2026 and Claude Code 2.1.215 performed identical scripted tool steps against a local fake model server, with the same number of model requests, in three fix tasks. Medians of three repetitions at the same list rates ($3 per million input tokens, $3.75 cache write, $0.30 cache read, $15 output), with caching modelled and tokens estimated as characters ÷ 4; a second session, run as a new process, came out 75% lower. It measures what each agent sends, not the quality of answers or a provider's real bill, and it does not show that Vector is cheaper than other agents in general.</p>
     <p class="ip-footnote"><strong>Privacy.</strong> Vector itself never trains on prompts or code. Requests to free models whose providers don't train ask them not to, and free models whose providers may train are labelled May train on your prompts and sent only after the user accepts that once.</p>
     <p class="ip-footnote"><strong>1.</strong> Stack Overflow 2026 Developer Survey, 6 October 2026. <strong>2.</strong> Epoch AI, LLM inference price trends, 12 March 2025; the rate depends on the performance level.</p>
     <details class="ip-details ip-sources">

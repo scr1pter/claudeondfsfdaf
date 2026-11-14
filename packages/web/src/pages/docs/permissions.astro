@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -7,13 +8,99 @@ export const prerender = true
 <DocsPage id="permissions">
 
           <p>
-            Every tool action is checked against a ruleset whose effect is <strong>allow</strong>, <strong>ask</strong> or <strong>deny</strong>. Rules from the agent, from the repository and from your saved answers are merged: deny wins, then ask, then allow, and anything with no matching rule defaults to ask. An agent with no permissions at all is denied everything rather than trusted.
+            Every tool action is checked against a list of rules. A rule names a permission (such as <code>bash</code>,
+            <code>edit</code> or <code>read</code>), a pattern (a command, a path or an address) and an effect:
+            <strong>allow</strong>, <strong>ask</strong> or <strong>deny</strong>. The <strong>last</strong> rule in the
+            list whose permission and pattern both match decides, whatever its effect, so a later allow overrides an
+            earlier deny. When no rule matches, Vector asks. <a href="#rule-order">Which rule decides</a> shows how the
+            list is built and how to write a deny that holds.
           </p>
           <p>
-            When you answer <strong>always</strong>, that allow is saved for the repository, so the same action is not asked again. Saved answers are per repository, and you can clear them.
+            When you answer <strong>always</strong>, Vector remembers that allow for the folder you are working in, in
+            every session there, until Vector restarts or reloads that folder; it is not saved to disk. A remembered
+            answer only turns an ask into an allow, and never overrides a deny. Some actions are never remembered, such
+            as sensitive browser and computer actions and Vector Cloud changes: for them <strong>always</strong> counts
+            as once.
           </p>
           <p class="note is-caution">
             For unattended runs the terminal agent takes <code>--auto</code> (also spelled <code>--yolo</code> or <code>--dangerously-skip-permissions</code>). It auto-approves anything not explicitly denied — deny rules still hold. It is off by default, and it is the flag to think twice about.
+          </p>
+
+          <h2 id="rule-order">Which rule decides</h2>
+          <p>
+            Vector builds each agent's list in this order, so a matching rule further down overrides one above it:
+          </p>
+          <ol>
+            <li>
+              Vector's defaults, which allow most actions and ask first for some, such as web fetches, files outside
+              the repository and secret files such as <code>.env</code>.
+            </li>
+            <li>
+              The agent's own rules, such as plan mode's deny on edits outside its plan files. Vector's lightweight
+              Quick lane and its hidden editor-completion and document helpers are the exception: their own deny on
+              everything comes after your <code>permission</code> rules instead.
+            </li>
+            <li>
+              The <code>permission</code> rules in your settings, in the order you wrote them: keys from first to last,
+              and the patterns inside each key from first to last. A single effect such as <code>"edit": "deny"</code>
+              is a rule for the pattern <code>*</code>.
+            </li>
+            <li>Your rules for that agent, under <code>agent.&lt;name&gt;.permission</code>.</li>
+            <li>
+              A few rules Vector adds last, for example to keep the research agents' own tools theirs, and to make a
+              Vector Cloud change that a wildcard allowed ask first.
+            </li>
+            <li>
+              The session's own rules, such as the limits a subagent's session carries from the session that started
+              it.
+            </li>
+          </ol>
+          <p>
+            Permission names and patterns take wildcards: <code>*</code> matches any run of characters, spaces and
+            slashes included, <code>?</code> matches one character, and a pattern ending in a space and <code>*</code>,
+            such as <code>git push *</code>, also matches the bare command. A key of <code>"*"</code> covers every
+            permission, and it overrides only what comes before it. When one call runs several commands, each is
+            checked, and a deny for any of them refuses the call.
+          </p>
+          <p>
+            When several settings files set permission rules, they are merged key by key in the order Vector reads
+            them. A later file's effect for a permission and pattern that an earlier file set takes its place in the
+            list; its new patterns go after the earlier patterns for that permission, and its new permissions after
+            all the earlier ones. If a trusted repository's settings allow or ask for anything, Vector also repeats
+            your own rules, from your first deny on, after your rules for the agent, so the repository cannot lift
+            that deny.
+          </p>
+          <p>
+            The read-only specialists (explore, review, security and judge) and the research agents are built the same
+            way, except that your rules can only narrow them: a deny applies, while an allow or ask counts only for
+            what the agent can already do, and their own denies come after yours.
+          </p>
+          <p>
+            In this <code>vector.json</code> the wildcard allow comes after the deny, so it is the last match for every
+            command and <code>git push origin main</code> is allowed:
+          </p>
+          <pre><code>{`{
+  "permission": {
+    "bash": {
+      "git push*": "deny",
+      "*": "allow"
+    }
+  }
+}`}</code></pre>
+          <p>To make the deny win, write it after the broader rule it should override:</p>
+          <pre><code>{`{
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "git push*": "deny"
+    }
+  }
+}`}</code></pre>
+          <p>
+            The same goes for keys: <code>{`{ "*": "deny", "bash": "allow" }`}</code> allows shell commands, while
+            <code>{`{ "bash": "allow", "*": "deny" }`}</code> denies them. A few actions ask every time even when a
+            rule allows them, such as Vector Cloud changes and, with Vector Local on, shell commands that may reach the
+            network; a deny still refuses them.
           </p>
 
           <h2 id="project-trust">Repository trust</h2>
@@ -56,6 +143,104 @@ export const prerender = true
             writes into <code>.vector</code> do not. Integrations you add from the app are kept with your own settings
             rather than in the repository, so they stay after a restart. A trusted repository can add allow rules, but
             it cannot lift a deny in your own settings.
+          </p>
+
+          <h2 id="prompt-files">Prompt files</h2>
+          <p>
+            {release113.since} an edit to a file Vector reads into an agent's instructions or permissions asks
+            <code>prompt_source</code> every time, whatever your rules, an earlier answer or <code>--auto</code> would
+            allow. These are the config files Vector loaded (your global <code>vector.json</code>, and a trusted
+            repository's own), the agents, modes, commands, skills and plugins in a config folder such as
+            <code>~/.config/vector</code>, <code>~/.vector</code> (even before it exists) or a trusted repository's
+            <code>.vector</code>, a file a loaded config's prompt settings name with <code>{"{file:...}"}</code>, the
+            skills in <code>~/.claude/skills</code>, <code>~/.agents/skills</code> and your <code>skills.paths</code>,
+            your global <code>AGENTS.md</code> and <code>~/.claude/CLAUDE.md</code>, and instruction files outside the
+            repository. Vector asks before its edit, write and patch tools change one, and before a shell redirect or
+            one of the common write commands (<code>cp</code>, <code>mv</code>, <code>install</code>, <code>ln</code>,
+            <code>tee</code>, <code>sed -i</code> and <code>dd</code>, and on Windows PowerShell's
+            <code>Copy-Item</code>, <code>Move-Item</code> and <code>Tee-Object</code> and cmd's <code>copy</code> and
+            <code>move</code>) does, a target spelled with
+            <code>$HOME</code> or <code>$XDG_CONFIG_HOME</code> included. A repository's own <code>AGENTS.md</code>
+            is not one: you often ask the agent to edit it, and the change shows in <code>git diff</code>. A
+            <code>vector.json</code> that Vector does not load, such as a test fixture, is edited like any other file,
+            so an unattended run that changes fixtures is not stopped.
+          </p>
+          <p>
+            {release113.since} a prompt file outside the repository that changed since you last approved it is held
+            when Vector next starts: a held agent, command, skill, plugin or instruction file is not loaded (a changed
+            module beside the plugins of a folder holds all of them), and a held global config keeps its providers and
+            sign-ins but not its prompt settings (agent and mode prompts, commands, instructions, plugins and skills),
+            nor does it when a file those settings name with <code>{"{file:...}"}</code> changed. The first start
+            records your files as they are; after that, a folder Vector has not seen before, such as a new
+            <code>~/.vector</code>, is held until you approve it. An edit you approved when Vector asked is not held.
+            The app shows the held files in a banner with <strong>Approve</strong>, which approves only the files it
+            listed, as they were listed: if one changed since, nothing is approved and the banner reads them again. In
+            a terminal outside Vector, <code>vector trust prompts</code> lists them and
+            <code>vector trust prompts approve</code> approves them and names each one. Prompt files inside a
+            repository are left to repository trust. <code>vector trust prompts approve</code> and
+            <code>vector trust approve</code> refuse to run from an agent's shell or from Vector's own terminal, and
+            the shell asks <code>agent_marker</code> every time before a command that removes the marker they check
+            (<code>unset</code>, <code>env -u</code>, <code>env -i</code>). This stops an agent approving what it wrote
+            by accident or on a page's say-so; it is not a boundary on its own.
+          </p>
+          <p class="note is-caution">
+            {release113.since} this is an ask and a hold, not a guarantee. Vector does not see what an interpreter
+            (<code>node -e</code>, <code>python -c</code>, <code>bash -c</code>), <code>git apply</code>,
+            <code>patch</code>, the V2 bash tool or an MCP filesystem server writes, so those writes do not ask. The
+            hold catches what they change outside the repository at the next start, and repository trust what they
+            change inside it. A program that can write Vector's state folder can also change what you last approved,
+            and one that clears its environment some way the shell does not see can run the owner-only commands; only
+            the opt-in shell sandbox (<code>VECTOR_SHELL_SANDBOX</code>) is a boundary.
+          </p>
+
+          <h2 id="learned-skills">Learned skills</h2>
+          <p>
+            {release113.since} loading a learned skill asks <code>skill</code>, as loading any skill does. A skill
+            Vector approved on its own, after two matching successful runs, also asks <code>learned_skill</code>, which
+            defaults to ask; a skill you approved does not. Every command in a learned skill still goes through your
+            permission rules.
+          </p>
+
+          <h2 id="subagents-and-workflows">Subagents and workflows</h2>
+          <p>
+            {release113.since} the <code>workflow</code> permission decides whether the agent may run a
+            <a href="/docs/workflows">workflow</a>: <code>ask</code> by default, <code>allow</code>, or
+            <code>deny</code>, which removes the workflow tool, as <code>{'"tools": { "workflow": false }'}</code> does.
+            Always allow, an allow rule and <code>--auto</code> cover only a plan within your configured defaults. A
+            plan past them, one that follows web or MCP content the conversation or its subagents read, and one that a
+            Vector process an agent started asks for, ask every time, and Always allow is not offered.
+          </p>
+          <pre><code>{`{
+  "permission": {
+    "workflow": "ask",
+    "task": { "fork": "deny" }
+  }
+}`}</code></pre>
+          <p>
+            {release113.since} the <code>task</code> permission's <code>fork</code> pattern governs forks, subagents that
+            start from the whole conversation: <code>deny</code> refuses them and <code>ask</code> asks before each one.
+            When an agent merges a subagent's worktree into your files, the merge asks <code>edit</code> with the diff,
+            like an edit, so your edit rules and the <code>prompt_source</code> and <code>memory_source</code> asks
+            apply. Over HTTP and the CLI only the server owner merges or discards a subagent's worktree.
+          </p>
+          <p>
+            {release113.since} refusing to edit a file the conversation has not read, or one that changed since, and
+            refusing to touch a file another running helper owns or has changed, are not permissions: no rule, Always
+            answer or <code>--auto</code> lifts them, and they come before any ask. Read the file again, or wait for the
+            helper, message it or stop it. See <a href="/docs/subagents#safe-edits">Safe edits in a shared folder</a>.
+          </p>
+          <p>
+            {release113.since} a repository's settings only narrow how subagents run. A trusted repository may lower
+            <code>budget.subagents.running</code> and <code>per_request</code> and every <code>budget.workflow</code>
+            limit, turn <code>sizing.subagents.fork</code> off, narrow <code>sizing.subagents.models</code> to entries
+            you also list, and shorten an <code>ask_timeout</code> you set. Its <code>budget.subagents.usd</code> and
+            <code>sizing.subagents.isolation</code> are ignored, and an untrusted repository's <code>budget</code> and
+            <code>sizing</code> are dropped, as before.
+          </p>
+          <p>
+            {release113.since} <code>sizing.subagents.ask_timeout</code> sets how many minutes a subagent's permission
+            request or question waits for you. When it runs out, Vector declines the request, never approves it, and
+            tells the subagent and the main agent.
           </p>
 
           <h2 id="read-only-specialists">Read-only specialists</h2>

@@ -1,4 +1,6 @@
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import { providerUsable } from "@vectordevai/schema/provider-policy"
 import { totalTokens } from "../economics/economics-types"
@@ -60,6 +62,7 @@ import {
 import { buildCreateReviewPayload } from "@vectordevai/core/review/github-payload"
 import {
   buildFinalizePrompt,
+  buildJudgePrompt,
   buildReviewPrompt,
   buildSecurityPrompt,
   buildVerifyPrompt,
@@ -78,6 +81,7 @@ import {
   type VerifyResult,
 } from "@vectordevai/core/review/schema"
 import { changedSymbols } from "@vectordevai/core/review/symbols"
+import { checkedLabs, checkedLine, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
 import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
 import {
   SEVERITIES,
@@ -164,6 +168,9 @@ export type ReviewModel = {
   context?: number
   price?: ReviewPrice // only when priced
   costKind: CostKind
+  // WP A35: the lab Vector Codium's listing states, and the entry's parts in the plan's review pair.
+  lab?: string
+  review?: readonly string[]
 }
 
 // in-place: every changed file in the checkout already is the pull request's version. rebuilt: the pull request's
@@ -184,7 +191,7 @@ export type ReviewEstimate = {
   high?: number
 }
 
-export type ReviewSpend = { costUsd?: number; tokens: number; partial?: true }
+export type ReviewSpend = { costUsd?: number; tokens: number; partial?: true; codium?: true }
 
 export type ReviewProgress =
   | { type: "status"; text: string }
@@ -291,6 +298,7 @@ export type ReviewMessage = {
   info: {
     role: string
     providerID?: string
+    billing?: string
     modelID?: string
     cost?: number
     unpriced?: boolean
@@ -299,7 +307,7 @@ export type ReviewMessage = {
     structured?: unknown
     error?: unknown
   }
-  parts: { type: string; text?: string }[]
+  parts: { type: string; text?: string; billing?: string }[]
 }
 
 type Result<T> = Promise<{ data?: T }>
@@ -360,6 +368,7 @@ export function costKindOf(
   cost?: { input: number; output: number },
   modelID = "",
 ) {
+  if (Billing.isCodium(provider.id)) return "codium" satisfies CostKind
   if (isFreeModel({ providerID: provider.id, id: modelID, cost })) return "free" satisfies CostKind
   const listed = !!cost && (cost.input > 0 || cost.output > 0)
   if (listed) return "priced" satisfies CostKind
@@ -375,6 +384,7 @@ type CatalogProvider = {
       id: string
       cost?: { input: number; output: number; cache?: { read: number; write: number } }
       limit?: { context: number }
+      codium?: ModelPlanStatus.Listing
     }
   >
 }
@@ -383,26 +393,32 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
   return providers
     .filter((provider) => providerUsable(provider.id, provider))
     .flatMap((provider) =>
-      Object.values(provider.models).map((model) => {
-        const costKind: CostKind = costKindOf(provider, model.cost, model.id)
-        const cost = model.cost
-        const price: ReviewPrice | undefined =
-          costKind === "priced" && cost
-            ? {
-                input: cost.input,
-                output: cost.output,
-                ...(cost.cache && cost.cache.read > 0 ? { cacheRead: cost.cache.read } : {}),
-                ...(cost.cache && cost.cache.write > 0 ? { cacheWrite: cost.cache.write } : {}),
-              }
-            : undefined
-        return {
-          providerID: provider.id,
-          modelID: model.id,
-          ...(model.limit?.context ? { context: model.limit.context } : {}),
-          ...(price ? { price } : {}),
-          costKind,
-        }
-      }),
+      Object.values(provider.models)
+        // A Codium model the plan no longer includes is listed for the picker (choosing it opens Change plan), but
+        // every review request to it would be refused, so a review never runs on it, chosen or configured.
+        .filter((model) => !ModelPlanStatus.isLocked(model))
+        .map((model) => {
+          const costKind: CostKind = costKindOf(provider, model.cost, model.id)
+          const cost = model.cost
+          const price: ReviewPrice | undefined =
+            costKind === "priced" && cost
+              ? {
+                  input: cost.input,
+                  output: cost.output,
+                  ...(cost.cache && cost.cache.read > 0 ? { cacheRead: cost.cache.read } : {}),
+                  ...(cost.cache && cost.cache.write > 0 ? { cacheWrite: cost.cache.write } : {}),
+                }
+              : undefined
+          return {
+            providerID: provider.id,
+            modelID: model.id,
+            ...(model.limit?.context ? { context: model.limit.context } : {}),
+            ...(price ? { price } : {}),
+            costKind,
+            ...(model.codium?.lab ? { lab: model.codium.lab } : {}),
+            ...(model.codium?.review?.length ? { review: model.codium.review } : {}),
+          }
+        }),
     )
 }
 
@@ -534,7 +550,7 @@ function promptHeadFiles(files: readonly HeadFile[], inlined: ReadonlySet<string
 // and tokens while the review runs. The finished review's figure still comes from the sessions' recorded messages.
 export function trackReviewSpend(onSpend: (spend: ReviewSpend) => void) {
   const sessions = new Map<string, CostKind>()
-  const messages = new Map<string, { cost: number; tokens: number; partial: boolean }>()
+  const messages = new Map<string, { cost: number; tokens: number; partial: boolean; codium: boolean }>()
   return {
     add(sessionID: string, costKind: CostKind = "priced") {
       sessions.set(sessionID, costKind)
@@ -543,17 +559,22 @@ export function trackReviewSpend(onSpend: (spend: ReviewSpend) => void) {
       if (event.type !== "message.updated") return
       const info = (event.properties as { info?: ReviewMessage["info"] & { id?: string; sessionID?: string } })?.info
       if (!info?.id || info.role !== "assistant" || !info.sessionID || !sessions.has(info.sessionID)) return
+      const codium = Boolean(Billing.of(info)) || (sessions.get(info.sessionID) === "codium" && !info.providerID)
+      const own = Billing.hasOwnIdentity(info)
       const tokens = info.tokens
       const count = tokens
         ? tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
         : 0
       const priced =
-        ["priced", "free"].includes(sessions.get(info.sessionID)!) && Number.isFinite(info.cost) && info.cost! >= 0
+        ["priced", "free", "codium"].includes(sessions.get(info.sessionID)!) &&
+        Number.isFinite(info.cost) &&
+        info.cost! >= 0
       messages.set(info.id, {
-        cost: priced ? info.cost! : 0,
-        tokens: count,
+        cost: priced && own && !codium ? info.cost! : 0,
+        tokens: codium || !own ? 0 : count,
+        codium,
         // A running or stopped attempt without counters cannot establish zero spend.
-        partial: !priced || !!info.unpriced || (count === 0 && !info.cost),
+        partial: !codium && (!own || !priced || !!info.unpriced || count === 0),
       })
       const values = [...messages.values()]
       const cost = values.reduce((total, message) => total + message.cost, 0)
@@ -562,15 +583,20 @@ export function trackReviewSpend(onSpend: (spend: ReviewSpend) => void) {
         costUsd: cost > 0 || !partial ? cost : undefined,
         tokens: values.reduce((total, message) => total + message.tokens, 0),
         ...(partial ? { partial: true } : {}),
+        ...(values.some((message) => message.codium) ? { codium: true as const } : {}),
       })
     },
   }
 }
 
 export function reviewSpendText(spend: ReviewSpend) {
+  if (spend.codium && !spend.costUsd && !spend.tokens && !spend.partial) return Billing.LABEL
+  if (spend.partial && !spend.tokens)
+    return `${CodiumUsage.withCodium(spend.costUsd ? `At least ${formatUsd(spend.costUsd)}` : "Cost unknown", Number(spend.codium))} · token usage unavailable`
   const tokens = `${formatTokens(spend.tokens)} tokens`
-  if (spend.costUsd === undefined) return `Cost unknown · ${tokens}`
-  return `${spend.partial ? "At least " : ""}${formatUsd(spend.costUsd)} · ${tokens}`
+  const own =
+    spend.costUsd === undefined ? "Cost unknown" : `${spend.partial ? "At least " : ""}${formatUsd(spend.costUsd)}`
+  return `${CodiumUsage.withCodium(own, Number(spend.codium))} · ${CodiumUsage.withCodium(tokens, Number(spend.codium))}`
 }
 
 type StopReason = "user" | "timeout"
@@ -687,18 +713,34 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   // An explicit model in review.json wins; otherwise the review runs on the agent's model (see preferredModels).
   // The resolved model is passed explicitly to every prompt.
   const catalog = input.catalog ?? []
-  const model =
+  const chosen =
     pickReviewModel([config.model, ...(input.preferredModels ?? [])], catalog) ?? fallbackReviewModel(catalog)
   // review.json's cheaper model runs the review and security passes; the double-check stays on the review model.
   const named = config.triageModel ? pickReviewModel([config.triageModel], catalog) : undefined
-  const triage = named && model && modelName(named) !== modelName(model) ? named : undefined
-  if (!model)
+  if (!chosen)
     throw new Error(
       catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
-        ? "Vectorscope runs on Vector Codium only when you choose it, since it spends your credits. Choose a Codium model for your agent, or set model in .vector/review.json."
+        ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
         : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
     )
-  const refusal = [model, ...(triage ? [triage] : [])]
+  // WP A35: on Vector Codium without a triageModel the review runs the plan's review pair, a same-lab pair runs one
+  // pass, and the panel adds a judge from a third lab (review.json's judgeModel, or the plan's panel judge).
+  const panelJudge = config.panel && config.judgeModel ? pickReviewModel([config.judgeModel], catalog) : undefined
+  const pair = chosen.providerID === ModelPlanStatus.PROVIDER_ID && !named
+  const role = (name: string) =>
+    catalog.find((item) => item.providerID === ModelPlanStatus.PROVIDER_ID && item.review?.includes(name))
+  const picked = reviewModels({
+    model: chosen,
+    ...(named ? { triage: named } : {}),
+    ...(panelJudge ? { judge: panelJudge } : {}),
+    panel: config.panel,
+    ...(pair ? { codium: { triage: role("triage"), confirm: role("confirm"), panelJudge: role("panelJudge") } } : {}),
+    auto: chosen.providerID === ModelPlanStatus.PROVIDER_ID && chosen.modelID === ModelPlanStatus.AUTO_ID,
+  })
+  const model = picked.model
+  const triage = picked.triage
+  const judge = picked.judge
+  const refusal = [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])]
     .map((item) => (item.context ? contextRefusal(modelName(item), item.context) : undefined))
     .find(Boolean)
   if (refusal) throw new Error(refusal)
@@ -818,24 +860,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const reports = runs.flatMap((run) => (run.report ? [{ source: run.name, report: run.report }] : []))
   if (!reports.length) {
     stop.dispose()
-    const usage = measureUsage(runs.flatMap((run) => run.usage.messages))
-    if (usage) {
-      const known = runs
-        .flatMap((run) => run.usage.messages)
-        .reduce((total, message) => total + (Number.isFinite(message.cost) && message.cost! > 0 ? message.cost! : 0), 0)
-      const costUsd = ["priced", "free"].includes(first.costKind) ? (usage.costUsd ?? (known || undefined)) : undefined
-      input.onProgress?.({
-        type: "spend",
-        costUsd,
-        tokens: totalTokens(usage.usage),
-        ...(usage.partial ||
-        usage.costUsd === undefined ||
-        costUsd === undefined ||
-        runs.some((run) => !run.usage.complete)
-          ? { partial: true }
-          : {}),
-      })
-    }
+    const spend = reviewProgressSpend(runs, first)
+    if (spend) input.onProgress?.({ type: "spend", ...spend })
     throw new Error(
       `Vector could not finish this review: ${(runs.find((run) => run.detail)?.detail ?? "no reviewer answered").replace(/[.\s]+$/, "")}.${spentSoFar(runs, first)}`,
     )
@@ -886,8 +912,41 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           rules,
           stop: stop.promise,
         })
+  // The panel's judge (WP A35): a model from a third lab makes the final call on each candidate once the check
+  // finished, with the first pass's claim and the check's verdict in front of it. Its verdict stands where it gave one.
+  const judgeText =
+    judge && verify?.status === "ok" && candidates.length
+      ? buildJudgePrompt({
+          trust: checkout.trust,
+          head,
+          ...(pr ? {} : { uncommitted: true }),
+          candidates,
+          checks: verify.verdicts,
+          headFiles: verifyHeadFiles(review, heads, candidates),
+        })
+      : ""
+  if (judgeText && judge) status(`Asking ${modelName(judge)} for the panel's final call…`)
+  const judged = !judgeText
+    ? undefined
+    : stop.stopped()
+      ? ({ status: "skipped", verdicts: [], usage: NO_USAGE } satisfies VerifyRun)
+      : await runVerify({
+          client,
+          directory,
+          parentID: input.parentID,
+          onSession: (sessionID) => input.onProgress?.({ type: "session", sessionID, costKind: judge!.costKind }),
+          title: `${REVIEW_SESSION_TITLE_PREFIX}${subject} · judge`,
+          internal: "vectorscope.judge",
+          scope,
+          text: judgeText,
+          model: judge,
+          rules,
+          stop: stop.promise,
+        })
   stop.dispose()
-  const verdicts = new Map((verify?.verdicts ?? []).map((entry) => [entry.id, entry.verdict]))
+  const candidateIds = new Set(candidates.map((finding) => finding.id))
+  const finalCall = judged?.status === "ok" ? judged.verdicts.filter((entry) => candidateIds.has(entry.id)) : []
+  const verdicts = new Map([...(verify?.verdicts ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
   // After a triage pass only what the review model confirmed is shown: a finding above a nit that it rejected, gave
   // no verdict for, or never saw because the double-check stopped or failed is left out.
   const unchecked = new Set(
@@ -948,52 +1007,102 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     if (fix) fixes[finding.id] = fix
   }
 
-  const usage = measureUsage([...runs, ...(verify ? [verify] : [])].flatMap((run) => run.usage.messages))
-  // Replies from exactly the triage and review models read as both, in that order, with their combined cost kind.
-  const chosen = triage ? [triage, model] : [model]
-  const identities = new Set(
-    [...runs, ...(verify ? [verify] : [])].flatMap((run) =>
-      run.usage.messages.flatMap((message) =>
-        message.role === "assistant" && message.providerID && message.modelID
-          ? [`${message.providerID}/${message.modelID}`]
-          : [],
+  const finished = [
+    ...runs,
+    ...(verify ? [{ ...verify, name: "verify" as const }] : []),
+    ...(judged ? [{ ...judged, name: "judge" as const }] : []),
+  ]
+  const messages = finished
+    .flatMap((run) => run.usage.messages)
+    .filter((message) => message.role === "assistant" && !message.forked)
+  const codium = messages.some((message) => Billing.of(message)) || (!messages.length && model.costKind === "codium")
+  const own = messages.filter(Billing.hasOwnIdentity)
+  const unknownIdentity = messages.some((message) => !Billing.of(message) && !Billing.hasOwnIdentity(message))
+  const usage = measureUsage(own)
+  const ownModels = [...new Set(own.map((message) => `${message.providerID}/${message.modelID}`))]
+  const ownKinds = ownModels.map((identity) => catalog.find((entry) => modelName(entry) === identity)?.costKind)
+  const identities = [
+    ...new Set(
+      messages.flatMap((message) =>
+        message.providerID && message.modelID ? [`${message.providerID}/${message.modelID}`] : [],
       ),
     ),
-  )
+  ]
+  const models = [...(triage ? [triage] : []), model, ...(judge ? [judge] : [])]
   const both =
-    triage && identities.size > 1 && [...identities].every((name) => chosen.some((item) => modelName(item) === name))
-  const used = usage
-    ? usage.provider && usage.model
-      ? `${usage.provider}/${usage.model}`
-      : both
-        ? chosen
-            .map(modelName)
-            .filter((name) => identities.has(name))
-            .join(" + ")
-        : "Multiple models"
-    : modelName(model)
+    triage && ownModels.length > 1 && ownModels.every((identity) => models.some((item) => modelName(item) === identity))
+  const used =
+    codium && !own.length && identities.length
+      ? identities.join(" + ")
+      : usage
+        ? usage.provider && usage.model
+          ? `${usage.provider}/${usage.model}`
+          : both
+            ? models
+                .map(modelName)
+                .filter((name) => ownModels.includes(name))
+                .join(" + ")
+            : "Multiple models"
+        : modelName(model)
   const kind: CostKind =
-    !usage || usage.costUsd === undefined || [...runs, ...(verify ? [verify] : [])].some((run) => !run.usage.complete)
-      ? "unknown"
-      : both
-        ? combineCostKinds(chosen.filter((item) => identities.has(modelName(item))).map((item) => item.costKind))
-        : (catalog.find((entry) => modelName(entry) === used)?.costKind ?? (usage.costUsd > 0 ? "priced" : "unknown"))
-  const passes = [...runs, ...(verify ? [{ ...verify, name: "verify" as const }] : [])].flatMap((run) => {
-    const spent = measureUsage(run.usage.messages)
-    if (!spent) return []
-    return [
-      {
-        name: run.name,
-        model:
-          spent.provider && spent.model
-            ? `${spent.provider}/${spent.model}`
-            : modelName(run.name === "verify" ? model : first),
-        ...(spent.costUsd !== undefined && !spent.partial ? { costUsd: spent.costUsd } : {}),
-        input: spent.usage.input + spent.usage.cacheRead + spent.usage.cacheWrite,
-        output: spent.usage.output + spent.usage.reasoning,
-        cacheRead: spent.usage.cacheRead,
-      } satisfies ReviewPass,
-    ]
+    codium && !own.length && !unknownIdentity
+      ? "codium"
+      : !usage || usage.costUsd === undefined || unknownIdentity || finished.some((run) => !run.usage.complete)
+        ? "unknown"
+        : ownKinds.every((value) => value !== undefined)
+          ? combineCostKinds(ownKinds.filter((value) => value !== undefined))
+          : usage.costUsd > 0
+            ? "priced"
+            : "unknown"
+  const ownCost = own.reduce(
+    (sum, message) => sum + (Number.isFinite(message.cost) && message.cost! > 0 ? message.cost! : 0),
+    0,
+  )
+  const passes = finished.flatMap((run) => {
+    const groups = Map.groupBy(
+      run.usage.messages.filter((message) => message.role === "assistant" && !message.forked),
+      (message) => `${message.providerID ?? ""}/${message.modelID ?? ""}/${Billing.of(message) ?? "own"}`,
+    )
+    return [...groups.values()].flatMap((group) => {
+      const identity = group[0]
+      const codium = group.some((message) => Billing.of(message))
+      const own = group.filter(Billing.hasOwnIdentity)
+      const spent = measureUsage(own)
+      const ownCost = own.reduce(
+        (sum, message) => sum + (Number.isFinite(message.cost) && message.cost! > 0 ? message.cost! : 0),
+        0,
+      )
+      if (!spent && !codium && !ownCost) return []
+      const model = `${identity.providerID ?? ""}/${identity.modelID ?? ""}`
+      const costKind: CostKind = codium
+        ? "codium"
+        : spent?.costUsd === undefined
+          ? "unknown"
+          : (catalog.find((entry) => modelName(entry) === model)?.costKind ??
+            (spent.costUsd > 0 ? "priced" : "unknown"))
+      return [
+        {
+          name: run.name,
+          model,
+          costKind,
+          ...(!codium && (costKind === "priced" || (costKind === "unknown" && ownCost > 0))
+            ? { costUsd: spent?.costUsd ?? ownCost }
+            : {}),
+          ...(!spent && !codium ? { usageMissing: true } : {}),
+          input: (spent?.usage.input ?? 0) + (spent?.usage.cacheRead ?? 0) + (spent?.usage.cacheWrite ?? 0),
+          output: (spent?.usage.output ?? 0) + (spent?.usage.reasoning ?? 0),
+          cacheRead: spent?.usage.cacheRead ?? 0,
+        } satisfies ReviewPass,
+      ]
+    })
+  })
+  // WP A35: how many labs checked what this review shows, for the "Checked by a second lab" line.
+  const labs = checkedLabs({
+    model,
+    ...(triage ? { triage } : {}),
+    ...(judge ? { judge } : {}),
+    verified: verify?.status === "ok",
+    judged: judged?.status === "ok",
   })
   return {
     ...summary,
@@ -1005,24 +1114,31 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     anchored,
     cost: used
       ? {
-          costUsd: usage?.costUsd ?? 0,
+          ...(codium ? { codium: true } : {}),
+          tokensOwnOnly: true,
+          costUsd: usage?.costUsd ?? ownCost,
           input: usage?.usage.input ?? 0,
           output: usage?.usage.output ?? 0,
           reasoning: usage?.usage.reasoning ?? 0,
           cacheRead: usage?.usage.cacheRead ?? 0,
           cacheWrite: usage?.usage.cacheWrite ?? 0,
-          ...(!usage ? { usageMissing: true } : {}),
+          ...(!usage && kind !== "codium" ? { usageMissing: true } : {}),
           // A stopped specialist's reply may have been billed without reporting usage: the priced part is a floor.
           ...(usage?.partial ? { partial: true } : {}),
           kind,
           model: used,
+          ...(labs ? { labs } : {}),
         }
       : undefined,
     durationMs: now() - started,
     specialists: runs.map(({ name, status, sessionID, detail }) => ({ name, status, sessionID, detail })),
-    sessions: [...runs, ...(verify ? [verify] : [])].flatMap((run) => (run.sessionID ? [run.sessionID] : [])),
+    sessions: [...runs, ...(verify ? [verify] : []), ...(judged ? [judged] : [])].flatMap((run) =>
+      run.sessionID ? [run.sessionID] : [],
+    ),
     banners: partialBanners(runs, timeoutMs),
     notes: [
+      ...picked.notes,
+      ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
       ...(verify && verify.status !== "ok"
         ? [
             triage && unconfirmed
@@ -1355,6 +1471,8 @@ async function runVerify(input: {
   parentID?: string
   onSession: (sessionID: string) => void
   title: string
+  // The hidden session's name: the check, or the panel's judge (WP A35).
+  internal?: "vectorscope.verify" | "vectorscope.judge"
   text: string
   scope: Scope
   model?: ReviewModel
@@ -1367,7 +1485,7 @@ async function runVerify(input: {
       directory,
       title: input.title,
       permission: input.rules,
-      internal: "vectorscope.verify",
+      internal: input.internal ?? "vectorscope.verify",
       ...(input.parentID ? { parentID: input.parentID } : {}),
     })
     .catch(() => undefined)
@@ -1466,20 +1584,60 @@ function estimateReview(input: {
 // listed price makes a cost: a subscription or an unlisted model reports tokens alone. A reviewer whose history could
 // not be read spent an unknown amount, so the known totals are then floors, as the spend event says.
 function spentSoFar(runs: readonly { usage: Usage }[], model: ReviewModel) {
-  const usage = measureUsage(runs.flatMap((run) => run.usage.messages))
-  if (!usage) return ""
-  const unread = runs.some((run) => !run.usage.complete)
-  const tokens = `${formatTokens(totalTokens(usage.usage))} tokens`
-  if (model.costKind !== "priced" || usage.costUsd === undefined || usage.mixedModels)
-    return ` ${unread ? "At least " : ""}${tokens} so far.`
-  return ` ${usage.partial || unread ? "At least " : ""}${formatUsd(usage.costUsd)} and ${tokens} so far.`
+  const spend = reviewProgressSpend(runs, model)
+  if (!spend) return ""
+  if (spend.codium && !spend.tokens && !spend.costUsd && !spend.partial) return " Codium."
+  if (spend.partial && !spend.tokens) return ` ${reviewSpendText(spend)}.`
+  const tokens = CodiumUsage.withCodium(`${formatTokens(spend.tokens)} tokens`, Number(spend.codium))
+  const prefix = (spend.costUsd === undefined ? runs.some((run) => !run.usage.complete) : spend.partial)
+    ? "At least "
+    : ""
+  if (spend.costUsd === undefined) return ` ${prefix}${tokens} so far.`
+  return ` ${prefix}${CodiumUsage.withCodium(formatUsd(spend.costUsd), Number(spend.codium))} and ${tokens} so far.`
+}
+
+// Session assignment is a fallback for older replies; explicit per-message billing wins after a model switch.
+function reviewProgressSpend(runs: readonly { usage: Usage }[], model: ReviewModel): ReviewSpend | undefined {
+  const messages = runs.flatMap((run) => run.usage.messages)
+  const codium = messages.some((message) => Billing.of(message)) || (!messages.length && model.costKind === "codium")
+  const own = messages.filter(Billing.hasOwnIdentity)
+  const usage = measureUsage(own)
+  const known = own.reduce(
+    (total, message) => total + (Number.isFinite(message.cost) && message.cost! > 0 ? message.cost! : 0),
+    0,
+  )
+  if (!usage) {
+    if (own.length || messages.some((message) => !Billing.of(message) && !Billing.hasOwnIdentity(message)))
+      return {
+        costUsd: ["priced", "free", "codium"].includes(model.costKind) && known > 0 ? known : undefined,
+        tokens: 0,
+        partial: true,
+        ...(codium ? { codium: true } : {}),
+      }
+    return codium ? { costUsd: 0, tokens: 0, codium: true } : undefined
+  }
+  const costUsd = ["priced", "free", "codium"].includes(model.costKind)
+    ? (usage.costUsd ?? (known || undefined))
+    : undefined
+  return {
+    costUsd,
+    tokens: totalTokens(usage.usage),
+    ...(usage.partial || usage.costUsd === undefined || costUsd === undefined || runs.some((run) => !run.usage.complete)
+      ? { partial: true }
+      : {}),
+    ...(codium ? { codium: true } : {}),
+  }
 }
 
 // Every assistant step of the session, so the cost includes the finalize step.
 async function usageOf(client: ReviewClient, sessionID: string, directory: string): Promise<Usage> {
   return client.session.messages({ sessionID, directory }).then(
     (result) => ({
-      messages: (result.data ?? []).map((message) => ({ ...message.info, parts: message.parts })),
+      messages: (result.data ?? []).map((message) => ({
+        ...message.info,
+        parts: message.parts,
+        ...(message.parts.some((part) => part.type === "step-finish" && Billing.of(part)) ? { billing: "codium" } : {}),
+      })),
       complete: result.data !== undefined,
     }),
     () => ({ messages: [], complete: false }),
@@ -1687,6 +1845,7 @@ const PASS_LABEL: Record<ReviewPass["name"], string> = {
   review: "Review",
   security: "Security",
   verify: "Double-check",
+  judge: "Panel judge",
 }
 
 // The double-check chip, and its tooltip, which says why findings were dropped: a finding the review model did not
@@ -1715,17 +1874,31 @@ export function verificationChip(verification: NonNullable<ReviewOutcomeLite["ve
 }
 
 // What each pass of a finished review spent, one line each. Dollars show only when the review as a whole has a price;
-// otherwise, as for a subscription or Vector Codium, only tokens.
+// otherwise subscription passes show tokens, while Codium passes show only their plan label.
 export function passLines(outcome: Pick<ReviewOutcomeLite, "passes" | "cost">) {
-  const priced = outcome.cost?.kind === "priced"
-  return (outcome.passes ?? []).map((pass) =>
-    [
+  return (outcome.passes ?? []).map((pass) => {
+    const codium =
+      pass.costKind === "codium" ||
+      pass.model.startsWith(`${Billing.CODIUM_PROVIDER_ID}/`) ||
+      (!pass.model.includes("/") && (pass.costKind ?? outcome.cost?.kind) === "codium")
+    const priced = pass.costKind
+      ? pass.costKind === "priced" || pass.costKind === "free"
+      : outcome.cost?.kind === "priced"
+    return [
       PASS_LABEL[pass.name],
-      pass.model,
-      ...(priced && pass.costUsd !== undefined ? [formatUsd(pass.costUsd)] : []),
-      `${formatTokens(pass.input + pass.output)} tokens`,
-    ].join(" · "),
-  )
+      pass.model.startsWith(`${Billing.CODIUM_PROVIDER_ID}/`)
+        ? `Vector Codium · ${pass.model.slice(Billing.CODIUM_PROVIDER_ID.length + 1)}`
+        : pass.model,
+      ...(pass.costUsd !== undefined && !codium && (priced || (pass.costKind === "unknown" && pass.costUsd > 0))
+        ? [`${formatUsd(pass.costUsd)}${pass.costKind === "unknown" ? " + unpriced" : ""}`]
+        : []),
+      codium
+        ? Billing.LABEL
+        : pass.usageMissing
+          ? "Token usage unavailable"
+          : `${formatTokens(pass.input + pass.output)} tokens`,
+    ].join(" · ")
+  })
 }
 
 export function countBySeverity(groups: readonly { severity: Severity; findings: readonly unknown[] }[]) {
@@ -2052,7 +2225,12 @@ function desktopSummaryBody(outcome: ReviewOutcomeLite, url?: string, inlinePost
 
 // The model and what the review cost, in the 1.2 wording, then how long it took.
 export function reviewFooter(outcome: Pick<ReviewOutcomeLite, "cost" | "durationMs">) {
-  return [outcome.cost ? costWording(outcome.cost) : undefined, formatDuration(outcome.durationMs)]
+  return [
+    outcome.cost ? costWording(outcome.cost) : undefined,
+    // WP A35: a first pass checked by another lab's model, or the panel's three labs; own keys included.
+    checkedLine(outcome.cost?.labs),
+    formatDuration(outcome.durationMs),
+  ]
     .filter(Boolean)
     .join(" · ")
 }
@@ -2067,6 +2245,7 @@ export function estimateText(estimate: ReviewEstimate) {
     ? `Your uncommitted changes touch ${count} files.`
     : `This pull request changes ${count} files.`
   const model = estimate.model ?? "your default model"
+  if (estimate.costKind === "codium") return `${size} Runs on your Vector Codium plan.`
   if (estimate.low !== undefined && estimate.high !== undefined)
     return `${size} With ${model} a review costs about ${formatUsd(estimate.low)}–${formatUsd(estimate.high)}.`
   if (estimate.costKind === "free") return `${size} It runs on ${model.replace(/:free$/, "")} at no charge.`

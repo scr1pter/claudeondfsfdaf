@@ -703,6 +703,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "الوصول إلى الملفات خارج المستودع",
   "settings.permissions.tool.doom_loop.title": "حلقة الموت",
   "settings.permissions.tool.doom_loop.description": "اكتشاف استدعاءات الأدوات المتكررة بمدخلات متطابقة",
+  "settings.permissions.tool.terminal.description":
+    "قراءة محطة طرفية لم يفتحها الوكيل، أو انتظار مخرجاتها، أو تغيير حجمها، أو إغلاقها: محطتك أو محطة جلسة أخرى",
+  "settings.permissions.tool.terminal_input.description":
+    "كتابة نص أو ضغط مفاتيح في محطة طرفية. يُفحص كل سطر يُرسَل أيضًا كأمر صدفة",
+  "session.permission.terminal.name": "المحطة الطرفية",
+  "session.permission.terminal.action.read": "قراءة مخرجاتها",
+  "session.permission.terminal.action.wait": "انتظار مخرجاتها",
+  "session.permission.terminal.action.resize": "تغيير حجمها",
+  "session.permission.terminal.action.close": "إغلاقها وإنهاء عمليتها",
+  "session.permission.terminal.text": "النص المراد كتابته",
+  "session.permission.terminal.enter": "ثم يضغط Enter",
+  "session.permission.terminal.keys": "المفاتيح المراد ضغطها",
   "session.delete.failed.title": "فشل حذف الجلسة",
   "session.delete.title": "حذف الجلسة",
   "session.delete.confirm": 'حذف الجلسة "{{name}}"؟',

@@ -41,6 +41,26 @@ export type ObservedElement = {
   readonly disabled?: boolean
 }
 
+export type PageFocus = {
+  readonly documentHasFocus: boolean
+  readonly activeKind: "body" | "root" | "control" | "other"
+  /** Present only when the active element has a ref in this observation. */
+  readonly focusedRef?: string
+  readonly tag?: string
+  readonly type?: string
+  readonly tabIndex?: number
+}
+
+/** Read-only top-level layout dimensions in CSS pixels; invalid or unavailable geometry stays unknown. */
+export type PageLayout = {
+  readonly viewportWidth: number
+  readonly viewportHeight: number
+  readonly documentWidth: number
+  readonly documentHeight: number
+  readonly scrollX: number
+  readonly scrollY: number
+}
+
 export type Observed = {
   readonly title: string
   readonly url: string
@@ -48,6 +68,10 @@ export type Observed = {
   readonly elements: readonly ObservedElement[]
   readonly links: readonly PageLink[]
   readonly forms: readonly string[]
+  /** Older browser backends may not report focus. Missing means unknown. */
+  readonly focus?: PageFocus
+  /** Missing on older backends or when the DOM has no usable layout. */
+  readonly layout?: PageLayout
 }
 
 export type ClickPoint =
@@ -414,6 +438,37 @@ export function observePage(
     })
   }
   if (top.body) walk(top.body, 0, false)
+  const active = { element: property(top, "activeElement") as Element | null }
+  // Follow only open roots and readable same-origin frames, as refs do. Observing never moves focus.
+  for (let depth = 0; active.element && depth < 20; depth++) {
+    const shadow = property(active.element, "shadowRoot") as ShadowRoot | null
+    const frame = ["iframe", "frame"].includes(tagOf(active.element))
+      ? ((active.element as HTMLIFrameElement).contentDocument ?? undefined)
+      : undefined
+    const inner = (
+      shadow ? property(shadow, "activeElement") : frame ? property(frame, "activeElement") : null
+    ) as Element | null
+    if (!inner || inner === active.element) break
+    active.element = inner
+  }
+  const owner = active.element ? (property(active.element, "ownerDocument") as Document) : top
+  const focusedRef = [...refs].find(([, element]) => element === active.element)?.[0]
+  // Read the top document only: a wide child inside its own scrolling container is not document overflow.
+  // Observation never scrolls, resizes, focuses or changes page styles. Out-of-range geometry stays unknown.
+  const layout = {
+    viewportWidth: Math.round(win.innerWidth),
+    viewportHeight: Math.round(win.innerHeight),
+    documentWidth: Math.max(top.documentElement.scrollWidth, top.body?.scrollWidth ?? 0),
+    documentHeight: Math.max(top.documentElement.scrollHeight, top.body?.scrollHeight ?? 0),
+    scrollX: Math.round(win.scrollX),
+    scrollY: Math.round(win.scrollY),
+  }
+  const measured =
+    Object.values(layout).every((value) => Number.isFinite(value) && Math.abs(value) <= 100_000_000) &&
+    layout.viewportWidth > 0 &&
+    layout.viewportHeight > 0 &&
+    layout.documentWidth > 0 &&
+    layout.documentHeight > 0
   return {
     title: line(top.title),
     url: win.location.href,
@@ -421,6 +476,26 @@ export function observePage(
     elements,
     links: links.filter((link, index) => links.findIndex((other) => other.url === link.url) === index),
     forms: [...new Set(forms)],
+    ...(measured ? { layout } : {}),
+    focus: {
+      documentHasFocus: invoke(top, "hasFocus") as boolean,
+      activeKind:
+        active.element && active.element === owner.body
+          ? "body"
+          : active.element && active.element === owner.documentElement
+            ? "root"
+            : active.element && interactive(active.element)
+              ? "control"
+              : "other",
+      ...(focusedRef ? { focusedRef } : {}),
+      ...(active.element
+        ? {
+            tag: tagOf(active.element).slice(0, 32),
+            type: typeOf(active.element).slice(0, 32),
+            tabIndex: property(active.element, "tabIndex") as number,
+          }
+        : {}),
+    },
   }
 }
 

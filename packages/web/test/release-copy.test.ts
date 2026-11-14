@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
+import { changelog } from "../src/data/docs-content"
 import { publishedDesktopVersion, release199, upcomingRelease } from "../src/data/vector-releases"
 
-// Desktop 1.99.110 was released from main on 2026-10-23, so no later edit may present it, or anything before it, as
-// upcoming. 1.99.109 was published on 2026-10-19 and 1.99.108 on 2026-10-17 by release run #88; 1.99.107 was skipped
-// and never published.
-const shipped = "1.99.110"
-const web = new URL("..", import.meta.url).pathname
+// Desktop 1.99.112 was published from main dfc98974 by release run #96 on 2026-10-30 (UTC), so no later edit may
+// present it, or anything before it, as upcoming. 1.99.111 was published by release run #95 on 2026-10-25, 1.99.110 on
+// 2026-10-23, 1.99.109 on 2026-10-19 and 1.99.108 on 2026-10-17 by release run #88; 1.99.107 was skipped and never
+// published.
+const shipped = "1.99.112"
+const web = fileURLToPath(new URL("..", import.meta.url))
 // The source repository is private, so its releases and files 404 for visitors. Installers come from the account
 // download page, which needs a free Vector account.
 const accountDownload = 'href="/download"'
@@ -18,8 +21,8 @@ const stale = [
   /\b(upcoming|next release)\W+1\.99\.99\b/i,
   /\b1\.99\.99,? the next (desktop )?release\b/i,
   /\b1\.99\.99 installers are not published\b/i,
-  /\bnot published yet\b[^.]*\b1\.99\.(8|99|100|101|102|103|104|105|106|107|108|109|110)\b/i,
-  /\b1\.99\.(10[89]|110)\b[^.]*\b(prepared|not (yet )?published|installers are not released)\b/i,
+  /\bnot published yet\b[^.]*\b1\.99\.(8|99|100|101|102|103|104|105|106|107|108|109|110|111|112)\b/i,
+  /\b1\.99\.(10[89]|11[0-2])\b[^.]*\b(prepared|not (yet )?published|installers are not released)\b/i,
   /\b(remain|are still)( at)? (desktop )?\**1\.99\.(8|99)\b/i,
   /\bcurrently (published|downloadable)\b[^.]*\b1\.99\.[78]\b/i,
   /\bno standalone CLI release is published\b/i,
@@ -29,7 +32,7 @@ const sources = await Promise.all(
   [
     ...(await Array.fromAsync(new Bun.Glob("src/{pages,components,data}/**/*.{astro,ts,tsx}").scan({ cwd: web }))),
     "../../README.md",
-  ].map(async (file) => ({ file, text: await Bun.file(`${web}${file}`).text() })),
+  ].map(async (file) => ({ file: file.replaceAll("\\", "/"), text: await Bun.file(`${web}${file}`).text() })),
 )
 
 test("the site marks the latest shipped desktop release as published", () => {
@@ -41,6 +44,16 @@ test("the site marks the latest shipped desktop release as published", () => {
   ).toEqual([])
   // The unversioned Upcoming entry leads the docs changelog; a version number there reads as upcoming.
   expect(upcomingRelease.summary).not.toMatch(/\b\d+\.\d+\.\d+\b/)
+})
+
+test("the docs changelog lists the current desktop download's notes word for word", () => {
+  // The docs front page names publishedDesktopVersion as the current download and links to the changelog, whose
+  // versioned entries are listed by hand, so advancing one without the other leaves the current release unlisted.
+  const notes = release199.find((release) => release.version === publishedDesktopVersion)
+  expect(notes).toBeDefined()
+  expect(changelog.filter(([label]) => label.endsWith(` · ${publishedDesktopVersion}`))).toEqual([
+    [expect.any(String), notes?.title, notes?.summary],
+  ])
 })
 
 test("website and README copy no longer call 1.99.99 unpublished or say Vector cannot update itself", () => {
@@ -149,15 +162,27 @@ test("the download page points installed copies at Check for Updates and install
   expect(install).toContain("free Vector account")
 })
 
-test("visitors without an account reach the account download from the footer and the sign-in page", async () => {
-  // /download and the footer's platform links send anonymous visitors to /login, so the sign-in page has to say
-  // that a free account is the way to every installer.
+test("the download page tells Mac users the keychain may ask once after an update and Always Allow stops it", async () => {
+  // Read as rendered text: the note wraps across lines and markup.
+  const download = (await Bun.file(`${web}src/components/marketing/download/FreeDownload.tsx`).text())
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+  const note = download.match(/After an update, macOS may ask[^]*?once after each update\./)?.[0] ?? ""
+  expect(note).toContain("“Vector Safe Storage”")
+  expect(note).toContain("Choose Always Allow and it stops asking.")
+  expect(note).toContain("Until Vector is signed with an Apple Developer ID")
+})
+
+test("visitors without an account reach the installers from the footer and can sign up on the sign-in page", async () => {
+  // /download and the footer's platform links send anonymous visitors to /login, where a free account is one
+  // step away: the form's Sign up link switches it to creating one.
   expect(await Bun.file(`${web}src/components/marketing/SiteFooter.astro`).text()).toContain(
     '["All installers", "/download"]',
   )
-  const login = await Bun.file(`${web}src/pages/login.astro`).text()
-  expect(login).toContain(accountDownload)
-  expect(login).toContain("Create a free one")
+  const signIn = await Bun.file(`${web}src/components/marketing/account/AuthPage.tsx`).text()
+  expect(signIn).toContain("Don’t have an account?")
+  expect(signIn).toContain('"Sign up"')
+  expect(signIn).toContain('"Create account"')
 })
 
 test("troubleshooting explains in-app updates and their fallbacks", async () => {

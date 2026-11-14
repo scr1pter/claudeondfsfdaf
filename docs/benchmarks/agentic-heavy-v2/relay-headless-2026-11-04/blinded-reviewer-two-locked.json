@@ -1,0 +1,434 @@
+{
+  "kind": "blinded-static-quality-review-v1",
+  "reviewer": "reviewer-two",
+  "lockedAtUtc": "2026-11-05T02:20:33.009607+00:00",
+  "identityMappingRead": false,
+  "otherReviewerRead": false,
+  "costsOrNativeOrIndependentResultLogsRead": false,
+  "runtimeCommandsRun": false,
+  "scope": "Requirements, rubric and exact A/B final authored source only; bounded static review. No app execution, tests, browser, provider or code modifications.",
+  "sourceHashesVerified": {
+    "A": 25,
+    "B": 20
+  },
+  "sourceHashesArtifactSha256": "b0c50f76f469878d603e260f8baa2d3fe6dfcc7cc15d921c114672f0c5397f62",
+  "requirementsSha256": "a85c62de50f23145bfc3ee6db261db08c565889ff8df0a7808bae1143b968351",
+  "rubricSha256": "d5687aedbba30af2ef3baf8768cf1be0f270160305e73ec39f0cf6d3a9173760",
+  "scores": {
+    "A": {
+      "dimensions": [
+        {
+          "name": "Functional completeness and coherent API semantics",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "The requested roster-import workflow, state transitions, snapshot projections, role separation and replay behavior are coherently implemented. No material functional omission was established in this bounded source review.",
+          "evidence": [
+            {
+              "file": "A/backend/api.mjs",
+              "line": 102,
+              "observation": "Creation replay compares the request fingerprint and regenerates the original owner capability without requiring an optional creation key."
+            },
+            {
+              "file": "A/backend/api.mjs",
+              "line": 147,
+              "observation": "Staging has subject-scoped replay, canonical request fingerprint, base-version validation and a stable public import projection."
+            },
+            {
+              "file": "A/backend/api.mjs",
+              "line": 211,
+              "observation": "Commit replay and new commit paths preserve one version increment, atomic rows and one event."
+            }
+          ]
+        },
+        {
+          "name": "Transactional integrity, recovery and corruption handling",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "FIFO clone-on-write transactions, fsynced journal writes, semantic state validation and an acknowledged-tip anchor provide a particularly complete local recovery design. The anchor also covers removal of complete acknowledged tail records.",
+          "evidence": [
+            {
+              "file": "A/backend/data.mjs",
+              "line": 532,
+              "observation": "Recovery checks complete lines, exact canonical records, sequence, predecessor, hash and state schema."
+            },
+            {
+              "file": "A/backend/data.mjs",
+              "line": 589,
+              "observation": "Existing initialization/tip evidence prevents silently creating an empty replacement journal."
+            },
+            {
+              "file": "A/backend/data.mjs",
+              "line": 611,
+              "observation": "The acknowledged tip must be present in the recovered history; valid later unacknowledged journal tails are preserved."
+            },
+            {
+              "file": "A/backend/data.mjs",
+              "line": 638,
+              "observation": "Serialized clone-on-write mutation publishes state only after append/fsync and tip publication; persistence failures poison subsequent work."
+            }
+          ]
+        },
+        {
+          "name": "Authorization boundaries and input/error validation",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "Current authorization is checked before body work and again inside each mutation transaction, including replay paths. Role, tenant, request-size, UTF-8/CSV and secret projection boundaries are explicit.",
+          "evidence": [
+            {
+              "file": "A/backend/api.mjs",
+              "line": 95,
+              "observation": "Authorization enforces the current capability and workspace for each operation."
+            },
+            {
+              "file": "A/backend/api.mjs",
+              "line": 123,
+              "observation": "Mutation reauthorizes against the serialized draft before role decisions or cached results."
+            },
+            {
+              "file": "A/backend/validation.mjs",
+              "line": 95,
+              "observation": "Mutation body reading enforces JSON media type, byte limit and fatal UTF-8 decoding."
+            },
+            {
+              "file": "A/backend/validation.mjs",
+              "line": 146,
+              "observation": "CSV parsing handles quoting, duplicate IDs and unsafe field values as an atomic validation step."
+            }
+          ]
+        },
+        {
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "Precise capability-ID/subject/import/epoch lease binding, serialized claims/commits and explicit accepted-request draining match the requested lifecycle semantics. No material concurrency/fencing defect was established statically.",
+          "evidence": [
+            {
+              "file": "A/backend/api.mjs",
+              "line": 198,
+              "observation": "Claim changes epoch in the serialized transaction and binds the lease to capability ID and subject."
+            },
+            {
+              "file": "A/backend/api.mjs",
+              "line": 219,
+              "observation": "Commit checks current state, exact capability, subject, epoch, expiry and token before applying rows."
+            },
+            {
+              "file": "A/backend/data.mjs",
+              "line": 444,
+              "observation": "Immutable exclusive successor publication avoids stale-lock unlink races and refuses live/unverifiable owners."
+            },
+            {
+              "file": "A/app.mjs",
+              "line": 29,
+              "observation": "Shutdown gates new admission and waits for accepted handlers and response completion before releasing storage."
+            }
+          ]
+        },
+        {
+          "name": "CLI usability and typed SDK contract accuracy",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "All requested CLI commands and accurate non-any SDK declarations are present. The client additionally bounds requests, validates successful shapes, uses a request deadline, bounds CSV file reading and whitelists CLI diagnostics.",
+          "evidence": [
+            {
+              "file": "A/sdk.d.mts",
+              "line": 57,
+              "observation": "The declared client includes all eight required methods and specific public return types."
+            },
+            {
+              "file": "A/sdk.mjs",
+              "line": 70,
+              "observation": "The request helper supplies deadline, redirect refusal, RelayError handling and success-shape validation."
+            },
+            {
+              "file": "A/cli.mjs",
+              "line": 69,
+              "observation": "CSV file input is bounded to 65,537 bytes and rejects excess before an unbounded read."
+            },
+            {
+              "file": "A/cli.mjs",
+              "line": 128,
+              "observation": "CLI diagnostics avoid rendering arbitrary upstream messages, URLs, secrets and arguments."
+            }
+          ]
+        },
+        {
+          "name": "Maintainability and meaningful independent verification",
+          "score": 7,
+          "maximum": 8,
+          "assessment": "Clear API/service/storage/client separation and substantial authored regression coverage support maintainability. The hand-built schema, tip and immutable ownership-chain machinery is sizeable; whole-state history and lock-generation retention need an operational growth policy beyond this prototype.",
+          "evidence": [
+            {
+              "file": "A/backend/service.mjs",
+              "line": 5,
+              "observation": "Service composition separates store ownership, handlers and close sequencing."
+            },
+            {
+              "file": "A/tests/integration.test.mjs",
+              "line": 163,
+              "observation": "Authored tests exercise canonical replay, simultaneous claims and connected workflows."
+            },
+            {
+              "file": "A/tests/shutdown.test.mjs",
+              "line": 20,
+              "observation": "A focused regression exercises concurrent held bodies, admission gating and restart durability."
+            },
+            {
+              "file": "A/tests/qa.test.mjs",
+              "line": 744,
+              "observation": "Source contains a journal-started transaction/disconnect fault-schedule test rather than only happy paths."
+            },
+            {
+              "file": "A/STORAGE.md",
+              "line": 81,
+              "observation": "Documentation explicitly acknowledges whole-state and immutable-lock-chain growth and lack of compaction."
+            }
+          ]
+        }
+      ],
+      "total": 47,
+      "maximum": 48
+    },
+    "B": {
+      "dimensions": [
+        {
+          "name": "Functional completeness and coherent API semantics",
+          "score": 6,
+          "maximum": 8,
+          "assessment": "The requested core roster/import/approval/lease/commit/read/event workflows are coherently implemented. Exact unkeyed workspace creation replay is missing: a valid initial request without an optional Idempotency-Key cannot recover its original owner result by exact retry.",
+          "evidence": [
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 91,
+              "observation": "Workspace replay is considered only when a valid optional key exists."
+            },
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 110,
+              "observation": "Otherwise an existing workspace ID always conflicts, even for the same exact creation body."
+            },
+            {
+              "file": "B/STORAGE.md",
+              "line": 48,
+              "observation": "The documented implementation explicitly states creation without a key conflicts when its workspace ID already exists."
+            },
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 188,
+              "observation": "Staging and subsequent import transitions otherwise preserve versions, projections and events."
+            }
+          ]
+        },
+        {
+          "name": "Transactional integrity, recovery and corruption handling",
+          "score": 6,
+          "maximum": 8,
+          "assessment": "Serialized clone-on-write transactions, journal fsync and hash/sequence checks are strong. Recovery has no independent acknowledged-tip or initialized-store evidence: removing complete final records, or removing the journal entirely, can be accepted as older/empty state instead of failing closed.",
+          "evidence": [
+            {
+              "file": "B/backend/storage.mjs",
+              "line": 227,
+              "observation": "Recovery validates only the records that remain; an empty journal is accepted as empty state."
+            },
+            {
+              "file": "B/backend/storage.mjs",
+              "line": 279,
+              "observation": "Opening a missing journal with a+ creates it, with no initialized-store marker check."
+            },
+            {
+              "file": "B/backend/storage.mjs",
+              "line": 260,
+              "observation": "A fully valid remaining prefix is returned without a separately retained high-water mark."
+            },
+            {
+              "file": "B/backend/storage.mjs",
+              "line": 290,
+              "observation": "Normal writes still serialize, complete partial writes, fsync before publishing and poison the writer after persistence failure."
+            }
+          ]
+        },
+        {
+          "name": "Authorization boundaries and input/error validation",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "Current capability, role and workspace checks occur before body parsing and again at serialized execution. Fatal UTF-8 decoding, bounded input buffering, strict CSV validation and public projections substantiate the requested boundaries.",
+          "evidence": [
+            {
+              "file": "B/backend/api.mjs",
+              "line": 101,
+              "observation": "The handler authenticates/authorizes before reading a mutation body."
+            },
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 72,
+              "observation": "Serialized mutation context rechecks current capability and role, including replays."
+            },
+            {
+              "file": "B/backend/api.mjs",
+              "line": 23,
+              "observation": "Body handling caps buffered bytes, checks media type, decodes UTF-8 fatally and returns JSON errors."
+            },
+            {
+              "file": "B/backend/validation.mjs",
+              "line": 49,
+              "observation": "The CSV state machine rejects malformed quoting, row shapes and unsafe member inputs."
+            }
+          ]
+        },
+        {
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "score": 8,
+          "maximum": 8,
+          "assessment": "The normal concurrency and lifecycle design is coherent: single-writer serialization, exact capability-bound leases, stale-version fencing and kernel-backed process ownership are explicit. Static review established no material fencing defect.",
+          "evidence": [
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 235,
+              "observation": "Claim binds capability ID, subject, epoch, token hash and expiry in a serialized mutation."
+            },
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 247,
+              "observation": "Commit checks state, capability, subject, epoch, expiry and base version before publishing data."
+            },
+            {
+              "file": "B/backend/storage.mjs",
+              "line": 133,
+              "observation": "Windows/Linux kernel ownership serializes live ownership and stale recovery before the metadata update."
+            },
+            {
+              "file": "B/app.mjs",
+              "line": 36,
+              "observation": "Shutdown closes the listener, then drains storage and releases owned resources."
+            }
+          ]
+        },
+        {
+          "name": "CLI usability and typed SDK contract accuracy",
+          "score": 7,
+          "maximum": 8,
+          "assessment": "The complete requested CLI and typed SDK surface is present, with connected HTTP calls, error types and secret-redacted CLI failures. Client-side limits are thinner: the CLI reads the entire file before server-side CSV size rejection, and fetch has no explicit client deadline or successful-response shape validation.",
+          "evidence": [
+            {
+              "file": "B/sdk.d.mts",
+              "line": 61,
+              "observation": "All eight required methods have accurate specific argument and return declarations without any."
+            },
+            {
+              "file": "B/sdk.mjs",
+              "line": 30,
+              "observation": "HTTP and RelayError handling are implemented; the fetch call has no explicit timeout and success values are returned without shape validation."
+            },
+            {
+              "file": "B/cli.mjs",
+              "line": 76,
+              "observation": "Staging reads the whole supplied file into memory before any CSV byte-limit check."
+            },
+            {
+              "file": "B/cli.mjs",
+              "line": 102,
+              "observation": "CLI errors redact the configured URL/token and lease-token flag values."
+            }
+          ]
+        },
+        {
+          "name": "Maintainability and meaningful independent verification",
+          "score": 7,
+          "maximum": 8,
+          "assessment": "The API/domain/storage/client modules are compact and well separated. Authored verification covers genuine workflow, boundary, corruption and restart cases. Whole-state append-only retention and the uncovered unkeyed-creation/complete-tail cases remain follow-up work; test source is evidence of intent, not proof of execution.",
+          "evidence": [
+            {
+              "file": "B/backend/api.mjs",
+              "line": 79,
+              "observation": "HTTP dispatch delegates authorization and state changes to a distinct domain layer."
+            },
+            {
+              "file": "B/backend/relay.mjs",
+              "line": 287,
+              "observation": "Domain execution separates cloned reads from serialized mutations."
+            },
+            {
+              "file": "B/verification/integration.mjs",
+              "line": 300,
+              "observation": "Authored tests exercise simultaneous staging and competing commits."
+            },
+            {
+              "file": "B/verification/integration.mjs",
+              "line": 313,
+              "observation": "Authored verification covers graceful and abrupt restart and durable replays."
+            },
+            {
+              "file": "B/verification/qa.mjs",
+              "line": 188,
+              "observation": "The QA source includes filesystem alias and lock-release preservation cases."
+            }
+          ]
+        }
+      ],
+      "total": 42,
+      "maximum": 48
+    }
+  },
+  "materialFindings": [
+    {
+      "id": "B-01",
+      "side": "B",
+      "dimension": "Functional completeness and coherent API semantics",
+      "material": true,
+      "confidence": "high, static control-flow derivation",
+      "title": "Exact workspace creation retry requires an optional key",
+      "scenario": "POST workspace with valid bootstrap and a body but no Idempotency-Key succeeds once. The identical retry reaches the duplicate-ID conflict rather than returning the original creation result. A lost first response can therefore leave the caller unable to recover the owner token via the documented exact retry.",
+      "evidence": [
+        {
+          "file": "B/backend/relay.mjs",
+          "line": 95,
+          "observation": "Replay lookup is conditional on validKey(raw.key)."
+        },
+        {
+          "file": "B/backend/relay.mjs",
+          "line": 110,
+          "observation": "Existing workspace otherwise always returns conflict."
+        },
+        {
+          "file": "B/STORAGE.md",
+          "line": 48,
+          "observation": "The unkeyed conflict behavior is expressly documented."
+        }
+      ]
+    },
+    {
+      "id": "B-02",
+      "side": "B",
+      "dimension": "Transactional integrity, recovery and corruption handling",
+      "material": true,
+      "confidence": "high, static recovery derivation",
+      "title": "Complete-record truncation or missing initialized journal can silently roll back state",
+      "scenario": "After acknowledged transactions and process stop, remove the final complete LF-terminated record while leaving a valid prefix, or remove the journal. Recovery has no separate retained tip/genesis/initialization evidence and returns the remaining prefix or a newly created empty journal. The contract calls truncated durable journals fail-closed.",
+      "evidence": [
+        {
+          "file": "B/backend/storage.mjs",
+          "line": 237,
+          "observation": "Empty journal is accepted."
+        },
+        {
+          "file": "B/backend/storage.mjs",
+          "line": 249,
+          "observation": "Sequence and predecessor checks cover only surviving records."
+        },
+        {
+          "file": "B/backend/storage.mjs",
+          "line": 279,
+          "observation": "a+ can create a missing file before recovery."
+        }
+      ]
+    }
+  ],
+  "sharedLimits": [
+    "Static review only; no authored test or independent acceptance result was executed or consulted.",
+    "No runtime identity, token/cost data, timing or native transcript was supplied to this reviewer.",
+    "Both use whole-state append-only journal snapshots; no sustained throughput, disk-growth or production-security claim follows.",
+    "SHA256 chains are corruption checks, not authentication against an attacker able to rewrite all checksums and metadata.",
+    "Scores are this reviewer's descriptive rubric assessments, not a statistical measurement or universal product ranking."
+  ],
+  "comparison": "A is stronger in this static review on exact workspace creation retry, acknowledged-history rollback detection and client-side bounds. Both have strong current-authority and capability/lease fencing code. Runtime, functional acceptance and economic comparison remain separate."
+}

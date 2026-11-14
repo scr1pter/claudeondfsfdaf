@@ -234,10 +234,8 @@ describe("structured-output.createStructuredOutputTool", () => {
     expect(result.metadata.valid).toBe(true)
   })
 
-  test("AI SDK validates schema before execute - missing required field", async () => {
-    // Note: The AI SDK validates the input against the schema BEFORE calling execute()
-    // So invalid inputs never reach the tool's execute function
-    // This test documents the expected schema behavior
+  test("advertises required fields in the input schema", async () => {
+    // The AI SDK does not check a JSON Schema tool's input; execute() does (see the validation tests below).
     const tool = SessionPrompt.createStructuredOutputTool({
       schema: {
         type: "object",
@@ -257,10 +255,7 @@ describe("structured-output.createStructuredOutputTool", () => {
     expect(inputSchema.jsonSchema?.required).toContain("age")
   })
 
-  test("AI SDK validates schema types before execute - wrong type", async () => {
-    // Note: The AI SDK validates the input against the schema BEFORE calling execute()
-    // So invalid inputs never reach the tool's execute function
-    // This test documents the expected schema behavior
+  test("advertises property types in the input schema", async () => {
     const tool = SessionPrompt.createStructuredOutputTool({
       schema: {
         type: "object",
@@ -301,7 +296,7 @@ describe("structured-output.createStructuredOutputTool", () => {
       },
     })
 
-    // Valid nested object - AI SDK validates before calling execute()
+    // Valid nested object
     const validResult = await tool.execute!(
       { user: { name: "John", email: "john@test.com" } },
       {
@@ -340,7 +335,7 @@ describe("structured-output.createStructuredOutputTool", () => {
       },
     })
 
-    // Valid array - AI SDK validates before calling execute()
+    // Valid array
     const validResult = await tool.execute!(
       { tags: ["a", "b", "c"] },
       {
@@ -380,8 +375,108 @@ describe("structured-output.createStructuredOutputTool", () => {
     if (modelOutput.type !== "text") throw new Error("expected text model output")
     expect(modelOutput.value).toBe("Test output")
   })
+})
 
-  // Note: Retry behavior is handled by the AI SDK and the prompt loop, not the tool itself
-  // The tool simply calls onSuccess when execute() is called with valid args
-  // See prompt.ts loop() for actual retry logic
+describe("structured-output.validation", () => {
+  const schema = {
+    type: "object",
+    properties: { answer: { type: "number" } },
+    required: ["answer"],
+    additionalProperties: false,
+  }
+  const options = { toolCallId: "call", messages: [], abortSignal: undefined as any }
+
+  // The run loop builds the tool again for every step and keeps the count of invalid calls itself.
+  const step = (input: { invalid: { count: number }; retryCount?: number; kept: unknown[]; schema?: object }) =>
+    SessionPrompt.createStructuredOutputTool({
+      schema: input.schema ?? schema,
+      onSuccess: (output) => input.kept.push(output),
+      retryCount: input.retryCount,
+      invalid: input.invalid,
+    })
+
+  test("invalid calls on separate steps get an error up to retryCount, then the value is kept as invalid", async () => {
+    const invalid = { count: 0 }
+    const kept: unknown[] = []
+    for (const attempt of [1, 2]) {
+      const result = await step({ invalid, retryCount: 2, kept }).execute!({ answer: "four" }, options)
+      expect(result.metadata).toEqual({ valid: false })
+      expect(result.output).toBe(
+        "Invalid structured output: /answer must be number, not string. Call StructuredOutput again with JSON that matches the schema.",
+      )
+      expect(invalid.count).toBe(attempt)
+      expect(kept).toEqual([])
+    }
+    const last = await step({ invalid, retryCount: 2, kept }).execute!({ answer: "four", extra: true }, options)
+    expect(last.metadata).toEqual({ valid: false, captured: true })
+    expect(kept).toEqual([{ answer: "four", extra: true }])
+  })
+
+  test("a valid call after invalid ones is kept as valid", async () => {
+    const invalid = { count: 0 }
+    const kept: unknown[] = []
+    expect((await step({ invalid, kept }).execute!({}, options)).metadata).toEqual({ valid: false })
+    expect((await step({ invalid, kept }).execute!({ answer: 4 }, options)).metadata).toEqual({ valid: true })
+    expect(kept).toEqual([{ answer: 4 }])
+  })
+
+  test("the count defaults to the format's retryCount of 2", async () => {
+    const invalid = { count: 0 }
+    const kept: unknown[] = []
+    for (const _ of [1, 2]) await step({ invalid, kept }).execute!({}, options)
+    expect(kept).toEqual([])
+    expect((await step({ invalid, kept }).execute!({}, options)).metadata).toEqual({ valid: false, captured: true })
+  })
+
+  test("a large retryCount stops at 5 invalid calls, so a caller cannot run up unbounded steps", async () => {
+    const invalid = { count: 0 }
+    const kept: unknown[] = []
+    for (const _ of [1, 2, 3, 4, 5])
+      expect((await step({ invalid, retryCount: 1000, kept }).execute!({}, options)).metadata).toEqual({ valid: false })
+    expect(invalid.count).toBe(5)
+    const last = await step({ invalid, retryCount: 1000, kept }).execute!({}, options)
+    expect(last.metadata).toEqual({ valid: false, captured: true })
+    expect(kept).toEqual([{}])
+  })
+
+  test("retryCount 0 keeps an invalid value at once", async () => {
+    const invalid = { count: 0 }
+    const kept: unknown[] = []
+    const result = await step({ invalid, retryCount: 0, kept }).execute!({ answer: "four" }, options)
+    expect(result.metadata).toEqual({ valid: false, captured: true })
+    expect(result.output).toBe("Structured output captured successfully.")
+    expect(kept).toEqual([{ answer: "four" }])
+    expect(invalid.count).toBe(0)
+  })
+
+  test("a schema the checker refuses is passed on and not validated", async () => {
+    const invalid = { count: 0 }
+    const kept: unknown[] = []
+    const refused = { type: "object", properties: { code: { type: "string", pattern: "^[A-Z]+$" } } }
+    const tool = step({ invalid, retryCount: 2, kept, schema: refused })
+    expect((tool.inputSchema as any).jsonSchema.properties.code.pattern).toBe("^[A-Z]+$")
+    const result = await tool.execute!({ code: 42 }, options)
+    expect(result.metadata).toEqual({ valid: true })
+    expect(kept).toEqual([{ code: 42 }])
+  })
+
+  test("bounds a provider drops are restated in the schema rendered for it", () => {
+    const bounded = {
+      type: "object",
+      properties: { score: { type: "integer", description: "Score", minimum: 1, maximum: 5 } },
+      required: ["score"],
+    }
+    const render = (npm: string) =>
+      (
+        SessionPrompt.createStructuredOutputTool({
+          schema: bounded,
+          onSuccess: () => {},
+          model: { providerID: "p", id: "m", api: { id: "m", npm } } as any,
+        }).inputSchema as any
+      ).jsonSchema.properties.score
+    expect(render("@ai-sdk/openai")).toEqual({ type: "integer", description: "Score (minimum: 1, maximum: 5)" })
+    expect(render("@ai-sdk/google").description).toBe("Score (minimum: 1, maximum: 5)")
+    // Anthropic keeps every bound, so nothing is restated.
+    expect(render("@ai-sdk/anthropic")).toEqual(bounded.properties.score)
+  })
 })

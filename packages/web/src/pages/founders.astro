@@ -1,0 +1,14 @@
+---
+import { FoundersPage } from "../components/marketing/founders/FoundersPage"
+import MarketingLayout from "../components/marketing/MarketingLayout.astro"
+
+// Only the empty shell is prerendered; the listing is read after loading, by the page's random slug until it is public.
+export const prerender = true
+---
+
+<MarketingLayout title="Founding members · Vector Codium" description="Vector Codium's founding members." noindex>
+  <FoundersPage client:only="react">
+    <p slot="fallback" role="status">Loading…</p>
+  </FoundersPage>
+  <noscript>This page needs JavaScript to load the list of founders.</noscript>
+</MarketingLayout>

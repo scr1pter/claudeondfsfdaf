@@ -792,6 +792,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Depo dışındaki dosyalara eriş",
   "settings.permissions.tool.doom_loop.title": "Sonsuz Döngü",
   "settings.permissions.tool.doom_loop.description": "Aynı girdiyle tekrarlanan araç çağrılarını algıla",
+  "settings.permissions.tool.terminal.description":
+    "Ajanın açmadığı bir terminali okuma, bekleme, yeniden boyutlandırma veya kapatma: sizinki ya da başka bir oturumunki",
+  "settings.permissions.tool.terminal_input.description":
+    "Bir terminale metin yazma veya tuşlara basma. Gönderilen her satır ayrıca bir kabuk komutu olarak denetlenir",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Çıktısını oku",
+  "session.permission.terminal.action.wait": "Çıktısını bekle",
+  "session.permission.terminal.action.resize": "Yeniden boyutlandır",
+  "session.permission.terminal.action.close": "Kapat ve işlemini sonlandır",
+  "session.permission.terminal.text": "Yazılacak metin",
+  "session.permission.terminal.enter": "Ardından Enter'a basar",
+  "session.permission.terminal.keys": "Basılacak tuşlar",
 
   "session.delete.failed.title": "Oturum silinemedi",
   "session.delete.title": "Oturumu sil",

@@ -1,0 +1,32 @@
+{
+  "kind": "workflow-runner-v1-freeze",
+  "frozenAtUtc": "2026-11-02T00:50:52.749463+00:00",
+  "apiGroups": 16,
+  "browserChecks": 8,
+  "modelCalls": 0,
+  "files": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    ".gitignore": "51c91ef3167129c06f8136c90379166622261cac922b5d8f4e5f2ea5e80759ed",
+    "browser-check.cjs": "c59ce38fc7d08a8585713721875dc56e695351a64dcc042f686ead75387bd30b",
+    "browser-controls.cjs": "082f7fb36f09e6aad8dfdf509f336c10d37ad538f44109f7deb5a1df26b71625",
+    "evaluate.py": "ce4837bff913f1670a6c1f7d2b2bd7323cc667b422aee2b4ae343bbc21c93cc4",
+    "free-validation.json": "506d6675477b122e3a01760fd6e5e922b183f8020a3a272e551bf5ddada96e51",
+    "freeze.py": "894de8d779b62488683450ec866dfecf50afad42eb17588b841ed06b80327f1b",
+    "lifecycle_controls.py": "4456897231f7bdd1d8dcd78d9cae8e0a132b6d061c65cf398c5fc92012d38510",
+    "README.md": "63336fbc1e0540259bfdc5596f3b18faa1e2b9caca63835fbefd8c70a01d9e39",
+    "task.json": "2006835e662f727a310347b7b97cdde45e290f677ce968eae0e1732e09b90365",
+    "TASK.md": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+    "test_controls.py": "c99f8b82ba6bc6b03065e95dc47c5695757cc9eff8ee5f5975f78220478d61cc",
+    "worker.ts": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+    "seed/.gitignore": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+    "seed/bun.lock": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+    "seed/package.json": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+    "seed/tsconfig.json": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+    "seed/public/index.html": "6d86ffa0a93a8aff404a9650c5db0b00a32e0873f0c23f4633aa75070e43e752",
+    "seed/scripts/build.ts": "6e5c03f3e0ad72cb4c17ba1c23153212e460ef546cf64c8de28a62e4d98fbd04",
+    "seed/server/index.ts": "2fca2242abd12f6d57c783ddbe751fcd0cd4dcbf93bdeca647683d7637854a4a",
+    "seed/server/worker.ts": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+    "seed/sql/v1.sql": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+    "seed/tests/smoke.test.ts": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912"
+  }
+}

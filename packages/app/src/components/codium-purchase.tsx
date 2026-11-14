@@ -4,23 +4,24 @@ import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { DialogBody, DialogHeader, DialogTitleGroup, DialogV2 } from "@vectordevai/ui/v2/dialog-v2"
 import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js"
 import { usePlatform } from "@/context/platform"
-import { codiumChanged, type VectorBillingRequest } from "@/vector-account"
+import { codiumChanged, newestRead, onCodiumChange, runBilling, type VectorBillingRequest } from "@/vector-account"
 import {
   billingNotice,
   billingProgress,
   offerAction,
   offerPrice,
-  offersPlanChange,
+  planUnknown,
   type BillingNotice,
 } from "./codium-billing"
 import "./codium-purchase.css"
 
 /**
- * Runs one billing request in the desktop's billing window and says how it went. Without the desktop bridge, as in
- * the web build, it opens the page on vectordev.ai instead. After a purchase it reads the account again a few times,
- * since a subscription arrives with Stripe's notification, which can trail the window by a few seconds.
+ * Runs one billing request in the desktop's billing window, or a plan change it answers without one, and says how it
+ * went. Without the desktop bridge, as in the web build, it opens vectordev.ai instead: the plans page for a checkout,
+ * the account page for everything else. Every screen showing the plan reads it again on codiumChanged(), once the
+ * request is done and, after a finished purchase or card update, on a schedule that outlives this page (runBilling).
  */
-export function createCodiumBilling(refresh: () => unknown, poll = 2_000) {
+export function createCodiumBilling() {
   const platform = usePlatform()
   // The request whose billing window is open.
   const [active, setActive] = createSignal<VectorBillingRequest>()
@@ -30,31 +31,21 @@ export function createCodiumBilling(refresh: () => unknown, poll = 2_000) {
   onCleanup(() => {
     life.alive = false
   })
-  const run = async (request: VectorBillingRequest) => {
-    const billing = platform.vectorAccount?.billing
+  // `paying`: the portal is opened to confirm a payment, so closing it starts the later reads too (runBilling).
+  const run = async (request: VectorBillingRequest, options: { paying?: boolean } = {}) => {
+    const account = platform.vectorAccount
     if (busy()) return
-    if (!billing) {
-      platform.openLink(request.kind === "portal" ? ModelPlanStatus.MANAGE_URL : ModelPlanStatus.PURCHASE_URL)
+    if (!account?.billing) {
+      platform.openLink(request.kind === "checkout" ? ModelPlanStatus.PURCHASE_URL : ModelPlanStatus.MANAGE_URL)
       return
     }
     setActive(request)
     setNotice(undefined)
-    const result = await billing(request).catch(() => ({
-      outcome: "failed" as const,
-      message: "Vector could not open billing. Try again.",
-    }))
+    const result = await runBilling(account, request, options)
     if (!life.alive) return
     setActive(undefined)
     setNotice(billingNotice(request, result))
-    await refresh()
     codiumChanged()
-    if (result.outcome !== "completed") return
-    for (const _ of [1, 2, 3, 4]) {
-      await new Promise((resolve) => setTimeout(resolve, poll))
-      if (!life.alive) return
-      await refresh()
-      codiumChanged()
-    }
   }
   return { active, busy, notice, run }
 }
@@ -62,11 +53,12 @@ export function createCodiumBilling(refresh: () => unknown, poll = 2_000) {
 export type CodiumBilling = ReturnType<typeof createCodiumBilling>
 
 /**
- * The Codium plans and top-ups, each with its name and public price and never the credits it buys, so no screen can
- * reveal the markup. Choosing one opens Stripe in Vector's billing window. While Codium is not on sale, every
- * button reads "Coming soon" and nothing can be bought.
+ * The Codium monthly plans, each with its name and public price and never what it buys, so no screen can reveal the
+ * markup. Without a plan, one opens checkout in Vector's billing window; a subscriber upgrades now or switches at
+ * renewal. While Codium is not on sale, every button reads "Coming soon" and nothing can be bought. `status` is the
+ * account's Codium status as last read: until a read has answered, no offer has a button (planUnknown).
  */
-export function CodiumPurchase(props: { plan?: { id: string; cancelAtPeriodEnd?: boolean }; billing: CodiumBilling }) {
+export function CodiumPurchase(props: { status?: ModelPlanStatus.Status; billing: CodiumBilling }) {
   const platform = usePlatform()
   // Undefined while loading; null when vectordev.ai could not be read.
   const [offers, setOffers] = createSignal<ModelPlanStatus.Offers | null>()
@@ -77,14 +69,15 @@ export function CodiumPurchase(props: { plan?: { id: string; cancelAtPeriodEnd?:
       .then((value) => setOffers(value ?? null))
       .catch(() => setOffers(null))
   })
-  const row = (offer: ModelPlanStatus.Offer, kind: "plan" | "topup") => {
-    // The account's plan can change while the list is open, after a purchase for one.
-    const action = () => offerAction(offer, kind, props.plan)
+  const row = (offer: ModelPlanStatus.Offer) => {
+    // The account's plan can change while the list is open, after an upgrade for one.
+    const action = () => (planUnknown(props.status) ? undefined : offerAction(offer, props.status?.plan))
     return (
       <li class="codium-purchase-offer" data-offer={offer.id}>
         <div>
           <span class="codium-purchase-name">{offer.name}</span>
-          <span class="codium-purchase-price">{offerPrice(offer, kind)}</span>
+          <span class="codium-purchase-price">{offerPrice(offer)}</span>
+          <Show when={action()?.detail}>{(detail) => <span class="codium-purchase-detail">{detail()}</span>}</Show>
         </div>
         <Show when={action()}>
           {(current) => (
@@ -128,40 +121,28 @@ export function CodiumPurchase(props: { plan?: { id: string; cancelAtPeriodEnd?:
               <section class="codium-purchase-group" aria-labelledby="codium-purchase-plans">
                 <div class="codium-purchase-head">
                   <h4 id="codium-purchase-plans">Monthly plans</h4>
-                  <p>Credits for each month, renewed with the plan.</p>
+                  <p>Each plan renews every month. Usage shows as a share of the month.</p>
                 </div>
                 <ul>
-                  <For each={current().plans}>{(offer) => row(offer, "plan")}</For>
+                  <For each={current().plans}>{(offer) => row(offer)}</For>
                 </ul>
-                <Show when={offersPlanChange(props.plan, current().enabled)}>
-                  <div class="codium-purchase-change">
-                    {/* Stripe's confirm page shows the charge but not the credits it ends, so say both first. */}
-                    <p id="codium-purchase-change-terms" class="codium-purchase-muted">
-                      A bigger plan starts a new month today and is charged in full, and what is left of this month's
-                      credits ends then. A smaller plan starts on your renewal date.
-                    </p>
-                    <ButtonV2
-                      variant="outline"
-                      aria-describedby="codium-purchase-change-terms"
-                      disabled={props.billing.busy()}
-                      onClick={() => void props.billing.run({ kind: "portal", flow: "change" })}
+                <Show when={planUnknown(props.status)}>
+                  {(unknown) => (
+                    <p
+                      role={unknown().kind === "error" ? "alert" : "status"}
+                      class="codium-purchase-notice"
+                      data-kind={unknown().kind}
                     >
-                      Change plan
-                    </ButtonV2>
-                  </div>
+                      {unknown().text}
+                    </p>
+                  )}
+                </Show>
+                <Show when={props.status?.plan?.scheduled}>
+                  <p class="codium-purchase-muted">
+                    A smaller plan is already scheduled. Keep your plan first to choose another change.
+                  </p>
                 </Show>
               </section>
-              <Show when={current().topups.length}>
-                <section class="codium-purchase-group" aria-labelledby="codium-purchase-topups">
-                  <div class="codium-purchase-head">
-                    <h4 id="codium-purchase-topups">Top-ups</h4>
-                    <p>Credits bought once that carry forward, used after your monthly credits.</p>
-                  </div>
-                  <ul>
-                    <For each={current().topups}>{(offer) => row(offer, "topup")}</For>
-                  </ul>
-                </section>
-              </Show>
             </>
           )}
         </Match>
@@ -170,14 +151,17 @@ export function CodiumPurchase(props: { plan?: { id: string; cancelAtPeriodEnd?:
   )
 }
 
-/** The billing window's progress and how it ended, for a page or dialog that runs billing. */
-export function CodiumBillingStatus(props: { billing: CodiumBilling }) {
+/**
+ * The billing window's progress and how it ended, for a page or dialog that runs billing. `plan` is the account's plan
+ * id, which tells an upgrade (paid in Stripe's checkout) from a smaller plan saved without a window.
+ */
+export function CodiumBillingStatus(props: { billing: CodiumBilling; plan?: string }) {
   return (
     <>
       <Show when={props.billing.active()}>
         {(request) => (
           <p role="status" class="codium-purchase-muted">
-            {billingProgress(request())}
+            {billingProgress(request(), props.plan)}
           </p>
         )}
       </Show>
@@ -196,34 +180,74 @@ export function CodiumBillingStatus(props: { billing: CodiumBilling }) {
   )
 }
 
-/** Buy credits from anywhere in the app, such as a Codium turn that ran out, without opening Settings. */
+/**
+ * The Codium plans from anywhere in the app, such as a Codium turn that needs a plan or a model the plan does not
+ * include, without opening Settings. A smaller plan already scheduled shows here with Keep my plan, as on Settings >
+ * Account, since every other change waits for it.
+ */
 export function DialogCodiumPurchase() {
   const platform = usePlatform()
   const [status, setStatus] = createSignal<ModelPlanStatus.Status>()
+  // A purchase's reads overlap; an older answer never replaces a newer one.
+  const statusRead = newestRead()
   const refresh = async () => {
     const read = platform.vectorAccount?.codium
-    if (read) setStatus(await read().catch(() => undefined))
+    if (!read) return
+    const newest = statusRead()
+    // A read that throws says so, as the desktop's own failed read does, instead of reading forever.
+    const next = await read().catch(() => ({
+      signedIn: true,
+      enabled: false,
+      access: false,
+      purchased: { bought: false },
+      empty: false,
+      low: false,
+      error: "Vector could not load your Codium plan. Try again shortly.",
+    }))
+    if (newest()) setStatus(next)
   }
-  const billing = createCodiumBilling(refresh)
-  onMount(() => void refresh())
+  const billing = createCodiumBilling()
+  onMount(() => {
+    onCleanup(onCodiumChange(() => void refresh()))
+    void refresh()
+  })
   return (
     <DialogV2 fit class="codium-purchase-dialog">
       <DialogHeader>
         <DialogTitleGroup
-          title="Buy Codium credits"
-          description="Plans renew each month and top-ups are bought once. Prices are in US dollars."
+          title="Vector Codium plans"
+          description="Monthly plans, in US dollars. A bigger plan starts today; a smaller one at renewal."
         />
       </DialogHeader>
       <DialogBody>
-        <CodiumPurchase plan={status()?.plan} billing={billing} />
-        <CodiumBillingStatus billing={billing} />
+        <Show when={status()?.plan?.scheduled}>
+          {(scheduled) => (
+            <div class="codium-purchase-scheduled" data-component="codium-purchase-scheduled">
+              <p role="status">
+                Switches to {scheduled().name} on {ModelPlanStatus.formatDate(scheduled().at)}.
+              </p>
+              <ButtonV2 variant="outline" disabled={billing.busy()} onClick={() => void billing.run({ kind: "keep" })}>
+                Keep my plan
+              </ButtonV2>
+            </div>
+          )}
+        </Show>
+        <CodiumPurchase status={status()} billing={billing} />
+        <CodiumBillingStatus billing={billing} plan={status()?.plan?.id} />
       </DialogBody>
     </DialogV2>
   )
 }
 
-/** Opens the purchase dialog. */
+/**
+ * Opens the Codium plans: Vector's own dialog where the desktop can bill, else the account page on vectordev.ai, since
+ * the web build has no plans to show.
+ */
 export function useCodiumPurchase() {
   const dialog = useDialog()
-  return () => dialog.show(() => <DialogCodiumPurchase />)
+  const platform = usePlatform()
+  return () =>
+    platform.vectorAccount?.billing
+      ? dialog.show(() => <DialogCodiumPurchase />)
+      : platform.openLink(ModelPlanStatus.MANAGE_URL)
 }

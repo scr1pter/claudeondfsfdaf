@@ -1,16 +1,24 @@
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { createHash, randomBytes } from "node:crypto"
 import { createServer } from "node:http"
 import codeHandler from "../../../api/account/cli-code"
 import exchangeHandler from "../../../api/account/cli-exchange"
 import deleteHandler from "../../../api/account/delete"
-import { verifyCliToken, verifyDeletionGrant, verifyDesktopToken } from "../../../api/_lib/cli-token"
 import {
+  verifyCliToken,
+  verifyCliTokenClaims,
+  verifyDeletionGrant,
+  verifyDesktopToken,
+} from "../../../api/_lib/cli-token"
+import {
+  cliSignInCallback,
+  cliSignInCancel,
   deletionConfirmation,
   deletionNeedsSignIn,
   deletionReauthPath,
   desktopSignInCallback,
   desktopSignInRequest,
+  desktopSignInStep,
 } from "../src/lib/desktop-sign-in"
 import { createVectorAccount } from "../../desktop/src/main/vector-account"
 
@@ -43,6 +51,29 @@ const upstream = Bun.serve({
     if (state.unavailable) return new Response(null, { status: 503 })
     const parts = (await request.json()) as string[]
     const grantKey = parts[1]?.startsWith("vector:deletion-grant:")
+    // Account deletion's Codium records (WP A57): the tombstone, its lease and the cleanup cron's list. This store holds
+    // no other Codium record, so its scans find nothing.
+    if (parts[1]?.startsWith("vector:codium:")) {
+      if (parts[0] === "GET") return Response.json({ result: records.get(parts[1]) ?? null })
+      if (parts[0] === "SET") {
+        const taken = parts.includes("NX") && records.has(parts[1])
+        if (!taken) records.set(parts[1], parts[2])
+        return Response.json({ result: taken ? null : "OK" })
+      }
+      if (parts[0] === "DEL") return Response.json({ result: Number(records.delete(parts[1])) })
+      if (parts[0] === "ZADD" || parts[0] === "ZREM") return Response.json({ result: 1 })
+      if (["SMEMBERS", "HGETALL", "LRANGE", "ZRANGE", "ZRANGEBYSCORE", "HKEYS"].includes(parts[0]))
+        return Response.json({ result: [] })
+      if (["HGET", "LPOP", "RPOP"].includes(parts[0])) return Response.json({ result: null })
+      if (["EXISTS", "SREM", "HDEL", "SCARD", "ZCARD", "LLEN", "UNLINK"].includes(parts[0]))
+        return Response.json({ result: 0 })
+    }
+    if (parts[0] === "SCAN" || parts[0] === "ZSCAN") return Response.json({ result: ["0", []] })
+    if (parts[0] === "EVAL" && parts[3]?.startsWith("vector:codium:")) {
+      // The deletion lease's release script.
+      if (records.get(parts[3]) === parts[4]) records.delete(parts[3])
+      return Response.json({ result: 1 })
+    }
     if (parts[0] === "GET")
       return Response.json({ result: grantKey ? (records.get(parts[1]) ?? null) : state.revoked ? "1" : null })
     if (parts[0] === "SET") {
@@ -51,7 +82,7 @@ const upstream = Bun.serve({
       expect(parts.slice(3)).toEqual(["EX", grantKey ? "900" : "300", "NX"])
       return Response.json({ result: "OK" })
     }
-    if (parts[0] !== "EVAL") throw new Error("Unexpected fixture command")
+    if (parts[0] !== "EVAL") throw new Error(`Unexpected fixture command ${parts[0]} ${parts[1]}`)
     if (parts[1].includes("'INCR'")) {
       const count = (counts.get(parts[3]) ?? 0) + 1
       counts.set(parts[3], count)
@@ -70,6 +101,9 @@ const server = createServer((request, response) => {
   if (request.url === "/delete") return void deleteHandler(request, response)
   void (request.url === "/code" ? codeHandler(request, response) : exchangeHandler(request, response))
 })
+
+// Each case owns its limiter window; attempt-exhaustion assertions still share counters within their own case.
+beforeEach(() => counts.clear())
 
 beforeAll(async () => {
   Object.assign(process.env, {
@@ -129,6 +163,24 @@ test("desktop sign-in requires a real authenticated session and rejects unsafe i
   expect((await request("/code", binding(), { origin: "https://foreign.example" })).status).toBe(403)
   expect((await request("/code", { state: "invalid", challenge: "invalid" })).status).toBe(400)
   expect((await request("/code", { padding: "a".repeat(2_100) })).status).toBe(413)
+})
+
+test("HTTP CLI code exchange uses the saved purpose and never grants desktop billing authority", async () => {
+  const input = binding()
+  const minted = await request("/code", { ...input, purpose: "cli" })
+  expect(minted.status).toBe(200)
+  const code = await minted.json()
+  const response = await request("/exchange", { ...input, code: code.code, purpose: "desktop", client: "desktop" })
+  expect(response.status).toBe(200)
+  const exchanged = await response.json()
+  expect(verifyCliTokenClaims(exchanged.token)).toMatchObject({
+    id: user.id,
+    email: user.email,
+    client: "cli",
+    jti: expect.any(String),
+  })
+  expect(() => verifyDesktopToken(exchanged.token)).toThrow("Sign in to Vector again")
+  expect((await request("/exchange", { ...input, code: code.code })).status).toBe(400)
 })
 
 test("PKCE and state bind one code to one desktop and concurrent replay has only one winner", async () => {
@@ -213,6 +265,60 @@ test("login return paths retain only validated desktop binding fields", () => {
   expect(() => desktopSignInCallback({ code: "vct_private", state: input.state }, input.state)).toThrow()
 })
 
+test("a CLI sign-in keeps its purpose and loopback port through sign-in, and its code returns only to 127.0.0.1", () => {
+  const input = binding()
+  const query = new URLSearchParams({
+    desktop: "1",
+    state: input.state,
+    code_challenge: input.challenge,
+    code_challenge_method: "S256",
+    purpose: "cli",
+    port: "49152",
+    returnTo: "https://foreign.example/next",
+    redirect: "https://foreign.example/callback",
+  })
+  const parsed = desktopSignInRequest(query.toString())
+  if (parsed?.purpose !== "cli") throw new Error("Expected a CLI sign-in request")
+  expect(parsed).toMatchObject({ port: 49152, confirmed: false })
+  expect(parsed.returnPath).toContain("purpose=cli")
+  expect(parsed.returnPath).toContain("port=49152")
+  expect(parsed.returnPath).not.toContain("foreign")
+  // Through /login and back, unchanged.
+  expect(desktopSignInRequest(new URL(parsed.returnPath, "https://vectordev.ai").search)).toEqual(parsed)
+  // The port must be a user port, and it comes only with the CLI purpose.
+  for (const port of ["0", "80", "1023", "65536", "8080.5", "08080", "localhost", ""]) {
+    const bad = new URLSearchParams({ ...Object.fromEntries(query), port })
+    expect(() => desktopSignInRequest(bad.toString())).toThrow("Run vector login again")
+  }
+  const missing = new URLSearchParams(query)
+  missing.delete("port")
+  expect(() => desktopSignInRequest(missing.toString())).toThrow("Run vector login again")
+  const desktop = new URLSearchParams(query)
+  desktop.delete("purpose")
+  expect(() => desktopSignInRequest(desktop.toString())).toThrow("Start sign-in")
+  const deleting = new URLSearchParams({ ...Object.fromEntries(query), purpose: "delete" })
+  expect(() => desktopSignInRequest(deleting.toString())).toThrow("Start sign-in")
+
+  // Nothing is minted until the person approves this terminal; a desktop sign-in goes straight on.
+  expect(desktopSignInStep(false, parsed)).toBe("ask")
+  expect(desktopSignInStep(true, parsed)).toBe("send")
+  expect(desktopSignInStep(false, desktopSignInRequest(desktop.toString().replace(/&port=\d+/, ""))!)).toBe("send")
+  // A CLI sign-in carries no deletion Continue.
+  const marked = new URLSearchParams({ ...Object.fromEntries(query), confirmed: "1" })
+  expect(desktopSignInStep(false, desktopSignInRequest(marked.toString())!)).toBe("ask")
+
+  const code = randomBytes(32).toString("base64url")
+  const callback = new URL(cliSignInCallback({ code, state: input.state }, parsed))
+  expect(callback.origin + callback.pathname).toBe("http://127.0.0.1:49152/callback")
+  expect(Object.fromEntries(callback.searchParams)).toEqual({ code, state: input.state })
+  expect(() => cliSignInCallback({ code, state: binding().state }, parsed)).toThrow()
+  expect(() => cliSignInCallback({ code: "vct_private", state: input.state }, parsed)).toThrow()
+  expect(() => cliSignInCallback({ code, state: input.state }, { ...parsed, port: 22 })).toThrow()
+  const cancel = new URL(cliSignInCancel(parsed))
+  expect(cancel.origin).toBe("http://127.0.0.1:49152")
+  expect(Object.fromEntries(cancel.searchParams)).toEqual({ error: "access_denied", state: input.state })
+})
+
 test("desktop start, signed-in website and one-time API exchange complete the same bound flow", async () => {
   const desktop = { stored: undefined as unknown, url: "", token: "", states: [] as unknown[] }
   const account = createVectorAccount({
@@ -240,6 +346,7 @@ test("desktop start, signed-in website and one-time API exchange complete the sa
     sync: async (token) => {
       desktop.token = token ?? ""
     },
+    models: async () => undefined,
     changed: (value) => {
       desktop.states.push(value)
     },
@@ -395,6 +502,7 @@ test("deleting from the desktop runs through the browser's fresh sign-in and end
     sync: async (token) => {
       desktop.token = token
     },
+    models: async () => undefined,
     changed: (value) => {
       desktop.states.push(value)
     },

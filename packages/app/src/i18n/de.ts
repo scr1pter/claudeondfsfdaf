@@ -725,6 +725,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Zugriff auf Dateien außerhalb des Repositorys",
   "settings.permissions.tool.doom_loop.title": "Doom Loop",
   "settings.permissions.tool.doom_loop.description": "Wiederholte Tool-Aufrufe mit identischer Eingabe erkennen",
+  "settings.permissions.tool.terminal.description":
+    "Ein Terminal lesen, darauf warten, seine Größe ändern oder es schließen, das der Agent nicht geöffnet hat: deines oder das einer anderen Sitzung",
+  "settings.permissions.tool.terminal_input.description":
+    "Text in ein Terminal tippen oder Tasten drücken. Jede abgeschickte Zeile wird zusätzlich als Shell-Befehl geprüft",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Ausgabe lesen",
+  "session.permission.terminal.action.wait": "Auf Ausgabe warten",
+  "session.permission.terminal.action.resize": "Größe ändern",
+  "session.permission.terminal.action.close": "Schließen und Prozess beenden",
+  "session.permission.terminal.text": "Zu tippender Text",
+  "session.permission.terminal.enter": "Drückt danach Enter",
+  "session.permission.terminal.keys": "Zu drückende Tasten",
   "session.delete.failed.title": "Sitzung konnte nicht gelöscht werden",
   "session.delete.title": "Sitzung löschen",
   "session.delete.confirm": 'Sitzung "{{name}}" löschen?',

@@ -11,12 +11,34 @@ import path from "path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { InvalidRequestError } from "../errors"
-import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { Git } from "@/git"
+import { PrivateAccess } from "@/tool/private-access"
+import { ForbiddenError } from "@vectordevai/protocol/errors"
 
 export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handlers) =>
   Effect.gen(function* () {
     const ripgrep = yield* Ripgrep.Service
     const locations = yield* LocationServiceMap.Service
+    const git = yield* Git.Service
+    const audience = yield* SessionAudience.Service
+    const read = Effect.fn("FileHttpApi.privateRead")(function* (file: string, ancestors = false) {
+      const access = PrivateAccess.make({
+        guest: !(yield* RequestOwner.owner),
+        audience,
+        git,
+        instance: yield* InstanceState.context,
+      })
+      yield* access
+        .read([file], { ancestors })
+        .pipe(
+          Effect.mapError(
+            () => new ForbiddenError({ message: "This filesystem selection could expose private task data." }),
+          ),
+        )
+    })
 
     const filesystem = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
       return yield* effect.pipe(
@@ -27,9 +49,13 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
     })
 
     const findText = Effect.fn("FileHttpApi.findText")(function* (ctx: { query: { pattern: string } }) {
+      yield* read(".", true)
       return (yield* ripgrep
         .grep({ cwd: (yield* InstanceState.context).directory, pattern: ctx.query.pattern, limit: 10 })
-        .pipe(Effect.orDie)).map((match) => ({
+        .pipe(
+          Effect.orDie,
+          Effect.tap(() => read(".", true)),
+        )).map((match) => ({
         path: { text: match.entry.path },
         lines: { text: match.text },
         line_number: match.line,
@@ -46,10 +72,12 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       query: { query: string; dirs?: "true" | "false"; type?: "file" | "directory"; limit?: number }
     }) {
       const directory = (yield* InstanceState.context).directory
+      yield* read(".", true)
       const limit = ctx.query.limit ?? 10
       const type = ctx.query.type ?? (ctx.query.dirs === "false" ? "file" : undefined)
       const started = performance.now()
       const found = yield* filesystem(FileSystem.Service.use((fs) => fs.find({ query: ctx.query.query, limit, type })))
+      yield* read(".", true)
       yield* Effect.logInfo("find file", {
         query: ctx.query.query,
         type,
@@ -67,6 +95,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
 
     const list = Effect.fn("FileHttpApi.list")(function* (ctx: { query: { path: string } }) {
       const directory = (yield* InstanceState.context).directory
+      yield* read(ctx.query.path, true)
       return yield* filesystem(
         Effect.gen(function* () {
           const fs = yield* FileSystem.Service
@@ -92,12 +121,13 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
             ),
           }))
         }),
-      )
+      ).pipe(Effect.tap(() => read(ctx.query.path, true)))
     })
 
     const content = Effect.fn("FileHttpApi.content")(function* (ctx: { query: { path: string } }) {
       const directory = (yield* InstanceState.context).directory
       const file = path.resolve(directory, ctx.query.path)
+      yield* read(file)
       if (!FSUtil.contains(directory, file)) return yield* Effect.die(new Error("Path escapes the location"))
       if (!(yield* FSUtil.Service.use((fs) => fs.existsSafe(file)))) return { type: "text" as const, content: "" }
       return yield* filesystem(
@@ -123,12 +153,16 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
                 mimeType: item.mime,
               },
         ),
+        Effect.tap(() => read(file)),
       )
     })
 
     const write = Effect.fn("FileHttpApi.write")(function* (ctx: { payload: { path: string; content: string } }) {
       const directory = (yield* InstanceState.context).directory
       const target = path.resolve(directory, ctx.payload.path)
+      yield* read(target)
+      const owner = yield* RequestOwner.owner
+      yield* SessionAudienceHttp.assertDirectory(target, owner)
       // Decided on where the write really lands: a link inside the workspace passes a textual check while the
       // write goes through it to the rest of the disk.
       if (
@@ -140,17 +174,20 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       // git runs the programs its own directory names (hooks, config) as the owner, so a guest writing there would be
       // running a command. Judged on both the requested and the real path, in every spelling a file system reads as .git.
       if (
-        (yield* RequestPrincipal).kind !== "owner" &&
+        !owner &&
         [path.relative(directory, target), path.relative(FSUtil.realpath(directory), FSUtil.realpath(target))].some(
           (item) => item.split(/[\\/]/).some(gitDirectoryName),
         )
       ) {
-        return yield* new InvalidRequestError({ message: "Only the server owner can write git's files.", field: "path" })
+        return yield* new InvalidRequestError({
+          message: "Only the server owner can write git's files.",
+          field: "path",
+        })
       }
       const fs = yield* FSUtil.Service
-      yield* fs.writeWithDirs(target, ctx.payload.content).pipe(
-        Effect.mapError((error) => new InvalidRequestError({ message: `${error}`, field: "path" })),
-      )
+      yield* fs
+        .writeWithDirs(target, ctx.payload.content)
+        .pipe(Effect.mapError((error) => new InvalidRequestError({ message: `${error}`, field: "path" })))
       return {
         path: ctx.payload.path,
         bytes: Buffer.byteLength(ctx.payload.content, "utf8"),

@@ -172,3 +172,20 @@ describe("shared desktop task observations", () => {
     ).toEqual({ inspect: true, message: false, stop: false })
   })
 })
+
+test("workspace task billing preserves Codium presence independently of own price classification", () => {
+  const now = Date.now()
+  const codium = workspaceTask(workspace({ billing: "codium", measuredCost: 0, costKind: "codium" }), { now })
+  expect(codium).toMatchObject({ billing: "codium", costKind: "codium", measuredCost: 0 })
+  expect(codium.usage).toBeUndefined()
+  const mixed = workspaceTask(
+    workspace({ provider: "own", billing: "codium", measuredCost: 0.12, actualCost: "$0.12", costKind: "priced" }),
+    { now },
+  )
+  expect(mixed).toMatchObject({ billing: "codium", costKind: "priced", measuredCost: 0.12 })
+  expect(mixed.usage).toBeUndefined()
+  const unknown = workspaceTask(workspace({ billing: "codium", costKind: "unknown" }), { now })
+  expect(unknown).toMatchObject({ billing: "codium", costKind: "unknown" })
+  expect(unknown.measuredCost).toBeUndefined()
+  expect(unknown.usage).toBeUndefined()
+})

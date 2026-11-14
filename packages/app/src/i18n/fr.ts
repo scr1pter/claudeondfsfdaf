@@ -723,6 +723,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Accéder aux fichiers en dehors du dépôt",
   "settings.permissions.tool.doom_loop.title": "Boucle infernale",
   "settings.permissions.tool.doom_loop.description": "Détecter les appels d'outils répétés avec une entrée identique",
+  "settings.permissions.tool.terminal.description":
+    "Lire, attendre, redimensionner ou fermer un terminal que l'agent n'a pas ouvert : le vôtre ou celui d'une autre session",
+  "settings.permissions.tool.terminal_input.description":
+    "Saisir du texte ou appuyer sur des touches dans un terminal. Chaque ligne envoyée est aussi vérifiée comme la commande shell qu'elle est",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Lire sa sortie",
+  "session.permission.terminal.action.wait": "Attendre sa sortie",
+  "session.permission.terminal.action.resize": "Le redimensionner",
+  "session.permission.terminal.action.close": "Le fermer et arrêter son processus",
+  "session.permission.terminal.text": "Texte à saisir",
+  "session.permission.terminal.enter": "Puis appuie sur Entrée",
+  "session.permission.terminal.keys": "Touches à presser",
   "session.delete.failed.title": "Échec de la suppression de la session",
   "session.delete.title": "Supprimer la session",
   "session.delete.confirm": 'Supprimer la session "{{name}}" ?',

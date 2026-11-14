@@ -784,6 +784,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Pristup datotekama izvan repozitorija",
   "settings.permissions.tool.doom_loop.title": "Beskonačna petlja",
   "settings.permissions.tool.doom_loop.description": "Otkriva ponovljene pozive alata sa identičnim unosom",
+  "settings.permissions.tool.terminal.description":
+    "Čitanje, čekanje, promjena veličine ili zatvaranje terminala koji agent nije otvorio: vašeg ili terminala druge sesije",
+  "settings.permissions.tool.terminal_input.description":
+    "Kucanje teksta ili pritiskanje tipki u terminalu. Svaka poslana linija se provjerava i kao shell komanda",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Čitanje izlaza",
+  "session.permission.terminal.action.wait": "Čekanje na izlaz",
+  "session.permission.terminal.action.resize": "Promjena veličine",
+  "session.permission.terminal.action.close": "Zatvaranje i završavanje procesa",
+  "session.permission.terminal.text": "Tekst za kucanje",
+  "session.permission.terminal.enter": "Zatim pritisne Enter",
+  "session.permission.terminal.keys": "Tipke za pritisnuti",
 
   "session.delete.failed.title": "Neuspjelo brisanje sesije",
   "session.delete.title": "Izbriši sesiju",

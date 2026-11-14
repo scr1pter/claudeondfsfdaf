@@ -4,12 +4,14 @@ import { Cause, Effect, Exit, Layer } from "effect"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2 } from "@vectordevai/core/event"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { Location } from "@vectordevai/core/location"
 import { buildLocationServiceMap, LocationServiceMap } from "@vectordevai/core/location-services"
 import { Pty } from "@vectordevai/core/pty"
+import { PtyID } from "@vectordevai/core/pty/schema"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
@@ -50,6 +52,7 @@ const it = testEffect(
         RuntimeFlags.node,
         Permission.node,
         EventV2.node,
+        FreeModelGuests.node,
         locations,
       ]),
       [[locations, locations]],
@@ -114,6 +117,246 @@ const failure = (exit: Exit.Exit<unknown, unknown>) => {
   if (Exit.isSuccess(exit)) throw new Error("expected the call to fail")
   return String(Cause.squash(exit.cause))
 }
+
+// Replace only PTY I/O: these tests still execute the real tool, permission scan and wait loop on every platform.
+const syntheticPty = (frames: { text: string; exitCode?: number }[], onRead?: (count: number) => void) => {
+  const created: Pty.Info[] = []
+  const reads: (Pty.ReadInput | undefined)[] = []
+  const state = { text: "", frame: 0 }
+  return {
+    created,
+    reads,
+    layer: Layer.mock(Pty.Service, {
+      create: (input, owner) =>
+        Effect.sync(() => {
+          const info: Pty.Info = {
+            id: PtyID.ascending(),
+            title: input.title ?? "Synthetic terminal",
+            command: input.command ?? "synthetic",
+            args: input.args ?? [],
+            cwd: input.cwd ?? "",
+            status: "running",
+            pid: 0,
+            ...(owner ? { owner } : {}),
+          }
+          created.push(info)
+          return info
+        }),
+      read: (id, input) =>
+        Effect.sync(() => {
+          const info = created.find((item) => item.id === id)
+          if (!info) throw new Error("Synthetic terminal was not created")
+          reads.push(input)
+          const frame = frames[state.frame++]
+          if (frame) {
+            state.text += frame.text
+            if (frame.exitCode !== undefined) {
+              info.status = "exited"
+              info.exitCode = frame.exitCode
+            }
+          }
+          onRead?.(reads.length)
+          const start = input?.cursor ?? 0
+          const output = state.text.slice(start, input?.limit === undefined ? undefined : start + input.limit)
+          return { info, output, start, cursor: start + output.length, end: state.text.length }
+        }),
+    }),
+  }
+}
+
+const withSyntheticPty = <A, E, R>(layer: Layer.Layer<Pty.Service>, body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    return yield* body.pipe(provideInstance(dir), Effect.provide(buildLocationServiceMap([[Pty.node, layer]])))
+  })
+
+describe("tool.terminal open readiness", () => {
+  it.live("waits past a startup banner for delayed readiness in one open call", () => {
+    const pty = syntheticPty([{ text: "Starting\n" }, { text: "" }, { text: "READY\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const asked: Ask[] = []
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY$", timeout: 2000, cursor: 999 },
+          context(asked),
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "running",
+          matched: "pattern",
+          cursor: "Starting\nREADY\n".length,
+        })
+        expect(opened.output).toContain("Starting\nREADY\n")
+        expect(opened.output).toContain("Matched the pattern.")
+        expect(pty.reads).toHaveLength(3)
+        expect(pty.created).toHaveLength(1)
+        expect(pty.created[0].owner).toEqual({ kind: "agent", sessionID: "ses_terminal" })
+        expect(asked.map((ask) => ask.permission)).toEqual(["bash"])
+      }),
+    )
+  })
+
+  it.live("keeps the first-output behavior when open has no readiness pattern", () => {
+    const pty = syntheticPty([{ text: "Starting\n" }, { text: "" }, { text: "READY\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup" }, context())
+        expect(opened.metadata).toMatchObject({ action: "open", status: "running", cursor: "Starting\n".length })
+        expect(opened.metadata.matched).toBeUndefined()
+        expect(opened.output).toContain("Starting")
+        expect(opened.output).not.toContain("READY")
+        expect(pty.reads).toHaveLength(2)
+      }),
+    )
+  })
+
+  it.live("matches readiness across output chunks after cleaning ANSI colors and CRLF", () => {
+    const frames = [{ text: "\x1b[32mREA" }, { text: "DY\x1b[0m\r" }, { text: "\nhttp://localhost:3000\r\n" }]
+    const pty = syntheticPty(frames)
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY\\nhttp://localhost:3000$", timeout: 2000 },
+          context(),
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          status: "running",
+          matched: "pattern",
+          cursor: frames.map((frame) => frame.text).join("").length,
+        })
+        expect(opened.output).toContain("READY\nhttp://localhost:3000\n")
+        expect(opened.output).not.toContain("\x1b")
+        expect(opened.output).not.toContain("\r")
+        expect(pty.reads).toHaveLength(3)
+      }),
+    )
+  })
+
+  it.live("reports an early nonzero exit without claiming readiness", () => {
+    const pty = syntheticPty([{ text: "Startup failed\n", exitCode: 7 }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup", pattern: "^READY$" }, context())
+        expect(opened.metadata).toMatchObject({ action: "open", status: "exited", exitCode: 7, matched: "exit" })
+        expect(opened.output).toContain("Startup failed")
+        expect(opened.output).toContain("exited with code 7")
+        expect(opened.output).not.toContain("Matched the pattern.")
+      }),
+    )
+  })
+
+  it.live("retains a nonzero exit when the same output frame also matches readiness", () => {
+    const pty = syntheticPty([{ text: "READY\n", exitCode: 7 }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup", pattern: "^READY$" }, context())
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "exited",
+          exitCode: 7,
+          matched: "pattern",
+          cursor: "READY\n".length,
+        })
+        expect(opened.output).toContain("Matched the pattern.")
+        expect(opened.output).toContain("exited with code 7")
+      }),
+    )
+  })
+
+  it.live("treats an invalid readiness regex as literal text", () => {
+    const pty = syntheticPty([{ text: "Listening a(b\r\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup", pattern: "a(b" }, context())
+        expect(opened.metadata).toMatchObject({ action: "open", status: "running", matched: "pattern" })
+        expect(opened.output).toContain("Listening a(b\n")
+      }),
+    )
+  })
+
+  it.live("returns a running terminal and cursor when readiness times out", () => {
+    const pty = syntheticPty([{ text: "Starting\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY$", timeout: 100 },
+          context(),
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "running",
+          cursor: "Starting\n".length,
+          matched: "timeout",
+        })
+        expect(opened.output).toContain("Gave up after 100 ms.")
+        expect(opened.output).toContain("Starting")
+      }),
+    )
+  })
+
+  it.live("stops readiness waiting on abort while retaining the terminal's actual status", () => {
+    const abort = new AbortController()
+    const pty = syntheticPty([{ text: "Starting\n" }], (count) => {
+      if (count === 2) abort.abort()
+    })
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY$", timeout: 2000 },
+          { ...context(), abort: abort.signal },
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "running",
+          cursor: "Starting\n".length,
+        })
+        expect(opened.metadata.matched).toBeUndefined()
+        expect(opened.output).toContain("Stopped waiting: the call was aborted.")
+        expect(pty.reads).toHaveLength(2)
+      }),
+    )
+  })
+
+  it.live("creates no terminal when permission for a readiness open is denied", () => {
+    const pty = syntheticPty([{ text: "READY\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const refused = yield* tool
+          .execute(
+            { action: "open", command: "echo startup", pattern: "^READY$" },
+            context([], { reject: (ask) => ask.permission === "bash" }),
+          )
+          .pipe(Effect.exit)
+        expect(failure(refused)).toContain("rejected bash")
+        expect(pty.created).toEqual([])
+        expect(pty.reads).toEqual([])
+      }),
+    )
+  })
+})
 
 describe("tool.terminal", () => {
   ptyTest("opens a command line through the configured shell, as the shell tool runs it", () =>
@@ -382,7 +625,7 @@ describe("tool.terminal", () => {
 })
 
 describe("tool.terminal permissions", () => {
-  ptyTest("own terminals ask nothing to resize or close; the user's and other sessions' ask under other:<id>", () =>
+  ptyTest("own terminals ask nothing to read or close; the user's and other sessions' ask under other:<id>", () =>
     project(({ pty }) =>
       Effect.gen(function* () {
         const tool = yield* init()
@@ -397,6 +640,8 @@ describe("tool.terminal permissions", () => {
         )
 
         const asked: Ask[] = []
+        yield* tool.execute({ action: "read", id: own.metadata.id }, context(asked))
+        yield* tool.execute({ action: "wait", id: own.metadata.id, quiet: 1 }, context(asked))
         const clamped = yield* tool.execute(
           { action: "resize", id: own.metadata.id, cols: 10, rows: 1000 },
           context(asked),
@@ -406,6 +651,8 @@ describe("tool.terminal permissions", () => {
         expect(half.output).toBe("resize needs both cols and rows.")
         expect(asked).toEqual([])
         for (const id of [user.id, other.id]) {
+          yield* tool.execute({ action: "read", id }, context(asked))
+          yield* tool.execute({ action: "wait", id, quiet: 1 }, context(asked))
           const resized = yield* tool.execute({ action: "resize", id, cols: 120, rows: 40 }, context(asked))
           expect(resized.output).toBe(`Resized ${id} to 120 columns and 40 rows.`)
           yield* tool.execute({ action: "type", id, text: "x" }, context(asked))
@@ -413,6 +660,8 @@ describe("tool.terminal permissions", () => {
         }
         expect(asked.map((ask) => [ask.permission, ask.patterns, ask.always])).toEqual(
           [user.id, other.id].flatMap((id) => [
+            ["terminal", [`other:${id}`], [`other:${id}`]],
+            ["terminal", [`other:${id}`], [`other:${id}`]],
             ["terminal", [`other:${id}`], [`other:${id}`]],
             ["terminal_input", [`other:${id}`], [`other:${id}`]],
             ["terminal", [`other:${id}`], [`other:${id}`]],
@@ -432,6 +681,80 @@ describe("tool.terminal permissions", () => {
     ),
   )
 
+  ptyTest("a refused read of the user's terminal shows none of its output", () =>
+    project(({ pty }) =>
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const user = yield* pty.create(bun(`console.log("the-users-secret"); ${IDLE}`))
+        const asked: Ask[] = []
+        const reject = (ask: Ask) => ask.permission === "terminal"
+        for (const params of [
+          { action: "read" as const, id: user.id },
+          { action: "wait" as const, id: user.id, pattern: "the-users-secret" },
+        ]) {
+          const exit = yield* tool.execute(params, context(asked, { reject })).pipe(Effect.exit)
+          expect(failure(exit)).toContain("rejected terminal")
+        }
+        expect(asked).toEqual([
+          expect.objectContaining({
+            permission: "terminal",
+            metadata: { action: "read", id: user.id, title: user.title },
+          }),
+          expect.objectContaining({
+            permission: "terminal",
+            metadata: { action: "wait", id: user.id, title: user.title },
+          }),
+        ])
+      }),
+    ),
+  )
+
+  ptyTest(
+    "in a session a guest acted in, only the agent's own terminals are listed or used, and nothing is asked",
+    () =>
+      project(({ pty }) =>
+        Effect.gen(function* () {
+          const guests = yield* FreeModelGuests.Service
+          yield* guests.mark(SessionID.make("ses_guest"))
+          const tool = yield* init()
+          const user = yield* pty.create({ ...bun(`console.log("the-users-secret"); ${IDLE}`), title: "claude" })
+          const other = yield* pty.create(bun(IDLE), { kind: "agent", sessionID: "ses_other" })
+          const asked: Ask[] = []
+          const guested = () => context(asked, { sessionID: "ses_guest" })
+          const own = yield* tool.execute(
+            { action: "open", ...bun(IDLE), title: "mine" },
+            context([], { sessionID: "ses_guest" }),
+          )
+          const listed = (yield* tool.execute({ action: "list" }, guested())).output
+          expect(listed).toContain(`Terminal ${own.metadata.id} "mine"`)
+          expect(listed).not.toContain(user.id)
+          expect(listed).not.toContain("claude")
+          expect(listed).not.toContain(other.id)
+          for (const id of [user.id, other.id])
+            for (const params of [
+              { action: "read" as const, id },
+              { action: "wait" as const, id, pattern: "the-users-secret" },
+              { action: "type" as const, id, text: "hello", enter: true },
+              { action: "keys" as const, id, keys: ["ctrl-c" as const] },
+              { action: "resize" as const, id, cols: 100, rows: 30 },
+              { action: "reveal" as const, id },
+              { action: "close" as const, id },
+            ]) {
+              const result = yield* tool.execute(params, guested())
+              expect(result.output).toContain("an invited guest has acted in")
+              expect(result.output).not.toContain("the-users-secret")
+            }
+          expect(asked).toEqual([])
+          expect((yield* pty.list()).map((info) => info.id)).toEqual(expect.arrayContaining([user.id, other.id]))
+          // The agent's own terminals work as before there.
+          const read = yield* tool.execute({ action: "read", id: own.metadata.id }, guested())
+          expect(read.output).toContain("yours")
+          // The user's own sessions still list every terminal.
+          expect((yield* tool.execute({ action: "list" }, context())).output).toContain(user.id)
+        }),
+      ),
+  )
+
   ptyTest("a submitted line is asked as the shell command it is, before anything is written", () =>
     project(({ directory, worktree }) =>
       Effect.gen(function* () {
@@ -445,8 +768,11 @@ describe("tool.terminal permissions", () => {
           ["terminal_input", [`own:${id}`]],
           ["bash", ["echo hello"]],
         ])
+        // The ask carries what would be typed, so the prompt can show it.
+        expect(asked[0].metadata).toEqual({ id, title: opened.metadata.title, text: "echo hello\ncat .env /etc/hosts" })
         asked.length = 0
         yield* tool.execute({ action: "keys", id, keys: ["enter"] }, context(asked))
+        expect(asked[0].metadata).toEqual({ id, title: opened.metadata.title, keys: ["enter"] })
         expect(asked.map((ask) => [ask.permission, ask.patterns])).toEqual([
           ["terminal_input", [`own:${id}`]],
           ["external_directory", [path.join("/etc", "*")]],
@@ -464,6 +790,7 @@ describe("tool.terminal permissions", () => {
           .pipe(Effect.exit)
         expect(failure(cloud)).toContain("rejected vector_cloud_publish")
         expect(asked.map((ask) => ask.permission)).toEqual(["terminal_input", "bash", "vector_cloud_publish"])
+        expect(asked[0].metadata).toMatchObject({ text: "vercel --prod", enter: true })
         expect(asked[2].patterns).toEqual([`vercel/${path.basename(directory)}/production/shell deploy`])
         const read = yield* tool.execute({ action: "read", id, cursor: ready.metadata.cursor }, context())
         expect(bytes(read.output)).toEqual(

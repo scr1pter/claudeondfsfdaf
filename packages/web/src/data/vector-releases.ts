@@ -21,11 +21,11 @@ export const upcomingRelease = {
 // The desktop release the download page offers today. Not every entry in release199 was published as a
 // desktop or npm release (1.99.9 has notes but no installers), so the releases page marks this one Latest.
 // Update it in the same change that publishes the next desktop installers.
-export const publishedDesktopVersion = "1.99.110"
+export const publishedDesktopVersion = "1.99.112"
 
 // Vector Brain arrives in desktop 1.99.110. The site deploys from main, so until the download page offers that release
-// the landing page and the investor page say it is coming in it, and from then on that it is new in it. README.md
-// cannot read this, so test/brain-docs.test.ts holds its wording to the same version.
+// the landing page and the investor page say it is coming in it, and from then on that it is new in it. The readme and
+// heading labels are for README.md, which has had no section on the brain since 24 October 2026.
 export function brainCopy(published: string) {
   const [major = 0, minor = 0, patch = 0] = published.split(".").map(Number)
   if (major > 1 || (major === 1 && (minor > 99 || (minor === 99 && patch >= 110))))
@@ -62,6 +62,32 @@ export function release111Copy(published: string) {
 }
 
 export const release111 = release111Copy(publishedDesktopVersion)
+
+// What desktop 1.99.112 changes in the docs, said as coming until the download page offers it.
+export const release112Version = "1.99.112"
+
+export function release112Copy(published: string) {
+  const [major = 0, minor = 0, patch = 0] = published.split(".").map(Number)
+  if (major > 1 || (major === 1 && (minor > 99 || (minor === 99 && patch >= 112))))
+    return { since: "From desktop 1.99.112:", stage: "Desktop 1.99.112", shipped: true }
+  return { since: "Coming in desktop 1.99.112:", stage: "Coming in 1.99.112", shipped: false }
+}
+
+export const release112 = release112Copy(publishedDesktopVersion)
+
+// Learned skills, workflow insights and the prompt guard arrive in desktop 1.99.113. Their docs say they are coming in it
+// until the download page offers it, and from then on that they are in it. test/release-113-docs.test.ts holds the
+// pages to this.
+export const release113Version = "1.99.113"
+
+export function release113Copy(published: string) {
+  const [major = 0, minor = 0, patch = 0] = published.split(".").map(Number)
+  if (major > 1 || (major === 1 && (minor > 99 || (minor === 99 && patch >= 113))))
+    return { since: "From desktop 1.99.113:", stage: "Desktop 1.99.113", shipped: true }
+  return { since: "Coming in desktop 1.99.113:", stage: "Coming in 1.99.113", shipped: false }
+}
+
+export const release113 = release113Copy(publishedDesktopVersion)
 
 export const releaseSeries: VectorRelease[] = [
   {
@@ -728,5 +754,11 @@ export const release199: VectorRelease[] = [
     title: "Deep research preview, Vector Local, and new model choices",
     summary:
       "Deep research arrives in preview with editable plans, Focused and Deep modes, isolated research browsers, and reports linked to source quotes. It makes no code changes. Research searches in each agent's own browser, with a fallback when search is blocked, and does not solve CAPTCHAs, disguise the browser or rotate addresses. Vector Local adds desktop controls for the model servers you choose, web access, and an origin-based request log. It is a policy inside Vector, not a firewall; programs the agent starts have separate network behavior, and Windows has no shell sandbox. Settings → Memory → About you makes learned preferences editable and undoable, and more Vector agents can use relevant preferences. Host locally keeps installed coding agents under the owner's control, with up to four running at once, explicit Try a fix actions, and exclusions from background work, learning, training and benchmark exports. The model picker separates free models provided by Vector from your own provider choices, with your own OpenRouter free copies under OpenRouter and labelled (free). Eligible new free models join the daily refresh, with training-policy consent and US only tags where applicable. The Codium catalog and pricing page now feature DeepSeek V4.1 Flash 1017, Claude Haiku 5.5, GPT-6 Luna, Kimi K3.1 Pro, and Gemini 4 Argon; DeepSeek is listed first and is the default, and Kimi and Gemini use credits faster. Model download notices clear when the model is ready. The required CLI remains 1.99.99; desktop connections to older engines explain which newer features are unavailable, and Vector Local prevents an older WSL engine from starting. This release is not yet code-signed, so a new install may show an operating-system warning on first launch.",
+  },
+  {
+    version: "1.99.112",
+    title: "Agent terminals and browser controls, research cleanup, and first-launch help",
+    summary:
+      "The agent can manage its own terminals and browser tabs, with terminal activity visible in Vector. Asking Vector to save or keep completed research uses Keep in brain, and erasing memory also forgets Deep research runs. Vector Local explains which information it could not read and lets you try again. On macOS, Vector reads its stored credential from Keychain once per launch. A first-launch guide helps new users get started, Settings stays open when the shell list is unavailable, and keyboard shortcuts and the shell picker are available in Settings. Website privacy and account handling are updated. The required CLI remains 1.99.99, so terminal and older WSL engine features still require a separately published CLI. Deep research remains a preview. This release is not yet code-signed, so a new install may show an operating-system warning on first launch.",
   },
 ]

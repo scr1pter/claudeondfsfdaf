@@ -22,6 +22,10 @@ export function parameterSchema() {
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),
+    background: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Run without waiting. Vector notifies you when the command exits; read its output file with read and stop it with task_manage stop. Main agent only.",
+    }),
   })
 }
 

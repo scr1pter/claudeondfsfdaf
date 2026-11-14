@@ -1,0 +1,407 @@
+{
+  "row": "governing",
+  "description": "Two paid subscriptions: the higher rank governs and the other is a duplicate for the owner.",
+  "apiVersion": "2025-02-24.acacia",
+  "accountId": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+  "now": 1790985600,
+  "account": {
+    "customer": "cus_CodiumFixture01"
+  },
+  "objects": {
+    "customers": [
+      {
+        "id": "cus_CodiumFixture01",
+        "object": "customer",
+        "created": 1788220200,
+        "email": null,
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90"
+        }
+      }
+    ],
+    "subscriptions": [
+      {
+        "id": "sub_twoPlus",
+        "object": "subscription",
+        "billing_cycle_anchor": 1788220800,
+        "cancel_at": null,
+        "cancel_at_period_end": false,
+        "canceled_at": null,
+        "collection_method": "charge_automatically",
+        "created": 1788220800,
+        "currency": "usd",
+        "current_period_end": 1793404800,
+        "current_period_start": 1790812800,
+        "customer": "cus_CodiumFixture01",
+        "ended_at": null,
+        "items": {
+          "object": "list",
+          "data": [
+            {
+              "id": "si_twoPlus",
+              "object": "subscription_item",
+              "created": 1788220800,
+              "metadata": {},
+              "price": {
+                "id": "price_codium10",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-10-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium10",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 1000,
+                "unit_amount_decimal": "1000"
+              },
+              "quantity": 1,
+              "subscription": "sub_twoPlus"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/subscription_items?subscription=sub_twoPlus"
+        },
+        "latest_invoice": "in_twoPlus",
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+          "vector_plan": "vector-10",
+          "vector_model_credits_usd": "4"
+        },
+        "pause_collection": null,
+        "schedule": null,
+        "start_date": 1788220800,
+        "status": "active"
+      },
+      {
+        "id": "sub_twoMax",
+        "object": "subscription",
+        "billing_cycle_anchor": 1790899200,
+        "cancel_at": null,
+        "cancel_at_period_end": false,
+        "canceled_at": null,
+        "collection_method": "charge_automatically",
+        "created": 1790899200,
+        "currency": "usd",
+        "current_period_end": 1793491200,
+        "current_period_start": 1790899200,
+        "customer": "cus_CodiumFixture01",
+        "ended_at": null,
+        "items": {
+          "object": "list",
+          "data": [
+            {
+              "id": "si_twoMax",
+              "object": "subscription_item",
+              "created": 1790899200,
+              "metadata": {},
+              "price": {
+                "id": "price_codium100",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-100-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium100",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 10000,
+                "unit_amount_decimal": "10000"
+              },
+              "quantity": 1,
+              "subscription": "sub_twoMax"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/subscription_items?subscription=sub_twoMax"
+        },
+        "latest_invoice": "in_twoMax",
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+          "vector_plan": "vector-100",
+          "vector_model_credits_usd": "48"
+        },
+        "pause_collection": null,
+        "schedule": null,
+        "start_date": 1790899200,
+        "status": "active"
+      }
+    ],
+    "invoices": [
+      {
+        "id": "in_twoPlus",
+        "object": "invoice",
+        "amount_due": 1000,
+        "amount_paid": 1000,
+        "amount_remaining": 0,
+        "attempt_count": 1,
+        "attempted": true,
+        "billing_reason": "subscription_cycle",
+        "charge": "ch_twoPlus",
+        "collection_method": "charge_automatically",
+        "created": 1790812800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_fixture/in_twoPlus",
+        "lines": {
+          "object": "list",
+          "data": [
+            {
+              "id": "il_twoPlus",
+              "object": "line_item",
+              "amount": 1000,
+              "currency": "usd",
+              "period": {
+                "start": 1790812800,
+                "end": 1793404800
+              },
+              "price": {
+                "id": "price_codium10",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-10-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium10",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 1000,
+                "unit_amount_decimal": "1000"
+              },
+              "proration": false,
+              "quantity": 1,
+              "subscription": "sub_twoPlus",
+              "type": "subscription"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/invoices/in_twoPlus/lines"
+        },
+        "livemode": false,
+        "paid": true,
+        "payment_intent": "pi_twoPlus",
+        "period_start": 1788220800,
+        "period_end": 1790812800,
+        "status": "paid",
+        "status_transitions": {
+          "finalized_at": 1790816400,
+          "marked_uncollectible_at": null,
+          "paid_at": 1790816400,
+          "voided_at": null
+        },
+        "subscription": "sub_twoPlus"
+      },
+      {
+        "id": "in_twoMax",
+        "object": "invoice",
+        "amount_due": 10000,
+        "amount_paid": 10000,
+        "amount_remaining": 0,
+        "attempt_count": 1,
+        "attempted": true,
+        "billing_reason": "subscription_create",
+        "charge": "ch_twoMax",
+        "collection_method": "charge_automatically",
+        "created": 1790899200,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_fixture/in_twoMax",
+        "lines": {
+          "object": "list",
+          "data": [
+            {
+              "id": "il_twoMax",
+              "object": "line_item",
+              "amount": 10000,
+              "currency": "usd",
+              "period": {
+                "start": 1790899200,
+                "end": 1793491200
+              },
+              "price": {
+                "id": "price_codium100",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-100-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium100",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 10000,
+                "unit_amount_decimal": "10000"
+              },
+              "proration": false,
+              "quantity": 1,
+              "subscription": "sub_twoMax",
+              "type": "subscription"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/invoices/in_twoMax/lines"
+        },
+        "livemode": false,
+        "paid": true,
+        "payment_intent": "pi_twoMax",
+        "period_start": 1790899200,
+        "period_end": 1790899200,
+        "status": "paid",
+        "status_transitions": {
+          "finalized_at": 1790902800,
+          "marked_uncollectible_at": null,
+          "paid_at": 1790902800,
+          "voided_at": null
+        },
+        "subscription": "sub_twoMax"
+      }
+    ],
+    "payment_intents": [
+      {
+        "id": "pi_twoPlus",
+        "object": "payment_intent",
+        "amount": 1000,
+        "created": 1790812800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "invoice": "in_twoPlus",
+        "latest_charge": "ch_twoPlus",
+        "livemode": false,
+        "status": "succeeded"
+      },
+      {
+        "id": "pi_twoMax",
+        "object": "payment_intent",
+        "amount": 10000,
+        "created": 1790899200,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "invoice": "in_twoMax",
+        "latest_charge": "ch_twoMax",
+        "livemode": false,
+        "status": "succeeded"
+      }
+    ],
+    "charges": [
+      {
+        "id": "ch_twoPlus",
+        "object": "charge",
+        "amount": 1000,
+        "amount_captured": 1000,
+        "amount_refunded": 0,
+        "balance_transaction": "txn_twoPlus",
+        "captured": true,
+        "created": 1790816400,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "disputed": false,
+        "invoice": "in_twoPlus",
+        "livemode": false,
+        "metadata": {},
+        "outcome": {
+          "network_status": "approved_by_network",
+          "risk_level": "normal",
+          "seller_message": "Payment complete.",
+          "type": "authorized"
+        },
+        "paid": true,
+        "payment_intent": "pi_twoPlus",
+        "refunded": false,
+        "status": "succeeded",
+        "payment_method_details": {
+          "card": {
+            "three_d_secure": {
+              "result": "authenticated"
+            }
+          }
+        }
+      },
+      {
+        "id": "ch_twoMax",
+        "object": "charge",
+        "amount": 10000,
+        "amount_captured": 10000,
+        "amount_refunded": 0,
+        "balance_transaction": "txn_twoMax",
+        "captured": true,
+        "created": 1790902800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "disputed": false,
+        "invoice": "in_twoMax",
+        "livemode": false,
+        "metadata": {},
+        "outcome": {
+          "network_status": "approved_by_network",
+          "risk_level": "normal",
+          "seller_message": "Payment complete.",
+          "type": "authorized"
+        },
+        "paid": true,
+        "payment_intent": "pi_twoMax",
+        "refunded": false,
+        "status": "succeeded",
+        "payment_method_details": {
+          "card": {
+            "three_d_secure": {
+              "result": "authenticated"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "state": "active",
+    "plan": "vector-100",
+    "subscription": "sub_twoMax",
+    "periodStart": 1790899200,
+    "periodEnd": 1793491200,
+    "key": "created",
+    "duplicates": [
+      "sub_twoPlus"
+    ]
+  }
+}

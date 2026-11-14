@@ -43,23 +43,36 @@ describe("Task background affordance", () => {
 
   test("does not offer multi-item promotion before any child launches", () => {
     expect(canBackgroundTask(task({ tasks: [{ description: "CSV" }, { description: "JSON" }] }, {}))).toBe(false)
+    expect(canBackgroundTask(task({ tasks: [{ description: "CSV" }, { description: "JSON" }] }, {}), true)).toBe(false)
   })
 
-  test("does not offer multi-item promotion with trimmed input or a completed sibling", () => {
-    expect(
-      canBackgroundTask(
-        task(
-          {},
-          {
-            taskBatch: 1,
-            tasks: [
-              { index: 0, status: "completed", sessionId: "ses_csv" },
-              { index: 1, status: "running", sessionId: "ses_json" },
-            ],
-          },
-        ),
-      ),
-    ).toBe(false)
+  test("a multi-item batch is promotable with taskPromote while any entry runs in the foreground", () => {
+    const batch = task(
+      {},
+      {
+        taskBatch: 1,
+        tasks: [
+          { index: 0, status: "completed", sessionId: "ses_csv" },
+          { index: 1, status: "running", sessionId: "ses_json" },
+        ],
+      },
+    )
+    // An engine without taskPromote moves only a single subagent, so the batch keeps no Ctrl+B there.
+    expect(canBackgroundTask(batch)).toBe(false)
+    expect(canBackgroundTask(batch, true)).toBe(true)
+    const moved = task(
+      {},
+      {
+        taskBatch: 1,
+        tasks: [
+          { index: 0, status: "running", sessionId: "ses_csv", background: true },
+          { index: 1, status: "queued", sessionId: "ses_json" },
+          { index: 2, status: "completed", sessionId: "ses_xml" },
+        ],
+      },
+    )
+    // Every running entry is already in the background, and a queued one is not running yet.
+    expect(canBackgroundTask(moved, true)).toBe(false)
   })
 
   test("retains promotion for a running one-item array and removes it after promotion", () => {
@@ -100,5 +113,6 @@ describe("Task background affordance", () => {
       time: { start: 1, end: 2 },
     }
     expect(canBackgroundTask(part)).toBe(false)
+    expect(canBackgroundTask(part, true)).toBe(false)
   })
 })

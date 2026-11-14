@@ -292,9 +292,11 @@ export function createWorkspaceTerminalSession(
     return sdk.client.pty
       .list()
       .then((result) => {
-        if (!result.data) return
-        result.data.forEach(adopt)
-        const live = new Set(result.data.map((info) => info.id))
+        // Only a list says which terminals the server has. Any other answer says nothing, so no tab is judged by it.
+        const list = Array.isArray(result.data) ? result.data : undefined
+        if (!list) return
+        list.forEach(adopt)
+        const live = new Set(list.map((info) => info.id))
         store.all.forEach((pty, index) => {
           if (pty.agent === undefined || pty.exitCode !== undefined || pty.gone) return
           if (live.has(pty.id) || !before.has(pty.id)) return

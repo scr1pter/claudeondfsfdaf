@@ -25,8 +25,9 @@ test("the desktop app docs describe today's Settings, not the removed pages", as
     "Vector has one look, its own dark theme, and shows its interface in your computer's language.",
   )
   expect(text).toContain("Vector Tab")
-  // Codium shows shares of credits, never amounts.
-  expect(text).toContain("the share of this month's credits left")
+  // Codium shows a share of the month, never amounts, credits or top-ups (A29).
+  expect(text).toContain("your Vector Codium plan with how much of this month is left, as a percentage")
+  expect(text).not.toMatch(/credits|top-?ups?|purchased/i)
   for (const removed of [
     "Appearance",
     "colour scheme",
@@ -38,6 +39,19 @@ test("the desktop app docs describe today's Settings, not the removed pages", as
   ])
     expect(text).not.toContain(removed)
   expect(text).not.toMatch(/project/i)
+})
+
+test("the desktop app docs say where shortcuts and the terminal shell are changed", async () => {
+  // Both were only in the old settings dialog, which the app no longer opens.
+  expect(await section("desktop-app", "workspace-rail")).toContain(
+    "Shortcuts are editable in Settings → Keyboard shortcuts, which can also reset them to their defaults.",
+  )
+  const text = await section("desktop-app", "settings")
+  expect(text).toContain("Keyboard shortcuts")
+  expect(text).toContain("Backspace or Delete clears it, Escape cancels")
+  expect(text).toContain("Reset to defaults puts every shortcut back")
+  expect(text).toContain("General also has a Terminal card with the Terminal Shell picker, Auto by default")
+  expect(text).toContain("unless the picker marks it terminal only")
 })
 
 test("repository rules live in .vector/RULES.md, with no Project rules screen to open", async () => {
@@ -66,4 +80,36 @@ test("the old settings-appearance and project-rules links still land on a headin
     const [name, anchor] = target.split("#")
     expect(await page(name)).toContain(`<h2 id="${anchor}">`)
   }
+})
+
+test("the desktop app docs describe Settings → General → While Vector works in the app's own words", async () => {
+  const en = await Bun.file(new URL("../../app/src/i18n/en.ts", import.meta.url)).text()
+  const string = (key: string) => {
+    const found = en.match(new RegExp(`"${key.replaceAll(".", "\\.")}":\\s*"((?:[^"\\\\]|\\\\.)*)"`))
+    if (!found) throw new Error(`${key} is not a string in en.ts`)
+    return String(JSON.parse(`"${found[1]}"`))
+  }
+  const text = await section("desktop-app", "settings")
+  // The card is new in 1.99.113, so its paragraph carries the release label.
+  expect(text).toContain("{release113.since} General also has a While Vector works card")
+  for (const key of [
+    "settings.general.section.whileWorking.title",
+    "settings.general.row.followup.title",
+    "settings.general.row.followup.option.steer",
+    "settings.general.row.followup.option.queue",
+    "settings.general.row.stopScope.title",
+    "settings.general.row.stopScope.option.turn",
+    "settings.general.row.stopScope.option.all",
+  ])
+    expect([key, text.includes(string(key))]).toEqual([key, true])
+  expect(string("settings.general.section.whileWorking.description")).toContain("These apply on this device only.")
+  expect(text).toContain("applies on this device only")
+  expect(string("settings.general.row.followup.description")).toContain(
+    "Alt+Enter (Option+Enter on a Mac) does the other for one message; slash commands and shell input always queue.",
+  )
+  expect(text).toContain(
+    "Alt+Enter (Option+Enter on a Mac) does the other for one message, and slash commands and shell input always queue.",
+  )
+  expect(text).toContain("chooses what Stop, Esc and Ctrl+G stop")
+  expect(string("settings.general.row.stopScope.description")).toContain("What Stop, Esc and Ctrl+G stop.")
 })

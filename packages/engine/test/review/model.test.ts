@@ -52,6 +52,8 @@ const MODELS = [
   model("vector/acme/coder:free"),
   model("openrouter/acme/coder:free"),
   model("tiny/small", { context: 16_000, input: 1, output: 1 }),
+  model("vector-plan/vector-flash"),
+  model("vector-plan/vendor/coder", { input: 3, output: 15 }),
 ]
 
 interface Setup {
@@ -208,6 +210,25 @@ describe("ReviewModel.resolveReviewModel cost", () => {
       const local = yield* resolve({ trigger: "command", env: { MODEL: "ollama/qwen" } })
       expect(local.costKind).toBe("local")
       expect(local.price).toBeUndefined()
+    }),
+  )
+
+  // Label plan §4.3 and C11: the review token stop and the Codium wording both read this kind.
+  it.effect("a Vector Codium model is Codium whatever its listed price or sign-in", () =>
+    Effect.gen(function* () {
+      const workflow = yield* resolve({ trigger: "command", env: { MODEL: "vector-plan/vector-flash" } })
+      expect(workflow.costKind).toBe("codium")
+      expect(workflow.price).toBeUndefined()
+
+      // A catalog price never makes Codium work a dollar review: no price, so no dollar cap and no estimate.
+      const listed = yield* resolve({ trigger: "local", flag: "vector-plan/vendor/coder" })
+      expect(listed.costKind).toBe("codium")
+      expect(listed.price).toBeUndefined()
+
+      // review.json's triageModel, resolved as `exact`, with an OAuth sign-in stored for the provider.
+      const triage = yield* resolve({ trigger: "local", exact: "vector-plan/vector-flash" }, { oauth: ["vector-plan"] })
+      expect(triage.costKind).toBe("codium")
+      expect(triage.price).toBeUndefined()
     }),
   )
 })

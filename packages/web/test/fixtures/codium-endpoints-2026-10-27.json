@@ -1,0 +1,19 @@
+{
+  "targetDate": "2026-10-27",
+  "capturedAt": "2026-10-23",
+  "snapshot": "codium-endpoints-2026-10-23.json",
+  "snapshotSha256": "3c37e89169bc4ccb0a4792f5bbb65ce97340731fcf1dcf6018ee95d7805889e0",
+  "providerEfforts": [],
+  "unverified": [
+    "The October 27 date identifies the owner contract target, not a new provider capture. Only the unchanged October 23 five-model /models and /endpoints/zdr snapshot is available here.",
+    "openai/gpt-6.1-terra: no captured raw model or azure/eu ZDR endpoint record establishes context, output limit, regional prompt/completion/cache prices or provider-specific effort support.",
+    "openai/gpt-6.1-sol, including :deep and :deepest: no captured raw model or azure ZDR endpoint record establishes the selected route's limits, regional prices, cache-write ceilings or exact effort support. Generic fork metadata does not verify an Azure route.",
+    "anthropic/claude-sonnet-5.5: no captured raw model or amazon-bedrock/google-vertex regional ZDR endpoint records verify the proposed provider tags, limits or regional prompt/completion/cache-write ceilings.",
+    "openai/gpt-6-astra, including :long: no captured raw model or azure/azure/us ZDR endpoint records verify the proposed routes, limits, prices or prompt-price threshold. The release-week ZDR recheck remains outstanding.",
+    "anthropic/claude-opus-5.5: no captured raw model or amazon-bedrock/google-vertex regional ZDR endpoint records verify the proposed provider tags, limits or regional prompt/completion/cache-write ceilings.",
+    "moonshotai/kimi-k3.1-pro:fast and google/gemini-4-argon:fast: the October 23 snapshot does not contain moonshotai/highspeed or google-vertex/global/priority. Their exact ZDR tags, limits and higher prices remain uncaptured.",
+    "Pinned xhigh/max, especially Sol Deep and Sol Deepest on Azure, require separate explicit exact-model/provider effort evidence and approved acceptance. A generic reasoning parameter or model-level effort list is insufficient; providerEfforts intentionally remains empty.",
+    "OpenRouter acceptance of exact provider.only endpoint tags together with zdr:true and allow_fallbacks:false has not been exercised. Captured endpoint metadata alone does not establish request acceptance.",
+    "The 768000-token tier contexts are staged contract limits. Their request body must pass the 4.5 MB gateway limit and 600-second deployment deadline in the approved acceptance environment; otherwise the contract's 512K launch fallback applies. No such deployment acceptance was run."
+  ]
+}

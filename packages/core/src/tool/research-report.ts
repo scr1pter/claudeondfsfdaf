@@ -83,7 +83,9 @@ const layer = Layer.effectDiscard(
               const found = yield* research.current(context)
               if ("refused" in found) return { text: found.refused, metadata: {} }
               // A child session shares its root's run, whose spend is not the research's alone.
-              const spent = found.lead.parentID ? undefined : (yield* guard.snapshot(context.sessionID))?.spentUsd
+              const spend = found.lead.parentID
+                ? undefined
+                : SpendGuard.reportSpend(yield* guard.snapshot(context.sessionID))
               const saved = yield* store.report(
                 found.place,
                 found.run.id,
@@ -103,7 +105,7 @@ const layer = Layer.effectDiscard(
                   judged: found.detail.notes.some(
                     (note) => note.verdict !== undefined && note.verdict !== "not-judged",
                   ),
-                  ...(spent ? { spend: `${SpendGuard.formatUsd(spent)} at list prices` } : {}),
+                  ...(spend ? { spend } : {}),
                   seconds: Math.round((Date.now() - found.run.created_at) / 1000),
                 },
               )

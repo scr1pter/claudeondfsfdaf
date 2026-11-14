@@ -64,12 +64,16 @@ benchmark.describe("performance: first navigation paint", () => {
     const result = await measureFirstNavigation(page, {
       href,
       trigger: "click",
+      clickSelector: 'button[aria-label^="Inspect child navigation"]',
       destinationPath: href,
       sourceSelector: messageSelector(fixture.expected.sourceMessageIDs.at(-1)!),
       destinationSelector: messageSelector(fixture.expected.childMessageIDs.at(-1)!),
       contentSelector,
       navigate: async () => {
-        await page.locator(`a[href="${href}"]`, { has: page.locator('[data-component="task-tool-card"]') }).click()
+        // Task parts now render as phase chips; modifier-click opens a single agent's child session.
+        await page
+          .getByRole("button", { name: /Inspect child navigation.*Show in Background tasks/ })
+          .click({ modifiers: ["ControlOrMeta"] })
         await expectSessionTitle(page, fixture.expected.childTitle)
       },
     })

@@ -1,0 +1,48 @@
+{
+  "kind": "additional-20-funding-v6-free-validation",
+  "date": "2026-11-04",
+  "baseRevision": "aef258212e5e320eb2e0ceed6432473d97997b93",
+  "runtimeSourceSha256": "0afcb8139970af470a19f90b9a67114c822200bdaeedb8fe54bca8a9f7084df7",
+  "tests": {
+    "command": "python -B -m unittest test_budget_gateway_v6 -q",
+    "methodsPassed": 34,
+    "failed": 0,
+    "skipped": 0,
+    "exitCode": 0,
+    "pureSyntheticJournals": true,
+    "temporaryOwnedLoopbackStartupControls": 3
+  },
+  "realHistoricalReadOnlyAudit": {
+    "verifiedHistoricalPrices": 1339,
+    "unmatchedHistoricalAdmissions": 1,
+    "retainedHistoricalLiabilityUsd": 5.73,
+    "unchangedV3StillRejectsUnmatchedAdmission": true,
+    "actualBudgetConstructed": false,
+    "actualPlacementCreated": false,
+    "credentialsRead": false,
+    "oldFinancialFilesChanged": false
+  },
+  "providerCalls": 0,
+  "BunRuns": 0,
+  "browserActions": 0,
+  "productionPaidRunStarted": false,
+  "unknownOldReceiptCreated": false,
+  "additionalRoundHardCapUsd": 20,
+  "cumulativeUpperExposureLimitUsd": 55.309095,
+  "perActorAllowancesAreSharedUnderCentralRoundCap": true,
+  "imageReservationBoundUsd": 5.73,
+  "phasePlanCompactSha256": "b91f3cfdd0738299f44ffa23e9a8850ca5751665a521859cf5c1fc2507ee0d5d",
+  "phasePlanRawSha256": "19ee7dbe02ff9e5d3ab2d8e41c1da1f738d1977f879a4a4be284947c793b1255",
+  "reviewCorrections": [
+    "Exact root plan schema and distinct raw/compact algorithms",
+    "Single fixed placement prevents alternative empty-ledger allowance",
+    "Initialized financial inventory rejects deletion reset with retained anchors",
+    "Initial snapshot failure blocks key entry"
+  ],
+  "independentReview": {
+    "runtimeSha256": "0afcb8139970af470a19f90b9a67114c822200bdaeedb8fe54bca8a9f7084df7",
+    "testsIndependentlyPassed": 34,
+    "remainingBlockingFindings": 0,
+    "rootRuntimeFreezeApproved": true
+  }
+}

@@ -3,3 +3,4 @@ Saves a finding of this research run as a note (N1, N2, ...) that the report can
 - source is the S# the quote is from; quote is copied word for word from it, at least 12 characters. A quote that is not in the source is refused, with the chunk to copy from.
 - claim says in one short sentence what the quote shows. When the quote does not state the whole claim, the note is kept as a paraphrase, which cannot make a section High confidence on its own.
 - stance: supports (default), contradicts (the source says otherwise), or context.
+- measurement optionally records a numeric metric, reported value, unit, scale and explicit scope (period, geography, population, methodology, definition, currency). Copy these from the quote; omit inferred scope. Vector compares compatible scopes and flags differences for review. This does not verify the source's truth.

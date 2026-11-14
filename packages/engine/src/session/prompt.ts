@@ -1,5 +1,8 @@
+import { WorkflowOwnerHandoffFailure } from "@/orchestration/owner-failure"
+import { WorkflowMarkers } from "@/orchestration/constants"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { freeModelDataPolicy } from "@vectordevai/core/free-model-catalog"
 import {
   FREE_MODEL_RESUME_UNAVAILABLE,
@@ -8,6 +11,7 @@ import {
   freeModelMayTrain,
 } from "@vectordevai/core/free-model-choice"
 import { isFreeModel, isFreeModelRef } from "@vectordevai/schema/free-model"
+import { Billing } from "@vectordevai/schema/billing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import path from "path"
@@ -60,10 +64,13 @@ import { Process } from "@/util/process"
 import { Cause, Deferred, Effect, Exit, Fiber, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 
 import { InstanceState } from "@/effect/instance-state"
-import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import { TaskTool, SUBTASK, type TaskPromptOps } from "@/tool/task"
+import { TaskLimits } from "@/task/limits"
+import { TaskNotify } from "@/task/notify"
 import { QUICK_DESCRIPTION } from "@/tool/escalate"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Flag } from "@vectordevai/core/flag/flag"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@vectordevai/core/database/database"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -75,20 +82,39 @@ import { SessionMemory } from "./memory"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
+import { BrainRevocation } from "@vectordevai/core/brain/revocation"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { ownerBlock, scopeOf, scopeQuery } from "@vectordevai/core/review/prompt"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { TaskIsolation } from "@/task/isolation"
+import { PrivateAccess } from "@/tool/private-access"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionTools } from "./tools"
+import { SessionFork } from "./fork"
 import { TitleUsage } from "./title-usage"
+import { Auth } from "@/auth"
+import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
 import { LLMEvent } from "@vectordevai/llm"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { RunBudget } from "@vectordevai/schema/run-budget"
 import { TaskSize } from "@vectordevai/core/task-size"
+import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { SessionTaskSize } from "./task-size"
+import { SessionSkillLearn } from "./skill-learn"
+import { SessionBrainHelper } from "./brain-helper"
+import { SessionWorkflow } from "./workflow"
+import { LearnedSkill } from "@/skill/learned"
+import { BackgroundJob } from "@/background/job"
+import { TaskPlace } from "@/task/place"
+import { TaskJobs } from "@/task/jobs"
+import { SessionCodiumAuto } from "./codium-auto"
+import { SecondOpinion } from "./second-opinion"
 import { parseJudgeVerdict } from "./judge-verdict"
 import { isRecord } from "@/util/record"
 import { ResearchRun } from "@/tool/research-run"
@@ -182,6 +208,12 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
+// The closing step's request ends with this, for a model that answered in text where thinking kept the call optional.
+const STRUCTURED_OUTPUT_CLOSING = "Call StructuredOutput now with your final answer."
+// The most invalid StructuredOutput calls one run answers with an error, whatever retryCount a caller sends: each one
+// costs another full-context step.
+const STRUCTURED_OUTPUT_MAX_RETRIES = 5
+
 // The judge Vector runs after a finished run gets at most this many rounds per request: a FAIL sends its findings back
 // for repair and the judge looks again, and the third verdict stands.
 const MAX_JUDGE_ROUNDS = 3
@@ -218,6 +250,15 @@ export class FreeModelsResumeError extends Schema.TaggedErrorClass<FreeModelsRes
 }) {}
 
 export interface Interface {
+  /** Reuse prompt model selection for owner actions without admitting a prompt or changing a free selection. */
+  readonly currentModel: (
+    sessionID: SessionID,
+    configured?: PromptInput["model"],
+  ) => Effect.Effect<{
+    providerID: ProviderV2.ID
+    modelID: ModelV2.ID
+    variant?: string
+  }>
   readonly awaitTitles: () => Effect.Effect<void>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput, options?: PromptOptions) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -229,6 +270,11 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  /**
+   * Whether the session may run now. An isolated task, or a descendant of one whose work was retired, runs only
+   * through its parent's validated resume; it is refused before any provider call, spend or write.
+   */
+  readonly admit: (sessionID: SessionID) => Effect.Effect<void, TaskIsolation.IsolationError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/SessionPrompt") {}
@@ -240,6 +286,7 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
     const freeModels = yield* FreeModels.Service
     const freeCredentials = yield* FreeModels.CredentialsService
     const processor = yield* SessionProcessor.Service
@@ -267,11 +314,23 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const guard = yield* SpendGuard.Service
     const brain = yield* Brain.Service
+    const brainDatabase = yield* BrainDatabase.Service
     const knowledge = yield* BrainKnowledge.Service
     const guests = yield* FreeModelGuests.Service
+    const brainHelper = SessionBrainHelper.bind({ brain, provider, guests, instruction, sessions })
+    const isolation = yield* TaskIsolation.Service
+    const privacy = yield* SessionAudience.Service
     const git = yield* Git.Service
     const researchStore = yield* ResearchStore.Service
     const researchRun = yield* ResearchRun.Service
+    const brainSkills = yield* BrainSkill.Service
+    const learnedSkills = yield* LearnedSkill.Service
+    const skillLearn = yield* SessionSkillLearn.Service
+    const workflowSession = yield* SessionWorkflow.Service
+    const jobs = yield* BackgroundJob.Service
+    const taskNotes = yield* TaskNotify.Service
+    const taskLimits = yield* TaskLimits.Service
+    const forks = yield* SessionFork.Service
     const { db } = database
     const backgroundTasks = yield* InstanceState.make(
       Effect.fnUntraced(function* () {
@@ -282,7 +341,8 @@ const layer = Layer.effect(
     // system prompt ahead of the whole conversation, so re-reading them every step meant one edit, often the agent's own
     // memory update, re-wrote the entire cached context at the cache-write price. They are read again only when that
     // context is re-written anyway: after compaction gives the session a new history start, on another model, or once
-    // the provider's cache has expired. An edit the agent makes itself is already in its context. Keyed by session, so
+    // the provider's cache has expired. Explicit user revocations also refresh it; normal learned writes do not.
+    // An edit the agent makes itself is already in its context. Keyed by session, so
     // concurrent sessions keep their own snapshot.
     // `personal` counts the owner's own entries the digest carries, for Vector Local's network log.
     const instructionSnapshots = new Map<
@@ -294,6 +354,8 @@ const layer = Layer.effect(
     const recallsTried = new Set<MessageID>()
     // The model learner a finished run left reading its session's last message, which the session's next run cancels.
     const learners = new Map<SessionID, Fiber.Fiber<void>>()
+    // The skill drafter a finished run left wording its skill, cancelled the same way.
+    const drafters = new Map<SessionID, Fiber.Fiber<void>>()
     // The brain's digest (rules, MEMORY.md, pinned memory) is part of the snapshot, so it is byte-stable for the session
     // too; a memory saved mid-session reaches later sessions, and this one through recall and search.
     const sessionInstructions = Effect.fn("SessionPrompt.sessionInstructions")(function* (
@@ -310,15 +372,16 @@ const layer = Layer.effect(
         readonly files: boolean
       },
     ) {
+      const place = yield* instruction.place()
+      const revoked = yield* BrainRevocation.revision(brainDatabase.db, place.repository)
       const snapshot = instructionSnapshots.get(sessionID)
-      const full = `${key}|${memory.personal ? "personal" : "shared"}|${memory.index ? "index" : "plain"}|${memory.audience}|${memory.kinds?.join(",") ?? "all"}|${memory.facets?.join(",") ?? "all"}|${memory.files ? "files" : "brief"}`
+      const full = `${key}|${memory.personal ? "personal" : "shared"}|${memory.index ? "index" : "plain"}|${memory.audience}|${memory.kinds?.join(",") ?? "all"}|${memory.facets?.join(",") ?? "all"}|${memory.files ? "files" : "brief"}|${revoked}`
       // Re-inserting keeps the most recently used sessions at the end; the oldest go once there are too many.
       instructionSnapshots.delete(sessionID)
       if (snapshot && snapshot.key === full && !cold) {
         instructionSnapshots.set(sessionID, snapshot)
         return snapshot
       }
-      const place = yield* instruction.place()
       // The repository's documents get one line beside the memory index, taken with the rest of the snapshot, and the
       // memory tool says how to open them for as long as the snapshot holds.
       // A role whose output leaves the machine is not told which private documents there are.
@@ -354,16 +417,52 @@ const layer = Layer.effect(
       } satisfies TaskPromptOps
     })
 
-    const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
+    const within = <A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, E, R>) =>
+      sessions.get(sessionID).pipe(
+        Effect.orDie,
+        Effect.andThen((session) =>
+          session.agent === "workflow"
+            ? Effect.die(
+                new Error("Workflow runs cannot receive prompts or commands; resume them with the workflow tool."),
+              )
+            : TaskPlace.within(sessionID)(effect),
+        ),
+      )
+    const admit: Interface["admit"] = (sessionID) =>
+      within(
+        sessionID,
+        isolation
+          .admit(sessionID)
+          .pipe(
+            Effect.catch((cause) =>
+              cause instanceof TaskIsolation.IsolationError ? Effect.fail(cause) : Effect.die(cause),
+            ),
+          ),
+      )
+    // HTTP callers admit first for a clear refusal; this repeats the check where the run starts, in its placement.
+    const executing = <A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, E, R>) =>
+      within(sessionID, isolation.admit(sessionID).pipe(Effect.orDie, Effect.andThen(effect)))
+
+    const cancel: Interface["cancel"] = (sessionID) =>
+      sessions.get(sessionID).pipe(
+        Effect.option,
+        Effect.andThen(() => TaskPlace.within(sessionID)(cancelHere(sessionID))),
+      )
+    const cancelHere = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
       yield* state.cancel(sessionID)
       // A tool waiting on the user runs outside the stopped loop, so its request is answered here: rejecting it ends
       // the wait, stops the tool from running if approved later, and tells every client to drop the prompt.
-      const asked = (yield* permission.list()).find((request) => request.sessionID === sessionID)
-      if (asked) yield* permission.reply({ requestID: asked.id, reply: "reject" }).pipe(Effect.ignore)
+      const asked = (yield* permission.list().pipe(TaskPlace.atHome(sessionID))).find(
+        (request) => request.sessionID === sessionID,
+      )
+      if (asked)
+        yield* permission
+          .reply({ requestID: asked.id, reply: "reject" })
+          .pipe(TaskPlace.atHome(sessionID), Effect.ignore)
       yield* Effect.forEach(
-        (yield* question.list()).filter((request) => request.sessionID === sessionID),
-        (request) => question.reject(request.id).pipe(Effect.ignore),
+        (yield* question.list().pipe(TaskPlace.atHome(sessionID))).filter((request) => request.sessionID === sessionID),
+        (request) => question.reject(request.id).pipe(TaskPlace.atHome(sessionID), Effect.ignore),
         { discard: true },
       )
     })
@@ -404,6 +503,24 @@ const layer = Layer.effect(
       return parts
     })
 
+    const helperCostKind = Effect.fn("SessionPrompt.helperCostKind")(function* (model: Provider.Model) {
+      const signIn = yield* auth.get(model.providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const line = yield* provider.line(model)
+      return SpendGuard.costKindOf({
+        codium: Billing.isCodium(model.providerID),
+        free: isFreeModel(model) || model.freeModel !== undefined,
+        oauthPlan:
+          signIn?.type === "oauth" &&
+          providerCredentialAllowed(
+            model.providerID,
+            signIn,
+            providerUsable(model.providerID, { npm: model.api.npm, api: model.api.url }),
+          ),
+        listed: model.cost.input > 0 || model.cost.output > 0,
+        local: line?.local ?? false,
+      })
+    })
+
     const title = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
       session: Session.Info
       history: SessionV1.WithParts[]
@@ -413,6 +530,7 @@ const layer = Layer.effect(
       answering: Effect.Effect<boolean>
       // Completes when the run ends.
       ended: Effect.Effect<void>
+      spend: SpendGuard.Captured
       // For a sized session: the request this run answers, whether it is only a greeting, and whether it is the
       // session's first request that is more than one.
       sized?: { users: readonly SessionV1.WithParts[]; chat: boolean; first: boolean }
@@ -483,16 +601,32 @@ const layer = Layer.effect(
       const ag = yield* agents.get("title")
       if (!ag) return
       const primary = yield* provider.getModel(input.providerID, input.modelID)
+      // Codium Auto as the title agent's own model is a listing entry the gateway never serves: the title goes to the
+      // helper model a Codium conversation gets, whichever provider this conversation is on, or is not generated.
+      const own = SessionCodiumAuto.isAuto(ag.model) ? undefined : ag.model
+      const from =
+        own || !ag.model ? input : { providerID: ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID), modelID: undefined }
+      const small =
+        isFreeModel(primary) || own ? undefined : yield* provider.getSmallModel(from.providerID, from.modelID)
+      // A Codium conversation without a helper model gets no generated title rather than one on its own model.
+      if (!isFreeModel(primary) && !own && !small && from.providerID === ModelPlanStatus.PROVIDER_ID) return
       const mdl = isFreeModel(primary)
         ? primary
-        : ag.model
-          ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
-          : ((yield* provider.getSmallModel(input.providerID, input.modelID)) ?? primary)
+        : own
+          ? yield* provider.getModel(own.providerID, own.modelID)
+          : (small ?? primary)
       // A shared free model allows a few requests a minute, so its title waits until the run is done rather than
       // compete with the run's own requests.
       if (isFreeModel(mdl)) yield* input.ended
       if (!(yield* kept)) return
-      const usage = TitleUsage.create({ sessionID: input.session.id, model: mdl, publish: events.publish })
+      if (yield* input.spend.stopped) return
+      const usage = TitleUsage.create({
+        sessionID: input.session.id,
+        model: mdl,
+        publish: events.publish,
+        spend: input.spend,
+        costKind: yield* helperCostKind(mdl),
+      })
       // A title sent to the session's provider needs a connection of its own beside the one opened for the first step.
       yield* provider.preconnect(mdl)
       const text = yield* llm
@@ -504,6 +638,7 @@ const layer = Layer.effect(
           tools: {},
           model: mdl,
           sessionID: input.session.id,
+          purpose: "title",
           retries: 2,
           started: usage.started,
           messages: [
@@ -541,15 +676,21 @@ const layer = Layer.effect(
       sessionID: SessionID
       session: Session.Info
       msgs: SessionV1.WithParts[]
+      delegation?: TaskLimits.Context
     }) {
       const { task, model, lastUser, sessionID, session, msgs } = input
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
-      const taskModel =
+      // A free selection keeps its subtasks on the free model, so a subtask's own model, Codium Auto included, is not read.
+      // A subtask on Auto runs on the model Auto picks for standard work; its subagent starts a history of its own.
+      const named =
         isFreeSelection({ providerID: model.providerID, modelID: model.id }) || !task.model
-          ? model
-          : yield* getModel(task.model.providerID, task.model.modelID, sessionID)
+          ? undefined
+          : SessionCodiumAuto.isAuto(task.model)
+            ? yield* autoModel({ sessionID, tier: "standard", visible: [] })
+            : task.model
+      const taskModel = named ? yield* getModel(named.providerID, named.modelID, sessionID) : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
         role: "assistant",
@@ -616,7 +757,13 @@ const layer = Layer.effect(
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { invokedAgents: [task.agent], promptOps },
+          // A user's slash command is counted like any launch, and may wait for a slot on its card.
+          extra: {
+            invokedAgents: [task.agent],
+            promptOps,
+            [SUBTASK]: true,
+            ...(input.delegation ? { delegation: input.delegation } : {}),
+          },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -725,6 +872,7 @@ const layer = Layer.effect(
         time: { created: Date.now() },
         agent: lastUser.agent,
         model: lastUser.model,
+        ...(lastUser.selected ? { selected: lastUser.selected } : {}),
         executionMode: lastUser.executionMode,
       }
       yield* sessions.updateMessage(summaryUserMsg)
@@ -775,7 +923,7 @@ const layer = Layer.effect(
       message: SessionV1.Assistant
       parent: Agent.Info
       judge: Agent.Info
-      args: { prompt: string; description: string; subagent_type: string; background: false }
+      args: { prompt: string; description: string; subagent_type: string; background: false; model?: string; effort?: "default" }
       metadata: Record<string, unknown>
       finished: (output: string) => Record<string, unknown>
       failed: string
@@ -803,7 +951,8 @@ const layer = Layer.effect(
           sessionID,
           abort: abort.signal,
           callID: started.callID,
-          extra: { ...input.extra, invokedAgents: [input.judge.name], promptOps },
+          // Vector's own launch: it takes no subagent slot and counts toward no request's limits.
+          extra: { ...input.extra, [TaskLimits.EXEMPT]: true, invokedAgents: [input.judge.name], promptOps },
           messages: input.msgs,
           metadata: (val) =>
             Effect.gen(function* () {
@@ -929,6 +1078,19 @@ const layer = Layer.effect(
 
       const round = input.rounds + 1
       const sessionID = input.session.id
+      // Second opinion (WP A35): Codium work is judged on the plan's judge from another lab, when the person turned it
+      // on, no judge model is configured and the catalog lists a usable cross-lab judge for the worker's model.
+      const on = SecondOpinion.enabled(work.requests.flatMap((request) => request.users))
+      const codiumWorker = input.lastUser.model.providerID === ModelPlanStatus.PROVIDER_ID
+      const opinion =
+        on && codiumWorker && !judge.model
+          ? SecondOpinion.judgeModel({
+              worker: input.lastUser.model,
+              models: (yield* provider.list())[ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID)]?.models,
+              configured: false,
+              on,
+            })
+          : undefined
       const message = yield* judgeMessage({ lastUser: input.lastUser, agent: parent.name, size: work.tier })
       const result = yield* launchJudge({
         session: input.session,
@@ -941,6 +1103,7 @@ const layer = Layer.effect(
           description: round === 1 ? "Check the finished work" : `Check the repairs (round ${round})`,
           subagent_type: "judge",
           background: false,
+          ...(opinion ? { model: `${opinion.providerID}/${opinion.modelID}`, effort: "default" as const } : {}),
         },
         // The size of the work judged: a FAIL raises the request it repairs to it (see SessionTaskSize.size).
         metadata: { judge: { round, size: work.tier } },
@@ -973,7 +1136,10 @@ const layer = Layer.effect(
         // A repair after a quick-lane thanks is build work: it runs on the build agent with the work's tools.
         agent: parent.name,
         model: input.lastUser.model,
+        ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
+        // The repair's verdict is judged as the work was: with Second opinion while it was on.
+        ...(on ? { secondOpinion: true } : {}),
       }
       yield* sessions.updateMessage(followup)
       yield* sessions.updatePart({
@@ -1191,10 +1357,10 @@ const layer = Layer.effect(
       if (verdicts.length > 0) {
         yield* researchStore.judged(place, runID, verdicts)
         // The report is saved again with the verdicts, so its confidence counts them and unsupported notes are struck.
-        const spent = (yield* guard.snapshot(sessionID))?.spentUsd
+        const spend = SpendGuard.reportSpend(yield* guard.snapshot(sessionID))
         yield* researchStore.report(place, runID, report.value, {
           judged: true,
-          ...(spent ? { spend: `${SpendGuard.formatUsd(spent)} at list prices` } : {}),
+          ...(spend ? { spend } : {}),
           seconds: Math.round((Date.now() - detail.run.created_at) / 1000),
         })
       }
@@ -1211,6 +1377,7 @@ const layer = Layer.effect(
         time: { created: Date.now() },
         agent: ResearchRun.LEAD,
         model: input.lastUser.model,
+        ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
       }
       yield* sessions.updateMessage(followup)
@@ -1245,7 +1412,16 @@ const layer = Layer.effect(
               yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
               throw error
             }
-            const model = input.model ?? (yield* currentModel(input.sessionID, agent.model))
+            const chosen = input.model ?? (yield* currentModel(input.sessionID, agent.model))
+            // A shell message on Codium Auto records the model Auto picks for standard work, so a turn that answers it
+            // never sends Auto itself. The command is local: when Auto cannot pick a model now (signed out, Vector Local
+            // on, no Auto on the plan), it still runs, and its message keeps Auto for a model turn to resolve or refuse.
+            const picked = SessionCodiumAuto.isAuto(chosen)
+              ? Option.getOrUndefined(
+                  yield* pickAuto({ sessionID: input.sessionID, tier: "standard" }).pipe(Effect.option),
+                )
+              : undefined
+            const model = picked ?? chosen
             const userMsg: SessionV1.User = {
               id: input.messageID ?? MessageID.ascending(),
               sessionID: input.sessionID,
@@ -1253,6 +1429,7 @@ const layer = Layer.effect(
               role: "user",
               agent: input.agent,
               model: { providerID: model.providerID, modelID: model.modelID },
+              ...(picked ? { selected: { providerID: chosen.providerID, modelID: chosen.modelID } } : {}),
             }
             yield* sessions.updateMessage(userMsg)
             const userPart: SessionV1.Part = {
@@ -1378,21 +1555,39 @@ const layer = Layer.effect(
       const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) return exit.value
       const err = Cause.squash(exit.cause)
-      if (Provider.ModelNotFoundError.isInstance(err)) {
-        yield* events.publish(Session.Event.Error, {
-          sessionID,
-          // A Codium notice carries its action, so the app can offer Sign in to Vector next to it.
-          error: err.codium
-            ? new SessionV1.APIError({
-                message: err.unavailable?.message ?? err.message,
-                isRetryable: false,
-                metadata: { codium: err.codium },
-              }).toObject()
-            : new NamedError.Unknown({ message: err.message }).toObject(),
-        })
-      }
+      if (Provider.ModelNotFoundError.isInstance(err))
+        yield* events.publish(Session.Event.Error, { sessionID, error: SessionCodiumAuto.notice(err) })
       return yield* Effect.die(err)
     })
+
+    // The model Codium Auto picks for one user message, from its size and the context it adds to after the last
+    // compaction boundary. Fails with the notice a chosen model would give when Auto cannot run.
+    const pickAuto = Effect.fn("SessionPrompt.pickAuto")(function* (input: {
+      sessionID: SessionID
+      tier: TaskSize.Tier
+      visible?: SessionV1.WithParts[]
+      added?: readonly SessionV1.Part[]
+    }) {
+      const visible =
+        input.visible ??
+        (yield* MessageV2.filterCompactedEffect(input.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        ))
+      return yield* provider.codiumAuto({
+        tier: input.tier,
+        contextTokens: SessionCodiumAuto.contextTokens(visible, input.added),
+        learned: workflowSession.autoModels ? yield* workflowSession.autoModels(input.sessionID, input.tier) : [],
+      })
+    })
+
+    // Auto for a model turn: when Auto cannot run, the turn fails with that notice on the session.
+    const autoModel = (input: Parameters<typeof pickAuto>[0]) =>
+      pickAuto(input).pipe(
+        Effect.tapError((err) =>
+          events.publish(Session.Event.Error, { sessionID: input.sessionID, error: SessionCodiumAuto.notice(err) }),
+        ),
+        Effect.orDie,
+      )
 
     const currentModel = Effect.fnUntraced(function* (sessionID: SessionID, configured?: PromptInput["model"]) {
       const current = yield* db
@@ -1417,8 +1612,10 @@ const layer = Layer.effect(
         .findMessage(sessionID, (m) => m.info.role === "user" && !!m.info.model)
         .pipe(Effect.orDie)
       if (Option.isSome(match) && match.value.info.role === "user") {
-        const saved = yield* provider.savedModel(match.value.info.model)
-        if (saved) return configured && !isFreeSelection(saved) ? configured : { ...match.value.info.model, ...saved }
+        // A message Codium Auto ran keeps Auto as the choice, not the model Auto picked for it.
+        const chosen = match.value.info.selected ?? match.value.info.model
+        const saved = yield* provider.savedModel(chosen)
+        if (saved) return configured && !isFreeSelection(saved) ? configured : { ...chosen, ...saved }
       }
       if (configured) return configured
       return yield* provider.defaultModel().pipe(Effect.orDie)
@@ -1492,6 +1689,7 @@ const layer = Layer.effect(
         executionMode: input.executionMode,
         ...(input.size ? { size: input.size } : {}),
         ...(input.judge ? { judge: input.judge } : {}),
+        ...(input.secondOpinion ? { secondOpinion: true } : {}),
       }
 
       if (
@@ -1640,6 +1838,13 @@ const layer = Layer.effect(
               // A file the user attached is theirs to share, wherever it lives. A file part written by a model, a
               // subagent brief or a guest goes through the Read tool's workspace boundary and read permission.
               const attachedByUser = options?.userFile?.(part.url) === true
+              // A guest family's attachment passes the same private-folder and output checks as its Read calls.
+              const access = PrivateAccess.make({
+                sessionID: input.sessionID,
+                audience: privacy,
+                git,
+                instance: yield* InstanceState.context,
+              })
               const readContext: Tool.Context = {
                 sessionID: input.sessionID,
                 abort: controller.signal,
@@ -1648,6 +1853,9 @@ const layer = Layer.effect(
                 extra: attachedByUser ? { bypassCwdCheck: true } : undefined,
                 messages: [],
                 metadata: () => Effect.void,
+                assertReadable: (request) =>
+                  access.read(request.files, { ancestors: request.recursive }).pipe(Effect.orDie),
+                assertOutput: (value) => access.output(value).pipe(Effect.asVoid, Effect.orDie),
                 ask: (request) =>
                   attachedByUser
                     ? Effect.void
@@ -1705,11 +1913,17 @@ const layer = Layer.effect(
                     type: "text",
                     synthetic: true,
                     text: result.output,
-                    // Lets a later Read of the same unchanged lines point back here instead of sending the file again.
-                    ...(typeof result.metadata.fingerprint === "string"
+                    // Lets a later Read of the same unchanged lines point back here instead of sending the file again,
+                    // and counts as a read for edit, write and apply_patch, after a restart too.
+                    ...(typeof result.metadata.fingerprint === "string" || result.metadata.fileState
                       ? {
                           metadata: {
-                            read: { fingerprint: result.metadata.fingerprint, display: result.metadata.display },
+                            read: {
+                              ...(typeof result.metadata.fingerprint === "string"
+                                ? { fingerprint: result.metadata.fingerprint, display: result.metadata.display }
+                                : {}),
+                              ...(result.metadata.fileState ? { fileState: result.metadata.fileState } : {}),
+                            },
                           },
                         }
                       : {}),
@@ -1796,6 +2010,7 @@ const layer = Layer.effect(
               // outside-directory and read permission checks run before any byte leaves the disk.
               const bytes = yield* Effect.gen(function* () {
                 const instance = yield* InstanceState.context
+                yield* access.read([filepath]).pipe(Effect.orDie)
                 yield* assertExternalDirectoryEffect(readContext, filepath, { bypass: attachedByUser })
                 yield* readContext.ask({
                   permission: "read",
@@ -1889,6 +2104,29 @@ const layer = Layer.effect(
         Effect.map((x) => x.flat().map(assign)),
       )
 
+      // Codium Auto picks this message's model once, from the size of the request it opens or joins and the context it
+      // adds to. The message stores that model and Auto as the choice; the session stays on Auto.
+      if (SessionCodiumAuto.isAuto(info.model)) {
+        const visible = yield* MessageV2.filterCompactedEffect(input.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        const sizing = (yield* config.get()).sizing
+        const tier = sizable(current, info)
+          ? (SessionTaskSize.size({
+              messages: [...visible, { info, parts: resolvedParts }],
+              caching: false,
+              lifetime: 0,
+              auto: sizing?.auto,
+              judge: sizing?.judge,
+            }).at(-1)?.tier ?? "standard")
+          : input.size && input.size !== "auto"
+            ? input.size
+            : "standard"
+        const chosen = yield* autoModel({ sessionID: input.sessionID, tier, visible, added: resolvedParts })
+        info.selected = { providerID: info.model.providerID, modelID: info.model.modelID }
+        info.model = { ...chosen, variant: info.model.variant }
+      }
+
       yield* plugin.trigger(
         "chat.message",
         {
@@ -1942,7 +2180,8 @@ const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt = Effect.fn("SessionPrompt.prompt")(function* (input: PromptInput, options?: PromptOptions) {
+    const prompt: Interface["prompt"] = (input, options) => executing(input.sessionID, promptHere(input, options))
+    const promptHere = Effect.fn("SessionPrompt.prompt")(function* (input: PromptInput, options?: PromptOptions) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       // Read before the message exists: a prompt sent while a run is going joins that run.
       const joined = (yield* status.get(input.sessionID)).type !== "idle"
@@ -1953,12 +2192,29 @@ const layer = Layer.effect(
         options?.tightenBudget ? guard.tighten(input.sessionID, budget) : guard.arm(input.sessionID, budget)
       if (input.budget) yield* arm(input.budget)
       const messageID = input.messageID ?? MessageID.ascending()
-      const recovered = input.parts.some((part) => part.type !== "text" || !part.synthetic)
+      const human = input.parts.some((part) => part.type !== "text" || !part.synthetic)
+      // The user writing again lifts "stop including helpers": their notes may start turns again.
+      if (human) yield* taskNotes.unfence(input.sessionID)
+      const recovered = human
         ? yield* SubagentLifecycle.recover(sessions, database, input.sessionID, messageID).pipe(Effect.orDie)
         : []
       // Reports recovered after a restart precede the actual human text in the same input; they cannot become
-      // a newer synthetic user turn or start model execution on their own.
-      const message = yield* createUserMessage({ ...input, messageID, parts: [...recovered, ...input.parts] }, options)
+      // a newer synthetic user turn or start model execution on their own. A message refused before it was saved, such
+      // as a guest's to a model that may train, gives their claims back.
+      const message = yield* createUserMessage(
+        { ...input, messageID, parts: [...recovered, ...input.parts] },
+        options,
+      ).pipe(
+        Effect.onError(() =>
+          SubagentLifecycle.releaseNotifications(
+            sessions,
+            database,
+            input.sessionID,
+            messageID,
+            recovered.map((part) => part.metadata.taskNotification.taskID),
+          ),
+        ),
+      )
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
@@ -1971,12 +2227,69 @@ const layer = Layer.effect(
       }
 
       if (input.noReply === true) return message
-      const result = yield* loop({ sessionID: input.sessionID })
+      let quieted = false
+      const replyLoop = () =>
+        executing(
+          input.sessionID,
+          state.ensureRunning(
+            input.sessionID,
+            lastAssistant(input.sessionID),
+            Effect.gen(function* () {
+              // Stop before admission revokes this specific trusted delivery; after admission it cancels this runner.
+              // A later human unfence does not authorize an older note to wake the model.
+              if (!human && !(yield* taskNotes.canReply(input.sessionID, message.info.id))) {
+                quieted = true
+                const parts = yield* Effect.forEach(
+                  message.parts,
+                  (part): Effect.Effect<SessionV1.Part> =>
+                    part.type !== "text"
+                      ? Effect.succeed(part)
+                      : sessions.updatePart({
+                          ...part,
+                          metadata: {
+                            ...part.metadata,
+                            [SessionTaskSize.QUIET]: true,
+                            ...(isRecord(part.metadata?.taskNotification)
+                              ? { taskNotification: { ...part.metadata.taskNotification, quiet: true } }
+                              : {}),
+                          },
+                        }),
+                )
+                return { info: message.info, parts }
+              }
+              return yield* runLoop(input.sessionID)
+            }),
+          ),
+        )
+      const result = yield* replyLoop().pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterrupts(cause) || !(Cause.squash(cause) instanceof WorkflowOwnerHandoffFailure))
+            return Effect.failCause(cause)
+          // The rejected owner command did not answer this saved human input. It gets an ordinary turn, while
+          // the owner route still receives its original error. A cancelled handoff never reaches this recovery.
+          return Effect.gen(function* () {
+            if (input.budget) yield* arm(input.budget)
+            return yield* replyLoop()
+          })
+        }),
+      )
       // A prompt sent while the session is busy joins the run already going, and that run can end without reading it:
       // a rejected permission, a content filter or a provider error ends the loop where it is. It is answered now,
       // unless the run was stopped, by the user or by the spend guard: a budget-stopped run goes on only through
       // Continue, under a new cap.
-      if (!joined || result.info.id > message.info.id) return result
+      // An owner workflow handoff answers only its own command. Another human input may have arrived before
+      // the synthetic assistant was written, or in the gap before the runner published busy status.
+      if (quieted) return result
+      const ownerHandoff = result.parts.some(
+        (part) =>
+          part.type === "tool" &&
+          part.state.status !== "pending" &&
+          part.state.metadata?.[WorkflowMarkers.OWNER_START] === true,
+      )
+      const answered = ownerHandoff
+        ? result.info.role === "assistant" && result.info.parentID === message.info.id
+        : !joined || result.info.id > message.info.id
+      if (answered) return result
       if (
         result.info.role === "assistant" &&
         (SessionV1.AbortedError.isInstance(result.info.error) ||
@@ -1985,7 +2298,7 @@ const layer = Layer.effect(
         return result
       // The prompt's budget went to the run it joined, which has ended, so the run that answers it gets it again.
       if (input.budget) yield* arm(input.budget)
-      return yield* loop({ sessionID: input.sessionID })
+      return yield* replyLoop()
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -2003,9 +2316,11 @@ const layer = Layer.effect(
       resumed?: ResumeFreeModelsInput & { parentID: MessageID },
     ) {
       const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-      // A new prompt cancels the model learner still reading the run before it.
+      // A new prompt cancels the model learner and the skill drafter still reading the run before it.
       const learning = learners.get(sessionID)
       if (learning) yield* Fiber.interrupt(learning)
+      const drafting = drafters.get(sessionID)
+      if (drafting) yield* Fiber.interrupt(drafting)
       // A run that ends before the provider answers keeps its provisional title without starting another request.
       const answering = yield* Deferred.make<boolean>()
       const ended = yield* Deferred.make<void>()
@@ -2104,6 +2419,7 @@ const layer = Layer.effect(
         spentUsd: run?.spentUsd,
         capUsd: run?.budget.usd,
         unpricedSteps: run?.unpricedSteps,
+        codiumSteps: run?.codiumSteps,
       }).toObject()
       if (current && !current.summary) {
         yield* sessions.updateMessage({ ...current, error })
@@ -2137,6 +2453,11 @@ const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const sessionID = session.id
       let structured: unknown
+      // Invalid StructuredOutput calls this run; the tool is built again for every step, so the count lives here.
+      const invalid = { count: 0 }
+      // A json_schema step that could not force the call ("auto" for thinking) and ended without a kept value gets one
+      // closing step with thinking off and the call required.
+      let closing: "due" | "done" | undefined
       let step = 0
       // Every message this run writes sorts after this ID, which is how the judge finds the requests the run answered.
       const since = MessageID.ascending()
@@ -2144,16 +2465,41 @@ const layer = Layer.effect(
       const taught = new Map<MessageID, { readonly message: SessionV1.WithParts; readonly tier: TaskSize.Tier }>()
       // The judge's rounds in this run; a compaction may summarise earlier verdicts out of view.
       let judged = 0
+      // What the run's latest build step ran with, for the workflow observation once it is over.
+      let decided: SessionWorkflow.Step | undefined
       // Before the first request, so a prompt arriving after the cache expired sends the cleared history.
       if (!resumed) yield* compaction.prune({ sessionID }).pipe(Effect.ignore)
+      // A fork (5.E.3) starts from its parent's conversation: its record names the fork point. Its requests name the
+      // tools its parent's rules allow, as the root's did; its own rules (FORK_DENIES) refuse what it may not run.
+      const forkRecord = session.parentID && !session.internal ? SubagentLifecycle.read(session) : undefined
+      const fork =
+        forkRecord?.fork && session.parentID ? { record: forkRecord, point: forkRecord.fork.point } : undefined
+      const forkParent = fork
+        ? Option.getOrUndefined(yield* sessions.get(session.parentID!).pipe(Effect.option))
+        : undefined
+      // What a fork inherits for the step being built, once its model is known, and what it inherited.
+      let inherit: Omit<SessionFork.InheritInput, "messages"> | undefined
+      let inherited: SessionFork.Inherited | undefined
+      const withInherited = Effect.fnUntraced(function* (own: SessionV1.WithParts[]) {
+        inherited = inherit ? yield* forks.inherited({ ...inherit, messages: own }) : undefined
+        return inherited ? [...inherited.messages, ...own] : own
+      })
+      // Whether a fork has sent a request in this run: only its first names the root's cache key.
+      let forkRequested = false
+      // Every reload of the history goes through here: a fork's own messages come after the history it inherits.
+      const history = Effect.fnUntraced(function* () {
+        return yield* withInherited(
+          yield* MessageV2.filterCompactedEffect(sessionID).pipe(Effect.provideService(Database.Service, database)),
+        )
+      })
 
       while (true) {
         yield* status.set(sessionID, { type: "busy" })
         yield* Effect.logInfo("loop", { "session.id": sessionID, step })
 
-        let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
-          Effect.provideService(Database.Service, database),
-        )
+        // The fork's own messages alone until this step's model is known, which decides what it inherits.
+        inherit = undefined
+        let msgs = yield* history()
 
         const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
@@ -2173,6 +2519,7 @@ const layer = Layer.effect(
           ) ?? false
 
         if (
+          closing !== "due" &&
           !(resumed && step === 0 && lastAssistant?.id === resumed.messageID) &&
           lastAssistant?.finish &&
           !["tool-calls"].includes(lastAssistant.finish) &&
@@ -2210,6 +2557,15 @@ const layer = Layer.effect(
         }
 
         step++
+        // A shell message on Codium Auto keeps Auto when Auto could not pick a model then. The turn that answers it picks
+        // once, here, and stores the pick beside Auto, so every step of the request stays on one model and its cache.
+        // When Auto still cannot pick, the turn fails with its notice and nothing is sent.
+        if (SessionCodiumAuto.isAuto(lastUser.model)) {
+          const chosen = yield* autoModel({ sessionID, tier: "standard", visible: msgs })
+          lastUser.selected = { providerID: lastUser.model.providerID, modelID: lastUser.model.modelID }
+          lastUser.model = { providerID: chosen.providerID, modelID: chosen.modelID }
+          yield* sessions.updateMessage(lastUser)
+        }
         const selectedModel = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
         const model =
           lastUser.executionMode === "fast" && !selectedModel.id.endsWith("-fast")
@@ -2219,51 +2575,93 @@ const layer = Layer.effect(
             : selectedModel
         // The provider connection opens while the first request is prepared, rather than after it is sent.
         if (step === 1) yield* provider.preconnect(model)
+        if (fork) {
+          const name = onBuild(lastUser) ? "build" : lastUser.agent
+          const marked = yield* guests.marked(sessionID)
+          inherit = {
+            session,
+            record: fork.record,
+            model: { providerID: model.providerID, modelID: model.id },
+            variant: lastUser.model.variant,
+            agent: name,
+            personal: !marked && !freeModelMayTrain(model),
+            audience: audienceOf(session, name),
+            guest: marked,
+          }
+          msgs = yield* withInherited(msgs)
+        }
 
         // Every step sizes the request again from the projected history, so a raise or a message that joined the run
         // applies from the next step. Subagents, Vector's hidden helpers and custom agents keep their own setup.
         const sizing = (yield* config.get()).sizing
-        const requests = sizable(session, lastUser)
-          ? SessionTaskSize.size({
-              messages: msgs,
-              caching: caches(model),
-              lifetime: ProviderTransform.cacheLifetime(model),
-              auto: sizing?.auto,
-              judge: sizing?.judge,
-            })
-          : []
+        const sizeAll = () =>
+          sizable(session, lastUser)
+            ? SessionTaskSize.size({
+                messages: msgs,
+                caching: ProviderTransform.caches(model),
+                lifetime: ProviderTransform.cacheLifetime(model),
+                auto: sizing?.auto,
+                judge: sizing?.judge,
+              })
+            : []
+        let requests = sizeAll()
+        // The subagents still working when a request opened are saved on its opening message at its first step off the
+        // quick lane, so every later step sends that message unchanged (5.A.2).
+        if (yield* snapshotFor(sessionID, requests.at(-1))) requests = sizeAll()
         const sized = requests.at(-1)
         for (const user of sized?.users ?? []) taught.set(user.info.id, { message: user, tier: sized!.tier })
 
         if (step === 1 && !resumed) {
           const background = yield* InstanceState.get(backgroundTasks)
-          const fiber = yield* title({
-            session,
-            modelID: lastUser.model.modelID,
-            providerID: lastUser.model.providerID,
-            history: msgs,
-            answering: Deferred.await(answering),
-            ended,
-            // The composer's Quick mode is a greeting lane of its own, titled the same way.
-            ...(lastUser.agent === "quick"
-              ? { sized: { users: [], chat: true, first: false } }
-              : sized
-                ? {
-                    sized: {
-                      users: sized.users,
-                      chat: sized.tier === "chat",
-                      first: !requests.slice(0, -1).some((request) => request.tier !== "chat"),
-                    },
-                  }
-                : {}),
-          }).pipe(Effect.ignore, Effect.forkIn(background.scope))
+          const fiber = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              return yield* restore(
+                title({
+                  session,
+                  spend,
+                  modelID: lastUser.model.modelID,
+                  providerID: lastUser.model.providerID,
+                  history: msgs,
+                  answering: Deferred.await(answering),
+                  ended,
+                  // The composer's Quick mode is a greeting lane of its own, titled the same way.
+                  ...(lastUser.agent === "quick"
+                    ? { sized: { users: [], chat: true, first: false } }
+                    : sized
+                      ? {
+                          sized: {
+                            users: sized.users,
+                            chat: sized.tier === "chat",
+                            first: !requests.slice(0, -1).some((request) => request.tier !== "chat"),
+                          },
+                        }
+                      : {}),
+                }),
+              ).pipe(Effect.ensuring(spend.release), Effect.ignore, Effect.forkIn(background.scope))
+            }),
+          )
           background.titles.add(fiber)
           fiber.addObserver(() => background.titles.delete(fiber))
         }
         const task = tasks.pop()
+        // The request a root session's subagent launches count against (5.B.2): the message that opened it, or for a
+        // Chat message a completion note made work, the request that launched that subagent.
+        const delegationContext: TaskLimits.Context | undefined =
+          session.parentID || session.internal
+            ? undefined
+            : {
+                requestID:
+                  sized?.ledgerRequestID ??
+                  msgs.findLast((message) => SessionTaskSize.real(message))?.info.id ??
+                  lastUser.id,
+              }
+        // The Tasks board reads the same request, so a message that joined the run, or a "thanks" a note made work,
+        // shows the launches of the request they count in (5.B.10).
+        if (delegationContext) yield* taskLimits.track(sessionID, delegationContext.requestID)
 
         if (task?.type === "subtask") {
-          yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+          yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs, delegation: delegationContext })
           continue
         }
 
@@ -2275,16 +2673,14 @@ const layer = Layer.effect(
             auto: task.auto,
             overflow: task.overflow,
             context: yield* researchDigest(sessionID),
+            // A fork's summary covers what it inherited; only its own messages can be kept word for word.
+            ...(fork?.record.fork?.from ? { floor: MessageID.make(fork.record.fork.from) } : {}),
           })
           if (result === "stop") break
           // The summary may replace the message that opened the request it covers. The marker records the request,
           // so it keeps its size and its judge, and a "continue" after it has work to continue.
           if (sized) {
-            const visible = new Set(
-              (yield* MessageV2.filterCompactedEffect(sessionID).pipe(
-                Effect.provideService(Database.Service, database),
-              )).map((message) => message.info.id),
-            )
+            const visible = new Set((yield* history()).map((message) => message.info.id))
             const carried = SessionTaskSize.carry(sized, (message) => !visible.has(message.info.id))
             if (carried)
               yield* sessions.updatePart({
@@ -2306,7 +2702,13 @@ const layer = Layer.effect(
           lastFinished.summary !== true &&
           (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
         ) {
-          yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+          yield* compaction.create({
+            sessionID,
+            agent: lastUser.agent,
+            model: lastUser.model,
+            ...(lastUser.selected ? { selected: lastUser.selected } : {}),
+            auto: true,
+          })
           continue
         }
 
@@ -2316,9 +2718,7 @@ const layer = Layer.effect(
           !lastFinished.summary &&
           (yield* compaction.clear({ sessionID, tokens: lastFinished.tokens }))
         )
-          msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
-            Effect.provideService(Database.Service, database),
-          )
+          msgs = yield* history()
 
         // An app's own quick-lane message is sized as a build request, so it runs on the build agent once it is work.
         // A helper session's agent may be a Subagent specialist Settings turned off, which only `helper` finds.
@@ -2345,6 +2745,23 @@ const layer = Layer.effect(
           : agent
         // The build agent and the research lead take their tools, effort and caps from the request's size.
         const build = sized && !chat && (agent.name === "build" || agent.name === ResearchRun.LEAD) ? sized : undefined
+        // A fork's inherited history as its parent's step sized it (that step's messages, without the launching one), so
+        // it carries the same size notes (I24), and a cold fork is offered the tools its parent was (5.E.3).
+        const parentUser = inherited?.messages.findLast((message) => message.info.role === "user")?.info
+        const forkRequests =
+          inherited && forkParent && parentUser?.role === "user" && sizable(forkParent, parentUser)
+            ? SessionTaskSize.size({
+                messages: inherited.messages.filter((message) => message.info.id !== fork?.point),
+                caching: ProviderTransform.caches(model),
+                lifetime: ProviderTransform.cacheLifetime(model),
+                auto: sizing?.auto,
+                judge: sizing?.judge,
+              })
+            : []
+        const forkSized = forkRequests.at(-1)
+        // What the step is offered: the request's size, or for a fork its parent's.
+        const shaped =
+          build ?? (forkSized && forkSized.tier !== "chat" && agent.name === "build" ? forkSized : undefined)
         // The user started the plan deep, which raised the request to Thorough: research's Focused default caps become
         // Deep's. A cap the owner armed since the run began stays as it is, and a guest's limits still hold.
         if (
@@ -2365,6 +2782,11 @@ const layer = Layer.effect(
           stepAgent.name === "quick"
             ? SessionTaskSize.closingText(msgs.filter((message) => message.info.id < opened)).slice(-PREVIOUS_REPLY)
             : ""
+        // The quick lane has no tools, so it is told which subagents are still working from live state (5.A.6).
+        const stillWorking =
+          stepAgent.name === "quick" && !session.parentID && !session.internal
+            ? TaskSize.running((yield* outstanding(sessionID, opened)).running, "quick")
+            : undefined
         // The owner's personal memory never goes to a session an invited guest has acted in, nor to a model that may
         // train on prompts.
         const guest = yield* guests.marked(sessionID)
@@ -2386,29 +2808,60 @@ const layer = Layer.effect(
           })
         // A subagent starts with how the owner works, and one a Thorough request launched with a brief besides, saved
         // on its first message as ids. A Vectorscope reviewer starts with how the owner reviews.
-        if (session.parentID && !session.internal)
+        // A fork starts from its parent's history, which already carries all that, and must never write to it.
+        if (session.parentID && !session.internal && !fork)
           msgs = yield* briefFor({ session, msgs, personal, agent: agent.name })
         if (session.internal?.startsWith(VECTORSCOPE))
           msgs = yield* reviewFor({ session, msgs, personal, agent: agent.name })
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
         const audience = audienceOf(session, agent.name)
+        // The session's learned skills (section 5.4): chosen on its first step off the quick lane from what that request
+        // asks, kept in brain.db, and only ever fewer after that, so the skills block stays the same from step to step.
+        const learned = quick
+          ? []
+          : yield* learnedSkills.listing({
+              session,
+              agent,
+              model,
+              guest,
+              query: (sized?.users ?? SessionMemory.request(msgs)).map(SessionMemory.typed).join("\n"),
+              first: !msgs.some((message) => message.info.role === "assistant" && message.info.agent !== "quick"),
+            })
         msgs = yield* withheldRecall(sessionID, msgs, personal, audience)
         // What the request carries out of the brain, for Vector Local's network log; counted only while it is on.
         const carried = Egress.policy().enabled
-          ? carriedOf(msgs, personal, personal && audience === "owner")
+          ? carriedOf(msgs, personal, personal && audience === "owner", learned.length)
           : undefined
         // What this agent may launch here: a general or specialist turned off is missing from the list, Plan mode or a
         // child session denies one by permission, and a subagent's own session is told not to start general Subagents
-        // of its own. The prompts that suggest explore point at the task tool's list instead where it is not permitted.
-        const subagents = SystemPrompt.subagentAvailability({
-          agents: yield* agents.list(),
-          permission: agent.permission,
-          session: session.permission,
-          agent: agent.name,
-          nested: session.parentID !== undefined,
-        })
+        // of its own. The plan reminder, which suggests explore, points at the task tool's list instead where it is not
+        // permitted.
+        // A fork is told and offered what its parent was: it is rendered as the root, under the root's rules.
+        const rules = fork ? (forkParent?.permission ?? []) : session.permission
+        const nested = session.parentID !== undefined && !fork
+        const subagents = {
+          ...SystemPrompt.subagentAvailability({
+            agents: yield* agents.list(),
+            permission: agent.permission,
+            session: rules,
+            agent: agent.name,
+            nested,
+          }),
+          // The task tool refuses every fork from a subagent's own session or the research lead (5.E.3).
+          ...(nested || agent.name === ResearchRun.LEAD ? { fork: false } : {}),
+        }
         const explore = subagents.permitted?.includes("explore")
+        // A learned workflow default (section 6.3), for the build agent's own requests only.
+        const tuned =
+          build && agent.name === "build"
+            ? yield* tune({ session, agent, stepAgent, user: lastUser, model, build, requests, guest, subagents })
+            : undefined
+        if (tuned)
+          decided =
+            !tuned.advice && decided?.advice && decided.request.users[0]?.info.id === build?.users[0]?.info.id
+              ? { ...tuned, advice: decided.advice }
+              : tuned
         msgs = yield* SessionReminders.apply({ messages: msgs, agent, session, explore }).pipe(
           Effect.provideService(RuntimeFlags.Service, flags),
           Effect.provideService(FSUtil.Service, fsys),
@@ -2416,7 +2869,16 @@ const layer = Layer.effect(
         )
         // A quick agent is given no environment, so it is given no date either.
         if (!quick) msgs = SessionReminders.dates(msgs)
-        if (requests.length > 0) msgs = sizeNotes(msgs, quick ? [] : requests)
+        if (requests.length > 0) msgs = sizeNotes(msgs, quick ? [] : requests, workflowNotes(requests, tuned?.workflow))
+        // A fork's inherited messages carry its parent's notes, with the learned default its launching step recorded.
+        else if (forkRequests.length > 0) {
+          const launching = inherited?.messages.find((message) => message.info.id === fork?.point)?.info
+          msgs = sizeNotes(
+            msgs,
+            forkRequests,
+            workflowNotes(forkRequests, launching?.role === "assistant" ? launching.workflow : undefined),
+          )
+        }
 
         const msg: SessionV1.Assistant = {
           id: MessageID.ascending(),
@@ -2426,6 +2888,7 @@ const layer = Layer.effect(
           agent: stepAgent.name,
           variant: lastUser.model.variant,
           ...(build ? { size: build.tier } : chat ? { size: "chat" as const } : {}),
+          ...(tuned?.workflow ? { workflow: tuned.workflow } : {}),
           path: { cwd: ctx.directory, root: ctx.worktree },
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -2458,6 +2921,21 @@ const layer = Layer.effect(
           const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
           const invokedAgents = lastUserMsg?.parts.flatMap((p) => (p.type === "agent" ? [p.name] : [])) ?? []
           const promptOps = yield* ops()
+          // A greeting never reasons; otherwise the size sets effort where the user left it on its default, or a
+          // learned default drops Thorough's high effort to the model's own. Changing thinking settings rewrites
+          // Anthropic's cached messages, so there effort follows the size the tools do. A subagent runs at the effort
+          // its record holds (5.A.7).
+          const sizedEffort: TaskSize.Effort | undefined = quick
+            ? "off"
+            : build
+              ? (tuned?.workflow?.effort ??
+                TaskSize.effort(ProviderTransform.usesCacheBreakpoints(model) ? build.offered : build.tier))
+              : session.parentID && !session.internal
+                ? childEffort(session)
+                : undefined
+          // What the task tool passes down follows this request's own size (5.E.1): a child shares none of the
+          // parent's cache, so the high effort a warm cache keeps after a Thorough request stays with the parent.
+          const passdown = build && !quick ? (tuned?.workflow?.effort ?? TaskSize.effort(build.tier)) : sizedEffort
 
           const tools = yield* SessionTools.resolve({
             agent: stepAgent,
@@ -2471,8 +2949,17 @@ const layer = Layer.effect(
             // and its memory tool finds nothing personal.
             personal: personal && audience === "owner",
             outward: audience === "outward",
+            ...(delegationContext ? { delegation: delegationContext } : {}),
+            ...(sizedEffort ? { effort: sizedEffort } : {}),
+            ...(passdown ? { passdown } : {}),
             ...(build
-              ? { taskSize: { tier: build.tier, capped: SessionTaskSize.capped(build.result) } }
+              ? {
+                  taskSize: {
+                    tier: build.tier,
+                    capped: SessionTaskSize.capped(build.result),
+                    held: SessionTaskSize.held(build.result),
+                  },
+                }
               : recoverable
                 ? { taskSize: { tier: "chat" as const } }
                 : {}),
@@ -2484,40 +2971,85 @@ const layer = Layer.effect(
             Effect.provideService(MCP.Service, mcp),
             Effect.provideService(Truncate.Service, truncate),
             Effect.provideService(Brain.Service, brain),
+            Effect.provideService(Config.Service, config),
+            Effect.provideService(SessionAudience.Service, privacy),
+            Effect.provideService(Git.Service, git),
           )
 
-          // A request is offered what its size needs. On a caching provider the size here is the session's highest
-          // while the cache is warm, so the task tool may stay defined on a Work request; it still runs only the
-          // subagents the user named, and escalate is how the agent asks for more.
+          // A request is offered what its size needs (5.A.1). On a caching provider the size here is the session's
+          // highest while the cache is warm, and "no subagents" withholds nothing, so a smaller or capped follow-up sends
+          // the same definitions; what it may not launch is refused when called instead.
+          const capped = shaped !== undefined && SessionTaskSize.capped(shaped.result)
+          // "No subagents" or "don't be thorough": escalate may not raise the request.
+          const held = shaped !== undefined && SessionTaskSize.held(shaped.result)
+          // A background command the agent started is stopped with task_manage (5.H), so Light keeps task_manage while
+          // one runs, as it does while subagents launched earlier work. Only Light withholds it, so only Light asks.
+          const commands =
+            shaped?.offered === "light" &&
+            shaped.snapshot.length === 0 &&
+            (yield* jobs.list()).some(
+              (job) => job.type === "shell" && job.status === "running" && job.metadata?.parentSessionId === sessionID,
+            )
+          const offer: TaskSize.Offer | undefined = shaped && {
+            capped: capped && !ProviderTransform.caches(model),
+            children: shaped.snapshot.length > 0 || commands,
+            notified: shaped.notified !== undefined,
+          }
           if (quick) {
             // The quick lane's one tool: escalate, which hands the message to the full agent. `invalid` only answers a
             // call to a tool that is not offered, and is never sent to the model.
             for (const id of Object.keys(tools))
               if (!(recoverable && QUICK_LANE_TOOLS.some((rule) => rule.permission === id))) delete tools[id]
             if (tools.escalate) tools.escalate = { ...tools.escalate, description: QUICK_DESCRIPTION }
-          } else if (build && agent.name === ResearchRun.LEAD) {
+          } else if (shaped && agent.name === ResearchRun.LEAD) {
             // Deep research (sections 5.2, 5.6a and 11.2). A Focused run is Work, and it may still hand independent
             // sub-questions to researchers, up to its own cap of 2 (a Deep run's is 4); the research run counts them,
             // and the lead's permissions let it launch nothing else. The user's "no subagents" keeps the lead on its
             // own, and once Run Guard warns no new researcher starts.
-            const capped = SessionTaskSize.capped(build.result)
-            for (const id of TaskSize.withheld(build.offered, build.result.agents.length))
+            for (const id of TaskSize.withheld(shaped.offered, shaped.result.agents.length, offer))
               if (capped || id !== "task") delete tools[id]
+            // A capped lead has no researcher to launch, so none to manage either (5.B.5).
+            if (capped) for (const id of ["task", "task_manage"]) delete tools[id]
             if ((yield* guard.snapshot(sessionID))?.warned === true) delete tools.task
             delete tools.escalate
-          } else if (build) {
-            for (const id of TaskSize.withheld(build.offered, build.result.agents.length)) delete tools[id]
-            // A thorough request has nothing to raise to, and the user kept a capped one at Work. On a caching provider
+          } else if (shaped) {
+            for (const id of TaskSize.withheld(shaped.offered, shaped.result.agents.length, offer)) delete tools[id]
+            // A thorough request has nothing to raise to, and the user kept a held one at Work. On a caching provider
             // the tool keeps its place so a smaller follow-up sends the same definitions and reads the cached prefix;
-            // it refuses to raise a capped request.
-            if ((build.tier === "thorough" || SessionTaskSize.capped(build.result)) && !caches(model))
-              delete tools.escalate
+            // it refuses to raise a held request.
+            if ((shaped.tier === "thorough" || held) && !ProviderTransform.caches(model)) delete tools.escalate
+            const why = capped ? CAPPED_REFUSAL : shaped.tier === "light" ? LIGHT_REFUSAL : undefined
             const delegate = tools.task?.execute
-            if (delegate && build.tier !== "thorough")
-              tools.task = { ...tools.task, execute: namedOnly(delegate, build.result.agents) }
+            if (why && delegate) {
+              // Light may continue a subagent whose report arrived in it, as the agent that subagent ran.
+              const resume =
+                !capped && shaped.notified !== undefined
+                  ? new Map(
+                      (yield* sessions.children(sessionID)).flatMap((child) => {
+                        const record = SubagentLifecycle.read(child)
+                        return record ? [[child.id as string, record.agent] as const] : []
+                      }),
+                    )
+                  : undefined
+              tools.task = { ...tools.task, execute: namedOnly(delegate, { named: shaped.result.agents, why, resume }) }
+            }
+            if (why && tools.workflow)
+              tools.workflow = {
+                ...tools.workflow,
+                execute: () => {
+                  throw new Error(why)
+                },
+              }
           } else delete tools.escalate
-          // Memory is the main agent's: a subagent reports to it, and Vector's hidden helpers never learn.
-          if (session.parentID || session.internal) delete tools.memory
+          // A workflow launches subagents, so it goes with the task tool.
+          if (!tools.task) delete tools.workflow
+          // Memory is the main agent's: a subagent reports to it, and Vector's hidden helpers never learn. A workflow is
+          // the main agent's too: its agents cannot launch subagents.
+          // A fork keeps both definitions, as its parent sent them, and refuses them (SessionFork.REFUSED).
+          if ((session.parentID && !fork) || session.internal) {
+            delete tools.memory
+            delete tools.workflow
+          }
 
           if (lastUser.format?.type === "json_schema") {
             tools["StructuredOutput"] = createStructuredOutputTool({
@@ -2525,6 +3057,9 @@ const layer = Layer.effect(
               onSuccess(output) {
                 structured = output
               },
+              retryCount: lastUser.format.retryCount,
+              invalid,
+              model,
             })
           }
 
@@ -2540,10 +3075,10 @@ const layer = Layer.effect(
           // Policies for a tool go only with a request that offers it, after this agent's permissions remove what it
           // may not use, as the request itself is built.
           const offered = Object.keys(
-            LLMRequestPrep.resolveTools({ tools, agent: stepAgent, permission: session.permission, user: lastUser }),
+            LLMRequestPrep.resolveTools({ tools, agent: stepAgent, permission: rules, user: lastUser }),
           )
           const [skills, env, snapshot, mcpInstructions, modelMsgs] = yield* Effect.all([
-            quick ? Effect.succeed(undefined) : sys.skills(agent),
+            quick ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
             quick
               ? Effect.succeed({ stable: [], session: [] })
               : sys.environment(model, {
@@ -2551,12 +3086,18 @@ const layer = Layer.effect(
                   subagents: {
                     ...delegation(
                       subagents,
-                      build && { offered: offered.includes("task"), named: build.result.agents, tier: build.tier },
+                      shaped && {
+                        offered: offered.includes("task"),
+                        manage: offered.includes("task_manage"),
+                        named: shaped.result.agents,
+                        tier: shaped.tier,
+                        capped,
+                      },
                     ),
                     teammates: offered.includes("send_teammate_message"),
                   },
                   tools: offered,
-                  nested: session.parentID !== undefined,
+                  nested,
                   workspace: !OUTWARD_AGENTS.has(agent.name),
                   // The day the history starts on; a later day is noted on the user message that starts it.
                   date: msgs.find((message) => message.info.role === "user")?.info.time.created,
@@ -2586,7 +3127,7 @@ const layer = Layer.effect(
                       : {}),
                   },
                 ).pipe(Effect.orDie),
-            quick ? Effect.succeed(undefined) : sys.mcp(agent, session.permission),
+            quick ? Effect.succeed(undefined) : sys.mcp(agent, rules),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
             MessageV2.toModelMessagesEffect(
               stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
@@ -2605,6 +3146,7 @@ const layer = Layer.effect(
                   ...(previousReply
                     ? [`Your previous reply in this conversation:\n<reply>\n${previousReply}\n</reply>`]
                     : []),
+                  ...(stillWorking ? [stillWorking] : []),
                 ]
               : []),
             ...env.session,
@@ -2615,32 +3157,111 @@ const layer = Layer.effect(
           ]
           const format = lastUser.format ?? { type: "text" as const }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+          const closingStep = closing === "due" && format.type === "json_schema"
+          if (closing === "due") closing = "done"
+          let chosen: LLM.StreamInput["toolChoice"]
+          const retried = invalid.count
+          const retries = lastUser.executionMode === "fast" ? 1 : undefined
+          // A step a fork may start from keeps what it sends, before it is sent (5.E.3).
+          if (
+            !quick &&
+            !isLastStep &&
+            !session.parentID &&
+            !session.internal &&
+            offered.includes("task") &&
+            agent.name !== ResearchRun.LEAD &&
+            !OUTWARD_AGENTS.has(agent.name) &&
+            SessionFork.qualifies(model) &&
+            sizing?.subagents?.fork !== false &&
+            flags.backgroundSubagents &&
+            format.type !== "json_schema"
+          )
+            yield* forks.remember({
+              messageID: msg.id,
+              sessionID,
+              request: {
+                user: lastUser,
+                agent: stepAgent,
+                model,
+                explore,
+                effort: sizedEffort,
+                permission: session.permission,
+                stableSystem: [...env.stable],
+                system: [...system],
+                tools: { ...tools },
+                retries,
+              },
+              personal,
+              audience,
+            })
+          // A fork's request (5.E.3). While its parent's step is cached (warm), it sends that step's tools and system
+          // blocks as they were; cold, it sends what it worked out as the root, under the same names. Either way each
+          // tool runs as the fork's own, and the ones a fork may not run refuse. The first request of each run names the
+          // root's cache key, and the last inherited message takes the non-final cache breakpoint.
+          const warm = inherited?.prefix?.request
+          const keyed = fork !== undefined && !forkRequested
+          forkRequested = forkRequested || fork !== undefined
+          if (keyed && inherited)
+            yield* SubagentLifecycle.modify(sessions, sessionID, (current) =>
+              current.fork && current.fork.warm !== (warm !== undefined)
+                ? { patch: { fork: { ...current.fork, warm: warm !== undefined } }, value: undefined }
+                : { value: undefined },
+            ).pipe(Effect.ignore)
+          const ancestry = new Set(inherited?.messages.map((message) => message.info.id))
+          const inheritedCount = inherited
+            ? (yield* MessageV2.toModelMessagesEffect(
+                msgs.filter((message) => ancestry.has(message.info.id)),
+                model,
+              )).length
+            : 0
+          if (session.internal === "brain.distill" && Billing.isCodium(model.providerID)) {
+            const floor = yield* provider.getBrainModel()
+            const settings = yield* brain.learnSettings()
+            if (
+              !(settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL) ||
+              settings.codiumHelpers !== "on" ||
+              !floor ||
+              floor.id !== model.id ||
+              !(yield* brainHelper.privateInput(session.parentID ?? sessionID))
+            )
+              return "break"
+          }
           const result = yield* handle.process({
             user: lastUser,
-            agent: stepAgent,
-            explore,
-            // A greeting never reasons; otherwise the size sets effort where the user left it on its default. Changing
-            // thinking settings rewrites Anthropic's cached messages, so there effort follows the size the tools do.
-            effort: quick
-              ? "off"
-              : build
-                ? TaskSize.effort(ProviderTransform.usesCacheBreakpoints(model) ? build.offered : build.tier)
-                : undefined,
-            permission: session.permission,
+            agent: warm?.agent ?? stepAgent,
+            explore: warm ? warm.explore : explore,
+            effort: warm ? warm.effort : sizedEffort,
+            permission: warm?.permission ?? rules,
             sessionID,
             parentSessionID: session.parentID,
-            stableSystem: env.stable,
-            system,
+            stableSystem: warm ? warm.stableSystem : env.stable,
+            system: warm?.system ?? system,
             messages: [
               ...(stepAgent.name === "autocomplete"
                 ? modelMsgs.filter((message) => message.role === "user").slice(-1)
                 : modelMsgs),
+              ...(closingStep ? [{ role: "user" as const, content: STRUCTURED_OUTPUT_CLOSING }] : []),
               ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
             ],
-            tools,
+            tools: fork
+              ? SessionFork.adopt({
+                  tools: warm?.tools ?? tools,
+                  own: tools,
+                  refused: SessionFork.REFUSED(yield* config.get()),
+                })
+              : tools,
             model,
             toolChoice: format.type === "json_schema" ? "required" : undefined,
-            retries: lastUser.executionMode === "fast" ? 1 : undefined,
+            chose: (choice) => {
+              chosen = choice
+            },
+            ...(closingStep ? { thinking: false as const } : {}),
+            ...(keyed && session.parentID ? { cacheKey: session.parentID } : {}),
+            ...(inheritedCount > 0 ? { boundary: inheritedCount - 1 } : {}),
+            retries: warm ? warm.retries : retries,
+            // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
+            ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
+            ...(session.internal === "brain.distill" ? { purpose: "brain" as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
@@ -2668,9 +3289,15 @@ const layer = Layer.effect(
               return "break" as const
             }
             if (format.type === "json_schema") {
+              // An invalid call got its error back, and the model answers it next step whatever the finish said.
+              if (invalid.count > retried) return "continue" as const
+              if (chosen === "auto" && closing === undefined) {
+                closing = "due"
+                return "continue" as const
+              }
               handle.message.error = new SessionV1.StructuredOutputError({
                 message: "Model did not produce structured output",
-                retries: 0,
+                retries: invalid.count,
               }).toObject()
               yield* sessions.updateMessage(handle.message)
               return "break" as const
@@ -2683,6 +3310,7 @@ const layer = Layer.effect(
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
+              ...(lastUser.selected ? { selected: lastUser.selected } : {}),
               auto: true,
               overflow: !handle.message.finish,
             })
@@ -2713,6 +3341,55 @@ const layer = Layer.effect(
         )
         // What the run's answers cited or the agent opened is credited by how the run ended.
         yield* creditRun(sessionID).pipe(Effect.ignore, Effect.forkIn(background.scope))
+        // The spend guard ends the run once this returns, so its numbers are read now; the writes go on in the
+        // background. A run that turned a check green may draft a learned skill, and how a build request went is
+        // recorded for workflow insights.
+        const snapshot = yield* guard.snapshot(sessionID)
+        const running = (yield* jobs.list()).filter(
+          (job) => job.type === "task" && job.status === "running" && job.metadata?.parentSessionId === sessionID,
+        ).length
+        // A CLI run waits for them, as for titles, before the instance goes.
+        const kept = (fiber: Fiber.Fiber<void>) => {
+          background.titles.add(fiber)
+          fiber.addObserver(() => background.titles.delete(fiber))
+          return fiber
+        }
+        kept(
+          yield* workflowSession
+            .observe({ session, taught, since, run: snapshot, background: running, step: decided })
+            .pipe(Effect.ignore, Effect.forkIn(background.scope)),
+        )
+        // The model drafter's request counts against this run, as the model learner's does, so its scopes are captured
+        // before the run ends. The drafter lets them go when it is done; with no drafter, they go at once.
+        kept(
+          yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              let drafting = false
+              return yield* restore(
+                skillLearn.run(session, taught, snapshot, { captured: spend, costKind: helperCostKind }),
+              ).pipe(
+                Effect.flatMap((later) => {
+                  if (!later) return Effect.void
+                  drafting = true
+                  return restore(later).pipe(
+                    Effect.ensuring(spend.release),
+                    Effect.forkIn(background.scope),
+                    Effect.map((drafter) => {
+                      drafters.set(sessionID, kept(drafter))
+                      drafter.addObserver(() => {
+                        if (drafters.get(sessionID) === drafter) drafters.delete(sessionID)
+                      })
+                    }),
+                  )
+                }),
+                Effect.ensuring(Effect.suspend(() => (drafting ? Effect.void : spend.release))),
+                Effect.catchCause((cause) => Effect.logWarning("skill learning failed", { cause })),
+                Effect.forkIn(background.scope),
+              )
+            }),
+          ),
+        )
         // What the user typed teaches Vector how they work: plain code at once, and the model learner, where it runs,
         // in the background.
         const later = yield* learnRun(session, taught).pipe(
@@ -2721,9 +3398,15 @@ const layer = Layer.effect(
           ),
         )
         if (later) {
-          const learner = yield* later.pipe(
-            Effect.catchCause(() => Effect.void),
-            Effect.forkIn(background.scope),
+          const learner = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              return yield* restore(later(spend)).pipe(
+                Effect.ensuring(spend.release),
+                Effect.catchCause(() => Effect.void),
+                Effect.forkIn(background.scope),
+              )
+            }),
           )
           learners.set(sessionID, learner)
           background.titles.add(learner)
@@ -2743,6 +3426,80 @@ const layer = Layer.effect(
       return yield* lastAssistant(sessionID)
     })
 
+    // A build request's learned workflow default (section 6.3), decided at its first step at its size and carried on
+    // its assistant messages after that, so it never moves within a request; only an escalation, which sends it at a new
+    // size and so writes the cache anew, decides again. Where the provider caches, effort follows the size the request
+    // is sent at, and while the cache is warm at that size it stays what the request before ran with. Only a request
+    // nobody chose for gets one (SessionWorkflow.eligible).
+    const tune = Effect.fn("SessionPrompt.tune")(function* (input: {
+      session: Session.Info
+      agent: Agent.Info
+      stepAgent: Agent.Info
+      user: SessionV1.User
+      model: Provider.Model
+      build: SessionTaskSize.Request
+      requests: readonly SessionTaskSize.Request[]
+      guest: boolean
+      subagents: SystemPrompt.SubagentAvailability
+    }) {
+      const tierOf = (request: SessionTaskSize.Request) =>
+        ProviderTransform.usesCacheBreakpoints(input.model) ? request.offered : request.tier
+      const effortTier = tierOf(input.build)
+      const info = yield* provider.getProvider(input.model.providerID)
+      const earlier = input.build.messages.filter(
+        (message) => message.info.role === "assistant" && message.info.size === input.build.tier,
+      )
+      const stepped = earlier.length > 0
+      const previous = input.requests.slice(0, -1).findLast((request) => request.tier !== "chat")
+      const warm = input.build.warm && previous !== undefined && tierOf(previous) === effortTier
+      const eligible =
+        !stepped &&
+        (yield* workflowSession.eligible({
+          session: input.session,
+          agent: input.agent,
+          stepAgent: input.stepAgent,
+          user: input.user,
+          model: input.model,
+          provider: info,
+          result: input.build.result,
+          guest: input.guest,
+        }))
+      const advice = eligible
+        ? yield* workflowSession.advice({
+            session: input.session,
+            tier: input.build.tier,
+            effortTier,
+            result: input.build.result,
+            model: input.model,
+            requestID: input.build.users.at(-1)?.info.id ?? input.user.id,
+            warm,
+            offered: input.subagents.general || input.subagents.specialists ? ["task"] : [],
+            namedSubagents: input.build.result.agents.length > 0,
+          })
+        : undefined
+      const workflow = stepped
+        ? SessionWorkflow.recorded({ messages: earlier })
+        : eligible
+          ? SessionWorkflow.applied(advice, { warm, previous: previous && SessionWorkflow.recorded(previous) })
+          : undefined
+      return {
+        request: input.build,
+        effortTier,
+        model: input.model,
+        ...SessionWorkflow.source({
+          user: input.user,
+          stepAgent: input.stepAgent,
+          model: input.model,
+          provider: info,
+          result: input.build.result,
+          effortTier,
+          ...(workflow ? { workflow } : {}),
+        }),
+        ...(workflow ? { workflow } : {}),
+        ...(advice ? { advice } : {}),
+      } satisfies SessionWorkflow.Step
+    })
+
     // Learning about you (section 6.3), once a run is over: what the user typed in each request message it answered
     // that was more than a greeting teaches Vector their terms and preferences, read by plain code with no model call.
     // Only typed words count (not what they pasted, a slash command's text or text from outside), and never in a session
@@ -2759,7 +3516,8 @@ const layer = Layer.effect(
       session: Session.Info,
       taught: ReadonlyMap<MessageID, { readonly message: SessionV1.WithParts; readonly tier: TaskSize.Tier }>,
     ) {
-      if (session.parentID || session.internal) return undefined
+      // A Vector an agent started answers text that agent wrote, never the owner's own words.
+      if (session.parentID || session.internal || SessionMemory.agentStarted()) return undefined
       // The run already holds the messages it answered, so nothing is read to learn from them.
       const requests = [...taught.values()]
         .filter((item) => item.tier !== "chat" && item.message.info.role === "user")
@@ -2834,26 +3592,29 @@ const layer = Layer.effect(
       const user = last?.message.info
       // The model learner runs where the user let it: with Vector Local on, by default.
       const allowed =
-        settings.modelLearner === "always" || (settings.modelLearner === "local-only" && Egress.policy().enabled)
+        settings.modelLearner !== "off" &&
+        (settings.modelLearner === "always" || Egress.policy().enabled || settings.codiumHelpers === "on")
       if (!last || user?.role !== "user" || !allowed) return undefined
       // Only a correction the rules found nothing in needs the session: whether it read outside content, and the reply
       // before the correction.
       const msgs = yield* sessions.messages({ sessionID: session.id })
       const tainted = SessionMemory.taint(msgs) !== undefined
       const before = msgs.filter((message) => message.info.id < user.id)
-      return Effect.gen(function* () {
-        const learned = yield* modelLearn({
-          session,
-          user,
-          typed: last.typed,
-          reply: SessionTaskSize.closingText(before).slice(-600),
-          tainted,
-          settings,
+      return (spend: SpendGuard.Captured) =>
+        Effect.gen(function* () {
+          const learned = yield* modelLearn({
+            session,
+            user,
+            typed: last.typed,
+            reply: SessionTaskSize.closingText(before).slice(-600),
+            tainted,
+            settings,
+            spend,
+          })
+          // A model's own words wait for the user, never for the same words from another session: a model would
+          // write them again.
+          yield* write(last.message, learned, "review")
         })
-        // A model's own words wait for the user, never for the same words from another session: a model would
-        // write them again.
-        yield* write(last.message, learned, "review")
-      })
     })
 
     // The optional model learner (section 6.3): one small-model request reads a correction ("no, I meant…") after the
@@ -2869,22 +3630,32 @@ const layer = Layer.effect(
       reply: string
       tainted: boolean
       settings: Brain.LearnSettings
+      spend: SpendGuard.Captured
     }) {
+      if (yield* input.spend.stopped) return []
+      if (yield* guests.marked(input.session.id)) return []
       const primary = yield* provider
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
       if (Option.isNone(primary)) return []
-      const model =
-        (yield* provider.getSmallModel(input.user.model.providerID, input.user.model.modelID)) ?? primary.value
-      if (freeModelMayTrain(primary.value) || freeModelMayTrain(model)) return []
+      const model = yield* brainHelper.choose({ setting: "modelLearner", primary: primary.value })
+      if (!model) return []
+      // The existing own-provider learner can retain a tainted typed correction for review. Codium consent does not
+      // authorize sending a held repository or tainted session to a remote Brain helper.
+      if (Billing.isCodium(model.providerID) && (input.tainted || (yield* instruction.place()).held)) return []
       const title = yield* agents.get("title")
       if (!title) return []
+      const settings = yield* brain.learnSettings()
       const usage = TitleUsage.create({
         sessionID: input.session.id,
         model,
         publish: events.publish,
         purpose: "memory",
+        spend: input.spend,
+        costKind: yield* helperCostKind(model),
       })
+      if (!(yield* brainHelper.permitted(model, "modelLearner"))) return []
+      if (Billing.isCodium(model.providerID) && !(yield* brainHelper.privateInput(input.session.id))) return []
       const reply = yield* llm
         .stream({
           // Its own instructions on the title helper's: no tools, no repository context.
@@ -2895,6 +3666,7 @@ const layer = Layer.effect(
           tools: {},
           model,
           sessionID: input.session.id,
+          purpose: "brain",
           retries: 1,
           started: usage.started,
           messages: [{ role: "user", content: BrainLearn.request({ typed: input.typed, reply: input.reply }) }],
@@ -2911,7 +3683,7 @@ const layer = Layer.effect(
         const learned = BrainLearn.accept(suggestion, {
           typed: input.typed,
           tainted: input.tainted,
-          facets: input.settings.facets,
+          facets: settings.facets,
         })
         return learned ? [learned] : []
       })
@@ -2937,20 +3709,36 @@ const layer = Layer.effect(
           const request = msgs[start]!
           const given = SessionMemory.delivered(turn)
           const fetched = SessionMemory.fetched(turn)
-          if (!SessionMemory.finished(turn) || (given.size === 0 && fetched.length === 0)) return Effect.void
-          return knowledge.credit(place, {
-            sessionID,
-            requestID: request.info.id,
-            outcome:
-              SessionMemory.recovered(msgs.slice(0, start + turn.length), request.info.time.created) ||
-              SessionMemory.judged(turn)
-                ? "pass"
-                : "none",
-            delivered: [...given],
-            cited: SessionMemory.cited(SessionMemory.answered(turn), given),
-            fetched,
-            edited: SessionMemory.edited(turn),
-          })
+          // A learned skill is credited by its own checks alone, never by a passing run as a whole.
+          const loads = SessionMemory.skills(turn)
+          if (!SessionMemory.finished(turn)) return Effect.void
+          return Effect.all(
+            [
+              loads.length === 0
+                ? Effect.void
+                : brainSkills.credit(place, {
+                    sessionID,
+                    requestID: request.info.id,
+                    outcomes: SessionMemory.skillOutcomes(turn, loads),
+                  }),
+              given.size === 0 && fetched.length === 0
+                ? Effect.void
+                : knowledge.credit(place, {
+                    sessionID,
+                    requestID: request.info.id,
+                    outcome:
+                      SessionMemory.recovered(msgs.slice(0, start + turn.length), request.info.time.created) ||
+                      SessionMemory.judged(turn)
+                        ? "pass"
+                        : "none",
+                    delivered: [...given],
+                    cited: SessionMemory.cited(SessionMemory.answered(turn), given),
+                    fetched,
+                    edited: SessionMemory.edited(turn),
+                  }),
+            ],
+            { discard: true },
+          )
         },
         { discard: true },
       )
@@ -3077,6 +3865,54 @@ const layer = Layer.effect(
       return input.msgs
     })
 
+    // This session's subagents launched before `before` (a request's opening message) that are still working, or that
+    // finished with a report not yet delivered. A record left running by an engine that is gone is not working
+    // (TaskManager.observe). `earlier` counts every child launched before, finished or not.
+    const outstanding = Effect.fn("SessionPrompt.outstanding")(function* (sessionID: SessionID, before: string) {
+      const children = (yield* sessions.children(sessionID)).flatMap((child) => {
+        const record = child.internal ? undefined : SubagentLifecycle.read(child)
+        return record && record.parentMessageID < before ? [{ child, record }] : []
+      })
+      const running = yield* Effect.forEach(children, ({ child, record }) =>
+        Effect.gen(function* () {
+          const item = { id: child.id, title: record.title }
+          if (record.status !== "running" && record.status !== "queued")
+            return record.notification && record.notification.messageID === undefined ? [item] : []
+          if (SubagentLifecycle.localLiveness(record) === "alive") return [item]
+          const live =
+            (yield* jobs.get(child.id).pipe(TaskJobs.atLauncher(child))) !== undefined ||
+            (yield* status.get(child.id)).type !== "idle"
+          return live ? [item] : []
+        }),
+      )
+      return { earlier: children.length, running: running.flat() }
+    })
+
+    // Saves the snapshot part on the opening message of a request that is past the quick lane and has none, and reports
+    // whether it did. A session that launched nothing before the request records nothing: its snapshot stays empty.
+    const snapshotFor = Effect.fn("SessionPrompt.snapshotFor")(function* (
+      sessionID: SessionID,
+      request: SessionTaskSize.Request | undefined,
+    ) {
+      const opener = request?.carried ? undefined : request?.users[0]
+      if (!request || !opener || request.tier === "chat" || SessionTaskSize.snapshotOf(opener) !== undefined)
+        return false
+      const found = yield* outstanding(sessionID, opener.info.id)
+      if (found.earlier === 0) return false
+      const part = yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: opener.info.id,
+        sessionID,
+        type: "text",
+        ...SessionTaskSize.snapshotPart(found.running, Date.now()),
+        synthetic: true,
+        // Rendered beside the request's size note (sizeNotes), not on its own.
+        ignored: true,
+      } satisfies SessionV1.TextPart)
+      opener.parts.push(part)
+      return true
+    })
+
     // A request message's recalled memory, saved on the message as a synthetic part (nothing when nothing is relevant).
     // A Deep research request recalls, of the owner's own memory, only how they work (section 6.4): researching needs
     // no fact about them, and nothing learned beside a private document. Its documents follow the usual rules.
@@ -3181,14 +4017,27 @@ const layer = Layer.effect(
       const kept = msgs.flatMap((message) => SessionMemory.remember(message))
       const toolPersonal = found ? parts.flatMap((part) => SessionMemory.personal(part)) : []
       const codeLinks = parts.flatMap((part) => Instruction.links(part))
+      const loads = parts.flatMap((part) => SessionMemory.skill(part) ?? [])
       if (
         recalls.length === 0 &&
         known.length === 0 &&
         kept.length === 0 &&
         toolPersonal.length === 0 &&
-        codeLinks.length === 0
+        codeLinks.length === 0 &&
+        loads.length === 0
       )
         return msgs
+      // A learned skill's steps, from the version the session loaded, where personal memory may go and its output
+      // stays in the session; elsewhere a line says they were withheld.
+      const procedures = new Map(
+        found
+          ? yield* Effect.forEach(loads, (load) =>
+              learnedSkills
+                .fill({ id: load.id, version: load.version })
+                .pipe(Effect.map((text) => [`${load.id}\0${load.version}`, text] as const)),
+            )
+          : [],
+      )
       const place = yield* instruction.place()
       // A read's pointer and an edit's spec guard, each rendered again from the ids it named.
       const linkKey = (link: Instruction.Link) => `${link.mode}\0${link.file}\0${link.ids.join(",")}`
@@ -3281,6 +4130,17 @@ const layer = Layer.effect(
           if (part.type === "text" && value?.document && value.part)
             return [{ ...part, text: outlines.get(value.document) ?? part.text }]
           if (part.type !== "tool" || part.state.status !== "completed") return [part]
+          const load = SessionMemory.skill(part)
+          if (load)
+            return [
+              {
+                ...part,
+                state: {
+                  ...part.state,
+                  output: procedures.get(`${load.id}\0${load.version}`) ?? LearnedSkill.WITHHELD,
+                },
+              },
+            ]
           const withheld = found ? SessionMemory.personal(part) : []
           const own = Instruction.links(part)
           if (withheld.length === 0 && !value && own.length === 0) return [part]
@@ -3372,13 +4232,14 @@ const layer = Layer.effect(
       return input.msgs
     })
 
-    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
-      input: LoopInput,
-    ) {
+    const loop: Interface["loop"] = (input) => executing(input.sessionID, loopHere(input))
+    const loopHere = Effect.fn("SessionPrompt.loop")(function* (input: LoopInput) {
       return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
     })
 
-    const resumeFreeModels = Effect.fn("SessionPrompt.resumeFreeModels")(function* (
+    const resumeFreeModels: Interface["resumeFreeModels"] = (input, options) =>
+      executing(input.sessionID, resumeFreeModelsHere(input, options))
+    const resumeFreeModelsHere = Effect.fn("SessionPrompt.resumeFreeModels")(function* (
       input: ResumeFreeModelsInput,
       options?: Pick<PromptOptions, "refuseTrainingFreeModels">,
     ) {
@@ -3459,14 +4320,14 @@ const layer = Layer.effect(
       )
     })
 
-    const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
-      "SessionPrompt.shell",
-    )(function* (input: ShellInput) {
+    const shell: Interface["shell"] = (input) => executing(input.sessionID, shellHere(input))
+    const shellHere = Effect.fn("SessionPrompt.shell")(function* (input: ShellInput) {
       const ready = yield* Latch.make()
       return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
     })
 
-    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+    const command: Interface["command"] = (input) => executing(input.sessionID, commandHere(input))
+    const commandHere = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       yield* Effect.logInfo("command", {
         "session.id": input.sessionID,
         command: input.command,
@@ -3553,7 +4414,9 @@ const layer = Layer.effect(
       // Command and agent defaults cannot spend money on behalf of a free selection.
       const taskModel = isFreeSelection(selectedModel) ? selectedModel : (commandModel ?? selectedModel)
 
-      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
+      // Codium Auto is checked where it is resolved: by the command's message, or by its subtask.
+      if (!SessionCodiumAuto.isAuto(taskModel))
+        yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
 
       // A slash command's text is not the user's words: a template someone wrote, an MCP server's prompt, a skill or
       // what its snippets printed. Memory takes only the arguments as theirs, and memory written after outside content
@@ -3634,6 +4497,7 @@ const layer = Layer.effect(
                 ? {}
                 : { size: commandSize(input.arguments) }),
           ...(input.judge ? { judge: input.judge } : {}),
+          ...(input.secondOpinion ? { secondOpinion: true } : {}),
         },
         // @file references in an MCP prompt or a skill are not the user's choice; the user's own attachments are.
         { userFile: (url) => attached.has(url) || cmd.source === "command" },
@@ -3648,6 +4512,7 @@ const layer = Layer.effect(
     })
 
     return Service.of({
+      currentModel,
       awaitTitles,
       cancel,
       prompt,
@@ -3656,6 +4521,7 @@ const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
+      admit,
     })
   }),
 )
@@ -3744,81 +4610,121 @@ function commandSize(args: string): TaskSize.Tier {
   return typed.source === "user" ? typed.tier : "standard"
 }
 
-// Whether the provider caches the prompt prefix, so a smaller tool set on the next request would write it again.
-function caches(model: Provider.Model) {
-  return ProviderTransform.usesCacheBreakpoints(model) || (model.cost?.cache?.read ?? 0) > 0
-}
-
-// Each sized request's guidance rides on its last user message, worked out from that request alone, so every earlier
-// message renders the same on every request and stays in the provider's cache. The judge policy older clients sent
-// with each prompt is dropped: Vector runs the judge itself, and the policy would have the model launch it too.
-function sizeNotes(messages: SessionV1.WithParts[], requests: readonly SessionTaskSize.Request[]) {
-  const notes = new Map(
-    requests.flatMap((request) => {
-      // A request whose opening message a compaction summarised carries its note on the compaction marker.
-      const user = request.users.at(-1) ?? request.messages.find((message) => message.info.role === "user")
-      if (!user || user.info.role !== "user" || !onBuild(user.info)) return []
-      const text = TaskSize.note(request.result.tier, {
-        escalate: !SessionTaskSize.capped(request.result),
-        judge: request.judge !== "off",
-      })
-      return text ? [[user.info.id, text] as const] : []
-    }),
-  )
+// Each sized request's guidance rides on the user messages its notes name (SessionTaskSize.Request.notes): the opening
+// message, and a joined one only where the size, the "no subagents" cap or the judge changed. Each is worked out from
+// the messages up to its own, so every earlier message renders the same on every request and stays in the provider's
+// cache. The opening message also carries the subagents still working when the request opened. The judge policy older
+// clients sent with each prompt is dropped: Vector runs the judge itself, and the policy would have the model launch it
+// too.
+function sizeNotes(
+  messages: SessionV1.WithParts[],
+  requests: readonly SessionTaskSize.Request[],
+  // Each request's learned workflow default, by the request's opening message, so a request's notes say the same on
+  // every step after it.
+  workflows: ReadonlyMap<string, SessionWorkflow.Workflow> = new Map(),
+) {
+  const notes = new Map<string, string[]>()
+  for (const request of requests) {
+    const solo = workflows.get(openerOf(request))?.split === "solo"
+    for (const [index, entry] of request.notes.entries()) {
+      if (entry.user.info.role !== "user" || !onBuild(entry.user.info)) continue
+      const capped = SessionTaskSize.capped(entry.result)
+      const lines = [
+        index === 0 ? TaskSize.running(request.snapshot, "work") : undefined,
+        TaskSize.note(entry.result.tier, {
+          escalate: !SessionTaskSize.held(entry.result),
+          judge: entry.judge !== "off",
+          solo,
+          capped,
+        }),
+      ].filter((line): line is string => line !== undefined)
+      if (lines.length > 0) notes.set(entry.user.info.id, [...(notes.get(entry.user.info.id) ?? []), ...lines])
+    }
+  }
   return messages.map((message) => {
     if (message.info.role !== "user") return message
-    const note = notes.get(message.info.id)
+    const added = notes.get(message.info.id) ?? []
     const parts = message.parts.filter(
       (part) => !(part.type === "text" && part.synthetic && part.text.startsWith(SessionTaskSize.LEGACY_JUDGE_POLICY)),
     )
-    if (!note && parts.length === message.parts.length) return message
+    if (added.length === 0 && parts.length === message.parts.length) return message
     return {
       ...message,
       parts: [
         ...parts,
-        ...(note
-          ? [
-              {
-                id: PartID.ascending(),
-                messageID: message.info.id,
-                sessionID: message.info.sessionID,
-                type: "text" as const,
-                text: note,
-                synthetic: true,
-              },
-            ]
-          : []),
+        ...added.map((text) => ({
+          id: PartID.ascending(),
+          messageID: message.info.id,
+          sessionID: message.info.sessionID,
+          type: "text" as const,
+          text,
+          synthetic: true,
+        })),
       ],
     }
   })
 }
 
-// Below Thorough the task tool may stay in a cached request's definitions; only a subagent the user named runs.
-function namedOnly(execute: NonNullable<AITool["execute"]>, named: readonly string[]): NonNullable<AITool["execute"]> {
+// The message that opened a request: the first user message, or the one a compaction recorded when its summary
+// replaced it.
+function openerOf(request: SessionTaskSize.Request) {
+  return request.carried?.opened ?? request.users[0]?.info.id ?? request.messages[0]!.info.id
+}
+
+// Each request's learned workflow default by its opening message: what its steps recorded, and for the request being
+// answered, what this step decided.
+function workflowNotes(requests: readonly SessionTaskSize.Request[], current: SessionWorkflow.Workflow | undefined) {
+  return new Map(
+    requests.flatMap((request, index) => {
+      const workflow = index === requests.length - 1 && current ? current : SessionWorkflow.recorded(request)
+      return workflow ? [[openerOf(request), workflow] as const] : []
+    }),
+  )
+}
+
+// Why a call the request may not make is refused (5.A.1), on a provider whose cache keeps the tool's definition.
+const LIGHT_REFUSAL =
+  "This is a Light request: it launches only subagents the user named. Do the work yourself, or continue a subagent whose report just arrived by passing its task_id."
+const CAPPED_REFUSAL =
+  "The user asked for no new subagents in this request. Do the work yourself; task_manage still checks, steers or stops the ones already running."
+
+// A call passes when every brief names a subagent the user named, or with `resume`, when every brief continues a child
+// by task_id as the agent it ran (subagent_type left out or the same). Anything else is refused with `why`.
+function namedOnly(
+  execute: NonNullable<AITool["execute"]>,
+  input: { named: readonly string[]; why: string; resume?: ReadonlyMap<string, string> },
+): NonNullable<AITool["execute"]> {
   return (args, options) => {
-    const input: Record<string, unknown> = isRecord(args) ? args : {}
-    const briefs: unknown[] = Array.isArray(input.tasks) ? input.tasks : [input]
-    const types = briefs.map((brief) =>
+    const call: Record<string, unknown> = isRecord(args) ? args : {}
+    const briefs: unknown[] = Array.isArray(call.tasks) ? call.tasks : [call]
+    const typeOf = (brief: unknown) =>
       isRecord(brief) && typeof brief.subagent_type === "string" && brief.subagent_type.trim()
         ? brief.subagent_type.trim()
-        : "general",
-    )
-    if (types.every((type) => named.includes(type))) return execute(args, options)
-    throw new Error(
-      "Subagents are not offered for this request. Do the work yourself; call escalate only for exceptionally hard work across the whole system or dozens of files.",
-    )
+        : undefined
+    if (briefs.every((brief) => input.named.includes(typeOf(brief) ?? "general"))) return execute(args, options)
+    const resume = input.resume
+    const continues = (brief: unknown) => {
+      if (!resume || !isRecord(brief) || typeof brief.task_id !== "string") return false
+      const type = typeOf(brief)
+      return type === undefined || type === resume.get(brief.task_id)
+    }
+    if (briefs.every(continues)) return execute(args, options)
+    throw new Error(input.why)
   }
 }
 
-// What the subagent policy describes for a sized request: nothing when the task tool is not offered, and only the
-// subagents the user named when they are all a smaller size allows.
+// What the subagent policy describes for a sized request: nothing when the task tool is not offered (only task_manage
+// when that is), and on a Light or capped request only the subagents the user named, when they named any.
 function delegation(
   availability: SystemPrompt.SubagentAvailability,
-  sized: { offered: boolean; named: readonly string[]; tier: TaskSize.Tier } | undefined,
+  sized:
+    | { offered: boolean; manage: boolean; named: readonly string[]; tier: TaskSize.Tier; capped: boolean }
+    | undefined,
 ): SystemPrompt.SubagentAvailability {
   if (!sized) return availability
-  if (!sized.offered) return { general: false, specialists: false }
-  if (sized.tier === "thorough" || sized.named.length === 0) return availability
+  if (!sized.offered)
+    return sized.manage ? { general: false, specialists: false, manage: true } : { general: false, specialists: false }
+  if ((sized.tier !== "light" && !sized.capped) || sized.named.length === 0) return availability
   const permitted = (availability.permitted ?? []).filter((name) => sized.named.includes(name))
   return {
     ...availability,
@@ -3826,6 +4732,13 @@ function delegation(
     specialists: permitted.length > 0,
     permitted,
   }
+}
+
+// A subagent's own effort, as its record holds it (5.A.7). The sized path carries "default" and "high"; a brief's low or
+// medium reaches the child as its variant.
+function childEffort(session: Session.Info): TaskSize.Effort | undefined {
+  const effort = SubagentLifecycle.read(session)?.effort
+  return effort === "default" || effort === "high" ? effort : undefined
 }
 
 function judgeBrief(work: NonNullable<ReturnType<typeof SessionTaskSize.judgeable>>) {
@@ -3958,11 +4871,15 @@ export const PromptInput = Schema.Struct({
   budget: Schema.optional(RunBudget.Info),
   size: Schema.optional(TaskSize.Choice).annotate({
     description:
-      "How much harness the request gets: auto (the default) lets Vector size it from what it says; chat is a direct reply with no tools; light, standard or thorough set it. Only thorough offers subagents.",
+      "How much harness the request gets: auto (the default) lets Vector size it from what it says; chat is a direct reply with no tools; light, standard or thorough set it. Standard and thorough may hand work to subagents; light and chat do not.",
   }),
   judge: Schema.optional(TaskSize.JudgeMode).annotate({
     description:
       "When Vector runs LLM-as-a-judge after the run: off, thorough (after large tasks that changed files) or changes (after every task that changed files). Defaults to the config's sizing.judge.",
+  }),
+  secondOpinion: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Second opinion: when the judge checks work done on a Vector Codium model, it runs on the plan's judge from another lab, unless a judge model is configured. Off unless set.",
   }),
   parts: Schema.Array(
     Schema.Union([
@@ -4030,6 +4947,7 @@ export const CommandInput = Schema.Struct({
   // As on PromptInput. Without a size from the sender or the command, Vector sizes the run from the template.
   size: Schema.optional(TaskSize.Choice),
   judge: Schema.optional(TaskSize.JudgeMode),
+  secondOpinion: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.
@@ -4105,20 +5023,44 @@ export function prepareCommandTemplate(templateCommand: string, inputArguments: 
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
   onSuccess: (output: unknown) => void
+  // Invalid calls answered with an error before a value is kept as it is (the format's retryCount, at most 5).
+  retryCount?: number
+  // The run's count of invalid calls. The tool is built again for every step, so the run keeps the count.
+  invalid?: { count: number }
+  // The model the schema is rendered for: bounds its provider drops are restated in descriptions.
+  model?: Provider.Model
 }): AITool {
   // Remove $schema property if present (not needed for tool input)
   const { $schema: _, ...toolSchema } = input.schema
+  // The AI SDK does not check a JSON Schema tool's input, so Vector does, for every schema JsonSchemaCheck can enforce
+  // in full. Any other schema is passed on and its value kept unchecked.
+  const check = JsonSchemaCheck.accept(input.schema)
+  const invalid = input.invalid ?? { count: 0 }
+  const retryCount = Math.min(input.retryCount ?? 2, STRUCTURED_OUTPUT_MAX_RETRIES)
 
   return tool({
     description: STRUCTURED_OUTPUT_DESCRIPTION,
-    inputSchema: jsonSchema(toolSchema as JSONSchema7),
+    inputSchema: jsonSchema(
+      check.ok && input.model
+        ? ProviderTransform.schema(input.model, toolSchema as JSONSchema7, { restate: true })
+        : (toolSchema as JSONSchema7),
+    ),
     async execute(args) {
-      // AI SDK validates args against inputSchema before calling execute()
+      const problems = check.ok ? JsonSchemaCheck.validate(check.schema, args) : []
+      if (problems.length > 0 && invalid.count < retryCount) {
+        invalid.count++
+        return {
+          output: `Invalid structured output: ${JsonSchemaCheck.describe(problems)} Call StructuredOutput again with JSON that matches the schema.`,
+          title: "Structured Output",
+          metadata: { valid: false },
+        }
+      }
       input.onSuccess(args)
       return {
         output: "Structured output captured successfully.",
         title: "Structured Output",
-        metadata: { valid: true },
+        // A value kept after the retries ran out is still the answer, marked invalid.
+        metadata: problems.length > 0 ? { valid: false, captured: true } : { valid: true },
       }
     },
     toModelOutput({ output }) {
@@ -4143,6 +5085,7 @@ export const node = LayerNode.make({
     Session.node,
     Agent.node,
     Provider.node,
+    Auth.node,
     FreeModels.node,
     FreeModels.credentialsNode,
     SessionProcessor.node,
@@ -4170,21 +5113,38 @@ export const node = LayerNode.make({
     Database.node,
     SpendGuard.node,
     Brain.node,
+    BrainDatabase.node,
     BrainKnowledge.node,
+    BrainSkill.node,
+    LearnedSkill.node,
+    SessionSkillLearn.node,
+    SessionWorkflow.node,
+    BackgroundJob.node,
+    TaskNotify.node,
+    TaskLimits.node,
+    SessionFork.node,
     FreeModelGuests.node,
     Git.node,
     ResearchStore.node,
     ResearchRun.node,
+    TaskIsolation.node,
+    SessionAudience.node,
   ],
 })
 
 /**
  * How many items of the owner's brain a request carries, for Vector Local's network log: personal memory entries,
- * document cards and passages, and the repository's own memory lines. Counted from the recall and memory-tool parts the
- * request fills in (withheldRecall), so nothing is read; `found` is whether what a tool found is filled in from personal
- * memory and private documents.
+ * document cards and passages, and the repository's own memory lines, learned skills listed and learned skills' steps
+ * included. Counted from the recall, memory-tool and skill parts the request fills in (withheldRecall), so nothing is
+ * read; `found` is whether what a tool found is filled in from personal memory and private documents, and `listed` how
+ * many learned skills the system prompt lists.
  */
-function carriedOf(msgs: readonly SessionV1.WithParts[], personal: boolean, found: boolean): LocalMode.Carried {
+export function carriedOf(
+  msgs: readonly SessionV1.WithParts[],
+  personal: boolean,
+  found: boolean,
+  listed = 0,
+): LocalMode.Carried {
   const parts = msgs.flatMap((message) => message.parts)
   const recalls = parts.flatMap((part) => SessionMemory.recall(part) ?? [])
   const known = parts.flatMap((part) => SessionMemory.knowledge(part) ?? [])
@@ -4197,7 +5157,8 @@ function carriedOf(msgs: readonly SessionV1.WithParts[], personal: boolean, foun
   const repository = new Set(
     recalls.flatMap((recall) => recall.ids.filter((id) => !recall.personal.includes(id) && !recall.cards.includes(id))),
   )
-  return { personal: own.size, documents: cards.size + passages, repository: repository.size }
+  const procedures = found ? parts.filter((part) => SessionMemory.skill(part) !== undefined).length : 0
+  return { personal: own.size, documents: cards.size + passages, repository: repository.size + listed + procedures }
 }
 
 export * as SessionPrompt from "./prompt"

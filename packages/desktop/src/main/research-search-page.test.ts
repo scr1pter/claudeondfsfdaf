@@ -1,20 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { realpathSync } from "node:fs"
-import { createRequire } from "node:module"
-import path from "node:path"
+import { GlobalRegistrator } from "@happy-dom/global-registrator"
 import { ResearchSearch } from "@vectordevai/core/research/search"
 import { readSearchPage, searchOutcome, type SearchPageRead } from "./research-search-page"
 
 // Reading search engines' results pages (section 5.7), against hand-written pages shaped like Google's and
-// DuckDuckGo's HTML results, in happy-dom (the app package's DOM for tests). No live page is fetched. The page script
+// DuckDuckGo's HTML results, in happy-dom (a DOM for tests). No live page is fetched. The page script
 // runs as the research browser runs it: serialized with toString() and rebuilt with no access to this module.
 
-const load = createRequire(
-  realpathSync(path.join(import.meta.dir, "../../../app/node_modules/@happy-dom/global-registrator/package.json")),
-)
-const { GlobalRegistrator } = load("@happy-dom/global-registrator") as {
-  GlobalRegistrator: { register: (options: { url: string }) => void }
-}
 GlobalRegistrator.register({ url: "https://www.google.com/" })
 
 const inPage = <T extends (...input: never[]) => unknown>(fn: T) => new Function(`return (${fn.toString()})`)() as T

@@ -1,5 +1,14 @@
 # OpenRouter free access — owner actions
 
+## Two accounts: free models and Codium
+
+Vector uses two OpenRouter accounts, with opposite settings. Never use one account's key for the other.
+
+- **The free-models account** (`OPENROUTER_FREE_API_KEY`) is what this page is about. Its balance must never go negative; keep automatic top-ups, cards, paid BYOK keys and paid plugins off, and keep "ZDR endpoints only" off, or every free model is refused.
+- **The Codium account** (`OPENROUTER_MANAGEMENT_KEY`) serves Vector Codium's paid models. It holds a balance refilled by OpenRouter's own auto top-up, with a backup card, ZDR on for every model group, and prompt logging and input/output use off. Its setup is [codium-payments.md, section 2](codium-payments.md#2-openrouter). Vector cannot buy OpenRouter credit itself: the funding check pauses Codium sales when this balance cannot cover what customers may still spend, and emails you when auto top-up is late ([codium-owner-guards.md](codium-owner-guards.md#funding)).
+
+## The free-models account
+
 **Superseded on 17 October 2026.** The owner decided that the free-model budget on Vector's own OpenRouter account is the free path for every signed-in Vector user ("i want it so that the vector app is connected to my openrouter account no matter who uses the free models"), and bought $10 of OpenRouter credits for it; see [Free models of 17 October 2026: owner steps](#free-models-of-17-october-2026-owner-steps). The rest of this paragraph and the sections after those steps are the history.
 
 Decision (1.99.99): use each user's own free OpenRouter account for the upcoming **1.99.99** release. Personal free-model discovery and setup work independently of `FREE_MODELS_ENABLED=false`. Leave the shared service off; do not add a shared key, activate KV for this feature, or purchase credits. The currently downloadable desktop **1.99.8** does not include this guarded setup.
@@ -47,7 +56,7 @@ The included-models policy changed from zero data retention to no training: prov
 
 In the OpenRouter account behind `OPENROUTER_FREE_API_KEY` (its privacy and provider-routing settings; the labels below are approximate):
 
-1. Turn **off** the account-wide "ZDR endpoints only" restriction. With it on, OpenRouter refuses every included model, because none of their endpoints is zero data retention.
+1. Turn **off** the account-wide "ZDR endpoints only" restriction. With it on, OpenRouter refuses every included model, because OpenRouter records only one free endpoint, Phala's for Xing4.0, as zero data retention.
 2. Keep training **disabled** for both free and paid endpoints ("may train on inputs" off), and keep "may publish prompts" off. Each request already sends `data_collection: "deny"`; these account settings are a second guard.
 3. Keep prompt and input/output logging **off**, and keep OpenRouter's own use of inputs off.
 4. Make sure Cohere and AtlasCloud are not ignored providers. If the account has an allowed-providers list, it must include `cohere` and `atlas-cloud`; OpenRouter answers 404 when an account allowlist and a request-level `only` list do not overlap.
@@ -75,7 +84,7 @@ A text fetch of OpenRouter's public model pages on 15 October 2026 showed no dat
 3. Select an eligible model under the **OpenRouter** provider in the model picker, where the account's own free copies sit with its other models, each named "<name> (free)". **Free models inside of Vector** lists only the models Vector provides; each row's tooltip says where it runs (Provided by Vector, or Your OpenRouter account). The scope is the allowlisted explicit `:free` models with online, tool-capable, zero-price endpoints from the provider allowlisted for each, read from each model's public `/api/v1/models/{author}/{slug}/endpoints` list. Discovery matches model ID and endpoint tag. It is not a list of every free model.
 4. Keep zero-price routing, `data_collection: "deny"`, the allowlisted provider list, and the protections against paid plugins and paid model/provider fallbacks. Missing eligibility, an unavailable endpoint, and exhausted limits must stop the request. Do not relax the constraints to make a request succeed.
 5. OpenRouter currently lists up to 50 requests/day and 20 requests/minute without buying credits. A coding task can require many requests. Wait for a reset when limits are reached; do not purchase a higher budget or create accounts to evade limits. See the [current upstream policy](https://openrouter.ai/docs/api_reference/limits).
-6. Review the user's OpenRouter privacy settings and downstream policies. Providers may retain prompts and outputs under their own policies; Vector requests that they are not used for training. This routing restriction does not cover Vector's local history, OpenRouter account logging, or every external tool/service. An account restricted to ZDR endpoints only gets no included models, because none of their endpoints is zero data retention. Keep other independently configured providers/tools distinct from free model access.
+6. Review the user's OpenRouter privacy settings and downstream policies. Providers may retain prompts and outputs under their own policies; Vector requests that they are not used for training. This routing restriction does not cover Vector's local history, OpenRouter account logging, or every external tool/service. An account restricted to ZDR endpoints only gets no included models, because OpenRouter records only one free endpoint, Phala's for Xing4.0, as zero data retention. Keep other independently configured providers/tools distinct from free model access.
 
 Before describing personal access as verified, the owner must exercise the reviewed candidate with their own unfunded account and an eligible model. Confirm that a harmless prompt succeeds under the unchanged privacy and zero-price constraints, and that the account balance is unchanged. Report only the model ID, success or rejection, and the balance result; keep credentials and request headers private. A rejection keeps live availability unverified and must not trigger paid routing, a credit purchase, or relaxed privacy settings.
 

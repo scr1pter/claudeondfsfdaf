@@ -1871,3 +1871,63 @@ describe("Brain files", () => {
     expect(result.digest.text ?? "").not.toContain("remembers 1 note")
   })
 })
+
+describe("Brain and learned skills", () => {
+  test("update and propose refuse a learned skill's id with skill-entry, and forget does not find it", async () => {
+    const result = await run({}, ({ brain, db, place }) =>
+      Effect.gen(function* () {
+        yield* db
+          .insert(BrainEntryTable)
+          .values({
+            id: "s0a1b2c",
+            scope: "repository",
+            repository_id: `skill:${place.repository}`,
+            kind: "skill",
+            origin: "agent",
+            status: "active",
+            body: "learned-bun-test-root: When bun test fails in the repository root: steps that made it pass here before.",
+            paths: [],
+            terms: "{}",
+            norm_hash: "card",
+            confidence: 0.8,
+            created_at: 1,
+            updated_at: 1,
+            related: [],
+          })
+          .run()
+          .pipe(Effect.orDie)
+        return {
+          edit: yield* brain.update(place, "s0a1b2c", { text: "Run bun test twice." }, "user"),
+          pin: yield* brain.update(place, "s0a1b2c", { pinned: true }, "user"),
+          archive: yield* brain.update(place, "s0a1b2c", { action: "archive" }, "agent"),
+          replace: yield* brain.propose(place, {
+            kind: "lesson",
+            text: "Run bun test from the repository root.",
+            scope: "repository",
+            origin: "user",
+            supersedes: "s0a1b2c",
+          }),
+          forget: yield* brain.forget(place, "s0a1b2c"),
+          row: yield* db
+            .select()
+            .from(BrainEntryTable)
+            .where(eq(BrainEntryTable.id, "s0a1b2c"))
+            .get()
+            .pipe(Effect.orDie),
+        }
+      }),
+    )
+    for (const refused of [result.edit, result.pin, result.archive, result.replace])
+      expect(refused).toMatchObject({
+        type: "refused",
+        reason: "skill-entry",
+        message: "That is a learned skill. Change learned skills in Settings > Memory > Skills.",
+      })
+    expect(result.forget).toBe("not-found")
+    expect(result.row).toMatchObject({
+      status: "active",
+      pinned: false,
+      body: expect.stringContaining("learned-bun-test-root"),
+    })
+  })
+})

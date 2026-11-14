@@ -7,6 +7,8 @@ let userDataPath = ""
 let encryptionAvailable = true
 let encryptFailure: Error | undefined
 let decryptFailure: Error | undefined
+// Every call that can reach the OS credential store ("Vector Safe Storage" in the macOS Keychain).
+const calls = { available: 0, encrypt: 0, decrypt: 0, async: 0 }
 const platform = Object.getOwnPropertyDescriptor(process, "platform")
 const setPlatform = (value: NodeJS.Platform) => Object.defineProperty(process, "platform", { ...platform, value })
 const electronMock = {
@@ -15,15 +17,32 @@ const electronMock = {
     getPath: () => userDataPath,
   },
   safeStorage: {
-    isEncryptionAvailable: () => encryptionAvailable,
+    isEncryptionAvailable: () => {
+      calls.available++
+      return encryptionAvailable
+    },
     getSelectedStorageBackend: () => "gnome_libsecret",
     encryptString: (value: string) => {
+      calls.encrypt++
       if (encryptFailure) throw encryptFailure
       return Buffer.from(`sealed:${value}`)
     },
     decryptString: (value: Buffer) => {
+      calls.decrypt++
       if (decryptFailure) throw decryptFailure
       return value.toString().replace(/^sealed:/, "")
+    },
+    isAsyncEncryptionAvailable: async () => {
+      calls.async++
+      return true
+    },
+    encryptStringAsync: async (value: string) => {
+      calls.async++
+      return Buffer.from(`sealed:${value}`)
+    },
+    decryptStringAsync: async (value: Buffer) => {
+      calls.async++
+      return { shouldReEncrypt: false, result: value.toString().replace(/^sealed:/, "") }
     },
   },
   // Bun keeps a module mock for the rest of the run, so it carries every export a later test file's imports bind.
@@ -32,6 +51,7 @@ const electronMock = {
 mock.module("electron", () => ({ default: electronMock, ...electronMock }))
 
 const { setupSecureRuntimeSecrets } = await import("./secure-runtime")
+const { vaultSecrets } = await import("./vault-secrets")
 const previousCredentialKey = process.env.VECTOR_CREDENTIAL_KEY
 const previousMcpKey = process.env.VECTOR_MCP_AUTH_KEY
 const previousRequirement = process.env.VECTOR_REQUIRE_SECURE_CREDENTIAL_STORE
@@ -78,6 +98,40 @@ test("migrates the legacy file key into OS-backed encrypted storage", async () =
 
   await setupSecureRuntimeSecrets()
   expect(process.env.VECTOR_CREDENTIAL_KEY).toBe(key)
+})
+
+test("reads the OS credential store once per launch, then keeps every sign-in in memory", async () => {
+  // The first launch makes and seals the vault key.
+  await setupSecureRuntimeSecrets()
+  Object.assign(calls, { available: 0, encrypt: 0, decrypt: 0, async: 0 })
+
+  // A later launch opens it: that is the one read, so a Mac build without a Developer ID asks at most once.
+  await setupSecureRuntimeSecrets()
+  expect(calls).toEqual({ available: 1, encrypt: 0, decrypt: 1, async: 0 })
+  expect(vaultSecrets.available()).toBe(true)
+
+  const tokens = Array.from({ length: 20 }, (_, index) => `placeholder-token-${index}`)
+  const sealed = tokens.map((token) => vaultSecrets.seal(token, "github-token"))
+  expect(await Promise.all(sealed.map(async (value) => (await vaultSecrets.open(value, "github-token")).text))).toEqual(
+    tokens,
+  )
+  expect(sealed.map((value) => vaultSecrets.openSync(value, "github-token").text)).toEqual(tokens)
+  expect(calls).toEqual({ available: 1, encrypt: 0, decrypt: 1, async: 0 })
+})
+
+test("keeps sign-ins out of a vault no OS credential store protects", async () => {
+  await setupSecureRuntimeSecrets()
+  expect(vaultSecrets.available()).toBe(true)
+
+  // A development build without a keychain keeps a plain key file, which must not guard sign-ins.
+  electronMock.app.isPackaged = false
+  encryptionAvailable = false
+  await rm(join(userDataPath, "secure-runtime"), { recursive: true, force: true })
+  await setupSecureRuntimeSecrets()
+
+  expect(process.env.VECTOR_CREDENTIAL_KEY).toBeDefined()
+  expect(vaultSecrets.available()).toBe(false)
+  expect(() => vaultSecrets.seal("placeholder-token", "github-token")).toThrow("not open")
 })
 
 test("fails closed in packaged builds without OS-backed secure storage", async () => {

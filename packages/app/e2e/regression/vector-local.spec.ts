@@ -551,8 +551,15 @@ test("Settings > Vector Local asks before Add server loosens it, and lists every
 
   // Cancelling sends nothing more. The field empties once the server is added, before it is typed in again.
   await expect(servers.getByLabel("Server address")).toHaveValue("")
-  await servers.getByLabel("Server address").fill("http://other-box:8000")
-  await servers.getByRole("button", { name: "Add server" }).click()
+  // The dialog stack drops a closed confirmation 100 ms after it closes, and Settings stays inert until then. The
+  // confirmation can leave the page and the field can read empty before that, while what is typed still goes nowhere
+  // and Add server stays disabled, so type again until Add server takes it.
+  const addServer = servers.getByRole("button", { name: "Add server" })
+  await expect(async () => {
+    await servers.getByLabel("Server address").fill("http://other-box:8000")
+    await expect(addServer).toBeEnabled({ timeout: 1_000 })
+  }).toPass()
+  await addServer.click()
   await page.locator(".vector-local-confirm-dialog").getByRole("button", { name: "Cancel" }).click()
   await expect(pane).toContainText("Nothing changed.")
   expect(state.servers).toHaveLength(3)

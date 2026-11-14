@@ -103,6 +103,7 @@ beforeAll(async () => {
     create schema if not exists auth;
     create table if not exists auth.users (id uuid primary key);
     alter table auth.users add column if not exists created_at timestamptz not null default now();
+    alter table auth.users add column if not exists email text;
   `,
     )
     .simple()
@@ -473,6 +474,78 @@ test("the summary counts people once across desktop and CLI, by day, week and co
     { client: "desktop", platform: "darwin", arch: "arm64", active: 1 },
     { client: "desktop", platform: "linux", arch: "x64", active: 1 },
   ])
+})
+
+test("the summary leaves out the dashboard owners' own use, from before and after they signed in", async () => {
+  const owner = randomUUID()
+  const ownerInstall = randomUUID()
+  const other = randomUUID()
+  const admins = process.env.VECTOR_ADMIN_EMAILS
+  await database`insert into auth.users(id, email) values (${owner}, 'owner@vector.test')`
+  try {
+    // The owner used this install before signing in on it: those days are the owner's too.
+    await database`
+      insert into public.vector_usage_daily (key, client, day, version, platform, arch, sessions)
+      values (${`install:${ownerInstall}`}, 'desktop', (now() at time zone 'utc')::date - 3, '1.99.100', 'darwin', 'arm64', 9)`
+    await recordUsage(
+      desktop(ownerInstall, {
+        accountId: owner,
+        usage: report({ days: [{ date: day(0), tokens: 500, tasks: 2, cost: 1 }] }),
+      }),
+    )
+    await recordUsage({
+      client: "cli",
+      accountId: owner,
+      version: "1.99.106",
+      platform: "linux",
+      arch: "x64",
+      usage: report({ days: [{ date: day(0), tokens: 700, tasks: 1, cost: 2 }] }),
+    })
+    await recordDownload({ accountId: owner, target: "mac-arm64", version: "1.99.105" })
+    await recordUsage(
+      desktop(other, {
+        accountId: state.account,
+        sessions: 2,
+        subagentSessions: 0,
+        usage: report({ days: [{ date: day(0), tokens: 40, tasks: 1, cost: 0.5 }] }),
+      }),
+    )
+    await recordDownload({ accountId: state.account, target: "windows-x64", version: "1.99.105" })
+
+    process.env.VECTOR_ADMIN_EMAILS = "nobody@vector.test"
+    const everyone = await usageSummary()
+    // Matched however the owner's address is written.
+    process.env.VECTOR_ADMIN_EMAILS = "Owner@Vector.test"
+    const summary = await usageSummary()
+
+    expect(everyone.totals).toMatchObject({ installs: 2, cliAccounts: 1, downloads: 2, downloadAccounts: 2 })
+    expect(summary.totals).toMatchObject({
+      accounts: everyone.totals.accounts - 1,
+      installs: 1,
+      cliAccounts: 0,
+      downloads: 1,
+      downloadAccounts: 1,
+      activeToday: 1,
+      active7: 1,
+      active30: 1,
+      sessions7: 2,
+      subagentSessions7: 0,
+    })
+    expect(summary.daily.at(-1)).toMatchObject({ active: 1, desktop: 1, cli: 0, sessions: 2, tokens: 40, tasks: 1 })
+    expect(everyone.daily.at(-4)).toMatchObject({ active: 1, sessions: 9 })
+    expect(summary.daily.at(-4)).toMatchObject({ active: 0, sessions: 0 })
+    expect(summary.usage).toMatchObject({ reporting: 1, lifetimeTokens: 1_000_000, tokens7: 40 })
+    expect(summary.models).toEqual([
+      { providerID: "anthropic", modelID: "claude-sonnet-4-5", tokens: 700_000, people: 1, share: 1 },
+    ])
+    expect(summary.versions).toEqual([{ client: "desktop", version: "1.99.105", active: 1 }])
+    expect(summary.funnel.at(-1)?.signups).toBe((everyone.funnel.at(-1)?.signups ?? 0) - 1)
+    expect(summary.retention.reduce((sum, cohort) => sum + cohort.size, 0)).toBe(1)
+  } finally {
+    if (admins === undefined) delete process.env.VECTOR_ADMIN_EMAILS
+    else process.env.VECTOR_ADMIN_EMAILS = admins
+    await database`delete from auth.users where id = ${owner}`
+  }
 })
 
 test("the summary adds up model use from each install's latest report", async () => {

@@ -1,11 +1,14 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Context, Duration, Effect, Exit, Layer, Option } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import type { Brain } from "@vectordevai/core/brain/brain"
+import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainDistill } from "@vectordevai/core/brain/distill"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { Flag } from "@vectordevai/core/flag/flag"
+import { Egress } from "@vectordevai/core/local-mode/egress"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { providerCredentialAllowed } from "@vectordevai/core/provider-policy"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -18,6 +21,7 @@ import { SessionAdmission } from "./admission"
 import { SessionPrompt } from "./prompt"
 import type { SessionID } from "./schema"
 import { Session } from "./session"
+import { SessionMemory } from "./memory"
 
 // "Find more with a model…": a model the user chose reads a document's sparse sections in a hidden helper session, so no
 // session opens for the user, and what it suggests is quote-locked (BrainDistill) and kept as proposed records. The
@@ -47,8 +51,8 @@ export type Estimate = {
   readonly refused?: { readonly reason: Reason; readonly message: string }
   /** Sections and tokens that would be sent, and the output cap. */
   readonly sections: number
-  readonly input: number
-  readonly output: number
+  readonly input?: number
+  readonly output?: number
   readonly costKind?: SpendGuard.CostKind
   /** At catalog rates, for a priced model. */
   readonly lowUsd?: number
@@ -63,8 +67,8 @@ export type Distilled = {
   readonly records: readonly BrainSchema.Record[]
   readonly duplicate: number
   readonly dropped: BrainDistill.Dropped
-  readonly tokens: BrainKnowledge.DistillRun["tokens"]
-  readonly cost: number
+  readonly tokens?: BrainKnowledge.DistillRun["tokens"]
+  readonly cost?: number
   readonly costKind: SpendGuard.CostKind
   /** Why the model gave nothing usable, when it did not. */
   readonly error?: string
@@ -73,6 +77,20 @@ export type Distilled = {
 export interface Interface {
   readonly estimate: (place: Brain.Place, input: Input) => Effect.Effect<Estimate>
   readonly run: (place: Brain.Place, input: Input) => Effect.Effect<Refused | Distilled>
+  /** Local scan and bounded estimates only; the owner confirms each proposed batch before any model call. */
+  readonly bootstrap: (
+    place: Brain.Place,
+    model?: string,
+  ) => Effect.Effect<
+    | Refused
+    | {
+        readonly type: "ready"
+        readonly queued: number
+        readonly pending: number
+        readonly maxTokens: number
+        readonly documents: readonly { readonly id: string; readonly title: string; readonly estimate: Estimate }[]
+      }
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/SessionDistill") {}
@@ -98,24 +116,48 @@ const layer = Layer.effect(
     const auth = yield* Auth.Service
     const guests = yield* FreeModelGuests.Service
     const knowledge = yield* BrainKnowledge.Service
+    const brain = yield* Brain.Service
 
     // Everything a request needs settled before it may run: the flag, the session, the model and what it would send.
     const plan = Effect.fnUntraced(function* (place: Brain.Place, input: Input) {
-      const enabled = Flag.VECTOR_KNOWLEDGE_DISTILL
+      const settings = yield* brain.learnSettings()
+      const enabled = settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL
       const guest = yield* guests.marked(input.sessionID)
       const off = BrainDistill.refusal({ enabled, guest })
       if (off) return refuse(off.reason, off.message)
       const chosen = input.model?.trim()
         ? Provider.parseModel(input.model.trim())
         : Option.getOrUndefined(yield* provider.defaultModel().pipe(Effect.option))
-      const model =
-        chosen?.providerID && chosen.modelID
+      const codium =
+        Billing.isCodium(chosen?.providerID) ||
+        (!input.model?.trim() && settings.codiumHelpers === "on" && !Egress.policy().enabled)
+      if (codium && settings.codiumHelpers !== "on")
+        return refuse("no-model", "Turn on Use Codium for Brain helpers in Settings > Memory first.")
+      const model = codium
+        ? yield* provider.getBrainModel()
+        : chosen?.providerID && chosen.modelID
           ? Option.getOrUndefined(yield* provider.getModel(chosen.providerID, chosen.modelID).pipe(Effect.option))
           : undefined
+      if (codium && place.held) return refuse("held", "Codium Brain helpers skip untrusted repositories.")
+      if (codium && input.sessionID) {
+        const messages = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.option)
+        if (Option.isNone(messages)) return refuse("not-found", "The source session is unavailable.")
+        if (SessionMemory.taint(messages.value))
+          return refuse("held", "Codium Brain helpers skip sessions that read outside content.")
+      }
       if (!model)
         return refuse(
           "no-model",
-          input.model ? `${input.model} is not available. Check the provider and its key.` : "Connect a provider or choose a model first.",
+          codium
+            ? "The Codium floor model is unavailable. This Brain request was skipped."
+            : input.model
+              ? `${input.model} is not available. Check the provider and its key.`
+              : "Connect a provider or choose a model first.",
+        )
+      if (codium && input.model?.trim() && chosen?.modelID !== ModelPlanStatus.AUTO_ID && chosen?.modelID !== model.id)
+        return refuse(
+          "no-model",
+          "That Codium model is not the current Brain floor. Refresh the preview before continuing.",
         )
       const info = yield* provider.getProvider(model.providerID).pipe(Effect.option)
       const urls = [model.api.url, Option.isSome(info) ? info.value.options.baseURL : undefined].filter(
@@ -136,13 +178,17 @@ const layer = Layer.effect(
       const name = `${model.providerID}/${model.id}`
       if (!model.capabilities.toolcall)
         return refuse("no-model", `${name} cannot answer through a tool, which suggestions need. Choose another model.`)
-      if (model.limit.context > 0 && model.limit.context < picked.tokens + BrainDistill.OVERHEAD + BrainDistill.LIMIT.output)
+      if (
+        model.limit.context > 0 &&
+        model.limit.context < picked.tokens + BrainDistill.OVERHEAD + BrainDistill.LIMIT.output
+      )
         return refuse(
           "no-model",
           `${name} cannot hold this request. Choose a model with a larger context, or send less with a lower token limit.`,
         )
       const signIn = yield* auth.get(model.providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
       const costKind = SpendGuard.costKindOf({
+        codium: Billing.isCodium(model.providerID),
         free: isFreeModel(model),
         oauthPlan:
           signIn?.type === "oauth" &&
@@ -180,13 +226,25 @@ const layer = Layer.effect(
         model: planned.name,
         sections: planned.picked.sections.length,
         costKind: planned.costKind,
-        ...planned.estimate,
+        ...(planned.costKind === "codium" ? {} : planned.estimate),
       } satisfies Estimate
     })
 
     const run = Effect.fn("SessionDistill.run")(function* (place: Brain.Place, input: Input) {
       const planned = yield* plan(place, input)
       if (planned.type === "refused") return planned
+      const settings = yield* brain.learnSettings()
+      const off = BrainDistill.refusal({
+        enabled: settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL,
+        guest: yield* guests.marked(input.sessionID),
+      })
+      if (off) return refuse(off.reason, off.message)
+      if (planned.costKind === "codium") {
+        if (settings.codiumHelpers !== "on") return refuse("no-model", "Codium Brain helpers are off.")
+        const floor = yield* provider.getBrainModel()
+        if (!floor || floor.id !== planned.model.id)
+          return refuse("no-model", "The Codium floor model is unavailable. This Brain request was skipped.")
+      }
       // A helper session: it stays out of session lists, and counts towards the session it was asked from.
       const session = yield* sessions.create({
         title: TITLE,
@@ -209,8 +267,17 @@ const layer = Layer.effect(
           sessionID: session.id,
           agent: "distill",
           model: { providerID: planned.model.providerID, modelID: planned.model.id },
-          format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: BrainDistill.SCHEMA, retryCount: 0 }),
-          parts: [{ type: "text", text: BrainDistill.prompt({ title: planned.document.title, sections: planned.picked.sections }) }],
+          format: new SessionV1.OutputFormatJsonSchema({
+            type: "json_schema",
+            schema: BrainDistill.SCHEMA,
+            retryCount: 0,
+          }),
+          parts: [
+            {
+              type: "text",
+              text: BrainDistill.prompt({ title: planned.document.title, sections: planned.picked.sections }),
+            },
+          ],
         })
         .pipe(
           Effect.provideService(SessionAdmission.Current, policy),
@@ -222,13 +289,17 @@ const layer = Layer.effect(
       const assistant = reply?.info.role === "assistant" ? reply.info : undefined
       const decoded = BrainDistill.decode(assistant?.structured)
       const locked = BrainDistill.lock(planned.picked.sections, decoded.drafts)
-      const error = !reply
-        ? Exit.isSuccess(exit)
-          ? "The model took too long to answer."
-          : "The request to the model failed."
-        : assistant?.structured === undefined
-          ? (failure(assistant) ?? "The model gave no suggestions Vector could read.")
-          : undefined
+      const share =
+        planned.costKind === "codium" && ModelPlanStatus.failureCode(assistant?.error) === "MODEL_PLAN_BRAIN_SHARE"
+      const error = share
+        ? undefined
+        : !reply
+          ? Exit.isSuccess(exit)
+            ? "The model took too long to answer."
+            : "The request to the model failed."
+          : assistant?.structured === undefined
+            ? (failure(assistant) ?? "The model gave no suggestions Vector could read.")
+            : undefined
       const messages = yield* sessions.messages({ sessionID: session.id }).pipe(Effect.orDie)
       const spent = measureCost(messages)
       const kept = yield* receipt(session, messages)
@@ -240,14 +311,14 @@ const layer = Layer.effect(
         cacheWrite: spent?.cacheWrite ?? 0,
       }
       const cost = spent && Number.isFinite(spent.costUsd) ? spent.costUsd : 0
+      const usage = planned.costKind === "codium" ? {} : { tokens, cost }
       const dropped = { invalid: assistant?.structured === undefined ? 0 : decoded.invalid, ...locked.dropped }
       const stored = yield* knowledge.distilled(place, input.document, {
         records: locked.kept,
         run: {
           model: planned.name,
           session: kept,
-          tokens,
-          cost,
+          ...usage,
           costKind: planned.costKind,
           dropped,
           ...(error ? { error } : {}),
@@ -260,11 +331,40 @@ const layer = Layer.effect(
         records: stored?.records ?? [],
         duplicate: stored?.duplicate ?? 0,
         dropped,
-        tokens,
-        cost,
+        ...usage,
         costKind: planned.costKind,
         ...(error ? { error } : {}),
       } satisfies Distilled
+    })
+
+    const bootstrap = Effect.fn("SessionDistill.bootstrap")(function* (place: Brain.Place, model?: string) {
+      if (place.held) return refuse("held", "Trust this repository before asking a model to read its documents.")
+      const settings = yield* brain.learnSettings()
+      const off = BrainDistill.refusal({
+        enabled: settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL,
+        guest: false,
+      })
+      if (off) return refuse(off.reason, off.message)
+      if (!(yield* knowledge.settings(place)).repositoryDocs)
+        return refuse("off", "Turn on reading repository documents in Settings > Memory first.")
+      const queued = yield* knowledge.scan(place, { force: true })
+      const documents = (yield* knowledge.documents(place, { personal: false })).filter(
+        (document) => document.origin === "repository" && !document.hold && document.status !== "superseded",
+      )
+      const ready = documents.filter((document) =>
+        ["searchable", "ready", "embedding", "partial"].includes(document.status),
+      )
+      return {
+        type: "ready" as const,
+        queued,
+        pending: documents.filter((document) => ["queued", "reading", "linking"].includes(document.status)).length,
+        maxTokens: BrainDistill.BOOTSTRAP.input,
+        documents: yield* Effect.forEach(ready.slice(0, BrainDistill.BOOTSTRAP.documents), (document) =>
+          estimate(place, { document: document.id, model, maxTokens: BrainDistill.BOOTSTRAP.input }).pipe(
+            Effect.map((estimate) => ({ id: document.id, title: document.title, estimate })),
+          ),
+        ),
+      }
     })
 
     // The helper's session holds the passages that were sent and the model's copies of them, so it does not outlive
@@ -286,7 +386,7 @@ const layer = Layer.effect(
       return kept.id
     })
 
-    return Service.of({ estimate, run })
+    return Service.of({ estimate, run, bootstrap })
   }),
 )
 
@@ -314,7 +414,15 @@ function failure(assistant: SessionV1.Assistant | undefined) {
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [Session.node, SessionPrompt.node, Provider.node, Auth.node, FreeModelGuests.node, BrainKnowledge.node],
+  deps: [
+    Session.node,
+    SessionPrompt.node,
+    Provider.node,
+    Auth.node,
+    FreeModelGuests.node,
+    BrainKnowledge.node,
+    Brain.node,
+  ],
 })
 
 export * as SessionDistill from "./distill"

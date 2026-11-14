@@ -1,6 +1,6 @@
 ---
 // The documentation's front door. Every subject is its own page under /docs;
-// this one says what Vector is, points at the first three pages, and lists the
+// this one says what Vector is, points at the first pages to read, and lists the
 // groups. It also catches the old single-page anchors — /docs#code-review and
 // the rest are still linked from the landing page and from inside the app — and
 // sends them to the page that subject now lives on.
@@ -13,6 +13,7 @@ export const prerender = true
 const nextRelease = release199.at(-1)
 
 const start = [
+  ["first-launch", "First launch, step by step", "New to Vector? From download to a first answer, one button at a time."],
   ["install", "Install Vector", "macOS, Windows or Linux, and the CLI in any terminal."],
   ["first-task", "Your first task", "Point Vector at a repository on your disk, ask for a change, review what it did."],
   ["vector-agent", "Vector Agent", "What the agent can do, its tools, and the rules it follows."],

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test"
+import { beforeAll, describe, expect, mock, spyOn, test } from "bun:test"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { batch, createRoot, createSignal } from "solid-js"
 import type { DirectorySDK } from "@/context/sdk"
@@ -35,7 +35,7 @@ function info(id: string, extra: Record<string, unknown> = {}) {
 
 // A workspace's tabs over the PTY routes and events the server gives it: a real event emitter, and routes answered
 // in memory. `list` is what the location holds when the stored tabs finish loading.
-function workspace(dir: string, list: () => Promise<unknown[]> = async () => []) {
+function workspace(dir: string, list: () => Promise<unknown> = async () => []) {
   const event = createGlobalEmitter<Record<string, { type: string; properties: unknown }>>()
   const created: string[] = []
   const client = {
@@ -196,6 +196,29 @@ describe("workspace terminal events", () => {
       ["pty_live", true],
       ["pty_done", false],
       ["pty_new", true],
+    ])
+    tabs.dispose()
+  })
+
+  test("an answer to the list that is not a list judges no tab and logs no error", async () => {
+    const errors = spyOn(console, "error")
+    // An object, as a server or a fake that does not know the route may answer, then other answers that are no list.
+    const state = { list: async (): Promise<unknown> => ({}) }
+    const tabs = workspace("/repo/not-a-list", () => state.list())
+    tabs.emit("pty.created", { info: info("pty_agent", { owner: agent }) })
+    await Bun.sleep(0)
+    for (const answer of [null, "pty_agent", { data: [info("pty_other", { owner: agent })] }]) {
+      state.list = async () => answer
+      await tabs.session.reconcile()
+    }
+    expect(tabs.session.all()).toEqual([{ id: "pty_agent", title: "dev server", titleNumber: 1, agent: "ses_agent" }])
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
+    // A real list still judges it: the server no longer has this terminal.
+    state.list = async () => []
+    await tabs.session.reconcile()
+    expect(tabs.session.all()).toEqual([
+      { id: "pty_agent", title: "dev server", titleNumber: 1, agent: "ses_agent", gone: true },
     ])
     tabs.dispose()
   })

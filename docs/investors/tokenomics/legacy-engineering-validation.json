@@ -1,0 +1,22 @@
+{
+  "kind": "legacy-cancellation-validation-projection-v1",
+  "source_revision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+  "source_base": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+  "negative_control_passed": 2,
+  "negative_control_failed": 6,
+  "fixed_new_controls_passed": 8,
+  "processor_usage_tests_passed": 85,
+  "processor_usage_assertions": 452,
+  "prompt_abort_tests_passed": 35,
+  "prompt_abort_existing_skips": 8,
+  "prompt_abort_assertions": 154,
+  "final_focused_background_tests_passed": 15,
+  "final_focused_background_assertions": 110,
+  "failed_tests": 0,
+  "package_typechecks_passed": 23,
+  "paid_savings_measured": false,
+  "provider_calls": 0,
+  "independent_source_review": "no blocking regression",
+  "scope": "Local deterministic provider fixtures through the actual Legacy processor. Focused cases overlap broader suites; counts are not additive. No inference quality or paid savings claim. Model, reasoning, context and verification settings unchanged.",
+  "limitation": "A pre-existing non-interruption publication defect can still exit before the guard records the completed call. This correction covers cancellation and snapshot-confirmation interruption, not every possible publication failure."
+}

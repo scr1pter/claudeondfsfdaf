@@ -392,7 +392,11 @@ describe("browser tool", () => {
           : FakeBridge.visible({
               url: "http://localhost:3000/",
               title: "Draft",
-              observed: { text: "Draft saved", elements: [] },
+              observed: {
+                text: "Draft saved",
+                elements: [],
+                focus: { documentHasFocus: false, activeKind: "body", tag: "body", tabIndex: -1 },
+              },
               dialogs:
                 call.body.command === "click"
                   ? [{ type: "alert", message: "Saved", url: "http://localhost:3000/", at }]
@@ -402,6 +406,9 @@ describe("browser tool", () => {
       const observed = yield* run({ action: "observe" })
       expect(observed.result.output).toContain(
         "Dialogs answered:\n- confirm: Leave without publishing? (answered Cancel)",
+      )
+      expect(observed.result.output).toContain(
+        "Keyboard focus: document=not focused; active=body; tag=body; tabIndex=-1",
       )
       expect(observed.result.output.indexOf("Dialogs answered:")).toBeLessThan(
         observed.result.output.indexOf("</untrusted_web_page"),

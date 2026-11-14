@@ -44,20 +44,25 @@ test("unmounts the terminal renderer while the pane is hidden", async ({ page })
     ],
     pageMessages: () => ({ items: [] }),
   })
-  // Directory-scoped SDK requests include a query string, so match exact paths.
+  // Directory-scoped SDK requests include a query string, so match exact paths. GET /pty lists the location's
+  // terminals, as the server does: none until the spec's terminal is created, then that one.
+  const terminal = { id: ptyID, title: "Terminal 1" }
+  const listed: (typeof terminal)[] = []
   await page.route(
     (url) => ["/pty", `/pty/${ptyID}`, `/pty/${ptyID}/connect-token`].includes(url.pathname),
     (route) => {
       const url = new URL(route.request().url())
+      const list = url.pathname === "/pty" && route.request().method() === "GET"
       expect(url.searchParams.get("directory")).toBe(directory)
-      expect(route.request().method()).toBe(url.pathname === `/pty/${ptyID}` ? "PUT" : "POST")
+      if (!list) expect(route.request().method()).toBe(url.pathname === `/pty/${ptyID}` ? "PUT" : "POST")
       if (url.pathname.endsWith("/connect-token")) expect(route.request().headers()["x-vector-ticket"]).toBe("1")
+      if (url.pathname === "/pty" && !list && listed.length === 0) listed.push(terminal)
       return route.fulfill({
         status: 200,
         contentType: "application/json",
         headers: { "access-control-allow-origin": "*" },
         body: JSON.stringify(
-          url.pathname.endsWith("/connect-token") ? { ticket: "e2e-ticket" } : { id: ptyID, title: "Terminal 1" },
+          list ? listed : url.pathname.endsWith("/connect-token") ? { ticket: "e2e-ticket" } : terminal,
         ),
       })
     },

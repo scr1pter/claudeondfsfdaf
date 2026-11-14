@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "scope": "Only the two completed contracts-candidate task pairs: Workflow Runner and Evidence Workbench. No third-task evidence inspected.",
+  "costBasis": "Actual funded-meter provider usage and recorded study rates; not invoice-reconciled",
+  "executionSettings": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "high",
+    "autonomousAgentsPerRuntime": 1,
+    "settingsPreserved": true,
+    "vectorCandidateRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+    "codexExecution": "Separately pinned Codex CLI; the Vector product revision is not a shared CLI revision."
+  },
+  "ratesUsdPerMillion": {
+    "freshInput": 2,
+    "cacheRead": 0.1,
+    "cacheWrite30m": 2.5,
+    "cacheWrite12h": 5,
+    "outputIncludingReasoning": 10
+  },
+  "partitionRules": {
+    "visibleOutput": "Recorded output minus recorded reasoning. Visible and reasoning costs partition output; reasoning is not charged again.",
+    "input": "Fresh non-write input, cache reads and cache writes partition input; cached categories are not added again to input.",
+    "writeTtl": "Use explicit TTL detail when present; generic writes without TTL detail follow the funded meter 30-minute default.",
+    "publicPricingClaim": false
+  },
+  "tasks": {
+    "workflow": {
+      "codex": {
+        "providerRequests": 30,
+        "tokens": {
+          "visibleOutputTokens": 37911,
+          "reasoningTokens": 11998,
+          "cacheWrite30mTokens": 91420,
+          "cacheWrite12hTokens": 0,
+          "cachedInputTokens": 1641525,
+          "freshInputTokens": 90
+        },
+        "components": {
+          "visibleOutputUsd": 0.37911,
+          "reasoningOutputUsd": 0.11998,
+          "cacheWriteUsd": 0.22855,
+          "cacheReadUsd": 0.1641525,
+          "freshInputUsd": 0.00018,
+          "totalUsd": 0.8919725
+        },
+        "measuredUsd": 0.8919725,
+        "exactComponentReconciliation": true
+      },
+      "vector": {
+        "providerRequests": 47,
+        "tokens": {
+          "visibleOutputTokens": 23822,
+          "reasoningTokens": 9923,
+          "cacheWrite30mTokens": 80489,
+          "cacheWrite12hTokens": 0,
+          "cachedInputTokens": 2123084,
+          "freshInputTokens": 141
+        },
+        "components": {
+          "visibleOutputUsd": 0.23822,
+          "reasoningOutputUsd": 0.09923,
+          "cacheWriteUsd": 0.2012225,
+          "cacheReadUsd": 0.2123084,
+          "freshInputUsd": 0.000282,
+          "totalUsd": 0.7512629
+        },
+        "measuredUsd": 0.7512629,
+        "exactComponentReconciliation": true
+      }
+    },
+    "evidence": {
+      "codex": {
+        "providerRequests": 35,
+        "tokens": {
+          "visibleOutputTokens": 27617,
+          "reasoningTokens": 7430,
+          "cacheWrite30mTokens": 81721,
+          "cacheWrite12hTokens": 0,
+          "cachedInputTokens": 1679527,
+          "freshInputTokens": 105
+        },
+        "components": {
+          "visibleOutputUsd": 0.27617,
+          "reasoningOutputUsd": 0.0743,
+          "cacheWriteUsd": 0.2043025,
+          "cacheReadUsd": 0.1679527,
+          "freshInputUsd": 0.00021,
+          "totalUsd": 0.7229352
+        },
+        "measuredUsd": 0.7229352,
+        "exactComponentReconciliation": true
+      },
+      "vector": {
+        "providerRequests": 44,
+        "tokens": {
+          "visibleOutputTokens": 24910,
+          "reasoningTokens": 10030,
+          "cacheWrite30mTokens": 76125,
+          "cacheWrite12hTokens": 0,
+          "cachedInputTokens": 1877091,
+          "freshInputTokens": 132
+        },
+        "components": {
+          "visibleOutputUsd": 0.2491,
+          "reasoningOutputUsd": 0.1003,
+          "cacheWriteUsd": 0.1903125,
+          "cacheReadUsd": 0.1877091,
+          "freshInputUsd": 0.000264,
+          "totalUsd": 0.7276856
+        },
+        "measuredUsd": 0.7276856,
+        "exactComponentReconciliation": true
+      }
+    }
+  },
+  "combined": {
+    "codex": {
+      "providerRequests": 65,
+      "components": {
+        "visibleOutputUsd": 0.65528,
+        "reasoningOutputUsd": 0.19428,
+        "cacheWriteUsd": 0.4328525,
+        "cacheReadUsd": 0.3321052,
+        "freshInputUsd": 0.00039,
+        "totalUsd": 1.6149077
+      }
+    },
+    "vector": {
+      "providerRequests": 91,
+      "components": {
+        "visibleOutputUsd": 0.48732,
+        "reasoningOutputUsd": 0.19953,
+        "cacheWriteUsd": 0.391535,
+        "cacheReadUsd": 0.4000175,
+        "freshInputUsd": 0.000546,
+        "totalUsd": 1.4789485
+      }
+    }
+  },
+  "comparison": {
+    "vectorLowerCostUsd": 0.1359592,
+    "vectorLowerCostPercent": 8.41900748,
+    "aggregateTwentyPercentTargetMet": false,
+    "workflowVectorLowerCostPercent": 15.77510517,
+    "evidenceVectorHigherCostPercent": 0.657099
+  },
+  "quality": {
+    "priority": "No lower quality on any task; one stronger task cannot offset a weaker task. Cost is secondary.",
+    "workflowRecordedScores": {
+      "codex": 45,
+      "vector": 45
+    },
+    "evidenceRecordedScores": {
+      "codex": 47,
+      "vector": 47
+    },
+    "dimensionScoresIdentical": {
+      "workflow": true,
+      "evidence": false
+    },
+    "limits": "Static exact-source review and two supplied screenshots per submission; total-score ties with different findings are bounded evidence, not a quality guarantee.",
+    "thirdTaskAndOverallDecision": "Pending; excluded from this audit."
+  },
+  "readOnlyActivityAudit": {
+    "source": "Study-owner supplied bounded read-only audit of the same two completed Vector runs; numeric metadata only",
+    "successfulVectorPatchCalls": 10,
+    "failedVectorPatchCalls": 0,
+    "selectSchemaMismatch": {
+      "observedPerVectorTask": 1,
+      "observedCombined": 2,
+      "callerField": "value",
+      "documentedField": "values array",
+      "attribution": "Common-client/shared-adapter contract issue; no native product Browser defect established",
+      "wholeRecoveryModelStepCostExposureUsd": 0.0208206,
+      "alreadyIncludedInEpisodeCosts": true,
+      "includesUsefulChecks": true,
+      "isolatedAvoidableCostUsd": null,
+      "causalSavingsEstablished": false
+    },
+    "browserOutputObservations": {
+      "workflow": {
+        "browserContainingShellCommands": 24,
+        "observedFullSnapshots": 29,
+        "fullSnapshotCharacters": 108509,
+        "repeatedSnapshotTextCharacters": 25670
+      },
+      "evidence": {
+        "browserContainingShellCommands": 19,
+        "observedFullSnapshots": 13,
+        "fullSnapshotCharacters": 47893,
+        "repeatedSnapshotTextCharacters": 5564
+      },
+      "scriptsAlreadyBatchCommonClientCalls": true,
+      "wholeSnapshotDeduplicationJustified": false,
+      "reason": "References, generations and state differ; repeated text is not proof that whole observations can be removed. Codex also has repeated observations. Character counts are not token or cost estimates."
+    },
+    "diagnostics": "The wrong shutdown-probe exception and expected 400/409 validation console messages are authored diagnostics, not demonstrated engine defects."
+  },
+  "conclusion": {
+    "majorProductEngineWasteDemonstrated": false,
+    "blanketVerificationReductionJustified": false,
+    "modelOrReasoningDowngradeProposed": false,
+    "optimizationHypothesis": "Align the shared client select contract and consider narrower stable-text presentation only with equivalent observation/verification coverage, then measure; no savings estimate is established.",
+    "scalingLimit": "This small one-agent study does not test multi-specialist or judge operation, quality at billions of tokens, or broad deployment behavior. Accounting stress remains pending."
+  },
+  "references": {
+    "workflow": "contracts-workflow.md",
+    "evidence": "contracts-evidence.md"
+  },
+  "sanitization": {
+    "rawLogsPrivatePathsProviderIdentifiersCredentialsExcluded": true,
+    "onlyCompletedPairReceiptsSelected": true
+  }
+}

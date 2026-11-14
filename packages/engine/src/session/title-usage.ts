@@ -4,6 +4,8 @@ import { LLMEvent, Usage, type UsageInput } from "@vectordevai/llm"
 import { DateTime, Effect } from "effect"
 import type { Provider } from "@/provider/provider"
 import { Session } from "./session"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { Billing } from "@vectordevai/schema/billing"
 
 export function create(input: {
   sessionID: Session.Info["id"]
@@ -11,28 +13,65 @@ export function create(input: {
   publish: EventV2.Interface["publish"]
   /** What the request was for: a title unless said otherwise. */
   purpose?: "title" | "memory"
+  spend?: SpendGuard.Captured
+  costKind?: SpendGuard.CostKind
 }) {
   const pending: { id: EventV2.ID; usage?: Usage }[] = []
   const state = { current: undefined as (typeof pending)[number] | undefined }
   const settle = Effect.fn("TitleUsage.settle")(function* (id: EventV2.ID, reported: Usage, incomplete: boolean) {
     const measured = Object.values(reported).some((value) => typeof value === "number" && Number.isFinite(value))
-    const usage = Session.getUsage({ model: input.model, usage: reported, metadata: reported.providerMetadata })
-    yield* input.publish(
-      SessionEvent.AncillaryUsage,
-      {
-        sessionID: input.sessionID,
-        timestamp: yield* DateTime.now,
-        usageID: id,
-        purpose: input.purpose ?? "title",
-        model: { providerID: input.model.providerID, id: input.model.id },
-        // Billing metadata can report a charge without counters; keep that subtotal without inventing usage.
-        ...(measured || usage.cost > 0 ? { cost: usage.cost } : {}),
-        ...(measured ? { tokens: usage.tokens } : {}),
-        ...(usage.unpriced || incomplete || !measured ? { unpriced: true } : {}),
-        ...(incomplete ? { incomplete: true } : {}),
-      },
-      { id },
-    )
+    const usage = Session.getUsage({
+      model: input.model,
+      usage: reported,
+      metadata: reported.providerMetadata,
+      incomplete,
+    })
+    const uncertain = usage.unpriced || incomplete || !measured
+    const kind =
+      input.costKind ??
+      SpendGuard.costKindOf({
+        // A Vector Codium request is billed to the account's plan, so it counts as a Codium step, never an unpriced one.
+        codium: Billing.isCodium(input.model.providerID),
+        free: input.model.freeModel !== undefined,
+        oauthPlan: false,
+        listed: input.model.cost.input > 0 || input.model.cost.output > 0,
+      })
+    yield* input
+      .publish(
+        SessionEvent.AncillaryUsage,
+        {
+          sessionID: input.sessionID,
+          timestamp: yield* DateTime.now,
+          usageID: id,
+          purpose: input.purpose ?? "title",
+          model: { providerID: input.model.providerID, id: input.model.id },
+          // Billing metadata can report a charge without counters; keep that subtotal without inventing usage.
+          ...(measured || usage.billed || usage.cost > 0 ? { cost: usage.cost } : {}),
+          ...(measured ? { tokens: usage.tokens } : {}),
+          ...(uncertain ? { unpriced: true } : {}),
+          ...(usage.billing ? { billing: usage.billing } : {}),
+          ...(incomplete ? { incomplete: true } : {}),
+        },
+        { id },
+      )
+      .pipe(
+        Effect.ensuring(
+          input.spend
+            ? input.spend
+                .record(id, {
+                  costUsd: usage.cost,
+                  costKind: kind === "unknown" && usage.billed ? "priced" : kind,
+                  unpriced: uncertain && !usage.billed,
+                  contextTokens: usage.tokens.input + usage.tokens.cache.read + usage.tokens.cache.write,
+                  cachedTokens: usage.tokens.cache.read,
+                  continues: false,
+                  tools: [],
+                  patched: false,
+                })
+                .pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+      )
   }, Effect.uninterruptible)
   return {
     started(reported: UsageInput) {
@@ -41,7 +80,10 @@ export function create(input: {
       pending.push(state.current)
     },
     record: Effect.fn("TitleUsage.record")(function* (event: LLMEvent) {
-      if ((LLMEvent.is.textDelta(event) || LLMEvent.is.reasoningDelta(event)) && !state.current) {
+      if (
+        (LLMEvent.is.stepStart(event) || LLMEvent.is.textDelta(event) || LLMEvent.is.reasoningDelta(event)) &&
+        !state.current
+      ) {
         // Generation began even if this provider reports usage only at completion.
         state.current = { id: EventV2.ID.create() }
         pending.push(state.current)

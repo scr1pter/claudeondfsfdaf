@@ -1,0 +1,227 @@
+{
+  "qualification": "Single completion check on battery, trace capture enabled, synthetic network fixtures; no baseline, timing or cost comparison.",
+  "results": [
+    {
+      "schemaVersion": 2,
+      "runID": "release113-02098b2b-windows-completion-20261109b",
+      "name": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "status": "passed",
+      "expectedStatus": "passed",
+      "retry": 0,
+      "repeatEachIndex": 0,
+      "context": {
+        "project": "chromium",
+        "platform": "win32"
+      },
+      "metrics": {
+        "summary": {
+          "samples": 6,
+          "firstDestinationObservedMs": 146.10000014305115,
+          "stableDestinationObservedMs": 177.70000004768372,
+          "sourceSamples": 1,
+          "blankSamples": 0,
+          "unknownSamples": 0,
+          "destinationSamples": 5
+        },
+        "samples": [
+          {
+            "observedAtMs": 21.200000047683716,
+            "source": true,
+            "destination": false,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_target",
+            "center": " vector golf nova alpha hotel orbit bravo india pixel charlie juliet quartz delt"
+          },
+          {
+            "observedAtMs": 146.10000014305115,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_target",
+            "center": "foxtrot metro vector golf nova alpha hotel orbit bravo india pixel charlie julie"
+          },
+          {
+            "observedAtMs": 161,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_target",
+            "center": " echo lima signal foxtrot metro vector golf nova alpha hotel orbit bravo india p"
+          },
+          {
+            "observedAtMs": 177.70000004768372,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_target",
+            "center": " echo lima signal foxtrot metro vector golf nova alpha hotel orbit bravo india p"
+          },
+          {
+            "observedAtMs": 183.20000004768372,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_target",
+            "center": " echo lima signal foxtrot metro vector golf nova alpha hotel orbit bravo india p"
+          },
+          {
+            "observedAtMs": 455.90000009536743,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_target",
+            "center": " echo lima signal foxtrot metro vector golf nova alpha hotel orbit bravo india p"
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": 2,
+      "runID": "release113-02098b2b-windows-completion-20261109b",
+      "name": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "status": "passed",
+      "expectedStatus": "passed",
+      "retry": 0,
+      "repeatEachIndex": 0,
+      "context": {
+        "project": "chromium",
+        "platform": "win32"
+      },
+      "metrics": {
+        "summary": {
+          "samples": 7,
+          "firstDestinationObservedMs": 171.70000004768372,
+          "stableDestinationObservedMs": 187,
+          "sourceSamples": 3,
+          "blankSamples": 0,
+          "unknownSamples": 0,
+          "destinationSamples": 4
+        },
+        "samples": [
+          {
+            "observedAtMs": 13.900000095367432,
+            "source": true,
+            "destination": false,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": " vector golf nova alpha hotel orbit bravo india pixel charlie juliet quartz delt"
+          },
+          {
+            "observedAtMs": 42.80000019073486,
+            "source": true,
+            "destination": false,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": " vector golf nova alpha hotel orbit bravo india pixel charlie juliet quartz delt"
+          },
+          {
+            "observedAtMs": 45.40000009536743,
+            "source": true,
+            "destination": false,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": " vector golf nova alpha hotel orbit bravo india pixel charlie juliet quartz delt"
+          },
+          {
+            "observedAtMs": 171.70000004768372,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": "Vector AgentWhat should we build?Plan a feature, repair a bug, or ask Vector to "
+          },
+          {
+            "observedAtMs": 179.30000019073486,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": "Vector AgentWhat should we build?Plan a feature, repair a bug, or ask Vector to "
+          },
+          {
+            "observedAtMs": 187,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": "Vector AgentWhat should we build?Plan a feature, repair a bug, or ask Vector to "
+          },
+          {
+            "observedAtMs": 280.80000019073486,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/new-session?draftId=draft_first_navigation",
+            "center": "Vector AgentWhat should we build?Plan a feature, repair a bug, or ask Vector to "
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": 2,
+      "runID": "release113-02098b2b-windows-completion-20261109b",
+      "name": "performance: first navigation paint > opens a child session without a blank frame",
+      "status": "passed",
+      "expectedStatus": "passed",
+      "retry": 0,
+      "repeatEachIndex": 0,
+      "context": {
+        "project": "chromium",
+        "platform": "win32"
+      },
+      "metrics": {
+        "summary": {
+          "samples": 5,
+          "firstDestinationObservedMs": 111.90000009536743,
+          "stableDestinationObservedMs": 186.59999990463257,
+          "sourceSamples": 1,
+          "blankSamples": 0,
+          "unknownSamples": 0,
+          "destinationSamples": 4
+        },
+        "samples": [
+          {
+            "observedAtMs": 50.5,
+            "source": true,
+            "destination": false,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_source",
+            "center": " vector golf nova alpha hotel orbit bravo india pixel charlie juliet quartz delt"
+          },
+          {
+            "observedAtMs": 111.90000009536743,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_child",
+            "center": "vector golf nova alpha hotel orbit bravo india pixel.\n charlie juliet quartz del"
+          },
+          {
+            "observedAtMs": 183.90000009536743,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_child",
+            "center": "delta kilo river echo lima signal foxtrot metro vector golf nova alpha hotel orb"
+          },
+          {
+            "observedAtMs": 186.59999990463257,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_child",
+            "center": "delta kilo river echo lima signal foxtrot metro vector golf nova alpha hotel orb"
+          },
+          {
+            "observedAtMs": 188.29999995231628,
+            "source": false,
+            "destination": true,
+            "content": true,
+            "pathname": "/server/aHR0cDovLzEyNy4wLjAuMTo0NDg3/session/ses_smoke_child",
+            "center": "delta kilo river echo lima signal foxtrot metro vector golf nova alpha hotel orb"
+          }
+        ]
+      }
+    }
+  ]
+}

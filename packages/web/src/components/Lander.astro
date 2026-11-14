@@ -39,46 +39,15 @@ import { wordmarkCells } from "../lib/wordmark"
 import { brainRelease } from "../data/vector-releases"
 
 // The landing page is the whole product tour: the hero and its one interactive
-// picture, the workspace in one screen, and the card shelf of what Vector does,
+// picture, the self-evolving section, and the card shelf of what Vector does,
 // each card linked to the docs page that covers it in full. The hero stays as short as it was: it says what Vector is,
-// with one emphasis line that labels the brain from brainRelease. The detail lives in the sections below: the
-// tokenomics engine in the workspace cards, with the cost note under them, and Vector Brain in the self-evolving
-// section. The cost note quotes the offline efficiency archive, docs/benchmarks/vector-efficiency-2026-10, with its
-// revision and caveats (test/landing-copy.test.ts recomputes the range, as test/investor-page.test.ts does for the
-// investor page).
-
-// The work Vector does in one window. Six, so the grid fills two even rows.
-const workspaceFacts = [
-  {
-    title: "As many agents as you want",
-    text: "No cap. Each one works in its own copy of the repository, and you merge the ones that landed.",
-  },
-  {
-    title: "Subagents for the parts",
-    text: "A very hard task splits itself, the pieces run in batches of up to eight, and a card shows what each one is doing.",
-  },
-  {
-    title: "Ships to your own cloud",
-    text: "Provision Supabase, sync environment values, publish to your Vercel account.",
-  },
-  {
-    title: "Reviewed before main",
-    text: "A summary and line comments on each pull request once automatic review is on, or run the same pass on your branch first.",
-  },
-  {
-    title: "A browser it drives",
-    text: "It loads your app, clicks through it, reads the console, and tells you what actually happened.",
-  },
-  {
-    title: "A tokenomics engine",
-    text: 'Runs are priced from the tokens the provider reported, at catalog rates where the model has a price. In the desktop app, each request is sized first, so "hi" gets one small, direct reply, and a Run Guard stops a run within one step of the cap you set.',
-  },
-]
+// with one emphasis line that labels the brain from brainRelease. The detail lives in the sections below, Vector Brain
+// in the self-evolving section.
 
 // The self-evolving agent of desktop 1.99.110, called coming or new by brainRelease: the brain (rules, memory and lessons
 // in one local graph) and documents read into structured knowledge linked to the code, searched on the computer. Its
-// numbers come only from the dated knowledge eval in docs/benchmarks (test/landing-copy.test.ts checks them), and the
-// section names the release, so it stays true for readers still on an earlier one.
+// numbers come only from the dated knowledge eval in docs/benchmarks (test/landing-copy.test.ts checks them). The hero
+// deck and the memory card name the release, so the page stays true for readers still on an earlier one.
 const evolvingFacts = [
   {
     title: "A brain for each repository",
@@ -94,23 +63,9 @@ const evolvingFacts = [
   },
 ]
 
-// The one-click plugins in the workspace: the count, and a sample to name
+// The number of one-click plugins, for the plugins card
 // (packages/app/src/components/plugins/catalog.tsx — keep the number in step with it).
 const pluginCount = 134
-const pluginNames = [
-  "GitHub",
-  "Linear",
-  "Sentry",
-  "Supabase",
-  "Vercel",
-  "Figma",
-  "Notion",
-  "Stripe",
-  "Postgres",
-  "Slack",
-  "Playwright",
-  "Your own MCP server",
-]
 
 // The shelf of things Vector does, each sentence checked against the code that
 // ships it and linked to the docs section that describes it in full. Order:
@@ -135,11 +90,11 @@ const privacyFacts = [
   },
   {
     title: "Never trained on",
-    text: "Vector collects nothing for training, and Velocity, the 550B-parameter model we're building, won't be trained on customers' code.",
+    text: "Vector collects nothing for training, and Vector Velocity, our planned model with 550B+ parameters, won't be trained on customers' code.",
   },
   {
     title: "On Vector's own models",
-    text: "Codium, coming soon, routes only to providers OpenRouter records as zero data retention. Requests to free models whose providers don't train ask them not to train on your prompts, and free models whose providers may train are labelled May train on your prompts and sent only after you accept that once. Providers may still keep prompts.",
+    text: "Codium, coming soon, routes only to endpoints OpenRouter records as zero data retention. Requests to free models whose providers don't train ask them not to train on your prompts, and free models whose providers may train are labelled May train on your prompts and sent only after you accept that once. Providers of free models may still keep prompts under their own policies.",
   },
   {
     title: "Counts, not content",
@@ -343,7 +298,7 @@ const trustCards = [
           <p class="headline">
             <span class="headline-lead">The self-evolving AI agentic harness&nbsp;that</span>{" "}
             <span class="headline-rotate" data-scramble aria-hidden="true">has an agent of its own.</span>
-            <span class="sr-only">The self-evolving AI agentic harness that has an agent of its own, can have a judge check its work before calling it done, sets up your database and deploys it, runs subagents in batches of up to eight, lets a trusted teammate join from the terminal, runs in your terminal too, prices each run from the tokens your provider reported, hosts Claude, Codex and Cursor alongside its own agent, and is building a 550B-parameter model of its own.</span>
+            <span class="sr-only">The self-evolving AI agentic harness that has an agent of its own, can have a judge check its work before calling it done, sets up your database and deploys it, runs subagents in batches of up to eight, lets a trusted teammate join from the terminal, runs in your terminal too, prices each run from the tokens your provider reported, hosts Claude, Codex and Cursor alongside its own agent, and is planning Vector Velocity, a model with 550B+ parameters.</span>
           </p>
 
           <p class="hero-deck simple-deck">
@@ -371,47 +326,8 @@ const trustCards = [
       </div>
     </section>
 
-    <section id="everything" data-chapter="One workspace" class="story" aria-labelledby="everything-title">
-      <div class="story-copy" data-reveal-group>
-        <p class="story-kicker" data-reveal>One workspace</p>
-        <h2 id="everything-title" class="story-title" data-reveal>Everything shipping&nbsp;takes.</h2>
-        <p class="story-subtitle" data-reveal>Not a chat box bolted onto an editor.</p>
-        <p class="story-body" data-reveal>
-          Point a swarm of agents at separate branches and let each one spawn subagents for the parts. Set up the
-          database, deploy to your own cloud account, and have the change reviewed before it reaches main. Vector does
-          all of it in one window, over the repository already on your disk — with a browser it can drive, a tokenomics
-          engine that prices its own agent's runs, {pluginCount} one-click plugins, and any MCP server you write yourself.
-        </p>
-        <ul class="story-facts" data-reveal>
-          {
-            workspaceFacts.map((fact) => (
-              <li>
-                <h3>{fact.title}</h3>
-                <p>{fact.text}</p>
-              </li>
-            ))
-          }
-        </ul>
-        <p class="story-body" data-reveal>
-          Low cost, measured: Vector's offline efficiency benchmark, archived at docs/benchmarks/vector-efficiency-2026-10,
-          ran Vector's runtime at an 11 October 2026 revision (commit 6f7f3c2ea) and Claude Code 2.1.215 through identical
-          scripted tool steps against a local fake model server, with the same number of model requests, on three fix
-          tasks. In a first session, Vector's modelled spend was 67–75% below Claude Code's at the same list rates. The
-          benchmark measures what each agent sends, not the quality of answers or your provider's bill, and does not show
-          that Vector is cheaper than other agents in general.
-        </p>
-        <ul class="story-models" data-reveal aria-label="A few of the plugins you can turn on">
-          {pluginNames.map((name) => <li>{name}</li>)}
-        </ul>
-        <div class="story-action" data-reveal>
-          <a class="landing-pill" href="/docs">See everything Vector does</a>
-        </div>
-      </div>
-    </section>
-
     <section id="evolving" data-chapter="Self-evolving" class="story" aria-labelledby="evolving-title">
       <div class="story-copy" data-reveal-group>
-        <p class="story-kicker" data-reveal>Self-evolving · {brainRelease.kicker}</p>
         <h2 id="evolving-title" class="story-title" data-reveal>An agent that learns you and your&nbsp;company.</h2>
         <p class="story-subtitle" data-reveal>Vector Brain: every session starts from what the last one learned.</p>
         <p class="story-body" data-reveal>
@@ -591,7 +507,7 @@ const trustCards = [
       "runs in your terminal too.",
       "prices each run from reported tokens.",
       "hosts Claude, Codex, and Cursor too.",
-      "is building a 550B model of its own.",
+      "is planning Vector Velocity, a 550B+ parameter model.",
     ]
     const stages = Array.from(document.querySelectorAll<HTMLElement>("[data-hero-stage]"))
     const progress = document.querySelector<HTMLElement>("[data-hero-progress]")
@@ -1495,29 +1411,6 @@ const trustCards = [
     white-space: nowrap;
   }
 
-  .story-models {
-    max-width: 760px;
-    margin: 36px 0 0;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px;
-    list-style: none;
-  }
-
-  .story-models li {
-    padding: 9px 16px;
-    color: var(--landing-title);
-    background: var(--landing-surface);
-    border: 1px solid var(--landing-line);
-    border-radius: 999px;
-    font-size: 15px;
-    font-weight: 500;
-    line-height: 1.2;
-    letter-spacing: -0.005em;
-  }
-
   .story-facts {
     width: 100%;
     max-width: 980px;
@@ -1838,16 +1731,6 @@ const trustCards = [
       margin-top: 20px;
       font-size: 17px;
       text-wrap: balance;
-    }
-
-    .story-models {
-      margin-top: 28px;
-      gap: 8px;
-    }
-
-    .story-models li {
-      padding: 8px 13px;
-      font-size: 14px;
     }
 
     .story-facts {

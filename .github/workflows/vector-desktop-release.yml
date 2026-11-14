@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       prerelease:
-        description: "Mark the GitHub release as a prerelease"
+        description: "Publish to the beta update channel instead of stable"
         required: true
         default: false
         type: boolean
@@ -91,7 +91,7 @@ jobs:
           source_commit=$(git rev-parse HEAD)
           if [ -n "$tag_commit" ] && [ "$tag_commit" != "$source_commit" ]; then
             echo "Release tag $TAG resolves to $tag_commit, but this workflow is building $source_commit."
-            echo "Run the workflow from the exact release tag before replacing draft assets."
+            echo "Run the workflow from the exact release tag before publishing."
             exit 1
           fi
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -372,7 +372,9 @@ jobs:
     name: Test (${{ matrix.name }})
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The engine suite runs in four shards: whole, it took past 30 minutes for 1.99.111, and Bun 1.3.14 crashed twice
+    # (a segmentation fault in Bun itself) after 25 minutes of it in one process.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -389,9 +391,18 @@ jobs:
           - name: desktop
             directory: packages/desktop
             command: bun run test
-          - name: vector
+          - name: vector 1/4
             directory: packages/engine
-            command: bun test --timeout 30000 --only-failures --max-concurrency 4
+            command: bun test --timeout 30000 --only-failures --max-concurrency 4 --shard=1/4
+          - name: vector 2/4
+            directory: packages/engine
+            command: bun test --timeout 30000 --only-failures --max-concurrency 4 --shard=2/4
+          - name: vector 3/4
+            directory: packages/engine
+            command: bun test --timeout 30000 --only-failures --max-concurrency 4 --shard=3/4
+          - name: vector 4/4
+            directory: packages/engine
+            command: bun test --timeout 30000 --only-failures --max-concurrency 4 --shard=4/4
           - name: sdk-next
             directory: packages/sdk-next
             command: bun run test
@@ -401,6 +412,12 @@ jobs:
     steps:
       - name: Check out release source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # The test workflow runs every package's tests on Node 24, the Node line Electron 42 ships; the desktop guard
+      # smoke needs it (http.setGlobalProxyFromEnv), and the runner image's own Node is older.
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
         with:
@@ -413,7 +430,7 @@ jobs:
       # The engine suite runs under the strict network guard, so Vector may not download ripgrep for the tests that
       # search files: it has to be installed (engine/test/preload.ts), and the Ubuntu runner image has none.
       - name: Install ripgrep
-        if: matrix.name == 'vector'
+        if: startsWith(matrix.name, 'vector')
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
       - name: Run package tests
         working-directory: ${{ matrix.directory }}
@@ -488,74 +505,15 @@ jobs:
         timeout-minutes: 5
         run: xvfb-run -a bun scripts/verify-brain-worker.ts
 
-  draft:
-    name: Prepare draft GitHub release
+  mac:
+    name: macOS desktop apps
     needs:
+      - catalog
       - credentials
       - prepare
       - typecheck
       - test
       - build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - name: Check out release source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Create release notes from the shipped changelog
-        env:
-          RELEASE_UNSIGNED: ${{ needs.prepare.outputs.unsigned }}
-          TAG: ${{ env.RELEASE_TAG }}
-        run: |
-          set -euo pipefail
-          jq -r --arg tag "$TAG" '
-            .releases[]
-            | select(.tag == $tag)
-            | .highlights[].items[]
-            | "## \(.title)\n\n\(.description)\n"
-          ' packages/web/public/changelog.json > release-notes.md
-          test -s release-notes.md
-          if [ "$RELEASE_UNSIGNED" = "true" ]; then
-            unsigned_notes=$(mktemp)
-            {
-              echo "## Unsigned installer notice"
-              echo
-              echo "This interim Vector release is not Apple-notarized or Windows Authenticode-signed. Installed copies receive it through Check for Updates; a new install may show an unidentified-developer or unknown-publisher warning. Production signing is planned for a later release."
-              echo
-              cat release-notes.md
-            } > "$unsigned_notes"
-            mv "$unsigned_notes" release-notes.md
-          fi
-
-      - name: Create or refresh draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ env.RELEASE_TAG }}
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
-            test "$draft" = "true" || {
-              echo "Release $TAG is already public; refusing to replace it."
-              exit 1
-            }
-            gh release edit "$TAG" --target "$GITHUB_SHA" --title "Vector ${TAG#v}" --notes-file release-notes.md
-            exit 0
-          fi
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --draft \
-            --title "Vector ${TAG#v}" \
-            --notes-file release-notes.md
-
-  mac:
-    name: macOS desktop apps
-    needs:
-      - catalog
-      - draft
-      - prepare
     runs-on: macos-15
     timeout-minutes: 90
     outputs:
@@ -763,8 +721,11 @@ jobs:
     name: Windows desktop apps
     needs:
       - catalog
-      - draft
+      - credentials
       - prepare
+      - typecheck
+      - test
+      - build
     runs-on: windows-2025
     timeout-minutes: 60
     outputs:
@@ -913,7 +874,7 @@ jobs:
 
   linux:
     name: Linux desktop apps
-    needs: [draft, catalog]
+    needs: [catalog, credentials, prepare, typecheck, test, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
@@ -994,7 +955,7 @@ jobs:
     timeout-minutes: 90
     environment: production-release
     permissions:
-      contents: write
+      contents: read
     env:
       VECTOR_RELEASE_CATALOG_PATH: ${{ github.workspace }}/release-catalog/api.json
       VECTOR_RELEASE_CATALOG_SHA256: ${{ needs.catalog.outputs.sha256 }}
@@ -1105,12 +1066,6 @@ jobs:
             checksum_alias "vector-desktop-${version}-linux-x86_64.AppImage" vector-desktop-linux-x86_64.AppImage
             checksum_alias "vector-desktop-${version}-linux-arm64.AppImage" vector-desktop-linux-arm64.AppImage
           )
-
-      - name: Upload the verified artifact set to the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ env.RELEASE_TAG }}
-        run: gh release upload "$TAG" release-assets/* --clobber
 
       - name: Publish Vector model catalog beside installers
         env:
@@ -1830,13 +1785,3 @@ jobs:
             checksums \
             "$api_origin/api/download-checksums" \
             "$origin/releases/vector-v$version/checksums.txt"
-
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ env.RELEASE_TAG }}
-          PRERELEASE: ${{ env.RELEASE_PRERELEASE }}
-        run: |
-          set -euo pipefail
-          gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE"
-          if [ "$PRERELEASE" != "true" ]; then gh release edit "$TAG" --latest; fi

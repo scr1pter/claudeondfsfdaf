@@ -1,0 +1,1508 @@
+{
+  "kind": "Sanitized final common v5 evaluation projections",
+  "originalFrozenManifestSha256": "fcc3611fc1a5ca397405e00073936c51a60c5d2327ac93373563dc11d89966bd",
+  "modelCalls": 0,
+  "cases": {
+    "vector-original": {
+      "api": [
+        {
+          "name": "authentication_bootstrap",
+          "status": "passed"
+        },
+        {
+          "name": "sessions_password_storage",
+          "status": "passed"
+        },
+        {
+          "name": "workspaces_selection",
+          "status": "passed"
+        },
+        {
+          "name": "invites_email_single_use",
+          "status": "passed"
+        },
+        {
+          "name": "roles_owner_protection",
+          "status": "passed"
+        },
+        {
+          "name": "tenant_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "customers_crud_search",
+          "status": "passed"
+        },
+        {
+          "name": "customers_uniqueness_validation",
+          "status": "passed"
+        },
+        {
+          "name": "products_crud_cents",
+          "status": "passed"
+        },
+        {
+          "name": "stock_ledger_validation",
+          "status": "passed"
+        },
+        {
+          "name": "stock_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "orders_price_snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "draft_order_state_machine",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_atomic_retry",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_idempotency",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_competing_orders",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_same_key_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoices_snapshot_validation",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_number_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_status_transitions",
+          "status": "passed"
+        },
+        {
+          "name": "projects_crud",
+          "status": "passed"
+        },
+        {
+          "name": "tasks_crud_filters_validation",
+          "status": "passed"
+        },
+        {
+          "name": "comments_permissions",
+          "status": "passed"
+        },
+        {
+          "name": "project_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "csv_import_atomicity",
+          "status": "passed"
+        },
+        {
+          "name": "csv_exports_roundtrip",
+          "status": "passed"
+        },
+        {
+          "name": "attachments_bytes_auth",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_validation_paths",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "activity_sync_analytics",
+          "status": "passed"
+        },
+        {
+          "name": "membership_revocation",
+          "status": "passed"
+        },
+        {
+          "name": "restart_persistence",
+          "status": "passed"
+        }
+      ],
+      "browser": [
+        {
+          "name": "signup-and-workspace",
+          "status": "passed"
+        },
+        {
+          "name": "multiple-workspaces-and-isolated-selection",
+          "status": "passed"
+        },
+        {
+          "name": "customer-create-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "customer-edit-keeps-real-data",
+          "status": "passed"
+        },
+        {
+          "name": "customer-search",
+          "status": "passed"
+        },
+        {
+          "name": "unused-customer-delete-confirmation",
+          "status": "passed"
+        },
+        {
+          "name": "quoted-customer-csv-import",
+          "status": "passed"
+        },
+        {
+          "name": "customer-export-escaping-and-formula-safety",
+          "status": "passed"
+        },
+        {
+          "name": "product-creation-and-exact-cents",
+          "status": "passed"
+        },
+        {
+          "name": "product-search-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "stock-receipt-real-movements",
+          "status": "passed"
+        },
+        {
+          "name": "stock-history-visible-reason-delta-date",
+          "status": "passed"
+        },
+        {
+          "name": "negative-stock-visible-error-no-write",
+          "status": "passed"
+        },
+        {
+          "name": "multi-line-order-price-snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "order-status-filter-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "order-fulfillment-updates-stock-once",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-issued-from-fulfilled-order",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-sent-paid-workflow",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-immutable-after-catalog-customer-edits",
+          "status": "passed"
+        },
+        {
+          "name": "project-create-and-board",
+          "status": "passed"
+        },
+        {
+          "name": "tasks-created-with-assignee-date-and-priority",
+          "status": "passed"
+        },
+        {
+          "name": "task-edit-moves-kanban-column",
+          "status": "passed"
+        },
+        {
+          "name": "task-search-and-composed-filters",
+          "status": "passed"
+        },
+        {
+          "name": "task-comment-safe-rendering",
+          "status": "passed"
+        },
+        {
+          "name": "task-attachment-upload-download-exact-bytes",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-attachment-visible-error-no-persistence",
+          "status": "passed"
+        },
+        {
+          "name": "attachment-delete-removes-download",
+          "status": "passed"
+        },
+        {
+          "name": "task-delete-confirmation-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "overview-real-workspace-analytics",
+          "status": "passed"
+        },
+        {
+          "name": "activity-real-events-and-author",
+          "status": "passed"
+        },
+        {
+          "name": "owner-invite-and-read-only-join",
+          "status": "passed"
+        },
+        {
+          "name": "read-only-ui-permissions",
+          "status": "passed"
+        },
+        {
+          "name": "live-role-promotion",
+          "status": "passed"
+        },
+        {
+          "name": "cross-client-live-product-update",
+          "status": "passed"
+        },
+        {
+          "name": "membership-revocation-reacts-live",
+          "status": "passed"
+        },
+        {
+          "name": "session-refresh-sign-out-sign-in",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-dialog-escape-and-focus-return",
+          "status": "passed"
+        },
+        {
+          "name": "accessible-controls-and-desktop-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "mobile-responsive-pages-and-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "browser-runtime-diagnostics",
+          "status": "passed"
+        }
+      ],
+      "fullGatePassed": true,
+      "sourceUnchanged": true,
+      "sourceIntegrityStatus": "unchanged",
+      "buildExitCode": 0,
+      "typecheckExitCode": 0,
+      "providerCallsForCorrectedEvaluation": 0
+    },
+    "codex-original": {
+      "api": [
+        {
+          "name": "authentication_bootstrap",
+          "status": "passed"
+        },
+        {
+          "name": "sessions_password_storage",
+          "status": "passed"
+        },
+        {
+          "name": "workspaces_selection",
+          "status": "passed"
+        },
+        {
+          "name": "invites_email_single_use",
+          "status": "passed"
+        },
+        {
+          "name": "roles_owner_protection",
+          "status": "passed"
+        },
+        {
+          "name": "tenant_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "customers_crud_search",
+          "status": "passed"
+        },
+        {
+          "name": "customers_uniqueness_validation",
+          "status": "passed"
+        },
+        {
+          "name": "products_crud_cents",
+          "status": "passed"
+        },
+        {
+          "name": "stock_ledger_validation",
+          "status": "passed"
+        },
+        {
+          "name": "stock_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "orders_price_snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "draft_order_state_machine",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_atomic_retry",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_idempotency",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_competing_orders",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_same_key_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoices_snapshot_validation",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_number_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_status_transitions",
+          "status": "passed"
+        },
+        {
+          "name": "projects_crud",
+          "status": "passed"
+        },
+        {
+          "name": "tasks_crud_filters_validation",
+          "status": "passed"
+        },
+        {
+          "name": "comments_permissions",
+          "status": "passed"
+        },
+        {
+          "name": "project_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "csv_import_atomicity",
+          "status": "passed"
+        },
+        {
+          "name": "csv_exports_roundtrip",
+          "status": "passed"
+        },
+        {
+          "name": "attachments_bytes_auth",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_validation_paths",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "activity_sync_analytics",
+          "status": "passed"
+        },
+        {
+          "name": "membership_revocation",
+          "status": "passed"
+        },
+        {
+          "name": "restart_persistence",
+          "status": "passed"
+        }
+      ],
+      "browser": [
+        {
+          "name": "signup-and-workspace",
+          "status": "passed"
+        },
+        {
+          "name": "multiple-workspaces-and-isolated-selection",
+          "status": "passed"
+        },
+        {
+          "name": "customer-create-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "customer-edit-keeps-real-data",
+          "status": "passed"
+        },
+        {
+          "name": "customer-search",
+          "status": "passed"
+        },
+        {
+          "name": "unused-customer-delete-confirmation",
+          "status": "passed"
+        },
+        {
+          "name": "quoted-customer-csv-import",
+          "status": "passed"
+        },
+        {
+          "name": "customer-export-escaping-and-formula-safety",
+          "status": "passed"
+        },
+        {
+          "name": "product-creation-and-exact-cents",
+          "status": "passed"
+        },
+        {
+          "name": "product-search-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "stock-receipt-real-movements",
+          "status": "passed"
+        },
+        {
+          "name": "stock-history-visible-reason-delta-date",
+          "status": "passed"
+        },
+        {
+          "name": "negative-stock-visible-error-no-write",
+          "status": "passed"
+        },
+        {
+          "name": "multi-line-order-price-snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "order-status-filter-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "order-fulfillment-updates-stock-once",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-issued-from-fulfilled-order",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-sent-paid-workflow",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-immutable-after-catalog-customer-edits",
+          "status": "passed"
+        },
+        {
+          "name": "project-create-and-board",
+          "status": "passed"
+        },
+        {
+          "name": "tasks-created-with-assignee-date-and-priority",
+          "status": "passed"
+        },
+        {
+          "name": "task-edit-moves-kanban-column",
+          "status": "passed"
+        },
+        {
+          "name": "task-search-and-composed-filters",
+          "status": "passed"
+        },
+        {
+          "name": "task-comment-safe-rendering",
+          "status": "passed"
+        },
+        {
+          "name": "task-attachment-upload-download-exact-bytes",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-attachment-visible-error-no-persistence",
+          "status": "passed"
+        },
+        {
+          "name": "attachment-delete-removes-download",
+          "status": "passed"
+        },
+        {
+          "name": "task-delete-confirmation-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "overview-real-workspace-analytics",
+          "status": "passed"
+        },
+        {
+          "name": "activity-real-events-and-author",
+          "status": "passed"
+        },
+        {
+          "name": "owner-invite-and-read-only-join",
+          "status": "passed"
+        },
+        {
+          "name": "read-only-ui-permissions",
+          "status": "passed"
+        },
+        {
+          "name": "live-role-promotion",
+          "status": "passed"
+        },
+        {
+          "name": "cross-client-live-product-update",
+          "status": "passed"
+        },
+        {
+          "name": "membership-revocation-reacts-live",
+          "status": "passed"
+        },
+        {
+          "name": "session-refresh-sign-out-sign-in",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-dialog-escape-and-focus-return",
+          "status": "passed"
+        },
+        {
+          "name": "accessible-controls-and-desktop-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "mobile-responsive-pages-and-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "browser-runtime-diagnostics",
+          "status": "passed"
+        }
+      ],
+      "fullGatePassed": true,
+      "sourceUnchanged": true,
+      "sourceIntegrityStatus": "unchanged",
+      "buildExitCode": 0,
+      "typecheckExitCode": 0,
+      "providerCallsForCorrectedEvaluation": 0
+    },
+    "native-first": {
+      "api": [
+        {
+          "name": "authentication_bootstrap",
+          "status": "passed"
+        },
+        {
+          "name": "sessions_password_storage",
+          "status": "passed"
+        },
+        {
+          "name": "workspaces_selection",
+          "status": "passed"
+        },
+        {
+          "name": "invites_email_single_use",
+          "status": "passed"
+        },
+        {
+          "name": "roles_owner_protection",
+          "status": "passed"
+        },
+        {
+          "name": "tenant_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "customers_crud_search",
+          "status": "passed"
+        },
+        {
+          "name": "customers_uniqueness_validation",
+          "status": "passed"
+        },
+        {
+          "name": "products_crud_cents",
+          "status": "passed"
+        },
+        {
+          "name": "stock_ledger_validation",
+          "status": "passed"
+        },
+        {
+          "name": "stock_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "orders_price_snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "draft_order_state_machine",
+          "status": "failed"
+        },
+        {
+          "name": "fulfillment_atomic_retry",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_idempotency",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_competing_orders",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_same_key_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoices_snapshot_validation",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_number_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_status_transitions",
+          "status": "passed"
+        },
+        {
+          "name": "projects_crud",
+          "status": "passed"
+        },
+        {
+          "name": "tasks_crud_filters_validation",
+          "status": "passed"
+        },
+        {
+          "name": "comments_permissions",
+          "status": "passed"
+        },
+        {
+          "name": "project_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "csv_import_atomicity",
+          "status": "passed"
+        },
+        {
+          "name": "csv_exports_roundtrip",
+          "status": "passed"
+        },
+        {
+          "name": "attachments_bytes_auth",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_validation_paths",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "activity_sync_analytics",
+          "status": "passed"
+        },
+        {
+          "name": "membership_revocation",
+          "status": "passed"
+        },
+        {
+          "name": "restart_persistence",
+          "status": "passed"
+        }
+      ],
+      "browser": [
+        {
+          "name": "signup-and-workspace",
+          "status": "passed"
+        },
+        {
+          "name": "multiple-workspaces-and-isolated-selection",
+          "status": "passed"
+        },
+        {
+          "name": "customer-create-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "customer-edit-keeps-real-data",
+          "status": "passed"
+        },
+        {
+          "name": "customer-search",
+          "status": "passed"
+        },
+        {
+          "name": "unused-customer-delete-confirmation",
+          "status": "passed"
+        },
+        {
+          "name": "quoted-customer-csv-import",
+          "status": "passed"
+        },
+        {
+          "name": "customer-export-escaping-and-formula-safety",
+          "status": "passed"
+        },
+        {
+          "name": "product-creation-and-exact-cents",
+          "status": "passed"
+        },
+        {
+          "name": "product-search-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "stock-receipt-real-movements",
+          "status": "passed"
+        },
+        {
+          "name": "stock-history-visible-reason-delta-date",
+          "status": "passed"
+        },
+        {
+          "name": "negative-stock-visible-error-no-write",
+          "status": "passed"
+        },
+        {
+          "name": "multi-line-order-price-snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "order-status-filter-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "order-fulfillment-updates-stock-once",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-issued-from-fulfilled-order",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-sent-paid-workflow",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-immutable-after-catalog-customer-edits",
+          "status": "passed"
+        },
+        {
+          "name": "project-create-and-board",
+          "status": "passed"
+        },
+        {
+          "name": "tasks-created-with-assignee-date-and-priority",
+          "status": "passed"
+        },
+        {
+          "name": "task-edit-moves-kanban-column",
+          "status": "passed"
+        },
+        {
+          "name": "task-search-and-composed-filters",
+          "status": "passed"
+        },
+        {
+          "name": "task-comment-safe-rendering",
+          "status": "passed"
+        },
+        {
+          "name": "task-attachment-upload-download-exact-bytes",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-attachment-visible-error-no-persistence",
+          "status": "passed"
+        },
+        {
+          "name": "attachment-delete-removes-download",
+          "status": "passed"
+        },
+        {
+          "name": "task-delete-confirmation-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "overview-real-workspace-analytics",
+          "status": "passed"
+        },
+        {
+          "name": "activity-real-events-and-author",
+          "status": "passed"
+        },
+        {
+          "name": "owner-invite-and-read-only-join",
+          "status": "passed"
+        },
+        {
+          "name": "read-only-ui-permissions",
+          "status": "passed"
+        },
+        {
+          "name": "live-role-promotion",
+          "status": "passed"
+        },
+        {
+          "name": "cross-client-live-product-update",
+          "status": "passed"
+        },
+        {
+          "name": "membership-revocation-reacts-live",
+          "status": "passed"
+        },
+        {
+          "name": "session-refresh-sign-out-sign-in",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-dialog-escape-and-focus-return",
+          "status": "passed"
+        },
+        {
+          "name": "accessible-controls-and-desktop-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "mobile-responsive-pages-and-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "browser-runtime-diagnostics",
+          "status": "passed"
+        }
+      ],
+      "fullGatePassed": false,
+      "sourceUnchanged": true,
+      "sourceIntegrityStatus": "unchanged",
+      "buildExitCode": 0,
+      "typecheckExitCode": 0,
+      "providerCallsForCorrectedEvaluation": 0
+    },
+    "native-final": {
+      "api": [
+        {
+          "name": "authentication_bootstrap",
+          "status": "passed"
+        },
+        {
+          "name": "sessions_password_storage",
+          "status": "passed"
+        },
+        {
+          "name": "workspaces_selection",
+          "status": "passed"
+        },
+        {
+          "name": "invites_email_single_use",
+          "status": "passed"
+        },
+        {
+          "name": "roles_owner_protection",
+          "status": "passed"
+        },
+        {
+          "name": "tenant_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "customers_crud_search",
+          "status": "passed"
+        },
+        {
+          "name": "customers_uniqueness_validation",
+          "status": "passed"
+        },
+        {
+          "name": "products_crud_cents",
+          "status": "passed"
+        },
+        {
+          "name": "stock_ledger_validation",
+          "status": "passed"
+        },
+        {
+          "name": "stock_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "orders_price_snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "draft_order_state_machine",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_atomic_retry",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_idempotency",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_competing_orders",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_same_key_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoices_snapshot_validation",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_number_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_status_transitions",
+          "status": "passed"
+        },
+        {
+          "name": "projects_crud",
+          "status": "passed"
+        },
+        {
+          "name": "tasks_crud_filters_validation",
+          "status": "passed"
+        },
+        {
+          "name": "comments_permissions",
+          "status": "passed"
+        },
+        {
+          "name": "project_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "csv_import_atomicity",
+          "status": "passed"
+        },
+        {
+          "name": "csv_exports_roundtrip",
+          "status": "passed"
+        },
+        {
+          "name": "attachments_bytes_auth",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_validation_paths",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "activity_sync_analytics",
+          "status": "passed"
+        },
+        {
+          "name": "membership_revocation",
+          "status": "passed"
+        },
+        {
+          "name": "restart_persistence",
+          "status": "passed"
+        }
+      ],
+      "browser": [
+        {
+          "name": "signup-and-workspace",
+          "status": "passed"
+        },
+        {
+          "name": "multiple-workspaces-and-isolated-selection",
+          "status": "passed"
+        },
+        {
+          "name": "customer-create-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "customer-edit-keeps-real-data",
+          "status": "passed"
+        },
+        {
+          "name": "customer-search",
+          "status": "passed"
+        },
+        {
+          "name": "unused-customer-delete-confirmation",
+          "status": "passed"
+        },
+        {
+          "name": "quoted-customer-csv-import",
+          "status": "passed"
+        },
+        {
+          "name": "customer-export-escaping-and-formula-safety",
+          "status": "passed"
+        },
+        {
+          "name": "product-creation-and-exact-cents",
+          "status": "passed"
+        },
+        {
+          "name": "product-search-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "stock-receipt-real-movements",
+          "status": "passed"
+        },
+        {
+          "name": "stock-history-visible-reason-delta-date",
+          "status": "passed"
+        },
+        {
+          "name": "negative-stock-visible-error-no-write",
+          "status": "passed"
+        },
+        {
+          "name": "multi-line-order-price-snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "order-status-filter-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "order-fulfillment-updates-stock-once",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-issued-from-fulfilled-order",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-sent-paid-workflow",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-immutable-after-catalog-customer-edits",
+          "status": "passed"
+        },
+        {
+          "name": "project-create-and-board",
+          "status": "passed"
+        },
+        {
+          "name": "tasks-created-with-assignee-date-and-priority",
+          "status": "passed"
+        },
+        {
+          "name": "task-edit-moves-kanban-column",
+          "status": "passed"
+        },
+        {
+          "name": "task-search-and-composed-filters",
+          "status": "passed"
+        },
+        {
+          "name": "task-comment-safe-rendering",
+          "status": "passed"
+        },
+        {
+          "name": "task-attachment-upload-download-exact-bytes",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-attachment-visible-error-no-persistence",
+          "status": "passed"
+        },
+        {
+          "name": "attachment-delete-removes-download",
+          "status": "passed"
+        },
+        {
+          "name": "task-delete-confirmation-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "overview-real-workspace-analytics",
+          "status": "passed"
+        },
+        {
+          "name": "activity-real-events-and-author",
+          "status": "passed"
+        },
+        {
+          "name": "owner-invite-and-read-only-join",
+          "status": "passed"
+        },
+        {
+          "name": "read-only-ui-permissions",
+          "status": "passed"
+        },
+        {
+          "name": "live-role-promotion",
+          "status": "passed"
+        },
+        {
+          "name": "cross-client-live-product-update",
+          "status": "passed"
+        },
+        {
+          "name": "membership-revocation-reacts-live",
+          "status": "passed"
+        },
+        {
+          "name": "session-refresh-sign-out-sign-in",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-dialog-escape-and-focus-return",
+          "status": "passed"
+        },
+        {
+          "name": "accessible-controls-and-desktop-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "mobile-responsive-pages-and-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "browser-runtime-diagnostics",
+          "status": "passed"
+        }
+      ],
+      "fullGatePassed": true,
+      "sourceUnchanged": true,
+      "sourceIntegrityStatus": "unchanged",
+      "buildExitCode": 0,
+      "typecheckExitCode": 0,
+      "providerCallsForCorrectedEvaluation": 0
+    },
+    "readiness-first": {
+      "api": [
+        {
+          "name": "authentication_bootstrap",
+          "status": "passed"
+        },
+        {
+          "name": "sessions_password_storage",
+          "status": "passed"
+        },
+        {
+          "name": "workspaces_selection",
+          "status": "passed"
+        },
+        {
+          "name": "invites_email_single_use",
+          "status": "passed"
+        },
+        {
+          "name": "roles_owner_protection",
+          "status": "passed"
+        },
+        {
+          "name": "tenant_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "customers_crud_search",
+          "status": "passed"
+        },
+        {
+          "name": "customers_uniqueness_validation",
+          "status": "passed"
+        },
+        {
+          "name": "products_crud_cents",
+          "status": "passed"
+        },
+        {
+          "name": "stock_ledger_validation",
+          "status": "passed"
+        },
+        {
+          "name": "stock_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "orders_price_snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "draft_order_state_machine",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_atomic_retry",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_idempotency",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_competing_orders",
+          "status": "passed"
+        },
+        {
+          "name": "fulfillment_same_key_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoices_snapshot_validation",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_number_concurrency",
+          "status": "passed"
+        },
+        {
+          "name": "invoice_status_transitions",
+          "status": "passed"
+        },
+        {
+          "name": "projects_crud",
+          "status": "passed"
+        },
+        {
+          "name": "tasks_crud_filters_validation",
+          "status": "passed"
+        },
+        {
+          "name": "comments_permissions",
+          "status": "passed"
+        },
+        {
+          "name": "project_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "csv_import_atomicity",
+          "status": "passed"
+        },
+        {
+          "name": "csv_exports_roundtrip",
+          "status": "passed"
+        },
+        {
+          "name": "attachments_bytes_auth",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_validation_paths",
+          "status": "passed"
+        },
+        {
+          "name": "attachment_cascade",
+          "status": "passed"
+        },
+        {
+          "name": "activity_sync_analytics",
+          "status": "passed"
+        },
+        {
+          "name": "membership_revocation",
+          "status": "passed"
+        },
+        {
+          "name": "restart_persistence",
+          "status": "passed"
+        }
+      ],
+      "browser": [
+        {
+          "name": "signup-and-workspace",
+          "status": "passed"
+        },
+        {
+          "name": "multiple-workspaces-and-isolated-selection",
+          "status": "passed"
+        },
+        {
+          "name": "customer-create-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "customer-edit-keeps-real-data",
+          "status": "passed"
+        },
+        {
+          "name": "customer-search",
+          "status": "passed"
+        },
+        {
+          "name": "unused-customer-delete-confirmation",
+          "status": "passed"
+        },
+        {
+          "name": "quoted-customer-csv-import",
+          "status": "passed"
+        },
+        {
+          "name": "customer-export-escaping-and-formula-safety",
+          "status": "passed"
+        },
+        {
+          "name": "product-creation-and-exact-cents",
+          "status": "passed"
+        },
+        {
+          "name": "product-search-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "stock-receipt-real-movements",
+          "status": "passed"
+        },
+        {
+          "name": "stock-history-visible-reason-delta-date",
+          "status": "passed"
+        },
+        {
+          "name": "negative-stock-visible-error-no-write",
+          "status": "passed"
+        },
+        {
+          "name": "multi-line-order-price-snapshots",
+          "status": "passed"
+        },
+        {
+          "name": "order-status-filter-and-export",
+          "status": "passed"
+        },
+        {
+          "name": "order-fulfillment-updates-stock-once",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-issued-from-fulfilled-order",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-sent-paid-workflow",
+          "status": "passed"
+        },
+        {
+          "name": "invoice-immutable-after-catalog-customer-edits",
+          "status": "passed"
+        },
+        {
+          "name": "project-create-and-board",
+          "status": "passed"
+        },
+        {
+          "name": "tasks-created-with-assignee-date-and-priority",
+          "status": "passed"
+        },
+        {
+          "name": "task-edit-moves-kanban-column",
+          "status": "passed"
+        },
+        {
+          "name": "task-search-and-composed-filters",
+          "status": "passed"
+        },
+        {
+          "name": "task-comment-safe-rendering",
+          "status": "passed"
+        },
+        {
+          "name": "task-attachment-upload-download-exact-bytes",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-attachment-visible-error-no-persistence",
+          "status": "passed"
+        },
+        {
+          "name": "attachment-delete-removes-download",
+          "status": "passed"
+        },
+        {
+          "name": "task-delete-confirmation-real-api",
+          "status": "passed"
+        },
+        {
+          "name": "overview-real-workspace-analytics",
+          "status": "passed"
+        },
+        {
+          "name": "activity-real-events-and-author",
+          "status": "passed"
+        },
+        {
+          "name": "owner-invite-and-read-only-join",
+          "status": "passed"
+        },
+        {
+          "name": "read-only-ui-permissions",
+          "status": "passed"
+        },
+        {
+          "name": "live-role-promotion",
+          "status": "passed"
+        },
+        {
+          "name": "cross-client-live-product-update",
+          "status": "passed"
+        },
+        {
+          "name": "membership-revocation-reacts-live",
+          "status": "passed"
+        },
+        {
+          "name": "session-refresh-sign-out-sign-in",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-dialog-escape-and-focus-return",
+          "status": "passed"
+        },
+        {
+          "name": "accessible-controls-and-desktop-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "mobile-responsive-pages-and-evidence",
+          "status": "passed"
+        },
+        {
+          "name": "browser-runtime-diagnostics",
+          "status": "passed"
+        }
+      ],
+      "fullGatePassed": true,
+      "sourceUnchanged": true,
+      "sourceIntegrityStatus": "unchanged",
+      "buildExitCode": 0,
+      "typecheckExitCode": 0,
+      "providerCallsForCorrectedEvaluation": 0
+    }
+  },
+  "projection": "Check names, outcomes, source-integrity verdict and exit codes only; no cookies, headers, raw errors or transcripts."
+}

@@ -160,8 +160,11 @@ export function forgetUsage(accountId: string, fetcher: typeof fetch = fetch) {
   )
 }
 
+/** Everyone's counts but the dashboard owners' own: their accounts, installs and downloads are left out. */
 export async function usageSummary(fetcher: typeof fetch = fetch) {
-  const summary = Option.getOrUndefined(decodeSummary(await ownerRpc("vector_usage_summary", {}, fetcher)))
+  const summary = Option.getOrUndefined(
+    decodeSummary(await ownerRpc("vector_usage_summary", { excludeEmails: usageOwners() }, fetcher)),
+  )
   if (!summary) throw unavailable()
   return {
     ...summary,

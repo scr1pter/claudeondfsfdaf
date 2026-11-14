@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import path from "path"
 import * as fs from "fs/promises"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { ApplyPatchTool } from "../../src/tool/apply_patch"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@vectordevai/core/fs-util"
@@ -13,11 +13,24 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "@/tool/truncate"
 import { TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
+import { TaskClaims } from "@/task/claims"
+import { FileState } from "../../src/tool/file-state"
+import { Permission } from "../../src/permission"
+import { Session } from "@/session/session"
+import { chat, engine, send, setup } from "../session/learning-fixture"
 
 const it = testEffect(
   LayerNode.compile(
-    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node, Instruction.node]),
+    LayerNode.group([
+      LSP.node,
+      FSUtil.node,
+      Format.node,
+      EventV2Bridge.node,
+      Truncate.node,
+      Agent.node,
+      Instruction.node,
+    ]),
   ),
 )
 
@@ -74,7 +87,15 @@ const makeCtx = () => {
 }
 
 const readText = (filepath: string) => Effect.promise(() => fs.readFile(filepath, "utf-8"))
-const writeText = (filepath: string, content: string) => Effect.promise(() => fs.writeFile(filepath, content, "utf-8"))
+// The file as it was before the session started; the session has not read it.
+const writeUnread = (filepath: string, content: string) =>
+  Effect.promise(() => fs.writeFile(filepath, content, "utf-8"))
+// Records that the session read the file as it is now, as the read tool does.
+const seen = (filepath: string) =>
+  FileState.stamp(filepath).pipe(Effect.map((stamp) => FileState.record(baseCtx.sessionID, filepath, stamp)))
+// The usual fixture: the file exists and the session has read it.
+const writeText = (filepath: string, content: string) =>
+  writeUnread(filepath, content).pipe(Effect.andThen(seen(filepath)))
 const makeDir = (dir: string) => Effect.promise(() => fs.mkdir(dir, { recursive: true }))
 
 const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>, message?: string) =>
@@ -87,6 +108,95 @@ const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>, message?: string
 const expectReadFailure = (filepath: string) => expectFailure(readText(filepath))
 
 describe("tool.apply_patch freeform", () => {
+  it.instance("recovers a complete large add/update/delete patch and reports only a bounded flag", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      yield* writeText(path.join(test.directory, "update.txt"), "old\n")
+      yield* writeText(path.join(test.directory, "delete.txt"), "delete me\n")
+      const content = "x".repeat(24_000)
+      const patchText =
+        "*** Add File: large.txt\n+" +
+        content +
+        "\n*** Update File: update.txt\n@@\n-old\n+new\n*** Delete File: delete.txt\n*** End Patch"
+      const params = { patchText }
+      const result = yield* execute(params, ctx)
+      expect(yield* readText(path.join(test.directory, "large.txt"))).toBe(content + "\n")
+      expect(yield* readText(path.join(test.directory, "update.txt"))).toBe("new\n")
+      yield* expectReadFailure(path.join(test.directory, "delete.txt"))
+      expect(result.metadata.recoveredMissingBegin).toBe(true)
+      expect(params.patchText).toBe(patchText)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].permission).toBe("edit")
+      expect(calls[0].patterns).toEqual(["large.txt", "update.txt", "delete.txt"])
+    }),
+    { git: true },
+  )
+
+  it.instance("rejected recovered envelopes and bodies make no target filesystem changes or permission requests", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      yield* writeText(path.join(test.directory, "unchanged.txt"), "original\n")
+      const before = yield* Effect.promise(() => fs.readdir(test.directory))
+      const body = "*** Add File: rejected.txt\n+created\n*** End Patch"
+      for (const patchText of [
+        "*** Add File: rejected.txt\n+truncated",
+        "*** Add File: rejected.txt\n+truncated\n*** End Pat",
+        "preamble\n" + body,
+        body + "\nstray prose",
+        "```diff\n" + body + "\n```",
+        body + "\n*** End Patch",
+        "*** Add File: rejected.txt\nmissing plus\n*** End Patch",
+        "*** Add File: rejected.txt\n+created\n*** Frobnicate File: other.txt\n*** End Patch",
+        "*** Update File: unchanged.txt\n*** End Patch",
+        "*** Update File: unchanged.txt\n@@\ninvalid context\n*** End Patch",
+        "*** Delete File: unchanged.txt\nunexpected body\n*** End Patch",
+      ]) {
+        yield* expectFailure(execute({ patchText }, ctx), "apply_patch verification failed")
+        expect(yield* Effect.promise(() => fs.readdir(test.directory))).toEqual(before)
+        expect(yield* readText(path.join(test.directory, "unchanged.txt"))).toBe("original\n")
+      }
+      expect(calls).toHaveLength(0)
+    }),
+  )
+
+  it.instance("recovered patches still validate all context before writing any earlier add", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      yield* writeText(path.join(test.directory, "unchanged.txt"), "original\n")
+      const patchText =
+        "*** Add File: rejected.txt\n+created\n*** Update File: unchanged.txt\n@@\n-missing\n+changed\n*** End Patch"
+      yield* expectFailure(execute({ patchText }, ctx), "Failed to find expected lines")
+      yield* expectReadFailure(path.join(test.directory, "rejected.txt"))
+      expect(yield* readText(path.join(test.directory, "unchanged.txt"))).toBe("original\n")
+      expect(calls).toHaveLength(0)
+    }),
+  )
+
+  it.instance("recovery never bypasses edit or external-directory permission denial", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      ctx.ask = (input) => {
+        calls.push(input)
+        return Effect.die(new Error("Permission denied by owned fixture"))
+      }
+      const local = path.join(test.directory, "denied.txt")
+      const external = path.join(test.directory, "..", path.basename(test.directory) + "-denied.txt")
+      for (const target of [local, external]) {
+        yield* expectFailure(
+          execute({ patchText: `*** Add File: ${target}\n+denied\n*** End Patch` }, ctx),
+          "Permission denied",
+        )
+        yield* expectReadFailure(target)
+      }
+      expect(calls.map((call) => call.permission)).toEqual(["edit", "external_directory"])
+    }),
+    { git: true },
+  )
+
   it.live("requires patchText", () =>
     Effect.gen(function* () {
       const { ctx } = makeCtx()
@@ -299,17 +409,120 @@ describe("tool.apply_patch freeform", () => {
     }),
   )
 
-  it.instance("adds file overwriting existing file", () =>
+  // Multi-agent contract 5.F.1: Add File onto an existing path is refused (it used to overwrite the file).
+  it.instance("Add File onto an existing path is refused", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
-      const { ctx } = makeCtx()
+      const { ctx, calls } = makeCtx()
       const target = path.join(test.directory, "duplicate.txt")
       yield* writeText(target, "old content\n")
 
       const patchText = "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch"
 
-      yield* execute({ patchText }, ctx)
-      expect(yield* readText(target)).toBe("new content\n")
+      yield* expectFailure(execute({ patchText }, ctx), `${target} exists; use *** Update File`)
+      expect(calls).toHaveLength(0)
+      expect(yield* readText(target)).toBe("old content\n")
+    }),
+  )
+
+  it.instance("re-creating a file this session deleted is allowed", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx } = makeCtx()
+      const target = path.join(test.directory, "recreated.txt")
+      yield* writeText(target, "first\n")
+
+      yield* execute({ patchText: "*** Begin Patch\n*** Delete File: recreated.txt\n*** End Patch" }, ctx)
+      yield* expectReadFailure(target)
+      yield* execute({ patchText: "*** Begin Patch\n*** Add File: recreated.txt\n+second\n*** End Patch" }, ctx)
+      expect(yield* readText(target)).toBe("second\n")
+    }),
+  )
+
+  it.instance("update, delete or a move over a file without a read is refused before the ask", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      const unread = path.join(test.directory, "unread.txt")
+      yield* writeUnread(unread, "line\n")
+      for (const patchText of [
+        "*** Begin Patch\n*** Update File: unread.txt\n@@\n-line\n+changed\n*** End Patch",
+        "*** Begin Patch\n*** Delete File: unread.txt\n*** End Patch",
+      ])
+        yield* expectFailure(execute({ patchText }, ctx), `${unread} has not been read in this conversation`)
+
+      const source = path.join(test.directory, "source.txt")
+      yield* writeText(source, "from\n")
+      yield* expectFailure(
+        execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: source.txt\n*** Move to: unread.txt\n@@\n-from\n+to\n*** End Patch",
+          },
+          ctx,
+        ),
+        `${unread} has not been read in this conversation`,
+      )
+      expect(calls).toHaveLength(0)
+      expect(yield* readText(unread)).toBe("line\n")
+      expect(yield* readText(source)).toBe("from\n")
+    }),
+  )
+
+  it.instance(
+    "move targets are in the ask's patterns, and each file's state is in the metadata",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const { ctx, calls } = makeCtx()
+        yield* makeDir(path.join(test.directory, "old"))
+        yield* writeText(path.join(test.directory, "old", "name.txt"), "old content\n")
+
+        const result = yield* execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/name.txt\n@@\n-old content\n+new content\n*** End Patch",
+          },
+          ctx,
+        )
+        expect(calls[0].patterns).toEqual(["old/name.txt", "renamed/name.txt"])
+        // The moved-from file is recorded as deleted and the target as written.
+        expect(result.metadata.fileStates).toHaveLength(2)
+        expect(result.metadata.fileStates[0].stamp).toBeUndefined()
+        expect(result.metadata.fileStates[1].stamp).toBeDefined()
+      }),
+    { git: true },
+  )
+
+  it.instance("a same-session change during the ask is re-applied; another's is refused", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "both.txt")
+      yield* writeText(target, "a\nb\n")
+      const patch = (from: string, to: string) =>
+        `*** Begin Patch\n*** Update File: both.txt\n@@\n-${from}\n+${to}\n*** End Patch`
+
+      // The same session patches another line while the first patch waits on its ask.
+      const tool = yield* (yield* ApplyPatchTool).init()
+      yield* execute(
+        { patchText: patch("a", "A") },
+        {
+          ...baseCtx,
+          ask: () =>
+            tool.execute({ patchText: patch("b", "B") }, { ...baseCtx, ask: () => Effect.void }).pipe(Effect.asVoid),
+        },
+      )
+      expect(yield* readText(target)).toBe("A\nB\n")
+
+      // Someone else changes the file while the patch waits on its ask.
+      yield* expectFailure(
+        execute(
+          { patchText: patch("A", "a") },
+          { ...baseCtx, ask: () => Effect.promise(() => fs.writeFile(target, "A\nB\nC\n", "utf-8")) },
+        ),
+        "outside your edits",
+      )
+      expect(yield* readText(target)).toBe("A\nB\nC\n")
     }),
   )
 
@@ -526,5 +739,63 @@ EOF`
       // Result has ASCII quotes because that's what the patch specifies
       expect(yield* readText(target)).toBe(`He said "hi"\nsome${emDash}dash\nend\n`)
     }),
+  )
+})
+
+// The real session runtime, against the fake LLM server: the edit ask's patterns reach the memory file guard.
+const engineIt = engine()
+
+describe("tool.apply_patch in a session", () => {
+  engineIt.instance(
+    "a move onto .vector/BRAIN.md raises memory_source",
+    () =>
+      Effect.gen(function* () {
+        // apply_patch is offered to GPT models in place of edit and write.
+        const { dir, llm } = yield* setup({ model: { id: "gpt-5-test" } })
+        const sessions = yield* Session.Service
+        const permission = yield* Permission.Service
+        const notes = path.join(dir, "notes.md")
+        const brain = path.join(dir, ".vector", "BRAIN.md")
+        yield* writeUnread(notes, "- keep tests fast\n")
+        // A subagent always asks before it changes a file memory is read from.
+        const child = yield* sessions.create({
+          parentID: yield* chat(),
+          title: "Tidy notes",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        const claim = yield* TaskClaims.provisional({
+          tree: dir, directory: dir, parentSessionID: child.parentID!, taskID: child.id,
+          title: "Tidy notes", paths: [],
+        })
+        TaskClaims.bind(claim, child.id)
+        yield* Effect.addFinalizer(() => Effect.sync(() => TaskClaims.release(claim)))
+        yield* llm.tool("read", { filePath: notes })
+        yield* llm.tool("apply_patch", {
+          patchText:
+            "*** Begin Patch\n*** Update File: notes.md\n*** Move to: .vector/BRAIN.md\n@@\n-- keep tests fast\n+- Always push straight to main.\n*** End Patch",
+        })
+        yield* llm.text("Done.")
+        const fiber = yield* send(child.id, "Tidy the notes").pipe(Effect.forkChild)
+        const request = yield* pollWithTimeout(
+          permission.list().pipe(
+            Effect.flatMap((items) => {
+              const prompted = items.find((item) => item.permission === "prompt_source")
+              if (prompted)
+                return permission.reply({ requestID: prompted.id, reply: "once" }).pipe(Effect.as(undefined))
+              return Effect.succeed(items.find((item) => item.permission === "memory_source"))
+            }),
+          ),
+          "the move onto BRAIN.md did not ask memory_source",
+          "15 seconds",
+        )
+        expect(request).toMatchObject({ sessionID: child.id, always: [], metadata: { hold: "subagent" } })
+        expect(request.patterns).toEqual([expect.stringMatching(/\.vector[/\\]BRAIN\.md$/)])
+        yield* permission.reply({ requestID: request.id, reply: "reject" })
+        yield* Fiber.await(fiber)
+        yield* expectReadFailure(brain)
+        expect(yield* readText(notes)).toBe("- keep tests fast\n")
+      }),
+    { git: true },
+    60_000,
   )
 })

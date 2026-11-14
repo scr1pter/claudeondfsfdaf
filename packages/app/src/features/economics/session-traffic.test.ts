@@ -5,7 +5,8 @@
 // refresh queue re-bootstraps a directory), the economics recorder and the layout's status reconciliation. Set
 // VECTOR_TRAFFIC_REPORT=1 to print the counts, and VECTOR_TRAFFIC_PROVIDER_BODY to serve a real /provider body for
 // byte counts.
-import { expect, test } from "bun:test"
+import { afterEach, expect, test, vi } from "bun:test"
+import { MessageChannel } from "node:worker_threads"
 import { QueryClient } from "@tanstack/solid-query"
 import { createStore } from "solid-js/store"
 import { createVectorClient, type Event } from "@vectordevai/sdk/v2/client"
@@ -19,6 +20,11 @@ import { createSessionEconomics } from "./session-economics"
 
 const directory = "/repo"
 const model = { providerID: "openai", modelID: "gpt-6.1" }
+
+afterEach(() => {
+  vi.clearAllTimers()
+  vi.useRealTimers()
+})
 
 type Info = Record<string, unknown> & { id: string; time: { created: number; updated: number }; parentID?: string }
 type Entry = { info: Record<string, unknown> & { id: string }; parts: Record<string, unknown>[] }
@@ -176,12 +182,31 @@ function createApp(engine: ReturnType<typeof createEngine>) {
   }
 }
 
-// Wait until every request the handlers started has been answered and nothing new was started.
+// Pump logical time while the SDK settles. Wall-clock pauses must not split an event burst across the ancestor
+// meter's 400ms coalescing window on a slow runner.
 async function settle(engine: ReturnType<typeof createEngine>) {
-  for (let quiet = 0; quiet < 3; ) {
-    const before = engine.requests.length
-    await Bun.sleep(25)
-    quiet = engine.state.inflight === 0 && engine.requests.length === before ? quiet + 1 : 0
+  const channel = new MessageChannel()
+  try {
+    for (let quiet = 0, pulses = 0; pulses < 1_000; pulses++) {
+      const before = engine.requests.length
+      const elapsed = Bun.sleep(25)
+      vi.advanceTimersByTime(25)
+      await elapsed
+      // A native event-loop turn drains SDK response parsing without advancing the fake clock again.
+      await new Promise<void>((resolve) => {
+        channel.port1.addEventListener("message", () => resolve(), { once: true })
+        channel.port1.start()
+        channel.port2.postMessage(undefined)
+      })
+      quiet = engine.state.inflight === 0 && engine.requests.length === before ? quiet + 1 : 0
+      if (quiet === 3) return
+    }
+    throw new Error(
+      `Session traffic did not settle after 1,000 logical pulses (${engine.requests.length} requests, ${engine.state.inflight} in flight)`,
+    )
+  } finally {
+    channel.port1.close()
+    channel.port2.close()
   }
 }
 
@@ -382,7 +407,7 @@ async function runSession(providerBody: string) {
     const start = engine.requests.length
     await run()
     // Include the live ancestor meter's 400ms coalescing window in this phase, not the following review.
-    await Bun.sleep(425)
+    vi.advanceTimersByTime(425)
     await settle(engine)
     phases.push({ name, requests: engine.requests.slice(start) })
   }
@@ -464,6 +489,7 @@ function summarize(requests: { path: string; bytes: number }[]) {
 }
 
 test("a multi-step session with subagents fetches history only when its family settles", async () => {
+  vi.useFakeTimers()
   const body = process.env.VECTOR_TRAFFIC_PROVIDER_BODY
   const result = await runSession(
     body ? await Bun.file(body).text() : JSON.stringify({ all: [], default: {}, connected: [] }),

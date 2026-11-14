@@ -1,0 +1,51 @@
+{
+  "kind": "focus-candidate-validation-v1",
+  "parentRevision": "bcc0ede392f559e60bfed0e39c82ad25163b9a88",
+  "motivation": {
+    "focus": "A funded run exposed a diagnostic blind spot. Free re-probes showed normal Tab traversal into browser chrome was mistaken for missing keyboard controls; this candidate reports that state rather than changing application focus.",
+    "verification": "Blinded review identified weaker verification coverage. Generic guidance now chooses tests by risk instead of unconditionally minimizing their count. Prompt causation is a hypothesis, not established."
+  },
+  "features": [
+    "Read-only optional focus metadata: document focus, active-element kind, bounded tag/type/tabIndex, and a ref only when retained in the current observation.",
+    "Absent metadata from older backends remains unknown. Observing never focuses a control or brings a page forward; metadata contains no field values or page text.",
+    "Generic GPT guidance favors focused changes, critical invariants and relevant failure/race verification without duplicating equivalent checks."
+  ],
+  "validation": [
+    { "check": "Desktop browser-page unit suite", "passed": 28, "failed": 0, "assertions": 122, "exitCode": 0 },
+    { "check": "Engine browser and report-format suites", "passed": 34, "failed": 0, "assertions": 201, "exitCode": 0 },
+    {
+      "check": "Existing system-prompt and LLM-request regressions",
+      "passed": 52,
+      "failed": 0,
+      "assertions": 268,
+      "exitCode": 0
+    },
+    { "check": "Engine package typecheck", "exitCode": 0 },
+    { "check": "Desktop package typecheck", "exitCode": 0 },
+    { "check": "Node policy and real TCP-reset controls", "passed": 10, "failed": 0, "exitCode": 0 },
+    {
+      "check": "Common-driver real-browser smoke",
+      "passed": 15,
+      "failed": 0,
+      "deniedOriginRequestsReceived": 0,
+      "exitCode": 0
+    },
+    { "check": "Serialized product real-browser focus control", "passed": 1, "failed": 0, "skipped": 0, "exitCode": 0 }
+  ],
+  "realBrowserCoverage": [
+    "Focused input metadata and current refs",
+    "Password value non-disclosure",
+    "Read/observe preserve focus",
+    "Bounded inventory omits an unretained focused ref",
+    "Tab leaves the document with body active and document focus false, then re-enters the first input"
+  ],
+  "tools": { "bun": "1.3.14", "node": "24.22.0", "playwright": "1.59.1" },
+  "limits": [
+    "Two changes are bundled; a future paired result cannot isolate their individual effects.",
+    "No improvement in task quality, cost or speed is established by these free checks.",
+    "No held-out task details were inspected for this candidate."
+  ],
+  "providerCalls": 0,
+  "cloudActions": 0,
+  "dependencyInstalls": 0
+}

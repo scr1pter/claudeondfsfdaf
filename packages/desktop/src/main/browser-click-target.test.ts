@@ -1,17 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { realpathSync } from "node:fs"
-import { createRequire } from "node:module"
-import path from "node:path"
+import { GlobalRegistrator } from "@happy-dom/global-registrator"
 import { clickTargetLabel } from "./browser-click-target"
 
-// Against happy-dom (the app package's DOM for tests), the way the page runs it: serialized with toString() and rebuilt
-// with no access to this module, so a function that read anything from module scope would fail.
-const load = createRequire(
-  realpathSync(path.join(import.meta.dir, "../../../app/node_modules/@happy-dom/global-registrator/package.json")),
-)
-const { GlobalRegistrator } = load("@happy-dom/global-registrator") as {
-  GlobalRegistrator: { register: (options: { url: string }) => void }
-}
+// Against happy-dom (a DOM for tests), the way the page runs it: serialized with toString() and rebuilt with no access
+// to this module, so a function that read anything from module scope would fail.
 GlobalRegistrator.register({ url: "https://dashboard.example/projects" })
 
 const label = new Function(`return (${clickTargetLabel.toString()})`)() as typeof clickTargetLabel

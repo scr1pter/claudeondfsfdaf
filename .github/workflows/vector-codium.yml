@@ -1,0 +1,265 @@
+name: Vector Codium
+
+# The CI lane for the Codium build. Work packages run single test files on the owner's Mac, so the typechecks, the
+# Codium suites with real Valkey and Postgres, the HttpApi exerciser and the Codium browser specs run here. It holds
+# no secrets: the Stripe test-mode checks run only in vector-codium-e2e.yml, behind the codium-test environment.
+#
+# Git cannot hold a branch named codium next to branches under codium/, so both the integration branches and their
+# per-package branches are listed. The legal drafts (WP A30) wait on codium-legal for the release commit, for the same
+# reason.
+on:
+  push:
+    branches:
+      - codium
+      - codium/**
+      - codium-legal
+      - codium-113
+      - codium-113/**
+  workflow_dispatch:
+
+concurrency:
+  group: vector-codium-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  typecheck:
+    name: typecheck (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The hosted API in api/ is checked against the root tsconfig.json, which includes only api/**.
+          - name: api
+            directory: packages/engine
+            command: bun typecheck --project ../../tsconfig.json
+          - name: schema
+            directory: packages/schema
+            command: bun typecheck
+          - name: core
+            directory: packages/core
+            command: bun typecheck
+          - name: engine
+            directory: packages/engine
+            command: bun typecheck
+          - name: app
+            directory: packages/app
+            command: bun typecheck
+          - name: desktop
+            directory: packages/desktop
+            command: bun typecheck
+          - name: web
+            directory: packages/web
+            command: bun typecheck
+          # The lane's own test picker lives in packages/cloud.
+          - name: cloud
+            directory: packages/cloud
+            command: bun typecheck
+          # WP A39: Vector Remote's relay Worker.
+          - name: relay
+            directory: packages/relay
+            command: bun typecheck
+          # WP A46: the ops Worker (On Call and Release Guard).
+          - name: ops-worker
+            directory: packages/ops-worker
+            command: bun typecheck
+          # WP A54: the cloud computer's image, hostd and the viewer proxy.
+          - name: hosted-computer
+            directory: packages/hosted-computer
+            command: bun typecheck
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Typecheck ${{ matrix.name }}
+        working-directory: ${{ matrix.directory }}
+        run: ${{ matrix.command }}
+
+  tests:
+    name: Codium tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_DB: vector_shares_test
+          POSTGRES_USER: vector_fixture
+          POSTGRES_PASSWORD: fixture-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vector_fixture -d vector_shares_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:7.2.14-alpine@sha256:c6c2f0020be34bbf684a53a0ef716ab16ff70295186d4d9f2518435beb7afbff
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The whole history, so the test picker can find what the branch changed since it left main.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      # Engine tests run under the strict network guard, so Vector may not download ripgrep for the tests that search
+      # files: it has to be installed (engine/test/preload.ts).
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      - name: Prepare isolated SQL fixtures
+        env:
+          VECTOR_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: docker exec "$VECTOR_TEST_PG_CONTAINER" createdb --username=vector_fixture --maintenance-db=postgres vector_teams_test
+
+      - name: Build test dependencies
+        timeout-minutes: 20
+        run: >-
+          GITHUB_ACTIONS=false bun turbo run build --log-order=stream
+          --filter='@vectordevai/engine^...' --filter='@vectordevai/core^...' --filter='@vectordevai/app^...'
+
+      # WP A38: test/phone-app.test.ts checks that the real phone build survives the website's prune.
+      - name: Build the phone app
+        timeout-minutes: 10
+        working-directory: packages/app
+        run: bun run build:phone
+
+      # The hosted API suite in test/, every test whose path names Codium, and every test file this branch added or
+      # changed since main, one Bun process per file (packages/cloud/src/codium-ci-tests.ts).
+      - name: Run the Codium test files
+        timeout-minutes: 40
+        env:
+          VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
+          VECTOR_TEST_POSTGRES_URL: postgres://vector_fixture:fixture-only@127.0.0.1:5432/vector_shares_test
+          VECTOR_TEST_TEAMS_POSTGRES_URL: postgres://vector_fixture:fixture-only@127.0.0.1:5432/vector_teams_test
+          VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+        run: GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts
+
+      - name: Run HttpApi exerciser gates
+        if: ${{ !cancelled() }}
+        working-directory: packages/engine
+        run: bun run test:httpapi
+
+      - name: Check generated client
+        if: ${{ !cancelled() }}
+        working-directory: packages/client
+        run: bun run check:generated
+
+  # WP A39, A46 and A54: the relay and ops Workers' deploy dry runs and smoke tests, and the cloud computer's image
+  # built and booted in Docker. They live in vector-hosted-ci.yml (WP A58), which pull requests touching the hosted
+  # services run too; here it runs only those jobs, with no secret.
+  hosted:
+    name: Hosted services
+    uses: ./.github/workflows/vector-hosted-ci.yml
+    with:
+      services_only: true
+
+  browser:
+    name: Codium browser specs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Playwright 1.59 hangs while extracting Chromium with Node 24.16.
+          node-version: "24.15"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      # Specs in packages/app/e2e whose path names Codium, and specs this branch added or changed since main.
+      - name: Select the Codium browser specs
+        id: select
+        run: |
+          set -euo pipefail
+          specs=$(bun packages/cloud/src/codium-ci-tests.ts --browser --list)
+          printf '%s\n' "$specs"
+          echo "count=$(printf '%s' "$specs" | grep -c . || true)" >> "$GITHUB_OUTPUT"
+
+      - name: Read Playwright version
+        id: playwright-version
+        if: steps.select.outputs.count != '0'
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        if: steps.select.outputs.count != '0'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        if: steps.select.outputs.count != '0'
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browsers
+        if: steps.select.outputs.count != '0' && steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run the Codium browser specs
+        if: steps.select.outputs.count != '0'
+        timeout-minutes: 30
+        env:
+          CI: true
+          # Five browser workers stalled asset loading on hosted runners; keep test deadlines intact.
+          PLAYWRIGHT_WORKERS: "1"
+        run: bun packages/cloud/src/codium-ci-tests.ts --browser
+
+      # The app's specs run against fixtures only, so their traces hold no credentials.
+      - name: Upload Playwright artifacts
+        if: failure() && steps.select.outputs.count != '0'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codium-playwright-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/app/e2e/test-results
+            packages/app/e2e/playwright-report

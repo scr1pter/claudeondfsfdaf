@@ -1,23 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test"
-import { realpathSync } from "node:fs"
-import { createRequire } from "node:module"
-import path from "node:path"
+import { GlobalRegistrator } from "@happy-dom/global-registrator"
 import type { BrowserAgentInput } from "../preload/types"
 
 // What the agent browser's commands do to a page: typing, keys, clicks, lists, hovering and the checks before them.
-// The page is happy-dom (the app package's DOM for tests), and the stand-in for Electron's web contents runs every
+// The page is happy-dom (a DOM for tests), and the stand-in for Electron's web contents runs every
 // script Vector sends, in either world, against it, as Chromium would. happy-dom has no layout, so where an element is
 // and what shows at a point are set by each test. Trusted key events are played into the focused field the way
 // Chromium plays them: a char event types its character, and Enter in an editable element starts a new block. What
 // only a real Electron run can show (modifier keys reaching a page, select all and undo, Chromium's dialogs) is left to
 // the desktop smoke. Each desktop test file runs in its own process, so this file's Electron mock stays its own.
 
-const load = createRequire(
-  realpathSync(path.join(import.meta.dir, "../../../app/node_modules/@happy-dom/global-registrator/package.json")),
-)
-const { GlobalRegistrator } = load("@happy-dom/global-registrator") as {
-  GlobalRegistrator: { register: (options: { url: string }) => void }
-}
 GlobalRegistrator.register({ url: "http://localhost:3000/" })
 
 type Listener = { listener(...input: unknown[]): unknown }["listener"]

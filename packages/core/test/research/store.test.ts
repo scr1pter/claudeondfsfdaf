@@ -8,8 +8,10 @@ import { sql } from "drizzle-orm"
 import { getTableConfig, SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core"
 import { Effect, Layer } from "effect"
 import type { Research } from "@vectordevai/schema/research"
+import type { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import { BrainEmbed } from "../../src/brain/embed"
+import { BrainErase } from "../../src/brain/erase"
 import { BrainKnowledge } from "../../src/brain/knowledge"
 import first from "../../src/brain/migration/20261018000000_brain"
 import knowledgeMigration from "../../src/brain/migration/20261101000000_knowledge"
@@ -450,6 +452,118 @@ describe("ResearchStore sources", () => {
 })
 
 describe("ResearchStore notes", () => {
+  test("persists optional quantitative metadata and refuses an annotation its quote does not state", async () => {
+    const measurement: Research.Measurement = {
+      metric: "revenue",
+      value: 1.2,
+      unit: "USD",
+      scale: "billion",
+      period: "2025",
+      geography: "Europe",
+    }
+    const quote = "Europe revenue in 2025 was USD 1.2 billion."
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        yield* setup.store.addSource(setup.place, run.id, page("market", [quote]))
+      const annotated = { ...measurement, unexpected: "not part of the measurement contract" }
+      const saved = yield* setup.store.note(setup.place, run.id, { ...NOTE, claim: quote, quote, measurement: annotated })
+        const refused = yield* setup.store.note(setup.place, run.id, {
+          ...NOTE,
+          claim: quote,
+          quote,
+          measurement: { ...measurement, value: 9 },
+        })
+        return { saved, refused, detail: yield* setup.store.get(setup.place, run.id) }
+      }),
+    )
+    expect(result.saved).toMatchObject({ type: "saved", note: { measurement } })
+    expect(result.detail?.notes[0]?.measurement).toEqual(measurement)
+    expect(result.refused).toMatchObject({ type: "refused" })
+    expect(result.detail?.notes).toHaveLength(1)
+  })
+
+  test("refuses a forged PDF page instead of overwriting the source page", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        yield* setup.store.addSource(
+          setup.place,
+          run.id,
+          page("pdf", STUDY, {
+            chunks: STUDY.map((text, index) => ({ text, chunk: index + 1, page: index + 10 })),
+          }),
+        )
+        return {
+          wrong: yield* setup.store.note(setup.place, run.id, { ...NOTE, page: 99 }),
+          correct: yield* setup.store.note(setup.place, run.id, { ...NOTE, page: 11 }),
+          inferred: yield* setup.store.note(setup.place, run.id, NOTE),
+        }
+      }),
+    )
+    expect(result.wrong).toMatchObject({ type: "refused", message: expect.stringContaining("page") })
+    expect(result.correct).toMatchObject({ type: "saved", note: { page: 11 } })
+    expect(result.inferred).toMatchObject({ type: "saved", note: { page: 11 } })
+  })
+
+  test("a public researcher receives no comparison derived from a private source", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        const measurement: Research.Measurement = {
+          metric: "revenue",
+          value: 1.2,
+          unit: "USD",
+          scale: "billion",
+          period: "2025",
+          geography: "Europe",
+        }
+        const privateQuote = "Private ledger: Europe revenue in 2025 was USD 1.2 billion."
+        const publicQuote = "Published annual survey: Europe revenue in 2025 was USD 1.8 billion."
+        yield* setup.store.addSource(setup.place, run.id, page("private", [privateQuote], { private: true }))
+        yield* setup.store.note(setup.place, run.id, { ...NOTE, claim: privateQuote, quote: privateQuote, measurement })
+        yield* setup.store.addSource(setup.place, run.id, page("public", [publicQuote]))
+        const params = {
+          ...NOTE,
+          source: "S2",
+          claim: publicQuote,
+          quote: publicQuote,
+          measurement: { ...measurement, value: 1.8 },
+        }
+        return {
+          public: yield* setup.store.note(setup.place, run.id, { ...params, publicOnly: true }),
+          lead: yield* setup.store.note(setup.place, run.id, params),
+        }
+      }),
+    )
+    expect(result.public).toMatchObject({ type: "saved" })
+    if (result.public.type === "saved") expect(result.public.comparisons).toBeUndefined()
+    expect(result.lead).toMatchObject({
+      type: "saved",
+      comparisons: expect.arrayContaining([expect.objectContaining({ kind: "conflict" })]),
+    })
+  })
+
+  test("a repeated PDF quote can cite a later page where it genuinely occurs", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        yield* setup.store.addSource(
+          setup.place,
+          run.id,
+          page("repeated", [NOTE.quote], {
+            chunks: [
+              { text: NOTE.quote, chunk: 1, page: 1 },
+              { text: NOTE.quote, chunk: 2, page: 7 },
+            ],
+          }),
+        )
+        return yield* setup.store.note(setup.place, run.id, { ...NOTE, page: 7 })
+      }),
+    )
+    expect(result).toMatchObject({ type: "saved", note: { page: 7 } })
+  })
+
   test("a quote must be in its source; one that does not state the claim is saved as a paraphrase", async () => {
     const result = await withStore((setup) =>
       Effect.gen(function* () {
@@ -897,6 +1011,127 @@ describe("ResearchStore guests", () => {
   })
 })
 
+// Erasing memory takes the research of what it erases (BrainErase), as Settings > Memory, the learned chip and
+// `vector memory erase` ask for it.
+describe("ResearchStore and erasing memory", () => {
+  // What Vector learned in a repository, from one session.
+  const learned = (setup: Setup, sessionID: string) =>
+    setup.brain.propose(setup.place, {
+      kind: "preference",
+      text: "Run the payments tests with bun before committing",
+      scope: "repository",
+      origin: "agent",
+      evidence: {
+        type: "message",
+        quote: "I always run the payments tests with bun before committing",
+        verified: true,
+      },
+      sessionID,
+      pending: "review",
+    })
+  const elsewhere = (setup: Setup): Brain.Place => ({ ...setup.place, repository: "repo-2" })
+
+  test("forgetting a session's runs takes the ones it started, kept or in memory, and leaves every other", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const mine = (yield* reported(setup, { sessionID: "ses_erase" })).run
+        const kept = yield* setup.store.keep(setup.place, mine.id)
+        const guest = yield* setup.store.start(setup.place, { ...RUN, sessionID: "ses_erase", guest: true })
+        const other = (yield* reported(setup, { sessionID: "ses_other" })).run
+        const away = yield* setup.store.start(elsewhere(setup), { ...RUN, sessionID: "ses_erase" })
+        const forgot = yield* setup.store.forgetAll(setup.place, { session: "ses_erase" })
+        // As Forget does, it leaves tombstones: a later run does not keep the page again on its own.
+        const later = yield* setup.store.start(setup.place, { ...RUN, sessionID: "ses_later" })
+        const again = yield* setup.store.addSource(setup.place, later.id, page("homes", STUDY))
+        return {
+          kept,
+          forgot,
+          again,
+          mine: yield* setup.store.get(setup.place, mine.id),
+          guest: yield* setup.store.get(setup.place, guest.id),
+          other: yield* setup.store.get(setup.place, other.id),
+          away: yield* setup.store.get(elsewhere(setup), away.id),
+        }
+      }),
+    )
+    expect(result.kept).toMatchObject({ type: "kept" })
+    expect(result.forgot).toBe(2)
+    expect(result.mine).toBeUndefined()
+    expect(result.guest).toBeUndefined()
+    expect(result.other).toMatchObject({ run: { session_id: "ses_other" }, sources: [{ id: "S1" }] })
+    // A session belongs to one repository: only the repository it is erased in is searched.
+    expect(result.away).toMatchObject({ run: { session_id: "ses_erase" } })
+    expect(result.again).toMatchObject({ type: "added", source: { status: "failed", reason: ResearchStore.FORGOTTEN } })
+  })
+
+  test("erasing a repository's memory, or all of it, forgets its research; erasing what Vector learned about you keeps it", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const stores = { brain: setup.brain, research: setup.store, place: setup.place }
+        const ids = (place: Brain.Place) =>
+          setup.store.list(place).pipe(Effect.map((runs) => runs.map((item) => item.run.id)))
+        const run = (yield* reported(setup)).run
+        const away = yield* setup.store.start(elsewhere(setup), RUN)
+        const personal = yield* BrainErase.erase({ ...stores, scope: "personal" })
+        const afterPersonal = yield* ids(setup.place)
+        yield* learned(setup, "ses_root")
+        const repository = yield* BrainErase.erase({ ...stores, scope: "repository" })
+        const afterRepository = { here: yield* ids(setup.place), away: yield* ids(elsewhere(setup)) }
+        // The brain's erase clears the tombstones Forget left, so the same page can be read again.
+        const fresh = (yield* reported(setup, { sessionID: "ses_fresh" })).added
+        const all = yield* BrainErase.erase({ ...stores, scope: "all" })
+        return {
+          run: run.id,
+          away: away.id,
+          personal,
+          afterPersonal,
+          repository,
+          afterRepository,
+          fresh,
+          all,
+          afterAll: { here: yield* ids(setup.place), away: yield* ids(elsewhere(setup)) },
+          stored: yield* counts(setup),
+        }
+      }),
+    )
+    expect(result.personal).toEqual({ entries: 0, runs: 0 })
+    expect(result.afterPersonal).toEqual([result.run])
+    expect(result.repository).toEqual({ entries: 1, runs: 1 })
+    expect(result.afterRepository).toEqual({ here: [], away: [result.away] })
+    expect(result.fresh).toMatchObject({ type: "added", source: { status: "read" } })
+    expect(result.all).toEqual({ entries: 0, runs: 2 })
+    expect(result.afterAll).toEqual({ here: [], away: [] })
+    expect(result.stored).toMatchObject({ runs: 0, sources: 0, notes: 0, documents: 0, passages: 0, postings: 0 })
+  })
+
+  test("erasing what Vector learned in a session forgets the runs that session started", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const stores = { brain: setup.brain, research: setup.store, place: setup.place }
+        const mine = (yield* reported(setup, { sessionID: "ses_erase" })).run
+        const other = (yield* reported(setup, { sessionID: "ses_other" })).run
+        const taught = yield* learned(setup, "ses_erase")
+        const erased = yield* BrainErase.session({ ...stores, sessionID: "ses_erase" })
+        const none = yield* BrainErase.session({ ...stores, sessionID: "ses_none" })
+        return {
+          taught,
+          erased,
+          none,
+          mine: yield* setup.store.get(setup.place, mine.id),
+          other: yield* setup.store.get(setup.place, other.id),
+          entries: yield* setup.brain.list(setup.place, { filter: "all", scope: "repository" }),
+        }
+      }),
+    )
+    expect(result.taught).toMatchObject({ type: "added" })
+    expect(result.erased).toEqual({ entries: 1, runs: 1 })
+    expect(result.none).toEqual({ entries: 0, runs: 0 })
+    expect(result.mine).toBeUndefined()
+    expect(result.other).toMatchObject({ run: { session_id: "ses_other" } })
+    expect(result.entries).toEqual([])
+  })
+})
+
 describe("research migration", () => {
   test("applies on a copy of a brain.db from before it, and keeps what that held", async () => {
     await using tmp = await tmpdir()
@@ -953,7 +1188,7 @@ describe("research migration", () => {
       declared: declared(table),
       stored: stored(db, getTableConfig(table).name),
     }))
-    const triggers = db.query("SELECT name FROM sqlite_master WHERE type = 'trigger'").all()
+    const triggers = db.query("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()
     db.close()
     const untouched = new Database(fixture, { readonly: true })
     const before = (untouched.query("SELECT id FROM migration").all() as { id: string }[]).length
@@ -964,7 +1199,14 @@ describe("research migration", () => {
     expect(document).toEqual([{ id: "d1", origin: "upload", source_url: null, fetched_at: null, run_id: null }])
     expect(kept).toEqual({ entries: [{ id: "m1a2b3" }], postings: [{ term: 1, item: 1, count: 2 }] })
     for (const shape of shapes) expect(shape.stored).toEqual(shape.declared)
-    expect(triggers).toEqual([{ name: "research_report_forgotten" }])
+    expect(triggers).toEqual([
+      { name: "brain_document_visibility_revocation" },
+      { name: "brain_event_revocation" },
+      { name: "brain_repository_docs_initial_revocation" },
+      { name: "brain_repository_docs_revocation" },
+      { name: "brain_repository_document_revocation" },
+      { name: "research_report_forgotten" },
+    ])
   })
 })
 

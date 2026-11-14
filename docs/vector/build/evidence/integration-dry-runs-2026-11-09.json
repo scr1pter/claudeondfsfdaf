@@ -1,0 +1,221 @@
+{
+  "kind": "pinned-integration-dry-runs-v1",
+  "observedAtUtc": "2026-11-10T03:00:20.146558+00:00",
+  "scope": "Object-only pairwise simulations; no ref, index, checkout or feature-code changes. Pending coordinator docs/policy/evidence edits are outside these pinned source comparisons.",
+  "command": "git merge-tree --write-tree --name-only <leftSha> <rightSha>",
+  "objectAvailability": "Initial missing-promisor-object results were unknown. Required public source objects were then explicitly hydrated via anonymous Git reads with terminal/askpass/credential prompts disabled; those exact pairs were rerun. No test or CI was rerun.",
+  "pins": {
+    "main": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+    "hands": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+    "codium": "eed4bc45a5c24c87d9d9505306c048ba9ebec3c7",
+    "vector-at-mention": "c65d6b5d1000ca3dd5b961d0f9f63d73baa46d64",
+    "vectorscope": "bee92d8e92ab8b058814e5825e381602b87d279a",
+    "cloud-workspaces": "ad81939c77ddc8170b778ee378475bc57c1623ec",
+    "finish-checks": "00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a",
+    "process-finish": "d2156cb2d188bde0876309135a9039529870d609",
+    "release-coordination": "02098b2b6d971b5346bdd368e95236d8d2d939dc"
+  },
+  "results": [
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "hands",
+      "rightSha": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "codium",
+      "rightSha": "eed4bc45a5c24c87d9d9505306c048ba9ebec3c7",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "vector-at-mention",
+      "rightSha": "c65d6b5d1000ca3dd5b961d0f9f63d73baa46d64",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "cloud-workspaces",
+      "rightSha": "ad81939c77ddc8170b778ee378475bc57c1623ec",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "finish-checks",
+      "rightSha": "00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "process-finish",
+      "rightSha": "d2156cb2d188bde0876309135a9039529870d609",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "release-coordination",
+      "rightSha": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "release-coordination",
+      "leftSha": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+      "right": "finish-checks",
+      "rightSha": "00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "release-coordination",
+      "leftSha": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+      "right": "process-finish",
+      "rightSha": "d2156cb2d188bde0876309135a9039529870d609",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "release-coordination",
+      "leftSha": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+      "right": "hands",
+      "rightSha": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "release-coordination",
+      "leftSha": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+      "right": "codium",
+      "rightSha": "eed4bc45a5c24c87d9d9505306c048ba9ebec3c7",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "process-finish",
+      "leftSha": "d2156cb2d188bde0876309135a9039529870d609",
+      "right": "codium",
+      "rightSha": "eed4bc45a5c24c87d9d9505306c048ba9ebec3c7",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "process-finish",
+      "leftSha": "d2156cb2d188bde0876309135a9039529870d609",
+      "right": "vector-at-mention",
+      "rightSha": "c65d6b5d1000ca3dd5b961d0f9f63d73baa46d64",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "vector-at-mention",
+      "leftSha": "c65d6b5d1000ca3dd5b961d0f9f63d73baa46d64",
+      "right": "hands",
+      "rightSha": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+      "exitCode": 0,
+      "state": "textually_clean",
+      "conflictingFiles": []
+    },
+    {
+      "left": "main",
+      "leftSha": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+      "right": "vectorscope",
+      "rightSha": "bee92d8e92ab8b058814e5825e381602b87d279a",
+      "exitCode": 1,
+      "state": "textual_conflicts",
+      "conflictingFiles": [
+        "packages/app/src/features/pull-requests/ai-review.test.ts",
+        "packages/app/src/features/pull-requests/ai-review.ts",
+        "packages/core/src/review/types.ts",
+        "packages/core/test/brain/migration-knowledge.test.ts",
+        "packages/engine/src/cli/cmd/review.render.ts",
+        "packages/engine/src/review/run.ts",
+        "packages/engine/test/cli/help/__snapshots__/help-snapshots.test.ts.snap",
+        "packages/engine/test/compliance/egress-inventory.test.ts",
+        "packages/engine/test/compliance/upstream-free.test.ts",
+        "packages/engine/test/local-mode/local-run.test.ts",
+        "packages/engine/test/tool/task.test.ts"
+      ]
+    },
+    {
+      "left": "codium",
+      "leftSha": "eed4bc45a5c24c87d9d9505306c048ba9ebec3c7",
+      "right": "vector-at-mention",
+      "rightSha": "c65d6b5d1000ca3dd5b961d0f9f63d73baa46d64",
+      "exitCode": 1,
+      "state": "textual_conflicts",
+      "conflictingFiles": ["packages/engine/src/provider/provider.ts"]
+    },
+    {
+      "left": "codium",
+      "leftSha": "eed4bc45a5c24c87d9d9505306c048ba9ebec3c7",
+      "right": "hands",
+      "rightSha": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+      "exitCode": 1,
+      "state": "textual_conflicts",
+      "conflictingFiles": [
+        "packages/app/src/components/settings-v2/dialog-settings-v2.tsx",
+        "packages/app/src/components/settings-v2/settings-registry.test.ts",
+        "packages/app/src/context/platform.tsx",
+        "packages/app/src/pages/layout.tsx",
+        "packages/desktop/src/main/index.ts",
+        "packages/desktop/src/main/tray.ts",
+        "packages/desktop/src/main/vector-account-runtime.ts",
+        "packages/engine/src/cli/cmd/export.ts"
+      ]
+    },
+    {
+      "left": "process-finish",
+      "leftSha": "d2156cb2d188bde0876309135a9039529870d609",
+      "right": "hands",
+      "rightSha": "2171efc6664ea084f9ca2ba626cca657e0d86bb9",
+      "exitCode": 1,
+      "state": "textual_conflicts",
+      "conflictingFiles": ["packages/engine/src/task/shells.ts", "packages/engine/test/task/shells.test.ts"]
+    }
+  ],
+  "summary": {
+    "uniquePairs": 18,
+    "textuallyClean": 14,
+    "conflicting": 4,
+    "unknownAfterHydration": 0
+  },
+  "duplicates": {
+    "finishChecksTip": "00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a",
+    "processFinishTip": "d2156cb2d188bde0876309135a9039529870d609",
+    "sameStablePatchId": "9b9c8407a971a075d3766d02d344dbc1b7b101d4",
+    "qualification": "The tip patches match, but entire branches differ. process-finish additionally contains production background-command ownership/cleanup commit 11111071f7cc6bfb7757e0685eb96ffe4ea199fa."
+  },
+  "qualification": [
+    "Most feature tips already contain main, so their clean main comparison does not exercise divergent shared changes.",
+    "Only the listed pairs were assessed; clean pairwise results do not prove a complete multi-branch integration is clean.",
+    "Textual results establish no behavior, CI success, owner review, scope eligibility, deployment or release readiness.",
+    "All active feature implementation and conflict resolutions remain owned by existing lane agents."
+  ]
+}

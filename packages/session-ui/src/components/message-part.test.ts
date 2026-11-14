@@ -24,6 +24,20 @@ describe("getToolInfo for terminal", () => {
     expect(getToolInfo("terminal", { action: "read", id: "pty_1" }).subtitle).toBe("pty_1")
     expect(getToolInfo("terminal", { action: "list" }).subtitle).toBe("list")
   })
+
+  test("shows the text a type call types and the keys a keys call presses", () => {
+    expect(getToolInfo("terminal", { action: "type", id: "pty_1", text: "npm test", enter: true }).subtitle).toBe(
+      "npm test ⏎",
+    )
+    expect(getToolInfo("terminal", { action: "type", id: "pty_1", text: "y\nrm -rf build" }).subtitle).toBe(
+      "y ⏎ rm -rf build",
+    )
+    expect(getToolInfo("terminal", { action: "type", id: "pty_1", text: "", enter: true }).subtitle).toBe("⏎")
+    expect(getToolInfo("terminal", { action: "keys", id: "pty_1", keys: ["ctrl-c", "up", "enter"] }).subtitle).toBe(
+      "ctrl-c up enter",
+    )
+    expect(getToolInfo("terminal", { action: "keys", id: "pty_1", keys: [] }).subtitle).toBe("pty_1")
+  })
 })
 
 describe("readPartText", () => {

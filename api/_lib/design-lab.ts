@@ -19,6 +19,15 @@ export function designLabOwners() {
 }
 
 /**
+ * Whether a signed-in account is on the Design Lab's allowlist, the one /design checks before it opens the lab. It
+ * only tells the account page to show the Design tab, so the site's code never has to carry anyone's address;
+ * api/design-lab still runs its full Google-only check.
+ */
+export function isDesignLabOwner(email: string) {
+  return designLabOwners().includes(email.trim().toLowerCase())
+}
+
+/**
  * Accepts only a confirmed owner account whose current session came from Google.
  * Password and magic-link sessions to the same address are refused, so the lab
  * cannot be opened without the owner's Google account. Other owner-only pages

@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Effect, Stream } from "effect"
 import { EventV2 } from "../../event"
 import { Integration } from "../../integration"
@@ -7,7 +8,7 @@ import { define } from "../internal"
 
 /** Vector Codium: the signed-in account's managed coding models, listed from vectordev.ai and never from configuration. */
 export const VectorPlanPlugin = define({
-  id: "vector-plan",
+  id: Billing.CODIUM_PROVIDER_ID,
   effect: Effect.fn(function* (ctx) {
     const plans = yield* ModelPlans.Service
     const credentials = yield* FreeModels.CredentialsService
@@ -27,6 +28,8 @@ export const VectorPlanPlugin = define({
           provider.disabled = false
           provider.api = { type: "aisdk", package: "@ai-sdk/openai-compatible", url: ModelPlans.API_URL }
         })
+        // Every entry, with what its listing says: Codium Auto (sent to its default model at prepare), models the plan
+        // does not include and manual-only lanes. Nothing automatic picks those (the V2 default skips Codium).
         for (const model of current.models)
           catalog.model.update(ModelPlans.PROVIDER_ID, model.id, (draft) => {
             draft.name = model.name
@@ -35,6 +38,7 @@ export const VectorPlanPlugin = define({
             // No dollar price: a Codium step spends credits, so it is recorded unpriced and left out of dollar totals.
             draft.cost = []
             draft.limit = { context: model.contextLength, output: model.maxOutputTokens }
+            draft.codium = ModelPlans.listing(model, current)
             draft.enabled = true
           })
       }),

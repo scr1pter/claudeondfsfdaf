@@ -135,11 +135,14 @@ Write-FixtureCheckpoint 'native-output-written'`,
             `$ErrorActionPreference = 'Stop'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $details = @{ bunPath = ${quote(process.execPath)}; entryPath = ${quote(entry)}; entryExists = [IO.File]::Exists(${quote(entry)}); arguments = @('run', '--no-env-file', ${quote(entry)}); pathExt = $env:PATHEXT; comSpec = $env:ComSpec }
+# Operators and .NET only, as in the rest of this stage: a cmdlet such as ConvertTo-Json sends pwsh through PSModulePath
+# and the module analysis cache to find its module, which can take longer than the whole fixture's deadline.
 function Write-FixtureCheckpoint([string] $phase) {
   $details.phase = $phase
   $details.at = [DateTime]::UtcNow.ToString('o')
   $details.elapsedMs = $clock.ElapsedMilliseconds
-  [IO.File]::AppendAllText(${quote(outerDiagnostic)}, (($details | ConvertTo-Json -Compress) + [Environment]::NewLine))
+  $fields = foreach ($key in $details.Keys) { $key + '=' + ($details[$key] -join ',') }
+  [IO.File]::AppendAllText(${quote(outerDiagnostic)}, (($fields -join '; ') + [Environment]::NewLine))
 }
 Write-FixtureCheckpoint 'pwsh-started'
 $start = [Diagnostics.ProcessStartInfo]::new()

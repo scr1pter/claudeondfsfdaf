@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { noteTriageUnchecked } from "@vectordevai/core/review/format"
+import { noteSameLabPair } from "@vectordevai/core/review/second-lab"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
@@ -258,6 +259,7 @@ describe("trackReviewSpend", () => {
           id,
           sessionID,
           role: "assistant",
+          providerID: "own-provider",
           cost,
           tokens: { input, output: 10, reasoning: 0, cache: { read: 5, write: 0 } },
         },
@@ -291,6 +293,7 @@ describe("review spend presentation", () => {
           id: "message",
           sessionID: "review",
           role: "assistant",
+          providerID: "own-provider",
           cost: 0,
           unpriced: true,
           tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -307,6 +310,7 @@ describe("review spend presentation", () => {
     spend.add("review")
     const info = {
       role: "assistant",
+      providerID: "own-provider",
       sessionID: "review",
       tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
     }
@@ -329,6 +333,7 @@ describe("review spend presentation", () => {
           id: "message",
           sessionID: "review",
           role: "assistant",
+          providerID: "own-provider",
           cost: 0,
           tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
         },
@@ -348,6 +353,7 @@ describe("review spend presentation", () => {
           id: "message",
           sessionID: "review",
           role: "assistant",
+          providerID: "own-provider",
           cost: 0.02,
           tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
         },
@@ -912,7 +918,7 @@ describe("runReview", () => {
     expect(unpriced).toContain("Double-checking 1 finding… 1.2k tokens so far.")
   })
 
-  test("runs on Vector Codium only when the person chose it, since it spends their credits", async () => {
+  test("runs on Vector Codium only when the person chose it, since it uses their Codium month", async () => {
     const codium: ReviewModel = {
       providerID: "vector-plan",
       modelID: "deepseek/deepseek-v4.1-flash",
@@ -1149,6 +1155,42 @@ describe("models", () => {
         costKind: "priced",
       },
     ])
+  })
+
+  test("a Codium model the plan no longer includes is never a review model, so the next candidate runs it", () => {
+    // Listed with its lock (choosing it in the picker opens Change plan); still first in the person's recents.
+    const providers: Parameters<typeof workflowModel>[1] = [
+      {
+        id: "vector-plan",
+        source: "custom",
+        models: {
+          "anthropic/claude-opus-5.5": {
+            id: "anthropic/claude-opus-5.5",
+            codium: { locked: { plan: "vector-200", name: "Ultra" } },
+          },
+          "deepseek/deepseek-v4.1-flash": { id: "deepseek/deepseek-v4.1-flash", codium: { role: "default" } },
+        },
+      },
+      {
+        id: "anthropic",
+        source: "env",
+        env: ["ANTHROPIC_API_KEY"],
+        models: { sonnet: { id: "claude-sonnet-4-5", cost: { input: 3, output: 15 } } },
+      },
+    ]
+    const catalog = reviewCatalog(providers)
+    expect(catalog.map((model) => `${model.providerID}/${model.modelID}`)).toEqual([
+      "vector-plan/deepseek/deepseek-v4.1-flash",
+      "anthropic/claude-sonnet-4-5",
+    ])
+    expect(pickReviewModel(["vector-plan/anthropic/claude-opus-5.5", "anthropic/claude-sonnet-4-5"], catalog)).toEqual(
+      catalog[1],
+    )
+    // A review configured on it falls through too, and so does the model GitHub Actions would run.
+    expect(workflowModel(["vector-plan/anthropic/claude-opus-5.5"], providers)).toEqual({
+      model: "anthropic/claude-sonnet-4-5",
+      keys: ["ANTHROPIC_API_KEY"],
+    })
   })
 
   test("automatic reviews run on the model a review here picks, with its provider's key variables as secrets", () => {
@@ -1541,9 +1583,7 @@ describe("cheaper first pass", () => {
         "The double-check did not finish, so the first pass's 2 findings were left out: with a triage model, only findings the review model confirmed are shown.",
     })
     expect(unchecked.selection.dropped).toContainEqual({ reason: "unconfirmed", count: 2 })
-    expect(unchecked.notes).toContain(
-      noteTriageUnchecked(2, "openrouter/cheap-coder", "anthropic/claude-sonnet-4-5"),
-    )
+    expect(unchecked.notes).toContain(noteTriageUnchecked(2, "openrouter/cheap-coder", "anthropic/claude-sonnet-4-5"))
   })
 
   test("Review again runs the double-check again when it did not finish, instead of reusing the review", async () => {
@@ -1562,7 +1602,9 @@ describe("cheaper first pass", () => {
     const outcome = (await run(again.client, { catalog: [sonnet, cheap], previous }))!
     expect(outcome.unchanged).toBeUndefined()
     expect(again.calls.prompt.filter(isVerify)).toHaveLength(1)
-    expect(outcome.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([[offByOne.title, true]])
+    expect(outcome.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([
+      [offByOne.title, true],
+    ])
   })
 
   test("says so when the triage model is not connected, and runs everything on the review model", async () => {
@@ -1575,6 +1617,107 @@ describe("cheaper first pass", () => {
     expect(outcome.notes).toContain(
       "The triage model in .vector/review.json, openrouter/missing, is not connected, so the whole review ran on anthropic/claude-sonnet-4-5.",
     )
+  })
+})
+
+// WP A35: second-lab reviews and the panel on the desktop. Vector Codium's listing names each entry's part in the plan's
+// review pair, and the footer says how many labs checked what the review shows.
+describe("second-lab reviews and the panel", () => {
+  const codium = (modelID: string, lab: string | undefined, review?: string[]): ReviewModel => ({
+    providerID: "vector-plan",
+    modelID,
+    context: 128_000,
+    costKind: "codium",
+    ...(lab ? { lab } : {}),
+    ...(review ? { review } : {}),
+  })
+  const DEEPSEEK = codium("deepseek/deepseek-v4.1-flash-1017", "deepseek", ["triage"])
+  const DEEPSEEK_LONG = codium("deepseek/deepseek-v4.1-flash-1017:long", "deepseek")
+  const LUNA = codium("openai/gpt-6-luna", "openai", ["confirm"])
+  const HAIKU = codium("anthropic/claude-haiku-5.5", "anthropic", ["panelJudge"])
+  const AUTO = codium("vector/codium-auto", undefined)
+  const catalog = [sonnet, AUTO, DEEPSEEK, DEEPSEEK_LONG, LUNA, HAIKU]
+  const isJudge = (call: PromptCall) => (call.parts?.[0]?.text ?? "").startsWith("You are the judge on a review panel")
+  const fromModel = (call: PromptCall, structured: unknown): ReviewMessage => ({
+    info: {
+      role: "assistant",
+      providerID: call.model?.providerID,
+      modelID: call.model?.modelID,
+      billing: call.model?.providerID === "vector-plan" ? "codium" : undefined,
+      structured,
+    },
+    parts: [],
+  })
+
+  test("on Vector Codium the plan's pair runs: the first pass on one lab, the check on another", async () => {
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      reply: (call) => fromModel(call, isVerify(call) ? verdicts(call) : report()),
+    })
+    const outcome = (await run(client, { catalog, preferredModels: ["vector-plan/vector/codium-auto"] }))!
+    expect(calls.prompt.filter((call) => !isVerify(call)).map((call) => call.model?.modelID)).toEqual([
+      DEEPSEEK.modelID,
+    ])
+    expect(calls.prompt.filter(isVerify).map((call) => call.model?.modelID)).toEqual([LUNA.modelID])
+    expect(outcome.triage).toBe(`vector-plan/${DEEPSEEK.modelID}`)
+    expect(outcome.selection.inline[0]?.verified).toBe(true)
+    expect(outcome.cost?.labs).toBe(2)
+    expect(reviewFooter(outcome)).toContain("Checked by a second lab")
+    expect(buildDesktopSummary(outcome)).toContain("Checked by a second lab")
+    expect(outcome.notes).toEqual([])
+  })
+
+  test("the panel adds the plan's judge from a third lab, and its call is final", async () => {
+    const files = { "src/list.ts": HEAD, ".vector/review.json": '{"panel":true}' }
+    const rejecting = fakeClient({
+      files,
+      reply: (call) =>
+        fromModel(call, isJudge(call) ? verdicts(call, "rejected") : isVerify(call) ? verdicts(call) : report()),
+    })
+    const rejected = (await run(rejecting.client, { catalog, preferredModels: [`vector-plan/${DEEPSEEK.modelID}`] }))!
+    const judged = rejecting.calls.prompt.filter(isJudge)
+    expect(judged.map((call) => call.model?.modelID)).toEqual([HAIKU.modelID])
+    expect(judged[0]?.parts?.[0]?.text).toContain("Second reviewer: confirmed. Checked.")
+    expect(rejecting.calls.create.map((call) => call.internal)).toContain("vectorscope.judge")
+    expect(rejected.selection.inline).toEqual([])
+    expect(rejected.passes?.map((pass) => pass.name)).toEqual(["review", "verify", "judge"])
+    expect(rejected.cost?.labs).toBe(3)
+    expect(reviewFooter(rejected)).toContain("Checked by three labs")
+
+    const confirming = fakeClient({
+      files,
+      reply: (call) =>
+        fromModel(call, isJudge(call) ? verdicts(call) : isVerify(call) ? verdicts(call, "rejected") : report()),
+    })
+    const confirmed = (await run(confirming.client, { catalog, preferredModels: [`vector-plan/${DEEPSEEK.modelID}`] }))!
+    expect(confirmed.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([
+      [offByOne.title, true],
+    ])
+  })
+
+  test("a pair from one lab warns and runs one pass, with no second-lab line", async () => {
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      reply: (call) => fromModel(call, isVerify(call) ? verdicts(call) : report()),
+    })
+    const outcome = (await run(client, { catalog, preferredModels: [`vector-plan/${DEEPSEEK_LONG.modelID}`] }))!
+    expect(new Set(calls.prompt.map((call) => call.model?.modelID))).toEqual(new Set([DEEPSEEK_LONG.modelID]))
+    expect(outcome.triage).toBeUndefined()
+    expect(outcome.notes).toContain(noteSameLabPair("deepseek", `vector-plan/${DEEPSEEK_LONG.modelID}`))
+    expect(outcome.cost?.labs).toBeUndefined()
+    expect(reviewFooter(outcome)).not.toContain("Checked by")
+  })
+
+  test("the catalog carries the listing's lab and review parts", () => {
+    const listed = reviewCatalog([
+      {
+        id: "vector-plan",
+        models: {
+          [LUNA.modelID]: { id: LUNA.modelID, limit: { context: 128_000 }, codium: { lab: "openai", review: ["confirm"] } },
+        },
+      },
+    ])
+    expect(listed[0]).toMatchObject({ lab: "openai", review: ["confirm"] })
   })
 })
 
@@ -1733,7 +1876,9 @@ describe("applying a fix", () => {
   }
 
   test("never moves a fix onto the same text somewhere else once the reviewed lines changed", () => {
-    expect(applyFix(twoFunctions, nullFix)).toBe(twoFunctions.replace("  return null\n}\n\nexport", "  return undefined\n}\n\nexport"))
+    expect(applyFix(twoFunctions, nullFix)).toBe(
+      twoFunctions.replace("  return null\n}\n\nexport", "  return undefined\n}\n\nexport"),
+    )
     const edited = twoFunctions.replace("  return null\n}\n\nexport", "  return fallback(x)\n}\n\nexport")
     expect(applyFix(edited, nullFix)).toBeUndefined()
     // Without the lines around it, a fix applies only exactly where it was reviewed.
@@ -1766,7 +1911,9 @@ describe("applying a fix", () => {
     expect(afterFixes(twelve, [])).toEqual(twelve)
     // The lines a fix replaces must still be the reviewed ones: another fix that rewrote them stops it.
     expect(afterFixes(at(10, ["const v10 = 0"]), [ten])).toBeUndefined()
-    expect(afterFixes(at(11, ["const v11 = 0"]), [{ ...ten, endLine: 11, before: [code(10), code(11)] }])).toBeUndefined()
+    expect(
+      afterFixes(at(11, ["const v11 = 0"]), [{ ...ten, endLine: 11, before: [code(10), code(11)] }]),
+    ).toBeUndefined()
   })
 
   test("refuses a moved fix when the reviewed lines now appear more than once nearby", () => {
@@ -1930,5 +2077,266 @@ describe("the findings list", () => {
       "Review · a/cheap · 1.2k tokens",
       "Double-check · b/strong · 1.0k tokens",
     ])
+  })
+})
+
+test("live Codium review figures are hidden while own-key reviewer totals remain visible", () => {
+  const seen: ReviewSpend[] = []
+  const spend = trackReviewSpend((value) => seen.push(value))
+  spend.add("codium", "codium")
+  const event = (sessionID: string, cost: number, input: number, providerID: string) => ({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: sessionID,
+        sessionID,
+        role: "assistant",
+        providerID,
+        cost,
+        tokens: { input, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    },
+  })
+  spend.observe(event("codium", 9, 90000, "vector-plan"))
+  expect(reviewSpendText(seen.at(-1)!)).toBe("Codium")
+  spend.add("own", "priced")
+  spend.observe(event("own", 0.12, 100, "anthropic"))
+  expect(reviewSpendText(seen.at(-1)!)).toBe("$0.12 + Codium · 120 tokens + Codium")
+  expect(
+    passLines({
+      cost: {
+        kind: "codium",
+        costUsd: 9,
+        input: 90000,
+        output: 10000,
+        reasoning: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        model: "vector-plan/vector-flash",
+      },
+      passes: [
+        { name: "review", model: "vector-plan/vector-flash", input: 90000, output: 10000, cacheRead: 0, costUsd: 9 },
+      ],
+    }),
+  ).toEqual(["Review · Vector Codium · vector-flash · Codium"])
+})
+
+test("failed Codium reviewers cannot overwrite live progress with raw usage", async () => {
+  const progress: Parameters<NonNullable<ReviewRunInput["onProgress"]>>[0][] = []
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: () => {
+      const message = answer(undefined, 9)
+      return {
+        ...message,
+        info: {
+          ...message.info,
+          providerID: "vector-plan",
+          billing: "codium",
+          tokens: { input: 90000, output: 10000, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      }
+    },
+  })
+  const model: ReviewModel = { providerID: "vector-plan", modelID: "vector-flash", context: 200000, costKind: "codium" }
+  await expect(
+    run(client, {
+      catalog: [model],
+      preferredModels: ["vector-plan/vector-flash"],
+      onProgress: (event) => progress.push(event),
+    }),
+  ).rejects.toThrow("No review came back. Codium.")
+  expect(progress.findLast((event) => event.type === "spend")).toEqual({
+    type: "spend",
+    costUsd: 0,
+    tokens: 0,
+    codium: true,
+  })
+})
+
+test("failed mixed reviews keep own-key charges when other messages use Codium", async () => {
+  const progress: Parameters<NonNullable<ReviewRunInput["onProgress"]>>[0][] = []
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: (input) => {
+      const message = answer(undefined, input.sessionID === "ses_1" ? 9 : 0.12)
+      return input.sessionID === "ses_1"
+        ? { ...message, info: { ...message.info, providerID: "vector-plan", billing: "codium" } }
+        : message
+    },
+  })
+  await expect(
+    run(client, { diff: join(listDiff, authDiff), onProgress: (event) => progress.push(event) }),
+  ).rejects.toThrow("$0.24 + Codium and 2.4k tokens + Codium so far.")
+  expect(progress.findLast((event) => event.type === "spend")).toEqual({
+    type: "spend",
+    costUsd: 0.24,
+    tokens: 2400,
+    codium: true,
+  })
+})
+
+test("per-pass cost kinds preserve own priced and free figures beside Codium", () => {
+  const passes = [
+    {
+      name: "review" as const,
+      model: "vector-plan/vector-flash",
+      costKind: "codium" as const,
+      input: 90000,
+      output: 10000,
+      cacheRead: 0,
+      costUsd: 9,
+    },
+    {
+      name: "verify" as const,
+      model: "anthropic/sonnet",
+      costKind: "priced" as const,
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      costUsd: 0.12,
+    },
+  ]
+  const cost = {
+    kind: "unknown" as const,
+    costUsd: 9.12,
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    model: "multiple",
+  }
+  expect(passLines({ cost, passes })).toEqual([
+    "Review · Vector Codium · vector-flash · Codium",
+    "Double-check · anthropic/sonnet · $0.12 · 120 tokens",
+  ])
+  expect(
+    passLines({ cost: { ...cost, kind: "codium" }, passes: [{ ...passes[1]!, costKind: "free", costUsd: 0 }] }),
+  ).toEqual(["Double-check · anthropic/sonnet · $0.00 · 120 tokens"])
+  expect(passLines({ cost, passes: [{ ...passes[1]!, costKind: "plan" }] })).toEqual([
+    "Double-check · anthropic/sonnet · 120 tokens",
+  ])
+})
+
+for (const mixed of [false, true]) {
+  test(`completed ${mixed ? "mixed" : "Codium-only"} review filters final cost and per-pass quantities`, async () => {
+    const { client } = fakeClient({
+      files: { "src/list.ts": HEAD, ...NO_VERIFY },
+      reply: (input) => {
+        const message = answer(report([]), 0.12)
+        if (mixed && input.sessionID !== "ses_1") return message
+        return {
+          ...message,
+          info: {
+            ...message.info,
+            providerID: "vector-plan",
+            modelID: "vector-flash",
+            billing: "codium",
+            cost: 99,
+            tokens: { input: 987654, output: 1234, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        }
+      },
+    })
+    const outcome = await run(client, { diff: mixed ? join(listDiff, authDiff) : join(listDiff) })
+    if (!outcome) throw new Error("review produced no outcome")
+    expect(outcome.cost).toMatchObject({ codium: true, tokensOwnOnly: true })
+    const visible = [reviewFooter(outcome), ...passLines(outcome)].join("\n")
+    expect(visible).toContain("Codium")
+    expect(visible).not.toContain("987")
+    expect(visible).not.toContain("$99")
+    expect(visible).not.toContain("$0.00")
+    if (mixed) {
+      expect(outcome.cost?.costUsd).toBeGreaterThan(0)
+      expect(visible).toContain("$0.12")
+      expect(passLines(outcome).some((line) => line.includes("1.2k tokens"))).toBe(true)
+    } else {
+      expect(outcome.cost).toMatchObject({ kind: "codium", costUsd: 0, input: 0, output: 0 })
+      expect(visible).toContain("Vector Codium · vector-flash · Codium")
+    }
+  })
+}
+
+test("live mixed reviews require positive own identity before displaying usage", () => {
+  const seen: ReviewSpend[] = []
+  const tracker = trackReviewSpend((value) => seen.push(value))
+  tracker.add("session", "priced")
+  tracker.observe({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: "codium",
+        sessionID: "session",
+        role: "assistant",
+        providerID: "vector-plan",
+        tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 99,
+      },
+    },
+  })
+  for (const providerID of ["", " ", "vector-plan "])
+    tracker.observe({
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "unknown",
+          sessionID: "session",
+          role: "assistant",
+          providerID,
+          tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          cost: 99,
+        },
+      },
+    })
+  expect(seen.at(-1)).toMatchObject({ codium: true, partial: true, tokens: 0 })
+  expect(seen.at(-1)?.costUsd).toBeUndefined()
+  expect(reviewSpendText(seen.at(-1)!)).not.toContain("987")
+})
+
+test("final review uses stamped parts and retains an own receipt without token counters", async () => {
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: (input) => {
+      const message = answer(report([]), input.sessionID === "ses_1" ? 99 : 0.12)
+      return input.sessionID === "ses_1"
+        ? {
+            ...message,
+            parts: [{ type: "step-finish", billing: "codium" }],
+            info: { ...message.info, tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+          }
+        : { ...message, info: { ...message.info, tokens: undefined } }
+    },
+  })
+  const outcome = await run(client, { diff: join(listDiff, authDiff) })
+  if (!outcome) throw new Error("review produced no outcome")
+  expect(outcome.cost).toMatchObject({ codium: true, kind: "unknown", costUsd: 0.12, usageMissing: true })
+  const visible = [reviewFooter(outcome), ...passLines(outcome)].join("\n")
+  expect(visible).toContain("$0.12")
+  expect(visible).toContain("Codium")
+  expect(visible).not.toContain("987")
+  expect(visible).not.toContain("$99")
+  expect(visible).toContain("Token usage unavailable")
+})
+
+test("failed mixed review retains own receipts when no own token counters arrived", async () => {
+  const progress: Parameters<NonNullable<ReviewRunInput["onProgress"]>>[0][] = []
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: (input) => {
+      const message = answer(undefined, input.sessionID === "ses_1" ? 99 : 0.12)
+      return input.sessionID === "ses_1"
+        ? { ...message, info: { ...message.info, billing: "codium", providerID: "vector-plan" } }
+        : { ...message, info: { ...message.info, tokens: undefined } }
+    },
+  })
+  await expect(
+    run(client, { diff: join(listDiff, authDiff), onProgress: (event) => progress.push(event) }),
+  ).rejects.toThrow("At least $0.24 + Codium · token usage unavailable")
+  expect(progress.findLast((event) => event.type === "spend")).toMatchObject({
+    costUsd: 0.24,
+    tokens: 0,
+    codium: true,
+    partial: true,
   })
 })

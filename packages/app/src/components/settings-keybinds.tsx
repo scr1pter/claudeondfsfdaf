@@ -523,7 +523,13 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
       <>
         <div class="settings-v2-tab-header settings-v2-tab-header--stacked">
           <div class="settings-v2-tab-header-row">
-            <h2 class="settings-v2-tab-title">{language.t("settings.shortcuts.title")}</h2>
+            <div>
+              <p class="settings-v2-page-kicker">Keyboard</p>
+              <h2 class="settings-v2-tab-title">{language.t("settings.shortcuts.title")}</h2>
+              <p class="settings-v2-page-subtitle">
+                Click a shortcut, then press the new keys. Backspace or Delete clears it, and Escape cancels.
+              </p>
+            </div>
             <ButtonV2 variant="ghost" onClick={resetAll} disabled={!hasOverrides()}>
               {language.t("settings.shortcuts.reset.button")}
             </ButtonV2>

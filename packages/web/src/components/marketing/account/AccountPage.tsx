@@ -6,14 +6,15 @@ import { readAccountApiResponse, takeAccountReturnPath, vectorAccountClient } fr
 import { FreeDownload } from "../download/FreeDownload"
 import { CliLaunchPanel } from "./CliLaunchPanel"
 import { ModelPlans } from "./ModelPlans"
+import { GithubAgents } from "./GithubAgents"
 import "../download/download.css"
 import "./account.css"
 
-// Only the owner sees the Design tab; api/design-lab decides who may open it.
-const DESIGN_LAB_OWNER = "krishnabharadwaj0521@gmail.com"
-
 type AccountState = {
   user: { id: string; email: string; name?: string }
+  // Decided by api/account/status against the Design Lab's allowlist, so this page never carries anyone's address.
+  // It only shows the Design tab; api/design-lab still decides who may open the lab.
+  owner?: boolean
 }
 
 /**
@@ -64,7 +65,7 @@ export function AccountPage(props: { preview?: AccountState }) {
         const session = await client.auth.getSession()
         if (session.error) throw session.error
         if (!session.data.session) {
-          location.replace(`/login?returnTo=${encodeURIComponent(`${location.pathname}${location.search}`)}`)
+          location.replace(`/login?returnTo=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`)
           return
         }
         const accessToken = session.data.session.access_token
@@ -127,7 +128,7 @@ export function AccountPage(props: { preview?: AccountState }) {
             <span>Vector</span>
           </a>
           <nav aria-label="Account navigation">
-            {account?.user.email === DESIGN_LAB_OWNER && <a href="/design">Design</a>}
+            {account?.owner === true && <a href="/design">Design</a>}
             <a href="/docs">Docs</a>
             <button type="button" onClick={signOut} disabled={Boolean(action)}>
               Sign out
@@ -143,6 +144,7 @@ export function AccountPage(props: { preview?: AccountState }) {
         {error && <p className="account-error">{error}</p>}
 
         <ModelPlans accessToken={token} preview={props.preview ? true : undefined} />
+        <GithubAgents accessToken={token} preview={props.preview ? { config: { enabled: false }, bindings: [] } : undefined} />
 
         <section className="acct-section">
           <h2>Download Vector</h2>
@@ -179,8 +181,8 @@ export function AccountPage(props: { preview?: AccountState }) {
               <>
                 <p className="acct-fine">
                   This cannot be undone. Vector deletes your account and sign-in and stops the CLI tokens this account
-                  has issued. Any Vector Codium plan ends at once, and the credits left, this month's or purchased, can
-                  no longer be used. Repositories on your own machine are not touched, and neither is anything you have
+                  has issued. Any Vector Codium plan ends at once, and what is left of this month can no longer be used.
+                  Repositories on your own machine are not touched, and neither is anything you have
                   already published to your own cloud accounts.
                 </p>
                 <label className="acct-danger-label" htmlFor="acct-delete-confirm">
@@ -250,5 +252,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isAccountState(value: Record<string, unknown>): value is AccountState {
   if (!isRecord(value.user)) return false
   if (typeof value.user.id !== "string" || typeof value.user.email !== "string") return false
+  if (value.owner !== undefined && typeof value.owner !== "boolean") return false
   return value.user.name === undefined || typeof value.user.name === "string"
 }

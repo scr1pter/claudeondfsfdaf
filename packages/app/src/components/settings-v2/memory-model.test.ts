@@ -111,6 +111,7 @@ describe("memory page model", () => {
     expect(holdLabel("mcp")).toContain("an MCP server's prompt")
     expect(kindLabel("failure")).toBe("Past failure")
     expect(kindLabel("term")).toBe("Term")
+    expect(kindLabel("skill")).toBe("Learned skill")
   })
 
   test("sums up memory and its cost in plain words", () => {
@@ -166,10 +167,12 @@ describe("memory page model", () => {
     ).toBe("Saved without the secret it contained. Vector will use it when it is relevant.")
   })
 
-  test("splits the page into Memory, About you, Documents and Research", () => {
+  test("splits the page into Memory, Skills, About you, Workflow insights, Documents and Research", () => {
     expect(MEMORY_TABS.map((item) => item.label)).toEqual([
       "Memory",
+      "Skills",
       "About you",
+      "Workflow insights",
       "Documents",
       "Research",
       "Search model",
@@ -368,5 +371,9 @@ describe("About you", () => {
     }
     expect(ERASE_SESSION.done(1)).toBe("Erased 1 thing Vector learned only in this session.")
     expect(ERASE_SESSION.confirm).toContain("The session keeps its messages until you delete it.")
+    // The engine forgets the session's research with what it learned there, so the confirmation says so.
+    expect(ERASE_SESSION.confirm).toContain(
+      "and does not learn it again. It also forgets the Deep research runs the session started.",
+    )
   })
 })

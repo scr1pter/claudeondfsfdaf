@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
-import { ArrowRight, Eye, EyeOff } from "lucide-react"
-import { type SubmitEventHandler, useEffect, useMemo, useState } from "react"
+import { Eye, EyeOff } from "lucide-react"
+import { type SubmitEventHandler, useEffect, useMemo, useRef, useState } from "react"
 import {
   rememberAccountReturnPath,
   safeReturnPath,
@@ -36,6 +36,9 @@ export function GoogleMark() {
 
 export function AuthPage() {
   const [mode, setMode] = useState<Mode>("signin")
+  // The form asks for the email first. Continue reveals the password (and the name, when creating an
+  // account) below it in the same form, and the next submit signs in or signs up as before.
+  const [revealed, setRevealed] = useState(false)
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -43,6 +46,7 @@ export function AuthPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
+  const firstRevealed = useRef<HTMLInputElement>(null)
   const returnTo = useMemo(
     () => safeReturnPath(new URLSearchParams(globalThis.location?.search ?? "").get("returnTo")),
     [],
@@ -58,6 +62,10 @@ export function AuthPage() {
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Vector accounts are unavailable."))
   }, [returnTo])
+
+  useEffect(() => {
+    if (revealed) firstRevealed.current?.focus()
+  }, [revealed, mode])
 
   const google = () => {
     setError("")
@@ -85,6 +93,10 @@ export function AuthPage() {
 
   const submit: SubmitEventHandler<HTMLFormElement> = (event) => {
     event.preventDefault()
+    if (!revealed) {
+      setRevealed(true)
+      return
+    }
     setError("")
     setNotice("")
     setLoading(true)
@@ -127,36 +139,42 @@ export function AuthPage() {
   }
 
   return (
-    <section className="auth-card" aria-labelledby="auth-title">
+    <section className="signin-form" aria-labelledby="auth-title">
       <h1 id="auth-title">
-        {reauth
-          ? "Sign in again to confirm it is you"
-          : mode === "signin"
-            ? "Sign in to Vector"
-            : "Create your Vector account"}
+        {reauth ? "Sign in again to confirm it is you" : mode === "signin" ? "Log in" : "Create account"}
       </h1>
-      <p className="auth-sub">
-        {reauth
-          ? "Vector asks for a fresh sign-in before it deletes your account."
-          : mode === "signin"
-            ? "One account for the desktop app and the CLI."
-            : "Free. One account for the desktop app and the CLI."}
-      </p>
+      {reauth && <p className="signin-sub">Vector asks for a fresh sign-in before it deletes your account.</p>}
 
-      <button className="google-button" type="button" onClick={google} disabled={loading}>
-        <GoogleMark /> Continue with Google
+      <button className="signin-button signin-primary" type="button" onClick={google} disabled={loading}>
+        <GoogleMark />
+        Continue with Google
       </button>
 
-      <div className="auth-divider">
+      <div className="signin-divider">
         <span>or</span>
       </div>
 
-      <form className="auth-form" onSubmit={submit} aria-busy={loading}>
-        {mode === "register" && (
-          <label>
+      <form className="signin-email" onSubmit={submit} aria-busy={loading}>
+        <label className="signin-field">
+          <span>Email</span>
+          <input
+            className="signin-input"
+            type="email"
+            value={email}
+            onInput={(event) => setEmail(event.currentTarget.value)}
+            autoComplete="email"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="name@example.com"
+            required
+          />
+        </label>
+        {revealed && mode === "register" && (
+          <label className="signin-field">
             <span>Name</span>
             <input
-              className="auth-field"
+              ref={firstRevealed}
+              className="signin-input"
               value={name}
               onInput={(event) => setName(event.currentTarget.value)}
               autoComplete="name"
@@ -165,43 +183,32 @@ export function AuthPage() {
             />
           </label>
         )}
-        <label>
-          <span>Email</span>
-          <input
-            className="auth-field"
-            type="email"
-            value={email}
-            onInput={(event) => setEmail(event.currentTarget.value)}
-            autoComplete="email"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder="you@example.com"
-            required
-          />
-        </label>
-        <label>
-          <span>Password</span>
-          <div className="auth-password">
-            <input
-              className="auth-field"
-              type={visible ? "text" : "password"}
-              value={password}
-              onInput={(event) => setPassword(event.currentTarget.value)}
-              autoComplete={mode === "signin" ? "current-password" : "new-password"}
-              minLength={8}
-              placeholder={mode === "signin" ? "Your password" : "At least 8 characters"}
-              required
-            />
-            <button
-              type="button"
-              aria-label={visible ? "Hide password" : "Show password"}
-              aria-pressed={visible}
-              onClick={() => setVisible((value) => !value)}
-            >
-              {visible ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </label>
+        {revealed && (
+          <label className="signin-field">
+            <span>Password</span>
+            <span className="signin-password">
+              <input
+                ref={mode === "signin" ? firstRevealed : undefined}
+                className="signin-input"
+                type={visible ? "text" : "password"}
+                value={password}
+                onInput={(event) => setPassword(event.currentTarget.value)}
+                autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                minLength={8}
+                placeholder={mode === "signin" ? "Your password" : "At least 8 characters"}
+                required
+              />
+              <button
+                type="button"
+                aria-label={visible ? "Hide password" : "Show password"}
+                aria-pressed={visible}
+                onClick={() => setVisible((value) => !value)}
+              >
+                {visible ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+              </button>
+            </span>
+          </label>
+        )}
 
         {notice && (
           <p className="auth-notice" role="status">
@@ -214,20 +221,19 @@ export function AuthPage() {
           </p>
         )}
 
-        <button className="auth-submit" disabled={loading}>
-          {loading ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
-          {!loading && <ArrowRight size={15} aria-hidden="true" />}
+        <button className="signin-button signin-secondary" disabled={loading}>
+          {loading ? "Please wait…" : !revealed ? "Continue" : mode === "signin" ? "Log in" : "Create account"}
         </button>
       </form>
 
-      <p className="auth-switch-line">
-        {mode === "signin" ? "New to Vector?" : "Already have an account?"}{" "}
+      <p className="signin-switch">
+        {mode === "signin" ? "Don’t have an account?" : "Already have an account?"}{" "}
         <button type="button" onClick={switchMode} disabled={loading}>
-          {mode === "signin" ? "Create an account" : "Sign in"}
+          {mode === "signin" ? "Sign up" : "Log in"}
         </button>
       </p>
-      <p className="auth-legal">
-        By continuing, you agree to the <a href="/legal/terms">Terms of Service</a> and acknowledge our{" "}
+      <p className="signin-legal">
+        By continuing, you agree to Vector’s <a href="/legal/terms">Terms of Service</a> and acknowledge the{" "}
         <a href="/legal/privacy">Privacy Policy</a>.
       </p>
     </section>

@@ -9,6 +9,7 @@ import { Project } from "@vectordevai/core/project"
 import { ProjectTable } from "@vectordevai/core/project/sql"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
@@ -17,6 +18,7 @@ const root = SessionV2.ID.make("ses_guest_root")
 const child = SessionV2.ID.make("ses_guest_child")
 const grandchild = SessionV2.ID.make("ses_guest_grandchild")
 const other = SessionV2.ID.make("ses_guest_other")
+const fork = SessionV2.ID.make("ses_guest_fork")
 
 const sessions = Effect.gen(function* () {
   const { db } = yield* Database.Service
@@ -30,6 +32,7 @@ const sessions = Effect.gen(function* () {
     [child, root],
     [grandchild, child],
     [other, undefined],
+    [fork, undefined],
   ] as const)
     yield* db
       .insert(SessionTable)
@@ -66,7 +69,22 @@ describe("FreeModelGuests", () => {
     }),
   )
 
-  it.effect("a mark outlives a restart, and an unreadable file marks nothing", () =>
+  it.effect("a guest's input in a fork marks the fork, never the conversation it was forked from", () =>
+    Effect.gen(function* () {
+      yield* sessions
+      // A fork is parentless; only its lineage edge names the conversation it copied.
+      yield* SessionAudience.make(yield* Database.Service).register({ sessionID: fork, forkOf: root })
+      const guests = yield* registry(undefined)
+      yield* guests.mark(fork)
+      expect(yield* guests.marked(fork)).toBe(true)
+      for (const id of [root, child, grandchild]) expect(yield* guests.marked(id)).toBe(false)
+      // The source's guest input is in the fork's copied history.
+      yield* guests.mark(child)
+      for (const id of [root, fork]) expect(yield* guests.marked(id)).toBe(true)
+    }),
+  )
+
+  it.effect("a mark outlives a restart, and an unreadable legacy file cannot erase the durable mark", () =>
     Effect.gen(function* () {
       yield* sessions
       const directory = yield* Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "free-model-guests-")))
@@ -80,7 +98,7 @@ describe("FreeModelGuests", () => {
       expect(yield* restarted.marked(other)).toBe(false)
       yield* Effect.promise(() => writeFile(file, "not json"))
       const unreadable = yield* registry(file)
-      expect(yield* unreadable.marked(root)).toBe(false)
+      expect(yield* unreadable.marked(root)).toBe(true)
     }),
   )
 

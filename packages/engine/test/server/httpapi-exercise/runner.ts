@@ -135,6 +135,70 @@ function withContext<A, E>(
             }).pipe(Effect.asVoid),
           session: (input) =>
             run(modules.Session.Service.use((svc) => svc.create({ title: input?.title, parentID: input?.parentID }))),
+          // Seed completed Codium usage through the real services: its provider endpoint is fixed and must never
+          // be called by this offline exerciser. The response and step retain local tokens for context accounting.
+          codiumSession: () =>
+            Effect.gen(function* () {
+              const { SpendGuard } = yield* Effect.promise(() => import("@vectordevai/core/spend-guard"))
+              return yield* run(
+                Effect.gen(function* () {
+                  const sessions = yield* modules.Session.Service
+                  const guard = yield* SpendGuard.Service
+                  const session = yield* sessions.create({ title: "Codium usage fixture" })
+                  const parentID = MessageID.ascending()
+                  const id = MessageID.ascending()
+                  const now = Date.now()
+                  const tokens = { input: 1_000, output: 200, reasoning: 50, cache: { read: 300, write: 10 } }
+                  yield* sessions.updateMessage({
+                    id: parentID,
+                    sessionID: session.id,
+                    role: "user",
+                    time: { created: now - 10 },
+                    agent: "build",
+                    model: { providerID: ProviderV2.ID.make("vector-plan"), modelID: ModelV2.ID.make("codium-test") },
+                  })
+                  yield* sessions.updateMessage({
+                    id,
+                    sessionID: session.id,
+                    role: "assistant",
+                    parentID,
+                    time: { created: now, completed: now + 10 },
+                    agent: "build",
+                    mode: "build",
+                    providerID: ProviderV2.ID.make("vector-plan"),
+                    modelID: ModelV2.ID.make("codium-test"),
+                    path: { cwd: directory(), root: directory() },
+                    cost: 0,
+                    tokens,
+                    unpriced: true,
+                    finish: "stop",
+                  })
+                  yield* sessions.updatePart({
+                    id: PartID.ascending(),
+                    sessionID: session.id,
+                    messageID: id,
+                    type: "step-finish",
+                    reason: "stop",
+                    cost: 0,
+                    tokens,
+                    unpriced: true,
+                    billing: "codium",
+                  })
+                  yield* guard.arm(session.id, { usd: 1, steps: 100 })
+                  yield* guard.begin(session.id)
+                  yield* guard.record(session.id, {
+                    costKind: "codium",
+                    contextTokens: 1_310,
+                    cachedTokens: 300,
+                    continues: false,
+                    patched: false,
+                    tools: [],
+                  })
+                  yield* guard.end(session.id)
+                  return session
+                }),
+              )
+            }),
           sessionGet: (sessionID) =>
             run(modules.Session.Service.use((svc) => svc.get(sessionID))).pipe(
               Effect.catchCause(() => Effect.succeed(undefined)),
@@ -182,6 +246,7 @@ function withContext<A, E>(
             run(modules.Worktree.Service.use((svc) => svc.remove({ directory })).pipe(Effect.ignore)),
           llmText: (value, options) => Effect.suspend(() => llm().text(value, options)),
           llmWait: (count) => Effect.suspend(() => llm().wait(count)),
+          llmCalls: () => Effect.suspend(() => llm().calls),
           tuiRequest: (request) => Effect.sync(() => modules.Tui.submitTuiRequest(request)),
         }
         yield* trace(options, scenario, `${label} seed start`)

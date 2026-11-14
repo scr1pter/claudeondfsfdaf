@@ -22,6 +22,10 @@ import { Option, Schema } from "effect"
  * Nor is it held for work that waits on the user. A session stays busy while a permission or question prompt is
  * unanswered, so a session with one does not count. Its parent, waiting on it as a foreground subagent, still looks
  * busy; so while any prompt is unanswered, the blocker is released once nothing has moved for `stalledMs`.
+ *
+ * Except while a paired phone watches (Vector Remote, WP A41: `watching`): the person can answer from the phone, so
+ * every busy session holds the blocker, one waiting on a prompt included, for as long as the phone stays. The relay
+ * closes a phone that sends nothing for 30 minutes, which ends the watch.
  */
 
 const SILENCE_MS = 5 * 60_000
@@ -88,6 +92,8 @@ export function startKeepAwake(input: {
   pollMs?: number
   /** The first reconnect delay; it doubles after each failed attempt, up to 30 seconds. */
   retryMs?: number
+  /** Whether a paired phone is attached and watching (Remote); call `refresh()` when it changes. */
+  watching?: () => boolean
   log?: (message: string, meta?: Record<string, unknown>) => void
 }) {
   const silenceMs = input.silenceMs ?? SILENCE_MS
@@ -125,12 +131,17 @@ export function startKeepAwake(input: {
   const apply = () => {
     const sessions = new Set([...busy.keys(), ...drains])
     const blocked = new Set(waiting.values())
-    const working = [...sessions].filter((sessionID) => !blocked.has(sessionID))
-    const stalled = working.length < sessions.size && Date.now() - progressAt > stalledMs
+    const watched = input.watching?.() === true
+    // A watching phone can answer what a session waits on, so then every busy session counts.
+    const working = watched ? [...sessions] : [...sessions].filter((sessionID) => !blocked.has(sessionID))
+    const stalled = !watched && working.length < sessions.size && Date.now() - progressAt > stalledMs
     const hold = !stopped && working.length > 0 && !stalled && Date.now() - heardAt <= silenceMs
     if (hold && held === undefined) {
       held = input.blocker.start()
-      input.log?.("keep awake: holding off idle sleep", { sessions: working.length })
+      input.log?.("keep awake: holding off idle sleep", {
+        sessions: working.length,
+        ...(watched ? { phone: true } : {}),
+      })
     }
     if (!hold && held !== undefined) {
       input.blocker.stop(held)
@@ -354,6 +365,10 @@ export function startKeepAwake(input: {
   void run()
 
   return {
+    /** Decides again now, after `watching` changed. */
+    refresh() {
+      apply()
+    },
     stop() {
       stopped = true
       clearInterval(watchdog)

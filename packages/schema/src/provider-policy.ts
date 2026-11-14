@@ -1,5 +1,7 @@
 export * as ProviderPolicy from "./provider-policy"
 
+import { Billing } from "./billing"
+
 // Re-enabling Copilot requires a Vector-owned registration and provider approval.
 export const COPILOT_SIGN_IN = false
 
@@ -216,8 +218,8 @@ export const SUPPORTED_PROVIDER_IDS = [
   "v0",
   "vancine",
   "vector",
-  // Vector Codium: managed coding models paid with Codium credits through vectordev.ai.
-  "vector-plan",
+  // Vector Codium: managed coding models included in the account's Codium plan, served through vectordev.ai.
+  Billing.CODIUM_PROVIDER_ID,
   "venice",
   "vercel",
   "vispark",

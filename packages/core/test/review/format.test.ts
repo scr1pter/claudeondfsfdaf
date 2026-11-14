@@ -843,6 +843,103 @@ describe("capBody", () => {
 })
 
 describe("numbers and cost", () => {
+  test("pure Codium wording and failure ignore raw numeric fields and missing usage", () => {
+    const codium: ReviewCost = {
+      ...priced,
+      kind: "codium",
+      model: "vector-plan/vector-velocity",
+      partial: true,
+      usageMissing: true,
+      tokensOwnOnly: true,
+    }
+    expect(costWording(codium)).toBe("Vector Codium · vector-velocity · Codium")
+    expect(noteFailed("timeout", codium)).toContain("Used before it stopped: Vector Codium · vector-velocity · Codium.")
+    const body = buildSummaryBody({ head: HEAD, baseRef: "main", mode: "full", cost: codium })
+    expect(body).toContain("· Vector Codium · vector-velocity · Codium</sub>")
+    expect(body).not.toMatch(/\$|48\.2k|31\.0k|3\.1k|usage unavailable|cost unknown|Codium\s+\d/)
+  })
+
+  test.each([0, 0.4])("PR totals show Codium activity without printing its count or zero dollars: %j", (costUsd) => {
+    const body = buildSummaryBody({
+      head: HEAD,
+      baseRef: "main",
+      mode: "full",
+      prTotal: { costUsd, reviews: 3, codiumReviews: 2 },
+    })
+    expect(body).toContain(`this pull request: ${costUsd ? "$0.40 + " : ""}Codium over 3 reviews`)
+    expect(body).not.toMatch(/Codium\s+\d|\$0\.00/)
+  })
+
+  test("mixed fresh usage shows only attributed own figures alongside Codium", () => {
+    expect(costWording({ ...priced, codium: true, tokensOwnOnly: true })).toBe(
+      "anthropic/claude-sonnet-4-5 · $0.21 + Codium (48.2k in, 31.0k of it cached / 3.1k out)",
+    )
+    expect(costWording({ ...priced, codium: true, partial: true })).toBe(
+      "anthropic/claude-sonnet-4-5 · at least $0.21 + Codium: a reply that stopped early reported no usage",
+    )
+    expect(costWording({ ...plan, codium: true })).toBe(
+      "openai/gpt-5 · subscription sign-in, no per-token price + Codium",
+    )
+    expect(costWording({ ...zeroCost, kind: "free", codium: true })).toBe("openai/gpt-4.1 · free + Codium")
+  })
+
+  test.each([undefined, false])("mixed aggregate tokens are omitted without positive fresh proof: %j", (proof) => {
+    const wording = costWording({ ...priced, codium: true, tokensOwnOnly: proof })
+    expect(wording).toBe("anthropic/claude-sonnet-4-5 · $0.21 + Codium")
+    expect(wording).not.toMatch(/cached| in| out|48\.2k|31\.0k|3\.1k/)
+  })
+
+  test("mixed unknown and missing usage preserve known own cost while explaining the gap", () => {
+    expect(costWording({ ...unknown, codium: true, costUsd: 0.21 })).toBe(
+      "provider/model · $0.21 + Codium · additional cost unknown: pricing or complete usage is unavailable",
+    )
+    expect(costWording({ ...unknown, codium: true, tokensOwnOnly: true })).toBe(
+      "provider/model · cost unknown + Codium: pricing or complete usage is unavailable (48.2k in / 3.1k out)",
+    )
+    expect(costWording({ ...priced, codium: true, usageMissing: true })).toBe(
+      "anthropic/claude-sonnet-4-5 · $0.21 + Codium · additional cost and token usage unavailable",
+    )
+  })
+
+  test("legacy model prefixes identify pure and mixed Codium without relying on old cost kind", () => {
+    expect(costWording({ ...priced, kind: "unknown", model: "vector-plan/vector-velocity" })).toBe(
+      "Vector Codium · vector-velocity · Codium",
+    )
+    expect(costWording({ ...priced, model: "anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity" })).toBe(
+      "anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium",
+    )
+    expect(costWording({ ...priced, model: "other/vector-plan/model" })).toBe(
+      "other/vector-plan/model · $0.21 (48.2k in, 31.0k of it cached / 3.1k out)",
+    )
+  })
+
+  // Label plan §2: `vector-plan` is never printed as a provider name; a Codium model reads "Vector Codium · <model>".
+  // Mixed wording keeps its "<models> · <own figure> + Codium" layout and renames only the Codium model's segment.
+  test("a mixed review names its Codium models Vector Codium, never by the vector-plan id", () => {
+    const mixed = "anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity"
+    const named = "anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity"
+    const cost: ReviewCost = { ...priced, codium: true, model: mixed }
+    const wordings = [
+      costWording({ ...cost, tokensOwnOnly: true }),
+      costWording({ ...cost, partial: true }),
+      costWording({ ...cost, usageMissing: true }),
+      costWording({ ...plan, codium: true, model: "openai/gpt-5 + vector-plan/vector-flash" }),
+      costWording({ ...unknown, codium: true, costUsd: 0.21, model: "vector-plan/vector-flash + provider/model" }),
+      noteFailed("timeout", cost),
+      buildSummaryBody({ head: HEAD, baseRef: "main", mode: "full", cost }),
+    ]
+    expect(wordings.slice(0, 5)).toEqual([
+      `${named} · $0.21 + Codium (48.2k in, 31.0k of it cached / 3.1k out)`,
+      `${named} · at least $0.21 + Codium: a reply that stopped early reported no usage`,
+      `${named} · $0.21 + Codium · additional cost and token usage unavailable`,
+      "openai/gpt-5 + Vector Codium · vector-flash · subscription sign-in, no per-token price + Codium",
+      "Vector Codium · vector-flash + provider/model · $0.21 + Codium · additional cost unknown: pricing or complete usage is unavailable",
+    ])
+    expect(wordings[5]).toContain(`Used before it stopped: ${named} · $0.21 + Codium.`)
+    expect(wordings[6]).toContain(`· ${named} · $0.21 + Codium</sub>`)
+    for (const wording of wordings) expect(wording).not.toContain("vector-plan")
+  })
+
   test("costWording for every kind", () => {
     expect(costWording(priced)).toBe("anthropic/claude-sonnet-4-5 · $0.21 (48.2k in, 31.0k of it cached / 3.1k out)")
     expect(costWording(zeroCost)).toBe("openai/gpt-4.1 · $0.00 (48.2k in / 3.1k out)")

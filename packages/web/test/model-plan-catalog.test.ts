@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { mkdtemp, rm } from "node:fs/promises"
+import path from "node:path"
+import { tmpdir } from "node:os"
 import { configuredPlanModels, MODEL_PLAN_OPTIONS } from "../../../api/_lib/model-plan-config"
 import snapshot from "./fixtures/codium-endpoints-2026-10-23.json"
 import { catalogBody } from "../../engine/script/release-catalog"
-import { auditModelPlanCatalog } from "../scripts/model-plan-catalog"
+import { auditModelPlanCatalog, auditModelPlanCatalogCommand } from "../scripts/model-plan-catalog"
 
 const configured = {
   id: "example/coder",
@@ -306,5 +310,181 @@ describe("configured Codium model audit", () => {
       ["example/coder", true],
       ["example/second", false],
     ])
+  })
+})
+
+describe("staged tier catalog audit", () => {
+  const variant = { ...configured, id: "example/coder:deep", upstream: configured.id }
+  const now = Date.parse("2026-10-28T12:00:00Z")
+  const evidence = {
+    model: configured.id,
+    tag: endpoint.tag,
+    efforts: ["xhigh", "max"],
+    source: "fixture: explicit provider effort verification",
+    capturedAt: "2026-10-27",
+  }
+
+  test("variants match captured model and endpoint IDs through their explicit upstream", () => {
+    expect(auditModelPlanCatalog([variant], [model], [endpoint])[0]).toMatchObject({
+      model: variant.id,
+      ok: true,
+    })
+    expect(auditModelPlanCatalog([{ ...configured, id: variant.id }], [model], [endpoint])[0]?.ok).toBe(false)
+    expect(
+      auditModelPlanCatalog([variant], [{ ...model, id: variant.id }], [{ ...endpoint, model_id: variant.id }])[0]?.ok,
+    ).toBe(false)
+  })
+
+  test("both model and endpoint capacity must cover the largest tier context and the base context", () => {
+    const target = { ...variant, tierContext: { "vector-50": 256000, "vector-200": 768000 } }
+    const large = { ...model, context_length: 1000000 }
+    const route = { ...endpoint, context_length: 1000000 }
+    expect(auditModelPlanCatalog([target], [model], [route])[0]?.failures).toContain(
+      "Model context is below the configured limit.",
+    )
+    expect(auditModelPlanCatalog([target], [large], [endpoint])[0]?.ok).toBe(false)
+    expect(auditModelPlanCatalog([target], [large], [route])[0]?.ok).toBe(true)
+    expect(
+      auditModelPlanCatalog(
+        [{ ...variant, tierContext: { "vector-200": 64000 } }],
+        [{ ...model, context_length: 100000 }],
+        [{ ...endpoint, context_length: 100000 }],
+      )[0]?.ok,
+    ).toBe(false)
+  })
+
+  test("providerOnly intersects exact captured ZDR endpoint tags, never names or tag prefixes", () => {
+    const routes = ["azure", "azure/us", "azure/eu"].map((tag) => ({ ...endpoint, tag, provider_name: "Azure" }))
+    expect(
+      auditModelPlanCatalog([{ ...variant, providerOnly: ["azure"] }], [model], routes)[0]?.providers.map(
+        (provider) => provider.id,
+      ),
+    ).toEqual(["azure"])
+    expect(auditModelPlanCatalog([{ ...variant, providerOnly: ["Azure"] }], [model], routes)[0]?.ok).toBe(false)
+    expect(auditModelPlanCatalog([{ ...variant, providerOnly: [] }], [model], routes)[0]?.ok).toBe(false)
+  })
+
+  test("larger tier windows make higher pricing reachable unless an actual prompt cap excludes it", () => {
+    const target = { ...variant, tierContext: { "vector-200": 768000 } }
+    const large = { ...model, context_length: 1000000 }
+    const route = {
+      ...endpoint,
+      context_length: 1000000,
+      pricing: {
+        ...endpoint.pricing,
+        overrides: [{ min_prompt_tokens: 400000, prompt: "0.000003", completion: "0.000012" }],
+      },
+    }
+    expect(auditModelPlanCatalog([target], [large], [route])[0]?.ok).toBe(false)
+    expect(auditModelPlanCatalog([{ ...target, promptTokenLimit: 400000 }], [large], [route])[0]?.ok).toBe(true)
+    expect(auditModelPlanCatalog([{ ...target, promptTokenLimit: 400001 }], [large], [route])[0]?.ok).toBe(false)
+  })
+
+  test("an explicit actual-token prompt cap cannot be narrowed by the estimated context window", () => {
+    const target = { ...configured, contextLength: 128000, promptTokenLimit: 272000 }
+    const pricing = (threshold: number) => ({
+      ...endpoint.pricing,
+      overrides: [{ min_prompt_tokens: threshold, prompt: "0.000003", completion: "0.000012" }],
+    })
+    expect(auditModelPlanCatalog([target], [model], [{ ...endpoint, pricing: pricing(200000) }])[0]?.ok).toBe(false)
+    expect(auditModelPlanCatalog([target], [model], [{ ...endpoint, pricing: pricing(272000) }])[0]?.ok).toBe(true)
+  })
+
+  test.each(["xhigh", "max"] as const)("generic reasoning metadata never verifies provider effort %s", (effort) => {
+    const result = auditModelPlanCatalog(
+      [{ ...variant, reasoningEffort: effort }],
+      [{ ...model, reasoning: { supported_efforts: [effort] } }],
+      [{ ...endpoint, supported_parameters: [...endpoint.supported_parameters, "reasoning", "reasoning_effort"] }],
+      now,
+    )[0]!
+    expect(result.ok).toBe(false)
+    expect(result.providers).toEqual([])
+    expect(result.failures.some((failure) => failure.includes(`pinned ${effort} effort is unverified`))).toBe(true)
+  })
+
+  test("advanced effort evidence must bind the exact upstream model and qualifying provider with real provenance", () => {
+    const target = { ...variant, reasoningEffort: "xhigh" as const }
+    const route = { ...endpoint, supported_parameters: [...endpoint.supported_parameters, "reasoning"] }
+    for (const invalid of [
+      { ...evidence, model: variant.id },
+      { ...evidence, tag: "example" },
+      { ...evidence, tag: "other/provider" },
+      { ...evidence, efforts: ["high"] },
+      { ...evidence, source: " " },
+      { ...evidence, capturedAt: "invalid" },
+      { ...evidence, capturedAt: "2026-10-29" },
+    ])
+      expect(auditModelPlanCatalog([target], [model], [route], now, [invalid])[0]?.ok).toBe(false)
+    expect(auditModelPlanCatalog([target], [model], [route], now, [evidence])[0]?.ok).toBe(true)
+    expect(
+      auditModelPlanCatalog([target], [model], [route, { ...route, tag: "unverified/second" }], now, [
+        evidence,
+      ])[0]?.providers.map((provider) => provider.id),
+    ).toEqual([endpoint.tag])
+  })
+})
+
+describe("offline captured catalog command", () => {
+  test("the default manifest audits staged candidates without relabeling old metadata as a new capture", async () => {
+    const report = await auditModelPlanCatalogCommand([])
+    expect(report.offline).toBe(true)
+    expect(report.targetDate).toBe("2026-10-30")
+    expect(report.capturedAt).toBe("2026-10-23")
+    expect(report.models.map((result) => result.model)).toEqual(
+      configuredPlanModels({ tiered: true }).map((model) => model.id),
+    )
+    expect(report.models.some((result) => !result.ok)).toBe(true)
+    expect(report.unverified.length).toBeGreaterThan(0)
+  })
+
+  test("--snapshot accepts the immutable raw capture while preserving the baseline five-model regression", async () => {
+    const report = await auditModelPlanCatalogCommand(
+      ["--snapshot", new URL("./fixtures/codium-endpoints-2026-10-23.json", import.meta.url).pathname],
+      { configured: configuredPlanModels() },
+    )
+    expect(report.capturedAt).toBe("2026-10-23")
+    expect(report).not.toHaveProperty("targetDate")
+    expect(report.models.every((result) => result.ok)).toBe(true)
+    expect(report.unverified).toEqual([])
+  })
+
+  test("manifest digest/date and sibling snapshot identity are checked before auditing", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "vector-offline-catalog-"))
+    try {
+      const raw = JSON.stringify(snapshot)
+      const filename = path.join(directory, "manifest.json")
+      const manifest = {
+        targetDate: "2026-10-27",
+        capturedAt: snapshot.checkedAt,
+        snapshot: "captured.json",
+        snapshotSha256: createHash("sha256").update(raw).digest("hex"),
+        providerEfforts: [],
+        unverified: ["Fixture: no new provider verification."],
+      }
+      await Bun.write(path.join(directory, manifest.snapshot), raw)
+      await Bun.write(filename, JSON.stringify(manifest))
+      expect(
+        (
+          await auditModelPlanCatalogCommand(["--snapshot", filename], { configured: configuredPlanModels() })
+        ).models.every((result) => result.ok),
+      ).toBe(true)
+      await Bun.write(filename, JSON.stringify({ ...manifest, snapshotSha256: "0".repeat(64) }))
+      await expect(auditModelPlanCatalogCommand(["--snapshot", filename])).rejects.toThrow("SHA-256")
+      await Bun.write(filename, JSON.stringify({ ...manifest, capturedAt: "2026-10-27" }))
+      await expect(auditModelPlanCatalogCommand(["--snapshot", filename])).rejects.toThrow("capture date")
+      await Bun.write(filename, JSON.stringify({ ...manifest, snapshot: "../captured.json" }))
+      await expect(auditModelPlanCatalogCommand(["--snapshot", filename])).rejects.toThrow("sibling JSON")
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test.each([
+    { argv: ["--live"] },
+    { argv: ["--snapshot"] },
+    { argv: ["--snapshot", ""] },
+    { argv: ["--snapshot", "fixture.json", "--probe"] },
+  ])("refuses unsupported network/probe or malformed command arguments %j", async ({ argv }) => {
+    await expect(auditModelPlanCatalogCommand(argv)).rejects.toThrow("Usage:")
   })
 })

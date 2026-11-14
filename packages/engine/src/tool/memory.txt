@@ -1,5 +1,5 @@
-Vector's memory of this repository and user, on this computer.
+Memory of this repository and user, on this computer.
 search(text), get(id): past decisions, lessons, conventions and failures.
-add(kind, text of at most 300 characters) when the user states a preference or correction, a fix turns a failing check into a passing one, or a lasting decision is made. It is used from the next request; the user can undo it. Give evidence when there is some: quote (the user's exact words), file with a committed line, or card [id], as quote, or command (the check that now passes). No secrets, progress notes or what the code plainly says.
+add(kind, text up to 300 chars) when the user states a preference or correction, a fix turns a failing check green, or a lasting decision is made. Used from the next request; the user can undo it. Give evidence if any: quote (the user's exact words), file with a committed line or card [id] as quote, or command (the check that now passes). No secrets, progress notes or what the code plainly says.
 add(file) with no text keeps the file, or "message" the user's paste, as a document.
-update(id, text) replaces an entry; forget(id) puts one away. scope "personal" is only for what the user just said about themselves.
+update(id, text) replaces an entry; forget(id) puts one away. keep(id?) saves research the user asks to keep. scope "personal" is only for what the user just said about themselves.

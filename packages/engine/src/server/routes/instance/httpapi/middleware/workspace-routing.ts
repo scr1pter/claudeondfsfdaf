@@ -14,7 +14,10 @@ import {
 } from "@/server/shared/workspace-routing"
 import { NotFoundError } from "@/storage/storage"
 import { Flag } from "@vectordevai/core/flag/flag"
-import { FreeModelGuests, GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import path from "node:path"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -268,7 +271,7 @@ function routeWorkspace<E>(
   client: HttpClient.HttpClient,
   effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
   plan: RequestPlan,
-  guestInput: Effect.Effect<void>,
+  guestInput: Effect.Effect<boolean>,
 ): Effect.Effect<
   HttpServerResponse.HttpServerResponse,
   E,
@@ -314,34 +317,48 @@ function routeWorkspace<E>(
       // marked here too, so it keeps the mark if it is warped back to this engine.
       Remote: ({ request, workspace, target, url, path }) =>
         guestInput.pipe(
-          Effect.andThen(
-            proxyRemote(
-              client,
-              request,
-              workspace,
-              principal.kind === "guest"
-                ? { ...target, headers: [...new Headers(target.headers).entries(), [GUEST_REQUEST_HEADER, "1"]] }
-                : target,
-              url,
-              path,
-            ),
+          Effect.flatMap((admitted) =>
+            admitted
+              ? proxyRemote(
+                  client,
+                  request,
+                  workspace,
+                  principal.kind === "guest" || RequestOwner.forwarded(request)
+                    ? { ...target, headers: RequestOwner.relayHeaders(target.headers) }
+                    : target,
+                  url,
+                  path,
+                )
+              : Effect.succeed(
+                  HttpServerResponse.jsonUnsafe(
+                    { _tag: "ForbiddenError", message: "This session's raw content is available only to the owner." },
+                    { status: 403 },
+                  ),
+                ),
           ),
         ),
       Local: ({ directory, workspaceID, sessionID }) =>
         guestInput.pipe(
-          Effect.andThen(
-            effect.pipe(
-              Effect.provideService(
-                WorkspaceRouteContext,
-                WorkspaceRouteContext.of({
-                  directory:
-                    principal.kind === "guest" && (sessionID === undefined || !allowsSession(principal, sessionID))
-                      ? guestWorkspaceDirectory(principal, workspaceID)!
-                      : directory,
-                  workspaceID,
-                }),
-              ),
-            ),
+          Effect.flatMap((admitted) =>
+            admitted
+              ? effect.pipe(
+                  Effect.provideService(
+                    WorkspaceRouteContext,
+                    WorkspaceRouteContext.of({
+                      directory:
+                        principal.kind === "guest" && (sessionID === undefined || !allowsSession(principal, sessionID))
+                          ? guestWorkspaceDirectory(principal, workspaceID)!
+                          : directory,
+                      workspaceID,
+                    }),
+                  ),
+                )
+              : Effect.succeed(
+                  HttpServerResponse.jsonUnsafe(
+                    { _tag: "ForbiddenError", message: "This session's raw content is available only to the owner." },
+                    { status: 403 },
+                  ),
+                ),
           ),
         ),
     })
@@ -351,6 +368,7 @@ function routeWorkspace<E>(
 function routeHttpApiWorkspace<E>(
   client: HttpClient.HttpClient,
   guests: FreeModelGuests.Interface,
+  audience: SessionAudience.Interface,
   effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
 ): Effect.Effect<
   HttpServerResponse.HttpServerResponse,
@@ -377,12 +395,72 @@ function routeHttpApiWorkspace<E>(
     const route = yield* HttpRouter.RouteContext
     const sessionID = getWorkspaceRouteSessionID(route.params)
     const principal = yield* RequestPrincipal
+    const owner = principal.kind === "owner" && !RequestOwner.forwarded(request)
+    for (const value of RequestOwner.fileSelectors(request, route.route.path))
+      if (
+        !owner &&
+        (yield* audience.overlapsPrivateDirectory(path.resolve(defaultDirectory(request, requestURL(request)), value)))
+      )
+        return HttpServerResponse.jsonUnsafe(
+          { _tag: "ForbiddenError", message: "This filesystem selection includes an owner-only working directory." },
+          { status: 403 },
+        )
+    for (const value of RequestOwner.paths(request))
+      if (!owner && (yield* audience.isPrivateDirectory(value)))
+        return HttpServerResponse.jsonUnsafe(
+          { _tag: "ForbiddenError", message: "This working directory is available only to the owner." },
+          { status: 403 },
+        )
+    if (
+      !owner &&
+      ((sessionID && !RequestOwner.counts(request, route.route.path) && (yield* audience.isPrivate(sessionID))) ||
+        (yield* audience.isPrivateDirectory(defaultDirectory(request, requestURL(request)))))
+    )
+      return HttpServerResponse.jsonUnsafe(
+        { _tag: "ForbiddenError", message: "This session's raw content is available only to the owner." },
+        { status: 403 },
+      )
+    // Workflow planning and execution are owner actions even when an adapter would forward with owner credentials.
+    if (
+      !owner &&
+      [
+        "/experimental/workflow/saved",
+        "/experimental/workflow/validate",
+        "/experimental/session/:sessionID/workflow",
+        "/experimental/session/:sessionID/workflow/:runID/resume",
+      ].includes(route.route.path) &&
+      (request.method === "POST" || route.route.path === "/experimental/workflow/saved")
+    )
+      return HttpServerResponse.jsonUnsafe(
+        { _tag: "ForbiddenError", message: "Only the server owner can validate or start workflows." },
+        { status: 403 },
+      )
     // Remote targets authenticate with the adapter's owner credentials. Apply task-control ownership before
     // forwarding, while the original guest principal is still available, as well as in the local handler.
+    // Merging and discarding need the authenticated owner: a guest in control, or owner credentials relaying a
+    // guest, are refused before any forward.
     if (
       request.method === "POST" &&
-      ((route.route.path.startsWith("/experimental/session/:sessionID/tasks/bridge/") && principal.kind !== "owner") ||
+      !owner &&
+      [
+        "/experimental/session/:sessionID/tasks/:taskID/merge",
+        "/experimental/session/:sessionID/tasks/:taskID/discard",
+      ].includes(route.route.path)
+    )
+      return HttpServerResponse.jsonUnsafe(
+        { _tag: "ForbiddenError", message: "Only the server owner can merge or discard a subagent's worktree." },
+        { status: 403 },
+      )
+    if (
+      request.method === "POST" &&
+      ((route.route.path.startsWith("/experimental/session/:sessionID/tasks/bridge/") && !owner) ||
         ([
+          "/experimental/session/:sessionID/workflow",
+          "/experimental/session/:sessionID/workflow/:runID/resume",
+          "/experimental/session/:sessionID/stop",
+          "/experimental/session/:sessionID/background",
+          "/experimental/session/:sessionID/tasks/background",
+          "/experimental/session/:sessionID/tasks/resume",
           "/experimental/session/:sessionID/tasks/stop",
           "/experimental/session/:sessionID/tasks/:taskID/message",
         ].includes(route.route.path) &&
@@ -406,17 +484,37 @@ function routeHttpApiWorkspace<E>(
       { template: route.route.path, path: matchedRoutePath(route.route.path, route.params) },
       session,
     )
+    if (!owner && plan._tag === "Local" && (yield* audience.isPrivateDirectory(plan.directory)))
+      return HttpServerResponse.jsonUnsafe(
+        { _tag: "ForbiddenError", message: "This working directory is available only to the owner." },
+        { status: 403 },
+      )
+    if (!owner && plan._tag === "Local")
+      for (const value of RequestOwner.fileSelectors(request, route.route.path))
+        if (yield* audience.overlapsPrivateDirectory(path.resolve(plan.directory, value)))
+          return HttpServerResponse.jsonUnsafe(
+            { _tag: "ForbiddenError", message: "This filesystem selection includes an owner-only working directory." },
+            { status: 403 },
+          )
+    if (!owner && plan._tag === "Local")
+      for (const value of RequestOwner.paths(request))
+        if (yield* audience.isPrivateDirectory(path.resolve(plan.directory, value)))
+          return HttpServerResponse.jsonUnsafe(
+            { _tag: "ForbiddenError", message: "This working directory is available only to the owner." },
+            { status: 403 },
+          )
     // Whatever a guest changes in a session, a prompt, a compaction, a message to a subagent, keeps that session's
     // free-model requests off models that may train (FreeModelGuests). It is recorded before the handler runs, and
     // only once the guest is allowed in the session.
     const guestSession = Schema.decodeUnknownOption(SessionID)(sessionID)
     const guestInput =
-      (principal.kind === "guest" || request.headers[GUEST_REQUEST_HEADER] === "1") &&
-      request.method !== "GET" &&
-      request.method !== "HEAD" &&
-      Option.isSome(guestSession)
-        ? guests.mark(guestSession.value)
-        : Effect.void
+      !owner && request.method !== "GET" && request.method !== "HEAD" && Option.isSome(guestSession)
+        ? audience.markGuest(guestSession.value).pipe(
+            Effect.andThen(guests.mark(guestSession.value)),
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          )
+        : Effect.succeed(true)
     return yield* routeWorkspace(client, effect, plan, guestInput)
   })
 }
@@ -429,8 +527,9 @@ export const workspaceRoutingLayer = Layer.effect(
     const client = yield* HttpClient.HttpClient
     const tickets = yield* PtyTicket.Service
     const guests = yield* FreeModelGuests.Service
+    const audience = yield* SessionAudience.Service
     return WorkspaceRoutingMiddleware.of((effect) =>
-      routeHttpApiWorkspace(client, guests, effect).pipe(
+      routeHttpApiWorkspace(client, guests, audience, effect).pipe(
         Effect.provideService(Socket.WebSocketConstructor, makeWebSocket),
         Effect.provideService(Workspace.Service, workspace),
         Effect.provideService(PtyTicket.Service, tickets),

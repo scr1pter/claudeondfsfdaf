@@ -14,7 +14,7 @@ import { AbsolutePath } from "../src/schema"
 import { SessionV2 } from "../src/session"
 import { SessionRunnerModel } from "../src/session/runner/model"
 import { FREE_MODEL_FALLBACKS } from "@vectordevai/schema/free-model"
-import { codiumModel } from "./fixture/codium-gateway"
+import { codiumCatalogV2, codiumModel } from "./fixture/codium-gateway"
 import { testEffect } from "./lib/effect"
 import { PluginTestLayer } from "./plugin/fixture"
 
@@ -64,8 +64,17 @@ for (const enabled of [true, false])
 const credentials = FreeModels.CredentialsService.of({
   get: (provider) => Effect.succeed(provider === "vector" ? "vct_signed-in.token" : undefined),
 })
+// A current client's catalog: Codium Auto, a model the plan has not unlocked and a manual-only lane beside the model.
 const plans = ModelPlans.Service.of({
-  catalog: () => Effect.succeed({ enabled: true, models: [codiumModel] }),
+  catalog: () =>
+    Effect.succeed({
+      ...codiumCatalogV2,
+      models: [
+        ...codiumCatalogV2.models,
+        { ...codiumModel, id: "vendor/locked", locked: { plan: "vector-100", name: "Max" } },
+        { ...codiumModel, id: "vendor/long", manualOnly: true as const },
+      ],
+    }),
   request: () => Promise.reject(new Error("Choosing a model must not call the chat gateway")),
 })
 const session = SessionV2.Info.make({
@@ -99,9 +108,21 @@ for (const shared of [true, false])
         Effect.provideService(ModelPlans.Service, plans),
         Effect.provideService(FreeModels.CredentialsService, credentials),
       )
-      expect((yield* catalog.model.available()).map((model) => String(model.providerID))).toContain(
-        ModelPlans.PROVIDER_ID,
+      // Every entry is listed, Auto, the locked model and the manual-only lane included, each with what a picker shows
+      // of it from the catalog; the default below still never picks Codium.
+      const listed = (yield* catalog.model.available()).filter(
+        (model) => String(model.providerID) === ModelPlans.PROVIDER_ID,
       )
+      expect(Object.fromEntries(listed.map((model) => [String(model.id), model.codium]))).toEqual({
+        // WP A35: the listing also names the entry's part in the plan's review pair (the catalog's `review`).
+        [codiumModel.id]: { lab: "deepseek", role: "default", review: ["triage"] },
+        [ModelPlans.AUTO_ID]: {
+          lab: "deepseek",
+          auto: { floor: codiumModel.id, default: codiumModel.id, ceiling: codiumModel.id },
+        },
+        "vendor/locked": { locked: { plan: "vector-100", name: "Max" } },
+        "vendor/long": { manualOnly: true },
+      })
       const resolved = yield* Effect.gen(function* () {
         const resolver = yield* SessionRunnerModel.Service
         return yield* resolver.resolve(session)

@@ -1,17 +1,10 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { randomUUID } from "node:crypto"
 
 import { getStore } from "./store"
 import { nextRun, type Recurrence } from "@vectordevai/app/schedule"
 import type { SpendLedger } from "./spend-limits"
-import {
-  measuredCost,
-  newSpend,
-  readSpend,
-  sessionCost,
-  sessionTokens,
-  usageDelta,
-  type EngineSessionResponse,
-} from "./run-usage"
+import { measuredRun, newSpend, readSpend, type EngineSessionResponse } from "./run-usage"
 
 const STORE_NAME = "scheduled-agents"
 const STORE_KEY = "records"
@@ -391,9 +384,7 @@ export function createScheduledAgents(
   }
 
   async function abortEngineSession(engine: ScheduledAgentEngine, sessionId: string) {
-    await request(engine, `/api/session/${encodeURIComponent(sessionId)}/interrupt`, { method: "POST" }).catch(
-      () => {},
-    )
+    await request(engine, `/api/session/${encodeURIComponent(sessionId)}/interrupt`, { method: "POST" }).catch(() => {})
   }
 
   async function waitForSessionCompletion(
@@ -528,8 +519,7 @@ export function createScheduledAgents(
         provider: after?.data?.model?.providerID ?? before?.data?.model?.providerID ?? "Current Vector provider",
         model: after?.data?.model?.id ?? before?.data?.model?.id ?? "Current selected model",
         source: "scheduled",
-        totalCostUsd: measuredCost(snapshot, sessionCost(before?.data), sessionCost(after?.data)),
-        totalTokens: usageDelta(sessionTokens(before?.data), sessionTokens(after?.data)),
+        ...measuredRun(snapshot, before?.data, after?.data),
       })
       .catch(() => undefined)
     if ("status" in execution && execution.status === "canceled") return execution.status
@@ -571,9 +561,20 @@ export function createScheduledAgents(
     const record = readRecords().find((item) => item.id === id)
     const runId = `${id}:${record?.startedAt ?? nowIso()}:${index}`
     const execution = spend().then(async (ledger) => {
+      // A recurrence continues its existing session, whose model may have changed since the schedule was saved.
+      // Only a model observed on that session (or pinned when creating a new one) can skip the local dollar gate.
+      const model = target.sessionId
+        ? await request<EngineSessionResponse | undefined>(
+            engine,
+            `/api/session/${encodeURIComponent(target.sessionId)}`,
+          )
+            .then((response) => response?.data?.model)
+            .catch(() => undefined)
+        : record?.model
       const allowance = await ledger.checkAllowance({
         runId,
         source: "scheduled",
+        billing: Billing.isCodium(model?.providerID) ? "codium" : undefined,
         // Every target of this launch is checked at once, so the hold has to
         // be taken inside the check, not after it.
         reserve: true,

@@ -11,6 +11,7 @@ import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
+import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { noteTriageFixedUnchecked, noteTriageUnchecked, noteVerifySkipped } from "@vectordevai/core/review/format"
 import {
@@ -21,6 +22,7 @@ import {
 } from "@vectordevai/core/review/types"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../../src/agent/agent"
+import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
@@ -59,6 +61,7 @@ import { testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { resolveReviewModel } from "../../src/review/model"
 
 // Review.run against the fake LLM. Requests are matched by the prompt they answer, since the review and security
 // sessions run in parallel.
@@ -129,6 +132,8 @@ const root = LayerNode.group([
   LLM.node,
   Env.node,
   Agent.node,
+  Auth.node,
+  ModelCatalog.node,
   Command.node,
   Permission.node,
   Plugin.node,
@@ -247,7 +252,7 @@ function input(directory: string, overrides: Partial<Review.RunInput> = {}): Rev
 
 const priced = { ...ref, context: 100_000, costKind: "priced" as const, price: PRICE }
 
-const useServer = (cost?: typeof PRICE) =>
+const useServer = (cost?: typeof PRICE, options: { compaction?: { auto: boolean } } = {}) =>
   Effect.gen(function* () {
     const test = yield* TestInstance
     const llm = yield* TestLLMServer
@@ -256,7 +261,7 @@ const useServer = (cost?: typeof PRICE) =>
     if (cost) provider.provider.lmstudio.models["test-model"].cost = cost
     yield* fs.writeWithDirs(
       path.join(test.directory, "vector.json"),
-      JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...provider }),
+      JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...provider, ...options }),
     )
     yield* fs.writeWithDirs(path.join(test.directory, "src/list.ts"), LIST_SOURCE)
     yield* Effect.promise(() => trustWorkspace(test.directory))
@@ -298,6 +303,12 @@ const modelRequests = (llm: TestLLMServer["Service"]) =>
 // Exercise the processor's real partial-usage persistence. This boundary fixture reports a numeric started total,
 // then fails or interrupts before completion; HTTP fixtures above cover the regular full-stream path.
 for (const reason of ["error", "abort", "reduced"] as const) {
+  // Review and security run in parallel, and nothing else orders security's first admission against review's step.
+  // Once review's step settles it holds its finalize reservation until its report is decoded, and a security
+  // admission that lands in that window is refused for budget: its started, unfinished attempt never runs, adds no
+  // uncertain exposure, and verify then fits. Review's first reply waits here until security's stream is pulled,
+  // which the processor does only after admitting it, so the attempt this test is about always runs.
+  const securityAdmitted = Promise.withResolvers<void>()
   const partial = testEffect(
     LayerNode.compile(root, [
       ...replacements,
@@ -310,6 +321,7 @@ for (const reason of ["error", "abort", "reduced"] as const) {
               Stream.suspend(() => {
                 const text = JSON.stringify(input.messages.at(-1) ?? {})
                 if (input.agent.name === "security" && !text.includes("Stop investigating")) {
+                  securityAdmitted.resolve()
                   input.started?.(
                     reason === "reduced"
                       ? { inputTokens: 40_000, outputTokens: 100, totalTokens: 40_100 }
@@ -337,26 +349,34 @@ for (const reason of ["error", "abort", "reduced"] as const) {
                   )
                 }
                 const verify = text.includes("You are checking candidate findings")
-                return Stream.make(
-                  LLMEvent.stepStart({ index: 0 }),
-                  LLMEvent.textStart({ id: "answer" }),
-                  LLMEvent.textDelta({
-                    id: "answer",
-                    text: JSON.stringify(
-                      verify ? { results: [] } : report(input.agent.name === "review" ? [finding()] : []),
+                const gate =
+                  input.agent.name === "review" && !verify && !text.includes("Stop investigating")
+                    ? Stream.fromEffect(Effect.promise(() => securityAdmitted.promise)).pipe(Stream.drain)
+                    : Stream.empty
+                return gate.pipe(
+                  Stream.concat(
+                    Stream.make(
+                      LLMEvent.stepStart({ index: 0 }),
+                      LLMEvent.textStart({ id: "answer" }),
+                      LLMEvent.textDelta({
+                        id: "answer",
+                        text: JSON.stringify(
+                          verify ? { results: [] } : report(input.agent.name === "review" ? [finding()] : []),
+                        ),
+                      }),
+                      LLMEvent.textEnd({ id: "answer" }),
+                      LLMEvent.stepFinish({
+                        index: 0,
+                        reason: "stop",
+                        usage: new Usage(
+                          input.agent.name === "review"
+                            ? { inputTokens: 30_000, outputTokens: 100, totalTokens: 30_100 }
+                            : { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                        ),
+                      }),
+                      LLMEvent.finish({ reason: "stop" }),
                     ),
-                  }),
-                  LLMEvent.textEnd({ id: "answer" }),
-                  LLMEvent.stepFinish({
-                    index: 0,
-                    reason: "stop",
-                    usage: new Usage(
-                      input.agent.name === "review"
-                        ? { inputTokens: 30_000, outputTokens: 100, totalTokens: 30_100 }
-                        : { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-                    ),
-                  }),
-                  LLMEvent.finish({ reason: "stop" }),
+                  ),
                 )
               }),
           }),
@@ -396,6 +416,64 @@ for (const reason of ["error", "abort", "reduced"] as const) {
 }
 
 describe("Review.run", () => {
+  for (const context of [272_000, 272_001, 300_000]) {
+    it.instance(
+      `reserves the exact context tier before a ${context}-token finalizer`,
+      () =>
+        Effect.gen(function* () {
+          const { llm, directory } = yield* useServer({ input: 1, output: 1 }, { compaction: { auto: false } })
+          const provider = yield* Provider.Service
+          const catalogModel = yield* provider.getModel(ref.providerID, ref.modelID)
+          // Inject catalog metadata into this fixture's instance, because project cost overrides expose only the
+          // older over-200K band. Neither the request prompt nor the model's tool/effort configuration is inflated.
+          Object.assign(catalogModel, {
+            limit: { ...catalogModel.limit, context: 1_000_000 },
+            cost: {
+              input: 1,
+              output: 1,
+              cache: { read: 0, write: 0 },
+              tiers: [{ tier: { type: "context", size: 272_000 }, input: 2, output: 1, cache: { read: 0, write: 0 } }],
+            },
+          })
+          const selected = yield* resolveReviewModel({ trigger: "local", flag: "lmstudio/test-model", env: {} })
+          const before = JSON.stringify(catalogModel)
+          // Production predicts the next context as the preceding reported context plus 3K. The fake finalizer
+          // reports exactly that prediction, so a failure cannot be attributed to unpredictable context growth.
+          yield* llm.pushMatch(
+            REVIEW,
+            reply()
+              .text("Investigation finished without a structured report.")
+              .usage({ input: context - 3_000, output: 100 })
+              .stop(),
+          )
+          yield* llm.pushMatch(
+            FINALIZE,
+            reply().tool("StructuredOutput", report()).usage({ input: context, output: 100 }),
+          )
+          const capped = context === 300_000 ? 1 : 0.7
+          const firstRate = context - 3_000 > 272_000 ? 2 : 1
+          const firstUsd = ((context - 3_000) * firstRate + 100) / 1_000_000
+          const finalUsd = (context * (context > 272_000 ? 2 : 1) + 100) / 1_000_000
+          const affordable = firstUsd + finalUsd <= capped
+          const outcome = yield* Review.run(
+            input(directory, { model: selected, config: config({ maxCostUsd: capped, security: "off" }) }),
+          )
+          const requests = yield* modelRequests(llm)
+          expect(requests.every((request) => JSON.stringify(request).length < 100_000)).toBe(true)
+          expect(JSON.stringify(catalogModel)).toBe(before)
+          expect(outcome.cost?.costUsd).toBeCloseTo(
+            firstUsd + (requests.some((body) => FINALIZE({ body })) ? finalUsd : 0),
+            6,
+          )
+          // The boundary control is affordable at base rates. The other controls are unaffordable specifically at
+          // their long-context rate, even though the old base-rate reservation permits them.
+          expect(requests.filter((body) => FINALIZE({ body }))).toHaveLength(affordable ? 1 : 0)
+          expect(outcome.cost?.costUsd).toBeLessThanOrEqual(capped)
+        }),
+      TIMEOUT,
+    )
+  }
+
   it.instance(
     "refuses an unaffordable initial request without starting the provider and keeps plan reviews uncapped",
     () =>

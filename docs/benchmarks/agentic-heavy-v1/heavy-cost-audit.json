@@ -1,0 +1,160 @@
+{
+  "kind": "closed-heavy-vector-cost-audit-v1",
+  "recordedDate": "2026-11-04",
+  "classification": "single closed Vector development replication; descriptive cost audit; no efficiency claim",
+  "sourceRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+  "auditExecution": {
+    "realProviderCalls": 0,
+    "frozenSourceOrInstrumentMutations": 0,
+    "witnessHashChainVerified": true,
+    "requestResponseReceiptTuplesVerified": 300,
+    "privateTranscriptFileHashesVerified": 7,
+    "existingProjectionReproducedReadOnly": true
+  },
+  "sourceDigestsSha256": {
+    "closedPairSummary": "73a0fa6cabfdef6a722d428220471edd42401b446ba223f7901935aaae4c794e",
+    "closedWitnessAudit": "4738aacec8a2274576feebdfba5993c984f051daf0786671e50008ead0a803a3",
+    "privateTranscriptManifest": "80a931fcd4a58a0f3dfb8f9d48f750e386fe97fcf80394d90931a9d0ceffa077"
+  },
+  "accounting": {
+    "providerRequests": 300,
+    "reconciledReceipts": 300,
+    "measuredUsd": 6.7876388,
+    "allChargesRetained": true,
+    "invoiceReconciled": false,
+    "runtimeQuiesced": true,
+    "implementation": { "requests": 294, "measuredUsd": 6.5005907 },
+    "formalRepair": {
+      "requests": 6,
+      "measuredUsd": 0.2870481,
+      "completedJoinedNativeSteps": 5,
+      "completedJoinedNativeStepUsd": 0.1472696,
+      "unmatchedProviderOrdinal": 300,
+      "unmatchedProviderUsd": 0.1397785,
+      "unmatchedProviderRole": "frontend_worker",
+      "unmatchedChargeRetained": true,
+      "sourceChanged": false,
+      "sourceManifestSha256BeforeAndAfter": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+      "fileCountBeforeAndAfter": 39,
+      "stopReason": "admission_policy_or_state_failure at request limit"
+    }
+  },
+  "nativeActivityJoin": {
+    "method": "Unique same-role exact input/output/total token tuple and provider interval within native message/tool lifetime, allowing minus 1 second and plus 5 seconds. No provider response ID or native-dollar join.",
+    "completedNativeSteps": 299,
+    "uniquelyJoinedSteps": 299,
+    "ambiguousSteps": 0,
+    "unmatchedNativeSteps": 0,
+    "joinedMeasuredUsd": 6.6478603,
+    "unmatchedProviderOrdinals": [300],
+    "unmatchedMeasuredUsd": 0.1397785,
+    "unmatchedToolActivityInferred": false,
+    "nativeReportedDollarsAuthoritative": false,
+    "identityLevelProviderResponseJoinEstablished": false
+  },
+  "receiptUsageByRole": {
+    "lead": { "requests": 128, "measuredUsd": 1.9251992 },
+    "backend_coordinator": { "requests": 12, "measuredUsd": 0.2801839 },
+    "frontend_worker": { "requests": 17, "measuredUsd": 0.7480924 },
+    "backend_api": { "requests": 25, "measuredUsd": 0.6611075 },
+    "backend_data": { "requests": 17, "measuredUsd": 0.3053056 },
+    "qa_specialist": { "requests": 64, "measuredUsd": 1.8676269 },
+    "team_judge": { "requests": 37, "measuredUsd": 1.0001233 }
+  },
+  "usageMixAll300Requests": {
+    "ordinaryInputTokens": 11720,
+    "cacheReadTokens": 24992788,
+    "cacheWrite30mTokens": 857016,
+    "cacheWrite12hTokens": 0,
+    "outputTokensIncludingReasoning": 212238,
+    "reasoningTokensIncludedInOutput": 46075,
+    "processedInputTokens": 25861524,
+    "processedInputIsDistinctNewContent": false
+  },
+  "costMixUsdAll300Requests": {
+    "ordinaryInput": 0.02344,
+    "cacheRead": 2.4992788,
+    "cacheWrite30m": 2.14254,
+    "cacheWrite12h": 0,
+    "outputIncludingReasoning": 2.12238,
+    "reasoningBilledAgain": false
+  },
+  "heuristicTurnGroups299JoinedSteps": {
+    "contains_edit_or_verification_script": { "turns": 45, "measuredUsd": 1.9787174 },
+    "contains_execution_or_verification": { "turns": 145, "measuredUsd": 3.0039491 },
+    "source_read_only": { "turns": 52, "measuredUsd": 0.7715024 },
+    "delegation": { "turns": 10, "measuredUsd": 0.201502 },
+    "no_tool_finish": { "turns": 9, "measuredUsd": 0.1652987 },
+    "task_message_only": { "turns": 9, "measuredUsd": 0.0776982 },
+    "todo_only": { "turns": 5, "measuredUsd": 0.0853084 },
+    "wait_only": { "turns": 24, "measuredUsd": 0.3638841 }
+  },
+  "coordinationObservations": {
+    "waitOnlyRole": "lead",
+    "waitOnlyTurns": 24,
+    "waitOnlyMeasuredUsd": 0.3638841,
+    "waitOnlyShareOfAllMeasuredUsdPercent": 5.360982,
+    "waitOnlyTimedOutWithTasksRunningTurns": 18,
+    "waitOnlyTimedOutWithTasksRunningUsd": 0.2666752,
+    "waitOnlyTimedOutShareOfAllMeasuredUsdPercent": 3.928836,
+    "waitOnlyInputTokenRange": [26476, 126060],
+    "waitTodoAndMessageOnlyTurns": 38,
+    "waitTodoAndMessageOnlyUsd": 0.5268907,
+    "allCoordinationSpendRemovable": false,
+    "timedOutWaitSpendProvenRecoverable": false,
+    "costIsProviderTurnAttributionNotToolExecutionPrice": true
+  },
+  "verificationObservations": {
+    "qaAndJudgeRequests": 101,
+    "qaAndJudgeMeasuredUsd": 2.8677502,
+    "qaAndJudgeShareOfAllMeasuredUsdPercent": 42.249599,
+    "qaAndJudgeClassifiedAsWaste": false,
+    "allExecutionOrVerificationClassifiedAsPolling": false,
+    "readToolCalls": 166,
+    "distinctReadInputsSummedWithinRoles": 160,
+    "leadReadToolCalls": 41,
+    "leadDistinctReadInputs": 41,
+    "broadIdenticalSourceRereadWasteEstablished": false,
+    "originalNormalizedChecks": { "passed": 64, "failed": 4, "notRun": 8, "total": 76 },
+    "correctedUnchangedSourceNormalizedChecks": { "passed": 74, "failed": 2, "notRun": 0, "total": 76 },
+    "genuineFailures": [
+      "Bodyless POST order cancellation returns invalid_json",
+      "Whole-document mobile overflow on customer, inventory and order pages"
+    ],
+    "originalEvaluatorNavigationConfoundRetained": true,
+    "all76RowsIndependentBusinessBehaviors": false
+  },
+  "opportunitiesForFutureControlledStage": [
+    {
+      "change": "Coalesce task waits and status notifications before another model turn.",
+      "evidence": "18 timed-out wait-only turns cost $0.2666752 while tasks remained running; all 24 wait-only turns cost $0.3638841.",
+      "limit": "These historical activity totals are not measured savings or wholly removable spend; keep completion, failure and user-progress delivery."
+    },
+    {
+      "change": "Bound browser/tool evidence and summarize completed work while preserving stable cacheable prefixes.",
+      "evidence": "All 300 requests processed 25,861,524 input tokens; cached reads cost $2.4992788 and cache writes cost $2.14254. Wait-only prompt input grew from 26,476 to 126,060 tokens.",
+      "limit": "Processed input includes replay. Shorter context can lose evidence or invalidate caches; quality and total delivery cost require a new controlled run."
+    },
+    {
+      "change": "Reuse digest-bound deterministic verification receipts and batch checks, with targeted independent judge validation.",
+      "evidence": "QA and judge account for 101 requests and $2.8677502; their work includes useful API, browser, concurrency and permission verification.",
+      "limit": "Do not remove required QA or independent judging or assume their full cost is redundant. Evidence reuse must bind the delivered source and relevant test state."
+    },
+    {
+      "change": "Reserve request capacity for final checks and repair earlier in implementation.",
+      "evidence": "Implementation consumed 294 of the 300 admitted requests. Six formal repair requests cost $0.2870481 and delivered no source change before request-limit refusal.",
+      "limit": "No successful repair or lower-cost counterfactual is established. Any future phase allocation needs its own reviewed freeze."
+    }
+  ],
+  "claimLimits": {
+    "activityLabelsAreHeuristics": true,
+    "costWithinMixedTurnsSplitBetweenTools": false,
+    "causalSavingsEstablished": false,
+    "matchedQualityComparisonEstablished": false,
+    "efficiencyClaimMet": false,
+    "productGateMet": false,
+    "browserAuditProvesOperatingSystemSandbox": false,
+    "rawPrivateEvidencePublished": false,
+    "otherRuntimeOrLaterContinuationDataIncluded": false
+  }
+}

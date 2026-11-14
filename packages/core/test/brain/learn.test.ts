@@ -803,12 +803,37 @@ describe("learning in the brain", () => {
       learning: true,
       facets: { format: true, workflow: true, vocabulary: true, tooling: true, sources: true, style: true },
       modelLearner: "local-only",
+      skills: "review",
+      skillDrafter: "local-only",
+      codiumHelpers: "ask",
+      workflow: "apply",
+      workflowExplore: false,
     })
     expect(result.after.facets.format).toBe(false)
     expect(result.read).toEqual(result.after)
     expect(result.refused).toMatchObject({ type: "refused", reason: "learning-off" })
     // What the user writes themselves is theirs, whatever Vector may learn.
     expect(result.user.type).toBe("added")
+  })
+
+  test("Codium Brain consent starts at ask and only an explicit personal choice changes it", async () => {
+    const result = await run((brain) =>
+      Effect.gen(function* () {
+        const before = yield* brain.learnSettings()
+        yield* brain.setLearnSettings({ facets: { format: false } })
+        const untouched = yield* brain.learnSettings()
+        const on = yield* brain.setLearnSettings({ codiumHelpers: "on", distillation: true })
+        yield* brain.setLearnSettings({ codiumHelpers: "off", distillation: false })
+        yield* brain.setLearnSettings({ skills: "off" })
+        return { before, untouched, on, after: yield* brain.learnSettings() }
+      }),
+    )
+    expect(result.before.codiumHelpers).toBe("ask")
+    expect(result.before).not.toHaveProperty("distillation")
+    expect(result.untouched.codiumHelpers).toBe("ask")
+    expect(result.untouched).not.toHaveProperty("distillation")
+    expect(result.on).toMatchObject({ codiumHelpers: "on", distillation: true })
+    expect(result.after).toMatchObject({ codiumHelpers: "off", distillation: false, skills: "off" })
   })
 
   test("the per-message cap holds for what the learner writes", async () => {

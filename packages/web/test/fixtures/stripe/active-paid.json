@@ -1,0 +1,216 @@
+{
+  "row": "active",
+  "description": "The current period's invoice is paid and unreversed.",
+  "apiVersion": "2025-02-24.acacia",
+  "accountId": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+  "now": 1790816400,
+  "account": {
+    "customer": "cus_CodiumFixture01"
+  },
+  "objects": {
+    "customers": [
+      {
+        "id": "cus_CodiumFixture01",
+        "object": "customer",
+        "created": 1788220200,
+        "email": null,
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90"
+        }
+      }
+    ],
+    "subscriptions": [
+      {
+        "id": "sub_active",
+        "object": "subscription",
+        "billing_cycle_anchor": 1790812800,
+        "cancel_at": null,
+        "cancel_at_period_end": false,
+        "canceled_at": null,
+        "collection_method": "charge_automatically",
+        "created": 1790812800,
+        "currency": "usd",
+        "current_period_end": 1793404800,
+        "current_period_start": 1790812800,
+        "customer": "cus_CodiumFixture01",
+        "ended_at": null,
+        "items": {
+          "object": "list",
+          "data": [
+            {
+              "id": "si_active",
+              "object": "subscription_item",
+              "created": 1790812800,
+              "metadata": {},
+              "price": {
+                "id": "price_codium10",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-10-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium10",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 1000,
+                "unit_amount_decimal": "1000"
+              },
+              "quantity": 1,
+              "subscription": "sub_active"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/subscription_items?subscription=sub_active"
+        },
+        "latest_invoice": "in_active",
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+          "vector_plan": "vector-10",
+          "vector_model_credits_usd": "4"
+        },
+        "pause_collection": null,
+        "schedule": null,
+        "start_date": 1790812800,
+        "status": "active"
+      }
+    ],
+    "invoices": [
+      {
+        "id": "in_active",
+        "object": "invoice",
+        "amount_due": 1000,
+        "amount_paid": 1000,
+        "amount_remaining": 0,
+        "attempt_count": 1,
+        "attempted": true,
+        "billing_reason": "subscription_create",
+        "charge": "ch_active",
+        "collection_method": "charge_automatically",
+        "created": 1790812800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_fixture/in_active",
+        "lines": {
+          "object": "list",
+          "data": [
+            {
+              "id": "il_active",
+              "object": "line_item",
+              "amount": 1000,
+              "currency": "usd",
+              "period": {
+                "start": 1790812800,
+                "end": 1793404800
+              },
+              "price": {
+                "id": "price_codium10",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-10-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium10",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 1000,
+                "unit_amount_decimal": "1000"
+              },
+              "proration": false,
+              "quantity": 1,
+              "subscription": "sub_active",
+              "type": "subscription"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/invoices/in_active/lines"
+        },
+        "livemode": false,
+        "paid": true,
+        "payment_intent": "pi_active",
+        "period_start": 1790812800,
+        "period_end": 1790812800,
+        "status": "paid",
+        "status_transitions": {
+          "finalized_at": 1790816400,
+          "marked_uncollectible_at": null,
+          "paid_at": 1790816400,
+          "voided_at": null
+        },
+        "subscription": "sub_active"
+      }
+    ],
+    "payment_intents": [
+      {
+        "id": "pi_active",
+        "object": "payment_intent",
+        "amount": 1000,
+        "created": 1790812800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "invoice": "in_active",
+        "latest_charge": "ch_active",
+        "livemode": false,
+        "status": "succeeded"
+      }
+    ],
+    "charges": [
+      {
+        "id": "ch_active",
+        "object": "charge",
+        "amount": 1000,
+        "amount_captured": 1000,
+        "amount_refunded": 0,
+        "balance_transaction": "txn_active",
+        "captured": true,
+        "created": 1790816400,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "disputed": false,
+        "invoice": "in_active",
+        "livemode": false,
+        "metadata": {},
+        "outcome": {
+          "network_status": "approved_by_network",
+          "risk_level": "normal",
+          "seller_message": "Payment complete.",
+          "type": "authorized"
+        },
+        "paid": true,
+        "payment_intent": "pi_active",
+        "refunded": false,
+        "status": "succeeded"
+      }
+    ]
+  },
+  "expect": {
+    "state": "active",
+    "plan": "vector-10",
+    "subscription": "sub_active",
+    "periodStart": 1790812800,
+    "periodEnd": 1793404800,
+    "cancelAtPeriodEnd": false,
+    "key": "created"
+  }
+}

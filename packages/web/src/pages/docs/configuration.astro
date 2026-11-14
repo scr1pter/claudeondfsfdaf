@@ -1,0 +1,87 @@
+---
+import DocsPage from "../../layouts/DocsPage.astro"
+
+export const prerender = true
+---
+
+<DocsPage id="configuration">
+
+          <p>
+            Vector's settings are JSON files named <code>vector.json</code>, or <code>vector.jsonc</code>, which may
+            carry comments. Some of the desktop app's Settings, such as a custom provider or a subagent switch, save
+            to one of these files for you (see below for which), and the keys this page lists are ones you can write
+            yourself. Start a file with
+            <code>{`"$schema": "https://vectordev.ai/config.json"`}</code> for completion and checks in your editor.
+          </p>
+
+          <h2 id="files">Where Vector reads them</h2>
+          <dl class="doc-rows">
+            <div><dt>A repository</dt><dd><code>vector.json</code> or <code>vector.jsonc</code> in the folder you work in and in each folder above it up to the repository's root, and the same names in the repository's <code>.vector</code> folders. Keys that could run code or send your work elsewhere apply once you trust the repository; see <a href="#trust">Before you trust a repository</a>.</dd></div>
+            <div><dt>Every repository, in the desktop app</dt><dd>The desktop app has two config folders of its own. Its Settings save to <code>vector.jsonc</code>, or to <code>vector.json</code> when only that one exists, in <code>~/Library/Application Support/ai.vector.app/xdg-config/vector/</code> on macOS, <code>%APPDATA%\ai.vector.app\xdg-config\vector\</code> on Windows and <code>~/.config/ai.vector.app/xdg-config/vector/</code> on Linux (in <code>vector</code> under <code>XDG_CONFIG_HOME</code> instead, when the app was started with that variable set). A <code>vector.json</code> or <code>vector.jsonc</code> you write in its own config folder, <code>~/Library/Application Support/ai.vector.app/config/vector/</code> on macOS, <code>%APPDATA%\ai.vector.app\config\vector\</code> on Windows and <code>~/.config/ai.vector.app/config/vector/</code> on Linux, is read after the one Settings save to, so where both set a key, yours wins.</dd></div>
+            <div><dt>Every repository, in the terminal</dt><dd>The terminal reads <code>~/.config/vector/vector.json</code> (<code>%USERPROFILE%\.config\vector\vector.json</code> on Windows) instead, so a setting there does not reach the desktop app.</dd></div>
+            <div><dt>Both</dt><dd><code>~/.vector/vector.json</code> (<code>%USERPROFILE%\.vector\vector.json</code> on Windows) is read by the desktop app and the terminal alike.</dd></div>
+          </dl>
+          <p>
+            Vector merges every file it reads. Objects such as <code>provider</code>, <code>mcp</code>,
+            <code>agent</code> and <code>command</code> combine entry by entry, so each file can add entries of its own,
+            and the <code>instructions</code> of every file add up. A company can also set a policy that overrides your
+            own and a repository's settings and can lock keys; see <a href="/docs/local#companies">For companies</a>.
+          </p>
+
+          <h2 id="substitution">Values from the environment and from files</h2>
+          <p>
+            Anywhere in a settings file, <code>{"{env:NAME}"}</code> becomes the value of the environment variable
+            <code>NAME</code>, or nothing when it is not set, and <code>{"{file:path}"}</code> becomes the contents of
+            that file, trimmed. A relative path starts from the settings file's folder, and one starting with
+            <code>~/</code> from your home folder. A <code>{"{file:}"}</code> that names a missing file is an error in that
+            settings file. Use them to keep keys and long prompts out of the file:
+          </p>
+          <pre><code>{`{
+  "provider": {
+    "gateway": {
+      "options": {
+        "baseURL": "https://llm.example.com/v1",
+        "apiKey": "{env:GATEWAY_API_KEY}"
+      }
+    }
+  },
+  "agent": {
+    "sql-review": {
+      "description": "Reviews SQL migrations",
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sql-review.md}"
+    }
+  }
+}`}</code></pre>
+          <p>
+            In a repository you have not trusted, Vector leaves both as written and reads neither. MCP servers can
+            also name a credential from Vector's own store with <code>{"{vault:NAME}"}</code>; see
+            <a href="/docs/mcp-and-plugins#mcp-config">MCP servers in vector.json</a>.
+          </p>
+
+          <h2 id="trust">Before you trust a repository</h2>
+          <p>
+            Until you trust a repository, Vector ignores the keys in its settings that could run code or send your work
+            somewhere else: <code>provider</code>, <code>model</code>, <code>mcp</code>, <code>plugin</code>,
+            <code>agent</code>, <code>command</code>, <code>instructions</code>, <code>skills</code>,
+            <code>formatter</code>, <code>lsp</code> and <code>shell</code> among them. It still applies what only
+            narrows Vector, such as deny rules and <code>disabled_providers</code>. See
+            <a href="/docs/permissions#project-trust">Repository trust</a>.
+          </p>
+
+          <h2 id="keys">Keys and where they are described</h2>
+          <dl class="doc-rows">
+            <div><dt>provider</dt><dd><a href="/docs/models#custom-providers">Custom providers</a> and <a href="/docs/models#custom-models">models that are not in the catalog</a>.</dd></div>
+            <div><dt>enabled_providers and disabled_providers</dt><dd><a href="/docs/models#provider-lists">Allow and block providers</a>.</dd></div>
+            <div><dt>mcp</dt><dd><a href="/docs/mcp-and-plugins#mcp-config">MCP servers in vector.json</a>.</dd></div>
+            <div><dt>plugin</dt><dd><a href="/docs/mcp-and-plugins#cli-plugins">Plugins</a>.</dd></div>
+            <div><dt>agent and default_agent</dt><dd><a href="/docs/subagents#custom-agents">Custom agents</a>.</dd></div>
+            <div><dt>command</dt><dd><a href="/docs/skills-and-commands#commands">Custom commands</a>.</dd></div>
+            <div><dt>skills</dt><dd><code>skills.paths</code> and <code>skills.urls</code>, under <a href="/docs/skills-and-commands#skills">Skills</a>.</dd></div>
+            <div><dt>instructions</dt><dd><a href="/docs/vector-agent#instructions">Instruction files</a>.</dd></div>
+            <div><dt>formatter and lsp</dt><dd><a href="/docs/vector-agent#formatters">Formatters and language servers</a>.</dd></div>
+            <div><dt>compaction</dt><dd><a href="/docs/vector-agent#context">Context and compaction</a>.</dd></div>
+            <div><dt>permission</dt><dd><a href="/docs/permissions">Permissions</a>.</dd></div>
+            <div><dt>local</dt><dd><a href="/docs/local">Vector Local</a>, read only from your own settings and your company's policy.</dd></div>
+          </dl>
+</DocsPage>

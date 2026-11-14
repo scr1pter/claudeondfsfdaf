@@ -1,0 +1,81 @@
+{
+  "schema": "vector.exact-input-counting-feasibility.v1",
+  "date": "2026-11-04",
+  "status": "NOT IMPLEMENTED",
+  "qualification": "NOT QUALIFIED",
+  "scope": "Future-only planning provenance; no change authorized for the current round.",
+  "activity": {
+    "provider_calls": 0,
+    "paid_inference_calls": 0,
+    "input_counting_calls": 0,
+    "live_gateway_edits": 0,
+    "financial_journal_mutations": 0,
+    "performed": "Read-only official documentation and source inspection."
+  },
+  "decision": "Do not implement counting or a v8 transport this round. Keep v7 unchanged. Accurate admission counts alone cannot establish that a complete matched heavy workflow fits a remaining budget.",
+  "official_sources": [
+    {
+      "url": "https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count",
+      "supports": "POST /v1/responses/input_tokens request schema and response.input_tokens integer response."
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/token-counting",
+      "supports": "Model-specific input counting, including instructions, tools and multimodal input."
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "supports": "Model context and pricing assumptions, including the long-input threshold; reverify before future implementation."
+    },
+    {
+      "url": "https://help.openai.com/en/articles/4936856-understanding-and-counting-tokens",
+      "supports": "The parent coordinator independently verified the free-counting and inference-quota statement here; this author did not independently reverify billing behavior or make an API call."
+    }
+  ],
+  "source_findings": {
+    "gateway": "The archived gateway prepare function computes a conservative text-byte/image bound before financial admission. v7 reuses the existing transport and budget history.",
+    "witness": "OwnedArm.enter independently checks its own byte-based reservation before forwarding. A gateway-only change would leave that earlier block in place.",
+    "references": [
+      "scripts/benchmarks/funding-runtime/carry/budget_gateway_v7.py",
+      "scripts/benchmarks/funding-runtime/archive/budget_gateway_v2.py",
+      "scripts/benchmarks/matched-headless-stage/owned_team_witness.py"
+    ]
+  },
+  "future_minimal_design": {
+    "mode": "Explicit opt-in in a separately source-pinned transport and matching witness hook; no model, reasoning, context, tool, image or output-quality reduction.",
+    "normalization": "Run original request validation and normalization first. Retain immutable generation-wire bytes and their SHA-256. Construct an explicitly reviewed count-schema projection and retain its separate SHA-256.",
+    "schema_projection": "The documented count schema accepts conversation, input, instructions, model, parallel_tool_calls, personality, previous_response_id, reasoning, text, tool_choice, tools and truncation. Existing gateway restrictions remain authoritative. Omit only reviewed non-input transport, return, billing and cache-routing fields; unknown or unsupported fields require conservative handling rather than silent stripping.",
+    "quote": "An authenticated local quote endpoint may use the existing key holder. Bind the result to exact normalized generation-wire SHA-256, model, counting projection and current open batch. Do not expose the provider key to the witness or model.",
+    "witness_binding": "Before the existing affordability check, require exact quote/request identity, validate the count and reservation, then recheck cancellation, deadline and current headroom. Forward the identical normalized generation request. Authoritative financial admission remains in the budget gateway.",
+    "reservation": {
+      "output_tokens_reserved": 32000,
+      "input_usd_per_million": 5,
+      "output_usd_per_million": 15,
+      "formula": "ceil_currency((validated_input_tokens * 5 + 32000 * 15) / 1000000)",
+      "basis": "Preserve the highest admitted 30-minute-cache/long-context input rate and long-context output rate. Current policy blocks 12-hour cache writes. Reverify rates, cache policy and service tier before use.",
+      "illustrative_only": "At 180000 input tokens, this formula reserves $1.38. This is neither a measured workflow cost nor a completion guarantee."
+    },
+    "failure_rules": [
+      "Unavailable endpoint, timeout, unsupported schema, malformed object, non-integer count, invalid count or request-hash mismatch must not justify a smaller reservation; use the original conservative bound where it is still valid or reject.",
+      "A valid count exceeding the old input bound demonstrates that the old bound is insufficient. Use the larger counted bound, a valid full-context bound, or reject. Never fall back to the demonstrated insufficient old bound.",
+      "A count beyond the admitted context, unknown pricing/cache policy, or an unaffordable valid bound must reject admission.",
+      "A quote/forward mismatch must not forward using the cheaper quote. Keep quote evidence and the actual admitted request bound consistent.",
+      "Any later count-versus-generation usage discrepancy must preserve actual usage and financial evidence, halt or review future admissions, and never create a refund or synthetic settlement."
+    ],
+    "evidence": "Durably retain non-secret count method, request/projection hashes, count, rates and reservation in a separate source-pinned evidence record. No raw requests, keys or invented provider receipts. Count-only calls do not consume inference-call allowance or create financial credits."
+  },
+  "financial_continuity": {
+    "rule": "No new allowance, reset, refund, settlement fabrication or history rewrite.",
+    "retained_unknown_holds_usd": [5.73, 1.447765],
+    "additional_round_total_cap_usd": 20,
+    "handoff": "Only after quiescence and explicit review may a future process reacquire the same exclusive locks and append to the same budget journal. Preserve every existing receipt and held liability; verify the entire existing prefix, including all 579 current receipts reported by the parent at this planning point.",
+    "source_integrity": "Keep original v7 and imported source bytes and their anchor unchanged. A future transport needs an additional reviewed source/handoff binding; the old anchor does not authenticate new code."
+  },
+  "qualification_required_before_any_future_paid_run": [
+    "Pure and fake-HTTP tests for schema projection, immutable wire/hash binding, count anomalies, timeout/fallback, valid counts above the old bound, tools and inline images, full output reservation, tier/cache policy, batch binding and concurrent budget admission.",
+    "Read-only replay proving all prior known receipts, both unknown holds, limits and restart locks remain intact, with no new grant or empty-journal reset.",
+    "Separately authorized free-count-only checks for the admitted model and representative supported payloads before considering inference admission.",
+    "Apply the same counting mode to both arms and disclose the instrumentation change. Actual usage pricing and quality gates remain unchanged."
+  ],
+  "scope_estimate": "Approximately 200-350 runtime lines plus focused tests; an estimate, not an implementation or qualification result.",
+  "interpretation": "This proposal improves reservation accuracy. It does not itself reduce provider charges, demonstrate Vector savings, prove a matched workflow will finish, or establish an efficiency claim."
+}

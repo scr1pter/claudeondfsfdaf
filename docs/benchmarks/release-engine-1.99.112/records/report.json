@@ -1,0 +1,1233 @@
+{
+  "schemaVersion": 1,
+  "kind": "offline-release-engine-evidence",
+  "status": "completed",
+  "synthetic": true,
+  "measuredCacheReuse": false,
+  "actualProviderCostUsd": null,
+  "startedAt": "2026-11-01T01:22:26.798Z",
+  "identity": {
+    "schemaVersion": 1,
+    "sourceSha": "dfc98974329f17c6814a923ac12ebe38b6673f38",
+    "version": "1.99.112",
+    "channel": "prod",
+    "platform": "linux-x64",
+    "entrySha256": "3f9f2e1ebd21ad091b51a7a8d80555319e233b8532b23df241fd6f26e5a8482b",
+    "catalogSha256": "a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14",
+    "artifact": {
+      "repository": "scr1pter/claudeondfsfdaf",
+      "runId": 40781089625,
+      "runAttempt": 1,
+      "artifactId": 12857033760,
+      "archiveSha256": "bf52c5056b7fbfff459c25cf30bc1d2687462b9caf7f39f085a369bddee52e64",
+      "installerSha256": "75b461bdc5848ff1f14239ba25a2f26ac322773a70730a574eac074fa2a82868",
+      "asarSha256": "57ec5e2a826fb0c919b0777774e31e56a5457bd44960f3c60e39304d580c9289",
+      "catalogArtifactId": 12858090022,
+      "catalogArchiveSha256": "4c247d70f4804f2f9918893b24bf25d7483560c14510f7db463010add97ad7de"
+    },
+    "scope": "Exact packaged sidecar bytes hosted under Node with an IPC adapter; not the full Electron application"
+  },
+  "entryKind": "packaged-sidecar",
+  "execution": "Node-hosted packaged sidecar",
+  "limitations": [
+    "Not a full Electron desktop memory profile.",
+    "Cached tokens and provider usage are scripted; no live cache, quality, speed or cost result.",
+    "RSS is sampled process-tree resident memory; shared pages may be counted more than once.",
+    "Capture buffers each response before replay; instrumentation affects memory and timing.",
+    "The evidence plugin applies the requested 512-token cap after built-in chat.params hooks."
+  ],
+  "machine": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "Intel(R) Xeon(R) 6975P-C",
+    "cpuCount": 4,
+    "totalMemoryBytes": 16464306176,
+    "hostnameSha256": "21932bd24c0023d859c26867c543787d294963f8aea4d9ddaf41d6e38f97b86f"
+  },
+  "controls": {
+    "model": "gpt-6.1-sol",
+    "variant": "medium",
+    "size": "standard",
+    "judge": "off",
+    "executionMode": "normal",
+    "steps": 1,
+    "outputTokenMax": 512,
+    "outputTokenMaxMechanism": "Evidence plugin chat.params hook; exact value independently required on the wire",
+    "transportOverride": "HTTP forced for offline instrumentation",
+    "cacheWarmup": false,
+    "cacheRetentionOverride": false
+  },
+  "sessions": [
+    {
+      "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+      "ordinal": 1,
+      "enginePID": 2508,
+      "startedAt": "2026-11-01T01:22:28.747Z",
+      "status": "completed",
+      "projectedUsage": [
+        {
+          "tokens": {
+            "total": 2056,
+            "input": 2048,
+            "output": 6,
+            "reasoning": 2,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0.004176
+        }
+      ],
+      "provider": {
+        "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+        "ordinal": 1,
+        "attemptedAt": "2026-11-01T01:22:29.570Z",
+        "state": "recorded",
+        "usage": {
+          "inputTokens": 2048,
+          "cachedInputTokens": 0,
+          "outputTokens": 8,
+          "reasoningTokens": 2
+        },
+        "actualCostUsd": null,
+        "model": "gpt-6.1-sol",
+        "effort": "medium",
+        "maxOutputTokens": 512,
+        "requestSha256": "8c4a86f9410261b9f3f3f6b8ab1fd76bdf492996899758fd2eab3fa850d720d6",
+        "systemSha256": "15f5cc89856b6433fbbc069f5b7d08ab7f6e5d5b85a591e65b19da79eef5f744",
+        "toolsSha256": "17b15ed8dec8b75a5d925d0a18153c7a459f03e026d60b65fbcd72edc38f6f1e",
+        "toolCount": 14,
+        "firstSystemBlockSha256": "1a6042f6782d3ab938cb9c002d8f9fc744a152c981c79800599ae88319c41f1b",
+        "cacheKey": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+        "requestBytes": 39339,
+        "httpStatus": 200,
+        "responseSha256": "a954cb47aa98754db0d18da238bb092b0b08049800e218cf1739940702332625",
+        "responseBytes": 2047,
+        "error": null,
+        "synthetic": true
+      },
+      "completedAt": "2026-11-01T01:22:29.767Z"
+    },
+    {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "ordinal": 2,
+      "enginePID": 2508,
+      "startedAt": "2026-11-01T01:22:29.817Z",
+      "status": "completed",
+      "projectedUsage": [
+        {
+          "tokens": {
+            "total": 2056,
+            "input": 1024,
+            "output": 6,
+            "reasoning": 2,
+            "cache": {
+              "read": 1024,
+              "write": 0
+            }
+          },
+          "cost": 0.0022304
+        }
+      ],
+      "provider": {
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "ordinal": 2,
+        "attemptedAt": "2026-11-01T01:22:29.921Z",
+        "state": "recorded",
+        "usage": {
+          "inputTokens": 2048,
+          "cachedInputTokens": 1024,
+          "outputTokens": 8,
+          "reasoningTokens": 2
+        },
+        "actualCostUsd": null,
+        "model": "gpt-6.1-sol",
+        "effort": "medium",
+        "maxOutputTokens": 512,
+        "requestSha256": "ca46ce770eed85f6a543dc382566e50b9323371f3be2178715005dff23d72646",
+        "systemSha256": "6932e37a1faa56d73623d5e24b9b20dbfcfc89d634c3f543600abee43260a945",
+        "toolsSha256": "17b15ed8dec8b75a5d925d0a18153c7a459f03e026d60b65fbcd72edc38f6f1e",
+        "toolCount": 14,
+        "firstSystemBlockSha256": "b7601c438e877b332f8f112910b1745a8038654fa6408a40536fb39f85bde07f",
+        "cacheKey": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "requestBytes": 39832,
+        "httpStatus": 200,
+        "responseSha256": "eea071e937c96500b52595309c6ade634ae59c0618ee96666cc2aff97d29ecfb",
+        "responseBytes": 2053,
+        "error": null,
+        "synthetic": true
+      },
+      "completedAt": "2026-11-01T01:22:30.026Z"
+    }
+  ],
+  "errors": [],
+  "fixture": {
+    "path": "/home/runner/work/_temp/vector-release-evidence/study/project",
+    "files": {
+      "README.md": "dd571cc86bc3a4f70848afe3f5c3c0b4eac1ddb6bcfc96955657d8fa0276734a",
+      "notes.txt": "ee8c83e9ab26ad6f05155d1216abc6ef24489d894a093237efbf944250e4c5c3"
+    },
+    "changed": ""
+  },
+  "harness": {
+    "release-evidence.mjs": "ad7b2ffa29f572a422451a5321d3355213d036c2e8bcb98dc51ff4ec3f0ab942",
+    "release-evidence/support.mjs": "1ee4084023622321411b66e6ac7e7e1260049140f19fbdfd7e7ba2f24db63275",
+    "release-evidence/engine.mjs": "4ceb68d29375d1275d8f46bdf2ba91e0f4e97237ba7eb8b1659d273259b20495",
+    "release-evidence/veto.mjs": "94dc5b2cd9a280cf2cd7fa5ec9608ed5db8b7a48870d6de17c4ceace03955083"
+  },
+  "configuration": {
+    "model": "openai/gpt-6.1-sol",
+    "small_model": "openai/gpt-6.1-sol",
+    "formatter": false,
+    "lsp": false,
+    "plugin": [
+      "file:///home/runner/work/claudeondfsfdaf/claudeondfsfdaf/packages/engine/script/release-evidence/veto.mjs"
+    ],
+    "provider": {
+      "openai": {
+        "options": {
+          "apiKey": "vector-offline-synthetic-key",
+          "baseURL": "http://127.0.0.1:41529/v1"
+        }
+      }
+    }
+  },
+  "runtime": {
+    "type": "runtime",
+    "versions": {
+      "node": "24.15.0",
+      "v8": "13.6.233.17-node.48"
+    },
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "health": {
+    "healthy": true,
+    "version": "1.99.112"
+  },
+  "memory": {
+    "intervalMs": 100,
+    "complete": true,
+    "missingPhases": [],
+    "sampledPeakProcessTreeRssKiB": 647752,
+    "phases": {
+      "startup": {
+        "sampleCount": 14,
+        "processSampleCount": 14,
+        "sampledPeakRssKiB": 475376
+      },
+      "idle": {
+        "sampleCount": 8,
+        "processSampleCount": 8,
+        "sampledPeakRssKiB": 478004
+      },
+      "session-1": {
+        "sampleCount": 13,
+        "processSampleCount": 13,
+        "sampledPeakRssKiB": 600220
+      },
+      "session-2": {
+        "sampleCount": 5,
+        "processSampleCount": 5,
+        "sampledPeakRssKiB": 647752
+      },
+      "settled": {
+        "sampleCount": 7,
+        "processSampleCount": 7,
+        "sampledPeakRssKiB": 642796
+      }
+    },
+    "samples": [
+      {
+        "atMs": 9.117804000000007,
+        "phase": "startup",
+        "rssKiB": 29324,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 29324,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 105.044965,
+        "phase": "startup",
+        "rssKiB": 83904,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 83904,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 204.300817,
+        "phase": "startup",
+        "rssKiB": 132140,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 132140,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 308.217039,
+        "phase": "startup",
+        "rssKiB": 256108,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 256108,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 406.19523599999997,
+        "phase": "startup",
+        "rssKiB": 286168,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 286168,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 507.01358400000004,
+        "phase": "startup",
+        "rssKiB": 319256,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 319256,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 609.11923,
+        "phase": "startup",
+        "rssKiB": 353088,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 353088,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 708.28612,
+        "phase": "startup",
+        "rssKiB": 365460,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 365460,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 807.572696,
+        "phase": "startup",
+        "rssKiB": 336236,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 336236,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 907.6075969999999,
+        "phase": "startup",
+        "rssKiB": 366260,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 366260,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1007.368513,
+        "phase": "startup",
+        "rssKiB": 391444,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 391444,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1107.260201,
+        "phase": "startup",
+        "rssKiB": 425252,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 425252,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1207.4811240000001,
+        "phase": "startup",
+        "rssKiB": 440248,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 440248,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1299.3467300000002,
+        "phase": "startup",
+        "rssKiB": 475376,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475376,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1305.755638,
+        "phase": "idle",
+        "rssKiB": 475376,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475376,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1407.569602,
+        "phase": "idle",
+        "rssKiB": 475376,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475376,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1507.5444420000001,
+        "phase": "idle",
+        "rssKiB": 475392,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475392,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1608.1872600000002,
+        "phase": "idle",
+        "rssKiB": 475392,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475392,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1708.209612,
+        "phase": "idle",
+        "rssKiB": 475400,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475400,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1810.7621290000002,
+        "phase": "idle",
+        "rssKiB": 475428,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 475428,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1912.943254,
+        "phase": "idle",
+        "rssKiB": 477900,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 477900,
+            "start": "Sun Nov 1 01:22:26 2026"
+          },
+          {
+            "pid": 2545,
+            "ppid": 2508,
+            "rssKiB": 0,
+            "start": "Sun Nov 1 01:22:28 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1922.0124620000001,
+        "phase": "idle",
+        "rssKiB": 478004,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 478004,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 1928.88506,
+        "phase": "session-1",
+        "rssKiB": 478324,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 478324,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2013.535918,
+        "phase": "session-1",
+        "rssKiB": 491488,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 491488,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2110.972513,
+        "phase": "session-1",
+        "rssKiB": 523196,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 523196,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2210.147205,
+        "phase": "session-1",
+        "rssKiB": 530736,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 530736,
+            "start": "Sun Nov 1 01:22:26 2026"
+          },
+          {
+            "pid": 2556,
+            "ppid": 2508,
+            "rssKiB": 0,
+            "start": "Sun Nov 1 01:22:28 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2310.944875,
+        "phase": "session-1",
+        "rssKiB": 557572,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 557572,
+            "start": "Sun Nov 1 01:22:26 2026"
+          },
+          {
+            "pid": 2556,
+            "ppid": 2508,
+            "rssKiB": 0,
+            "start": "Sun Nov 1 01:22:28 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2419.365553,
+        "phase": "session-1",
+        "rssKiB": 562000,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 562000,
+            "start": "Sun Nov 1 01:22:26 2026"
+          },
+          {
+            "pid": 2559,
+            "ppid": 2508,
+            "rssKiB": 0,
+            "start": "Sun Nov 1 01:22:28 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2511.624889,
+        "phase": "session-1",
+        "rssKiB": 567180,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 567180,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2612.715169,
+        "phase": "session-1",
+        "rssKiB": 577632,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 577632,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2712.034313,
+        "phase": "session-1",
+        "rssKiB": 584100,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 584100,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2814.078487,
+        "phase": "session-1",
+        "rssKiB": 590492,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 590492,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2912.547736,
+        "phase": "session-1",
+        "rssKiB": 597800,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 597800,
+            "start": "Sun Nov 1 01:22:26 2026"
+          },
+          {
+            "pid": 2583,
+            "ppid": 2508,
+            "rssKiB": 0,
+            "start": "Sun Nov 1 01:22:29 2026"
+          },
+          {
+            "pid": 2584,
+            "ppid": 2508,
+            "rssKiB": 0,
+            "start": "Sun Nov 1 01:22:29 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2968.139604,
+        "phase": "session-1",
+        "rssKiB": 598508,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 598508,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2984.301586,
+        "phase": "session-1",
+        "rssKiB": 600220,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 600220,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 2998.653034,
+        "phase": "session-2",
+        "rssKiB": 603828,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 603828,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3023.121985,
+        "phase": "session-2",
+        "rssKiB": 608044,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 608044,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3122.227103,
+        "phase": "session-2",
+        "rssKiB": 647752,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 647752,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3218.136437,
+        "phase": "session-2",
+        "rssKiB": 642748,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642748,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3223.078695,
+        "phase": "session-2",
+        "rssKiB": 642752,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642752,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3228.642222,
+        "phase": "settled",
+        "rssKiB": 642756,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642756,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3316.575448,
+        "phase": "settled",
+        "rssKiB": 642776,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642776,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3416.3676920000003,
+        "phase": "settled",
+        "rssKiB": 642776,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642776,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3516.750014,
+        "phase": "settled",
+        "rssKiB": 642776,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642776,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3617.927466,
+        "phase": "settled",
+        "rssKiB": 642776,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642776,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3719.0874790000003,
+        "phase": "settled",
+        "rssKiB": 642776,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642776,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      },
+      {
+        "atMs": 3736.266333,
+        "phase": "settled",
+        "rssKiB": 642796,
+        "processes": [
+          {
+            "pid": 2508,
+            "ppid": 2490,
+            "rssKiB": 642796,
+            "start": "Sun Nov 1 01:22:26 2026"
+          }
+        ]
+      }
+    ],
+    "errors": [],
+    "nodeSamples": [
+      {
+        "type": "memory",
+        "at": 1793496146985,
+        "rss": 103628800,
+        "heapTotal": 56459264,
+        "heapUsed": 31068408,
+        "external": 3853864,
+        "arrayBuffers": 61690,
+        "phase": "startup"
+      },
+      {
+        "type": "memory",
+        "at": 1793496147833,
+        "rss": 400769024,
+        "heapTotal": 137113600,
+        "heapUsed": 82721208,
+        "external": 82096157,
+        "arrayBuffers": 433762,
+        "phase": "startup"
+      },
+      {
+        "type": "memory",
+        "at": 1793496147966,
+        "rss": 438054912,
+        "heapTotal": 220889088,
+        "heapUsed": 112056096,
+        "external": 82121066,
+        "arrayBuffers": 438562,
+        "phase": "startup"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148098,
+        "rss": 485502976,
+        "heapTotal": 237404160,
+        "heapUsed": 115175920,
+        "external": 89739097,
+        "arrayBuffers": 438362,
+        "phase": "startup"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148199,
+        "rss": 486420480,
+        "heapTotal": 237404160,
+        "heapUsed": 115573128,
+        "external": 87191635,
+        "arrayBuffers": 438399,
+        "phase": "idle"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148299,
+        "rss": 486420480,
+        "heapTotal": 237404160,
+        "heapUsed": 115574632,
+        "external": 87191635,
+        "arrayBuffers": 438399,
+        "phase": "idle"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148400,
+        "rss": 486420480,
+        "heapTotal": 237404160,
+        "heapUsed": 115587168,
+        "external": 87191635,
+        "arrayBuffers": 438399,
+        "phase": "idle"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148501,
+        "rss": 486420480,
+        "heapTotal": 237404160,
+        "heapUsed": 115598240,
+        "external": 87191635,
+        "arrayBuffers": 438399,
+        "phase": "idle"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148601,
+        "rss": 486420480,
+        "heapTotal": 237404160,
+        "heapUsed": 115599904,
+        "external": 87191635,
+        "arrayBuffers": 438399,
+        "phase": "idle"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148702,
+        "rss": 488517632,
+        "heapTotal": 238714880,
+        "heapUsed": 128185528,
+        "external": 87224515,
+        "arrayBuffers": 464341,
+        "phase": "idle"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148810,
+        "rss": 495202304,
+        "heapTotal": 241860608,
+        "heapUsed": 141142560,
+        "external": 87315889,
+        "arrayBuffers": 519298,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496148919,
+        "rss": 535113728,
+        "heapTotal": 258801664,
+        "heapUsed": 134557464,
+        "external": 87300037,
+        "arrayBuffers": 503446,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149178,
+        "rss": 572862464,
+        "heapTotal": 280297472,
+        "heapUsed": 190116368,
+        "external": 87298878,
+        "arrayBuffers": 502287,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149290,
+        "rss": 572825600,
+        "heapTotal": 278528000,
+        "heapUsed": 143052624,
+        "external": 87303694,
+        "arrayBuffers": 507103,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149400,
+        "rss": 590692352,
+        "heapTotal": 287703040,
+        "heapUsed": 190166216,
+        "external": 87300311,
+        "arrayBuffers": 503720,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149502,
+        "rss": 597377024,
+        "heapTotal": 293732352,
+        "heapUsed": 182551920,
+        "external": 87321393,
+        "arrayBuffers": 524802,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149637,
+        "rss": 604393472,
+        "heapTotal": 298975232,
+        "heapUsed": 215871280,
+        "external": 87671480,
+        "arrayBuffers": 725758,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149742,
+        "rss": 612126720,
+        "heapTotal": 306470912,
+        "heapUsed": 185805512,
+        "external": 87528000,
+        "arrayBuffers": 582278,
+        "phase": "session-1"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149851,
+        "rss": 626835456,
+        "heapTotal": 308043776,
+        "heapUsed": 201432528,
+        "external": 154660869,
+        "arrayBuffers": 67715147,
+        "phase": "session-2"
+      },
+      {
+        "type": "memory",
+        "at": 1793496149950,
+        "rss": 663068672,
+        "heapTotal": 306028544,
+        "heapUsed": 174934880,
+        "external": 154768129,
+        "arrayBuffers": 67822407,
+        "phase": "session-2"
+      },
+      {
+        "type": "memory",
+        "at": 1793496150053,
+        "rss": 657821696,
+        "heapTotal": 306028544,
+        "heapUsed": 188259264,
+        "external": 154791967,
+        "arrayBuffers": 67846245,
+        "phase": "settled"
+      },
+      {
+        "type": "memory",
+        "at": 1793496150153,
+        "rss": 657821696,
+        "heapTotal": 306028544,
+        "heapUsed": 189579320,
+        "external": 154792084,
+        "arrayBuffers": 67846362,
+        "phase": "settled"
+      },
+      {
+        "type": "memory",
+        "at": 1793496150252,
+        "rss": 657821696,
+        "heapTotal": 306028544,
+        "heapUsed": 189609224,
+        "external": 154800634,
+        "arrayBuffers": 67854912,
+        "phase": "settled"
+      },
+      {
+        "type": "memory",
+        "at": 1793496150353,
+        "rss": 657821696,
+        "heapTotal": 306028544,
+        "heapUsed": 189610696,
+        "external": 154800634,
+        "arrayBuffers": 67854912,
+        "phase": "settled"
+      },
+      {
+        "type": "memory",
+        "at": 1793496150453,
+        "rss": 657821696,
+        "heapTotal": 306028544,
+        "heapUsed": 189612168,
+        "external": 154800634,
+        "arrayBuffers": 67854912,
+        "phase": "settled"
+      },
+      {
+        "type": "memory",
+        "at": 1793496150553,
+        "rss": 657821696,
+        "heapTotal": 306028544,
+        "heapUsed": 189633416,
+        "external": 154800648,
+        "arrayBuffers": 67854926,
+        "phase": "settled"
+      }
+    ]
+  },
+  "engineExit": {
+    "code": 0,
+    "signal": null
+  },
+  "engineLogTruncated": false,
+  "transport": {
+    "configuredWire": "HTTP to loopback fake Responses provider",
+    "observedWire": "http",
+    "diagnostics": [
+      "timestamp=2026-11-01T01:22:29.559Z level=INFO run=74049f16 message=\"openai transport\" requestID=561c790e-9d17-433a-ae7e-e9e32d924b93 sessionID=ses_e6b4c951effeTo8XnAKkb5WpFw transport=http phase=selected model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=0.297 reason=disabled",
+      "timestamp=2026-11-01T01:22:29.600Z level=INFO run=74049f16 message=\"openai transport\" requestID=561c790e-9d17-433a-ae7e-e9e32d924b93 sessionID=ses_e6b4c951effeTo8XnAKkb5WpFw transport=http phase=connected model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=40.592 status=200",
+      "timestamp=2026-11-01T01:22:29.600Z level=INFO run=74049f16 message=\"openai transport\" requestID=561c790e-9d17-433a-ae7e-e9e32d924b93 sessionID=ses_e6b4c951effeTo8XnAKkb5WpFw transport=http phase=first_frame model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=40.964",
+      "timestamp=2026-11-01T01:22:29.601Z level=INFO run=74049f16 message=\"openai transport\" requestID=561c790e-9d17-433a-ae7e-e9e32d924b93 sessionID=ses_e6b4c951effeTo8XnAKkb5WpFw transport=http phase=terminal model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=42.028 terminal=body_end status=200",
+      "timestamp=2026-11-01T01:22:29.921Z level=INFO run=74049f16 message=\"openai transport\" requestID=ba894f1a-fa76-45b1-b0e4-b8897b45ec83 sessionID=ses_e6b4c9506ffeDF8FhAM3tK5Pt7 transport=http phase=selected model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=0.263 reason=disabled",
+      "timestamp=2026-11-01T01:22:29.926Z level=INFO run=74049f16 message=\"openai transport\" requestID=ba894f1a-fa76-45b1-b0e4-b8897b45ec83 sessionID=ses_e6b4c9506ffeDF8FhAM3tK5Pt7 transport=http phase=connected model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=5.634 status=200",
+      "timestamp=2026-11-01T01:22:29.927Z level=INFO run=74049f16 message=\"openai transport\" requestID=ba894f1a-fa76-45b1-b0e4-b8897b45ec83 sessionID=ses_e6b4c9506ffeDF8FhAM3tK5Pt7 transport=http phase=first_frame model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=5.879",
+      "timestamp=2026-11-01T01:22:29.928Z level=INFO run=74049f16 message=\"openai transport\" requestID=ba894f1a-fa76-45b1-b0e4-b8897b45ec83 sessionID=ses_e6b4c9506ffeDF8FhAM3tK5Pt7 transport=http phase=terminal model=gpt-6.1-sol reasoningEffort=medium reasoningContext=undefined patchToolType=function elapsedMs=7.413 terminal=body_end status=200"
+    ],
+    "forwardedRequests": 2
+  },
+  "attempts": [
+    {
+      "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+      "ordinal": 1,
+      "attemptedAt": "2026-11-01T01:22:29.570Z",
+      "state": "recorded",
+      "usage": {
+        "inputTokens": 2048,
+        "cachedInputTokens": 0,
+        "outputTokens": 8,
+        "reasoningTokens": 2
+      },
+      "actualCostUsd": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "maxOutputTokens": 512,
+      "requestSha256": "8c4a86f9410261b9f3f3f6b8ab1fd76bdf492996899758fd2eab3fa850d720d6",
+      "systemSha256": "15f5cc89856b6433fbbc069f5b7d08ab7f6e5d5b85a591e65b19da79eef5f744",
+      "toolsSha256": "17b15ed8dec8b75a5d925d0a18153c7a459f03e026d60b65fbcd72edc38f6f1e",
+      "toolCount": 14,
+      "firstSystemBlockSha256": "1a6042f6782d3ab938cb9c002d8f9fc744a152c981c79800599ae88319c41f1b",
+      "cacheKey": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+      "requestBytes": 39339,
+      "httpStatus": 200,
+      "responseSha256": "a954cb47aa98754db0d18da238bb092b0b08049800e218cf1739940702332625",
+      "responseBytes": 2047,
+      "error": null,
+      "synthetic": true
+    },
+    {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "ordinal": 2,
+      "attemptedAt": "2026-11-01T01:22:29.921Z",
+      "state": "recorded",
+      "usage": {
+        "inputTokens": 2048,
+        "cachedInputTokens": 1024,
+        "outputTokens": 8,
+        "reasoningTokens": 2
+      },
+      "actualCostUsd": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "maxOutputTokens": 512,
+      "requestSha256": "ca46ce770eed85f6a543dc382566e50b9323371f3be2178715005dff23d72646",
+      "systemSha256": "6932e37a1faa56d73623d5e24b9b20dbfcfc89d634c3f543600abee43260a945",
+      "toolsSha256": "17b15ed8dec8b75a5d925d0a18153c7a459f03e026d60b65fbcd72edc38f6f1e",
+      "toolCount": 14,
+      "firstSystemBlockSha256": "b7601c438e877b332f8f112910b1745a8038654fa6408a40536fb39f85bde07f",
+      "cacheKey": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "requestBytes": 39832,
+      "httpStatus": 200,
+      "responseSha256": "eea071e937c96500b52595309c6ade634ae59c0618ee96666cc2aff97d29ecfb",
+      "responseBytes": 2053,
+      "error": null,
+      "synthetic": true
+    }
+  ],
+  "completedAt": "2026-11-01T01:22:30.602Z"
+}

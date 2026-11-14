@@ -1,0 +1,31 @@
+# A26: review output and GitHub evidence
+
+A26 implements label-plan C11 after A25's immutable accepted revision `295ab95e007f46726272730a3e5840d4c20d16ca`. Its accepted source revision and final validation are recorded below.
+
+Review cost keeps Codium activity separate from its own-model cost kind. Pure Codium ignores internal or cached numeric usage; mixed reviews retain measured own charges and unknown-price status. Fresh reducers require positive canonical provider identity for own quantities and honor explicitly stamped Codium parts even under an older own-provider assistant identity. An own receipt without counters retains its measured dollars and reports unavailable token usage.
+
+Review state stores the Codium review count as compact key `k`. Existing key `c` remains dollar spend, including monthly and PR budget accounting. A Codium-only review adds no dollars or token counts; a mixed review adds only its own figures. Carry-forward reviews do not count again. Older readers can ignore `k` without mistaking a review count for money.
+
+Core, App and CLI footers, failure text, per-pass lines and GitHub evidence show Codium labels. Per-pass attribution follows actual message identity. GitHub progress reports `Spent: Codium`, with measured own amounts retained for mixed activity. Cached local review outcomes cannot grant token provenance through a serialized `tokensOwnOnly` flag; the loader clears that claim before human output. JSON also lets an explicit pure Codium kind override stale own-looking model text and retains independent own passes.
+
+Independent review identified and drove regressions for stamped-part precedence, own charges without token counters (including failed runs), live events with missing/padded identity, known subtotals in an unknown-price pass, explicit Codium JSON precedence and cached mixed terminal output. Cached pass classification cannot prove partitioned token totals: every cached outcome with Codium evidence clears its pass token availability, including when passes are the only surviving evidence. All-Codium legacy passes without positive own-model evidence preserve the pure Codium boundary. The cross-surface App guard checks Codium-only and mixed formatter results, allowing the specified separate duration text while rejecting private token figures and a zero dollar price beside Codium.
+
+Validation is serialized through `/workspace/.tools/vector-serial` in each owning package. No provider calls, deployment or release activation is part of this package. Full native CI remains in GitHub.
+
+Independent source review is clear. The focused validation comprises 285 passing cases across ten files: Core state/format 107, App review/formatter guard 108, and Engine evidence/render/GitHub integration/cache/JSON/review runner 70. The GitHub integration runs the named Codium progress case; local cache coverage runs the two named Codium JSON-boundary cases. Remaining cases in those two broader files are left to hosted CI. Core, App and Engine typechecks pass. The optional review fields are internal Core/CLI/App types; no public Protocol or Server schema changed, so no client regeneration is needed.
+
+Initial checks caught a duplicate local variable name, fixture array-to-diff conversion, missing optional-result narrowing, old live fixtures without provider identity, and a guard that also matched the explicitly allowed duration. These were corrected without weakening own-cost, unknown-usage or Codium assertions. App navigation/session/timeline source and production benchmark inputs are unchanged by A26; its App changes are confined to review output and its regression guard.
+
+The reviewed source was published as `9afebc9124ab54d5f1bc7f9c37abf0051728e3a8`. Its normal pre-push hook passed all 23 package checks (16 cached, 1m44.189s), and exact-head [scoped CI 41269650177](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41269650177) completed successfully: all eight typechecks, the Codium browser suite and the full scoped test job passed. A26 is accepted at that immutable revision; later packages are separate source changes.
+
+**Status, 8 Nov 2026 (P4d).** The paragraphs above describe their own day. Run 41269650177 (Vector Codium, push, head
+`9afebc91`) completed with success. P4's review of A26 (`codium-p4-repairs.md`, "A26 review footer") found two
+defects and repaired both (at the time of this record, 8 Nov 2026, the repairs were not yet committed; the package
+that pushes them adds a dated line here with its commit and Vector Codium run). F60: a mixed review's wording printed
+the provider id (`anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity · $0.21 + Codium`) in the PR footer, the
+failure note and the app and CLI footers; `costWording` now names each Codium model `Vector Codium · <model>`, and the `format.test.ts`
+expectation that pinned the old text (`:908-909` at `39db0daf`) now reads
+`anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium`. F61 (P4b's F18): the engine's
+`resolveReviewModel` never answered `"codium"`, so a Codium review with an explicit `triageModel`, no listed review
+roles or a same-lab pair ran without the P5 review token stop; `review/model.ts` now passes `codium`. Two defects in
+Codex's `github.evidence.ts` and `github.review.ts` (F63, F64) are handed to Codex; those files were not edited.

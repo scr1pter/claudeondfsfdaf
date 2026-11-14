@@ -4,6 +4,7 @@ import { SessionID } from "./schema"
 import { Effect, Layer, Context } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
+import { TaskPlace } from "@/task/place"
 
 export const Info = SessionStatusEvent.Info
 export type Info = SessionStatusEvent.Info
@@ -27,25 +28,31 @@ const layer = Layer.effect(
       Effect.fn("SessionStatus.state")(() => Effect.succeed(new Map<SessionID, Info>())),
     )
 
-    const get = Effect.fn("SessionStatus.get")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      return data.get(sessionID) ?? { type: "idle" as const }
-    })
+    const get = Effect.fn("SessionStatus.get")(
+      function* (sessionID: SessionID) {
+        const data = yield* InstanceState.get(state)
+        return data.get(sessionID) ?? { type: "idle" as const }
+      },
+      (effect, sessionID) => TaskPlace.atHome(sessionID)(effect),
+    )
 
     const list = Effect.fn("SessionStatus.list")(function* () {
       return new Map(yield* InstanceState.get(state))
-    })
+    }, TaskPlace.atHome())
 
-    const set = Effect.fn("SessionStatus.set")(function* (sessionID: SessionID, status: Info) {
-      const data = yield* InstanceState.get(state)
-      yield* events.publish(Event.Status, { sessionID, status })
-      if (status.type === "idle") {
-        yield* events.publish(Event.Idle, { sessionID })
-        data.delete(sessionID)
-        return
-      }
-      data.set(sessionID, status)
-    })
+    const set = Effect.fn("SessionStatus.set")(
+      function* (sessionID: SessionID, status: Info) {
+        const data = yield* InstanceState.get(state)
+        yield* events.publish(Event.Status, { sessionID, status })
+        if (status.type === "idle") {
+          yield* events.publish(Event.Idle, { sessionID })
+          data.delete(sessionID)
+          return
+        }
+        data.set(sessionID, status)
+      },
+      (effect, sessionID) => TaskPlace.atHome(sessionID)(effect),
+    )
 
     return Service.of({ get, list, set })
   }),

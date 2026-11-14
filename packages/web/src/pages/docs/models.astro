@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -8,7 +9,8 @@ export const prerender = true
 
           <p>
             Sign in to Vector to use free models, or connect a provider account or API key. The free models, their
-            data policies and their limits are described below.
+            data policies and their limits are described below, followed by keys from environment variables, custom
+            providers, models that are not in the catalog, and the lists that allow or block providers.
           </p>
 
           <h2 id="byok">Bring your own key</h2>
@@ -117,5 +119,178 @@ vector models anthropic --verbose</code><button class="doc-cmd-copy" type="butto
           </p>
           <p>
             Models that expose reasoning effort take <code>--variant</code>. The level resolves from the flag, then your saved preference, then what the session last used, and your choice is kept per provider and model.
+          </p>
+          <p>
+            {release113.since} when you leave effort on Default, the request's size sets it, and a learned default may drop Thorough's extra effort (Settings → Memory → Workflow insights). See <a href="/docs/tokenomics#learned-defaults">Learned defaults</a>.
+          </p>
+          <p>
+            {release113.since} on Thorough requests the general subagents the agent starts get high effort too, unless
+            their agent or your settings set an effort of their own; your variant keeps its meaning, and a pick of yours
+            always wins. A brief may give a subagent a lower effort, or a model that costs no more than the agent's own,
+            but never more effort than the agent has. See
+            <a href="/docs/subagents#forks-models-effort">Forks, models and effort</a>.
+          </p>
+
+          <h2 id="environment-variables">Keys from environment variables</h2>
+          <p>
+            A provider in Vector's catalog is connected when one of its environment variables is set, such as
+            <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code> or <code>GROQ_API_KEY</code>. The catalog,
+            <code>https://vectordev.ai/models/api.json</code>, lists each provider's variables under <code>env</code>.
+            When a provider has one variable, its value is the key; a provider that takes several values, such as
+            Amazon Bedrock or Azure, is connected when any of them is set. GitHub Copilot is not connected from the
+            environment while its sign-in is paused.
+          </p>
+          <p>
+            In the terminal, <code>vector providers list</code> shows the keys saved with
+            <code>vector providers login</code> and then, under Environment, each variable it found. The desktop app
+            reads the environment of your login shell when it starts on macOS and Linux, so a key exported in your
+            shell profile works there too; on Windows it uses the environment Vector was started with. Restart Vector
+            after changing a variable. Settings → Providers &amp; keys tags such a provider
+            <strong>Environment</strong> and offers no Disconnect for it, since the key is not Vector's to remove:
+            unset the variable instead.
+          </p>
+
+          <h2 id="custom-providers">Custom providers</h2>
+          <p>
+            Any server that speaks the OpenAI-compatible API can be a provider: a company gateway, a proxy, or a model
+            server you run. In the desktop app, open Settings → Providers &amp; keys and choose
+            <strong>Connect</strong> on <strong>Custom provider</strong>.
+          </p>
+          <ul class="feature-list">
+            <li><strong>Server</strong><span>Ollama, LM Studio, vLLM, llama.cpp and SGLang fill in their usual address on this computer, and Other leaves the address to you. <strong>Find servers</strong> looks for those servers on the computer Vector's engine runs on, and <strong>Identify</strong> reads the server at the address you typed, sending the API key and headers you entered. Either fills in the models the server reports, with their context size and whether they call tools and read images, and leaves out Ollama's cloud models.</span></li>
+            <li><strong>Provider ID and Display name</strong><span>The ID names the provider in settings and in model selectors, such as <code>gateway/coder-large</code>. It takes lowercase letters, numbers, hyphens and underscores, and cannot be one Vector already has. The display name is what model lists show.</span></li>
+            <li><strong>Base URL</strong><span>Where requests go, starting with <code>http://</code> or <code>https://</code> and usually ending in <code>/v1</code>. A plain <code>http://</code> address that is not on this computer is marked Not encrypted.</span></li>
+            <li><strong>API key</strong><span>Optional. Vector keeps it with its other provider keys, not in a settings file. Type <code>{"{env:NAME}"}</code> instead to have Vector read the key from the environment variable <code>NAME</code>.</span></li>
+            <li><strong>Requests at once</strong><span>Shown once you pick a server. Left empty, a server on this computer or your network takes one request at a time, and any other server has no limit.</span></li>
+            <li><strong>Models</strong><span>Each model's ID as the server names it, a display name, its context and reply limit in tokens, and whether it calls tools and reads images. With a context and no reply limit, the reply limit is a quarter of the context, at most 8,192 tokens.</span></li>
+            <li><strong>Headers</strong><span>Optional headers sent with every request, for a gateway that authenticates another way.</span></li>
+          </ul>
+          <p>
+            <strong>Submit</strong> saves the provider in Vector's own settings on the computer Vector's engine runs
+            on, as <code>provider.&lt;id&gt;</code> using the <code>@ai-sdk/openai-compatible</code> package, so it is
+            available in every repository. A server that Find servers or Identify read is also added to your
+            <a href="/docs/local#servers">Vector Local</a> model servers, after Vector asks you when that would loosen
+            Vector Local; if you decline, its models stay off while Vector Local is on. <strong>Disconnect</strong>
+            removes the provider's key and adds its ID to <code>disabled_providers</code>.
+          </p>
+          <h3 id="provider-config">Providers in vector.json</h3>
+          <p>
+            The same provider can be written in <code>vector.json</code> yourself (see
+            <a href="/docs/configuration">Configuration files</a> for where it goes), which also lets you use any AI
+            SDK package rather than the OpenAI-compatible one:
+          </p>
+          <pre><code>{`{
+  "provider": {
+    "gateway": {
+      "name": "Company gateway",
+      "npm": "@ai-sdk/openai-compatible",
+      "env": ["GATEWAY_API_KEY"],
+      "options": {
+        "baseURL": "https://llm.example.com/v1",
+        "headers": { "X-Team": "platform" },
+        "timeout": 600000
+      },
+      "models": {
+        "coder-large": {
+          "name": "Coder Large",
+          "limit": { "context": 131072, "output": 8192 },
+          "tool_call": true
+        }
+      }
+    }
+  }
+}`}</code></pre>
+          <dl class="doc-rows">
+            <div><dt>npm</dt><dd>The AI SDK package that talks to the server, <code>@ai-sdk/openai-compatible</code> when a provider Vector does not know names none. Packages Vector ships with load at once; any other is installed into Vector's cache the first time one of its models is used, and a <code>file://</code> URL loads a module from your disk. Vector calls the package's export whose name starts with <code>create</code>, with the provider's options.</dd></div>
+            <div><dt>name</dt><dd>The name shown in settings and model lists.</dd></div>
+            <div><dt>env</dt><dd>The environment variable that holds the key.</dd></div>
+            <div><dt>options.apiKey</dt><dd>A key in the file itself. Write <code>{"{env:NAME}"}</code> here rather than the key.</dd></div>
+            <div><dt>options.baseURL</dt><dd>Where requests go. In a repository's <code>vector.json</code> it must be <code>https://</code>, or <code>http://</code> to this computer (<code>localhost</code>, <code>127.0.0.1</code> or <code>[::1]</code>); Vector leaves out a repository's provider with any other address.</dd></div>
+            <div><dt>options.headers</dt><dd>Headers sent with every request. A model's own <code>headers</code> are added to them.</dd></div>
+            <div><dt>options.timeout</dt><dd>How long one whole request may take, in milliseconds, or <code>false</code> for no limit.</dd></div>
+            <div><dt>options.chunkTimeout</dt><dd>Stop a streamed reply when no new chunk arrives within this many milliseconds.</dd></div>
+            <div><dt>options.concurrency</dt><dd>How many requests Vector sends the server at once, as Requests at once does.</dd></div>
+            <div><dt>models</dt><dd>The provider's models, described below.</dd></div>
+          </dl>
+
+          <h2 id="custom-models">Add a model that isn't in the catalog</h2>
+          <p>
+            Under <code>provider.&lt;id&gt;.models</code>, a key that is not already one of that provider's models adds
+            one, for a provider in the catalog as well as a custom one, and you select it as
+            <code>&lt;provider&gt;/&lt;key&gt;</code>. A key that names a catalog model changes only the fields you
+            give. This adds a fine-tuned model to OpenAI under a shorter name:
+          </p>
+          <pre><code>{`{
+  "provider": {
+    "openai": {
+      "models": {
+        "support-tuned": {
+          "id": "ft:gpt-4.1-mini-2025-04-14:acme::A1b2C3d4",
+          "name": "Support (fine-tuned)",
+          "limit": { "context": 1047576, "output": 32768 },
+          "cost": { "input": 0.8, "output": 3.2 },
+          "attachment": true,
+          "modalities": { "input": ["text", "image"] }
+        }
+      }
+    }
+  }
+}`}</code></pre>
+          <dl class="doc-rows">
+            <div><dt>id</dt><dd>The model's name in requests, when it differs from the key.</dd></div>
+            <div><dt>name</dt><dd>The name shown in model lists.</dd></div>
+            <div><dt>limit</dt><dd><code>context</code> and <code>output</code> in tokens, and optionally <code>input</code>. Vector compacts a session before the context fills; with no context it never compacts that model's sessions on its own, and Vector's agent refuses a model with no context on a server on this computer or your network.</dd></div>
+            <div><dt>cost</dt><dd><code>input</code>, <code>output</code>, <code>cache_read</code> and <code>cache_write</code> in US dollars per million tokens, and <code>context_over_200k</code> with the same fields for a long-context price. A model Vector does not know has no price without it.</dd></div>
+            <div><dt>tool_call</dt><dd>Whether the model calls tools; true unless you say otherwise.</dd></div>
+            <div><dt>reasoning</dt><dd>Whether the model reasons, which gives it effort levels.</dd></div>
+            <div><dt>attachment and modalities</dt><dd>Whether it takes attachments, and <code>modalities.input</code>, the inputs it reads: <code>text</code>, <code>image</code>, <code>audio</code>, <code>video</code> and <code>pdf</code>.</dd></div>
+            <div><dt>temperature</dt><dd>Whether Vector may send it a temperature; off for a model Vector does not know unless you turn it on.</dd></div>
+            <div><dt>options and headers</dt><dd>Provider options and headers sent with every request to this model.</dd></div>
+            <div><dt>variants</dt><dd>The model's effort levels, described next.</dd></div>
+          </dl>
+          <p>
+            <code>variants</code> are the effort levels <code>--variant</code> chooses by name and the desktop's effort
+            slider moves across. Each is a set of provider options sent with the request, in the form the model's
+            package takes them. A model with <code>reasoning</code> on already has the levels Vector knows for its
+            package, such as low, medium and high, set with <code>reasoningEffort</code>, for many models on
+            <code>@ai-sdk/openai-compatible</code>. A model whose ID contains <code>qwen</code>, <code>kimi</code>,
+            <code>glm</code>, <code>minimax</code>, <code>grok</code>, <code>deepseek-r1</code>,
+            <code>deepseek-v3</code>, <code>deepseek-chat</code> or <code>deepseek-reasoner</code>, common on
+            self-hosted servers, gets none or only a fixed pair, so write its <code>variants</code> yourself. Your
+            entries add levels or change them, and
+            <code>"disabled": true</code> removes one. Here a server that accepts a higher setting gets a
+            <code>max</code> level, and <code>low</code> goes:
+          </p>
+          <pre><code>{`{
+  "provider": {
+    "gateway": {
+      "models": {
+        "coder-large": {
+          "reasoning": true,
+          "variants": {
+            "max": { "reasoningEffort": "max" },
+            "low": { "disabled": true }
+          }
+        }
+      }
+    }
+  }
+}`}</code></pre>
+
+          <h2 id="provider-lists">Allow and block providers</h2>
+          <ul class="feature-list">
+            <li><strong>enabled_providers</strong><span>When set, only the providers it lists load. Every other provider is ignored, with its keys, environment variables and settings. The free models provided by Vector are the provider <code>vector</code>.</span></li>
+            <li><strong>disabled_providers</strong><span>The providers it lists never load, even with a key. A provider in both lists stays off.</span></li>
+            <li><strong>whitelist and blacklist</strong><span>Under <code>provider.&lt;id&gt;</code>, <code>whitelist</code> keeps only the models it lists and <code>blacklist</code> removes the ones it lists, by model key.</span></li>
+          </ul>
+          <pre><code>{`{
+  "enabled_providers": ["anthropic", "gateway"],
+  "provider": {
+    "anthropic": { "whitelist": ["claude-opus-5", "claude-sonnet-5"] }
+  }
+}`}</code></pre>
+          <p>
+            A repository you have not trusted can only narrow these lists. To keep a model out of the desktop's model
+            picker without removing it, switch it off in Settings → Default models instead.
           </p>
 </DocsPage>

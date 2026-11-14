@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -32,6 +33,14 @@ export const prerender = true
             The box at the bottom of a session is where you type the task, and it carries every per-message control: which agent answers, which model, how hard that model thinks, how fast to run (see <a href="/docs/vector-agent#modes">modes</a>), dictation, and attachments. It takes pasted images and dragged files, keeps a history of your prompts you can walk back through, and offers a popover of slash commands. Shell mode sends a command instead of a prompt, and it is refused while Plan Mode is on.
           </p>
           <p>
+            {release113.since} while Vector works, Enter steers the running turn and Alt+Enter (Option+Enter on a Mac)
+            queues the message; queued messages wait in a dock above the composer, each with Steer, which sends it into
+            the running turn now, and Delete. One that could not be sent shows Not sent and Retry, and the queue pauses
+            after a run ends in a spend stop, a Stop or an error until you choose Resume. While
+            helpers run, a chevron beside Stop offers <strong>Stop including helpers (N)</strong>, and
+            <code>/workflow</code> starts a saved workflow; see <a href="/docs/workflows">Workflows</a>.
+          </p>
+          <p>
             For models that expose reasoning effort, the model popover shows a slider across that model's variants: <strong>Default</strong> follows the provider's recommendation, <strong>Light</strong> favours speed and cost on small tasks, <strong>Balanced</strong> trades speed against careful reasoning, and <strong>Max</strong> sits at the top of the range. The choice shows on the control, with its description in the tooltip.
           </p>
           <p class="note">
@@ -53,7 +62,7 @@ export const prerender = true
             The slim rail down the left edge is the app's top-level navigation: Home, Agents, Search, Agent Dashboard, Browser, Pull Requests, Plugins, Connections and Settings, with a help cluster for Docs, Best practices, Changelog, Diagnostics, Support and Send feedback.
           </p>
           <ul class="feature-list">
-            <li><strong>Command palette</strong><span>Searches every action by category and runs it without the mouse. Shortcuts are editable and can be reset to their defaults, and some actions live only here, such as adding the current file selection to the prompt context.</span></li>
+            <li><strong>Command palette</strong><span>Searches every action by category and runs it without the mouse, and some actions live only here, such as adding the current file selection to the prompt context. Shortcuts are editable in Settings → Keyboard shortcuts, which can also reset them to their defaults.</span></li>
             <li><strong>Chat search</strong><span>A search overlay finds sessions and messages across the workspace, so you can return to a conversation without scrolling the sidebar. It closes on Escape.</span></li>
           </ul>
 
@@ -69,15 +78,64 @@ export const prerender = true
             Click your name at the bottom of the sidebar to open <strong>Settings</strong> at <strong>Account</strong>, or use the gear beside it, <strong>Settings</strong> in the Help menu, or Cmd+, (Ctrl+, on Windows and Linux). When an update has downloaded, an <strong>Update</strong> button takes the gear's place: it restarts Vector into the new version, and first asks whether to stop any agents in the workspace that are still running. From 1.99.109 Home shows the same <strong>Update</strong> button too, just before its <strong>Settings</strong> button.
           </p>
           <ul class="feature-list">
-            <li><strong>Account</strong><span>Your Vector sign-in, your Vector Codium plan with the share of this month's credits left, and the way to delete your account. Desktop app only; signed out, it offers Sign in.</span></li>
+            <li><strong>Account</strong><span>Your Vector sign-in, your <a href="/docs/codium">Vector Codium</a> plan with how much of this month is left, as a percentage, and the way to delete your account. Desktop app only; signed out, it offers Sign in.</span></li>
             <li><strong>Notifications</strong><span>Desktop alerts, error alerts and sound effects.</span></li>
             <li><strong>Accessibility</strong><span>Interface scaling, high contrast, reduced motion, visible focus indicators and larger click targets.</span></li>
+            <li><strong>Keyboard shortcuts</strong><span>The app's commands with their shortcuts, grouped as General, Session, Navigation, Model and agent, Terminal and Prompt, with a search by name or keys. Click a shortcut and press the new keys: Backspace or Delete clears it, Escape cancels, and keys another command already uses are refused with a notice naming that command. <strong>Reset to defaults</strong> puts every shortcut back.</span></li>
           </ul>
           <p>
             Vector has one look, its own dark theme, and shows its interface in your computer's language. <strong>Vector Tab</strong>, the AI suggestions in the editor, is switched on and off from its label in the editor's status bar; the suggestions use the selected model.
           </p>
           <p>
             <strong>General</strong> holds the <strong>Share usage counts</strong> switch, on by default. While the app is open it reports how many sessions and subagent sessions were active that day (in UTC) and the totals from <strong>Usage &amp; streaks</strong>: tokens by type, recorded cost, tokens and tasks per day, the models and providers you use with their share of tokens, effort levels, chats and streaks. It checks about once an hour and sends only when something has gone up. Each report carries a random install ID, your Vector account when you are signed in, the app version, operating system and CPU architecture, and never your prompts, code, file names or model output. Turn it off there to stop sending.
+          </p>
+          <p>
+            <strong>General</strong> also has a <strong>Terminal</strong> card with the <strong>Terminal Shell</strong> picker, Auto by default: the shell the terminal and the composer's shell mode use. Agent tool calls use it too, unless the picker marks it terminal only, as it does fish.
+          </p>
+          <p>
+            {release113.since} <strong>General</strong> also has a <strong>While Vector works</strong> card, which
+            applies on this device only. <strong>Follow-up behavior</strong> chooses <strong>Steer</strong>, the
+            default, which joins a message you send while Vector works to the running turn at its next step, or
+            <strong>Queue</strong>, which holds it until the turn ends. Alt+Enter (Option+Enter on a Mac) does the other
+            for one message, and slash commands and shell input always queue. A queued message is sent while one Vector
+            window is open, even with its session closed; in a browser that cannot share the queue between pages, the
+            card says it is sent only while its session is open. <strong>Stop button</strong> chooses what Stop, Esc
+            and Ctrl+G stop: <strong>Stop the main turn</strong>, the default, or <strong>Stop the main turn and its
+            helpers</strong>, which also stops the subagents, workflow runs and background commands the conversation
+            started. See <a href="/docs/subagents#stopping-helpers">Stopping helpers</a>.
+          </p>
+
+          <h2 id="remote-servers">Connect to a Vector server on another machine</h2>
+          <p>
+            The desktop app runs its own engine on your computer, and it can also work with a Vector server on another
+            machine, such as a workstation that holds your repositories, started there with <code>vector serve</code>.
+            Repositories you open on that server, and the provider keys, custom providers and MCP servers you add while
+            working on it, are on that machine.
+          </p>
+          <ol class="steps">
+            <li><span>1</span><div><strong>Start the server with a password</strong><p>On the other machine, set <code>VECTOR_SERVER_PASSWORD</code> from a protected secret source, and <code>VECTOR_SERVER_USERNAME</code> if you want a username other than <code>vector</code>. Then run <code>vector serve</code> with a <code>--port</code> and the <code>--hostname</code> to listen on. Read the rules below before it listens beyond loopback.</p></div></li>
+            <li><span>2</span><div><strong>Add it in Settings</strong><p>In Settings → Environment &amp; servers, choose <strong>Add server</strong>. Enter the server address with its port, such as <code>http://192.168.1.20:4096</code>, an optional name, and under <strong>Authentication</strong> the username and password the server was started with. Vector checks the address as you type and adds the server only once it answers.</p></div></li>
+            <li><span>3</span><div><strong>Work on it</strong><p>With more than one server, Home lists each one under <strong>Agents</strong> with its repositories, and <strong>Open repository</strong> beside a server lets you pick a folder on that machine. <strong>Set as default</strong> in a server's menu opens the app on that server the next time it starts, and <strong>Remove default</strong> goes back to the app's own engine.</p></div></li>
+          </ol>
+          <p>
+            Each server in the list shows whether it answers, its version and its username. Its menu also has
+            <strong>Edit</strong> and <strong>Delete</strong>. An address typed without <code>http://</code> or
+            <code>https://</code> uses <code>http://</code> for this computer or your own network (private, link-local
+            and CGNAT addresses such as Tailscale's, and names such as <code>gpu-box</code> or
+            <code>nas.local</code>) and <code>https://</code> for anything else. Vector refuses an address with a
+            username or password inside it, and sends a password over plain HTTP only to this computer or your own
+            network: <em>A password is sent over plain HTTP only to this computer or your own network. Use an https://
+            address for this server.</em>
+          </p>
+          <p class="note is-caution">
+            A server on your network is reachable by anyone who can reach that port. From 1.99.99 a server listening
+            beyond loopback needs <code>VECTOR_SERVER_PASSWORD</code> unless you pass <code>--unsecured</code>; do not
+            pass it on a shared network. From the next CLI release a server with a password also refuses to listen beyond
+            loopback unless you pass <code>--trusted-network</code>, which is for a network you trust, such as a private LAN,
+            because plain HTTP carries the password in every request. From anywhere else, keep the server on loopback
+            behind a TLS reverse proxy or tunnel and add its <code>https://</code> address. Releases before 1.99.99 do
+            not enforce the password rule, so keep them on loopback. See
+            <a href="/docs/terminal-agent#cli-server">Server, web and editors</a>.
           </p>
 
           <h2 id="help-assistant">Help inside the app</h2>

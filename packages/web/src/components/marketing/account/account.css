@@ -55,7 +55,7 @@
   text-transform: uppercase;
 }
 
-/* ── Sign-in: one compact card over the rain ─────────────────────── */
+/* ── /design and /usage doors: one compact card over the rain ───── */
 .auth-environment { background: #07050b; }
 /* Dense rain everywhere, quieter around the card so it reads first. The scrim sits over the
    rain canvas and under the page, which comes later in the tree at the same level. */
@@ -64,12 +64,7 @@
 .login-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 28px; background: linear-gradient(180deg, rgba(7, 5, 11, 0.92), rgba(7, 5, 11, 0.6) 62%, transparent); }
 .login-brand { display: inline-flex; align-items: center; gap: 9px; color: #f4effb; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none; }
 .login-brand img { display: block; width: 26px; height: 26px; border-radius: 7px; }
-.login-top-link { padding: 6px 10px; color: rgba(236, 228, 246, 0.66); border-radius: 8px; font-size: 13px; text-decoration: none; transition: color 140ms ease, background 140ms ease; }
-.login-top-link:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
 .login-main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 8px 20px 64px; }
-.login-aside { max-width: 380px; margin: 0; padding: 6px 14px; color: rgba(214, 203, 228, 0.7); background: rgba(9, 7, 14, 0.86); border: 1px solid rgba(206, 182, 255, 0.1); border-radius: 999px; font-size: 12px; line-height: 1.5; text-align: center; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-.login-aside a { color: #c9b4f2; text-underline-offset: 2px; }
-.login-aside a:hover { color: #e6dbff; }
 
 .auth-card { width: min(380px, 100%); padding: 28px 28px 20px; color: #eee7f7; background: rgba(12, 9, 18, 0.88); border: 1px solid rgba(206, 182, 255, 0.14); border-radius: 14px; box-shadow: 0 28px 80px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .auth-card-loading { min-height: 404px; display: grid; place-items: center; color: rgba(214, 203, 228, 0.6); font-size: 13px; }
@@ -78,40 +73,11 @@
 /* The private /design door still carries a mark and a label above its title. */
 .auth-form-mark img { display: block; width: 32px; height: 32px; margin-bottom: 18px; border-radius: 8px; }
 .auth-form-eyebrow { margin: 0 0 8px; color: #a98ee0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size: 11px; letter-spacing: 0.04em; }
-.google-button,
-.auth-submit { width: 100%; height: 40px; display: flex; align-items: center; justify-content: center; gap: 9px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 550; transition: background 160ms ease, border-color 160ms ease, box-shadow 200ms ease, transform 120ms ease; }
-.google-button { margin-top: 22px; color: #eee7f7; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(214, 192, 255, 0.18); }
+.google-button { width: 100%; height: 40px; display: flex; align-items: center; justify-content: center; gap: 9px; margin-top: 22px; color: #eee7f7; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(214, 192, 255, 0.18); border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 550; transition: background 160ms ease, border-color 160ms ease; }
 .google-button:hover { background: rgba(255, 255, 255, 0.075); border-color: rgba(214, 192, 255, 0.3); }
 .google-button svg { width: 16px; height: 16px; }
 .google-button + .auth-error { margin-top: 12px; }
-.auth-divider { margin: 16px 0; display: flex; align-items: center; gap: 12px; color: rgba(206, 194, 222, 0.5); font-size: 11px; }
-.auth-divider::before,
-.auth-divider::after { content: ""; height: 1px; flex: 1; background: rgba(206, 182, 255, 0.12); }
-.auth-form { display: grid; gap: 12px; }
-.auth-form label { display: grid; gap: 6px; }
-.auth-form label > span { color: rgba(226, 216, 238, 0.78); font-size: 12px; font-weight: 500; }
-.auth-field { width: 100%; height: 40px; padding: 0 12px; color: #f1eaf9; color-scheme: dark; background: rgba(4, 3, 8, 0.66); border: 1px solid rgba(207, 182, 240, 0.16); border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: 0; transition: border-color 140ms ease, box-shadow 140ms ease; }
-.auth-field:hover { border-color: rgba(207, 182, 240, 0.26); }
-.auth-field:focus { border-color: #a98be6; box-shadow: 0 0 0 3px rgba(165, 121, 230, 0.16); }
-.auth-field::placeholder { color: rgba(184, 170, 200, 0.42); }
-.auth-password { position: relative; }
-.auth-password .auth-field { padding-right: 42px; }
-.auth-password button { position: absolute; top: 50%; right: 4px; width: 32px; height: 32px; display: grid; place-items: center; transform: translateY(-50%); color: rgba(206, 194, 222, 0.6); background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
-.auth-password button:hover { color: #efe6fa; background: rgba(255, 255, 255, 0.06); }
-/* The same light pill as the site's Login button, with the same purple side glow. */
-.auth-submit { margin-top: 4px; color: #140d1d; background: rgba(232, 222, 255, 0.94); border: 1px solid rgba(255, 255, 255, 0.55); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7); }
-.auth-submit:hover:not(:disabled),
-.auth-submit:focus-visible { background: rgba(240, 233, 255, 0.98); border-color: rgba(214, 196, 255, 0.95); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), -12px 0 26px -6px rgba(160, 110, 255, 0.85), 12px 0 26px -6px rgba(160, 110, 255, 0.85); }
-.auth-submit:active:not(:disabled) { transform: scale(0.99); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), -16px 0 32px -4px rgba(165, 115, 255, 1), 16px 0 32px -4px rgba(165, 115, 255, 1); }
-.auth-submit:disabled,
 .google-button:disabled { opacity: 0.6; cursor: wait; }
-.auth-switch-line { margin: 16px 0 0; color: rgba(214, 203, 228, 0.66); font-size: 12.5px; text-align: center; }
-.auth-switch-line button { padding: 2px 0; color: #d2bcf6; background: transparent; border: 0; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 550; }
-.auth-switch-line button:hover { color: #efe6ff; text-decoration: underline; text-underline-offset: 3px; }
-.auth-switch-line button:disabled { opacity: 0.6; cursor: wait; }
-.auth-legal { margin: 18px 0 0; padding-top: 14px; color: rgba(196, 184, 212, 0.5); border-top: 1px solid rgba(206, 182, 255, 0.09); font-size: 11px; line-height: 1.6; text-align: center; }
-.auth-legal a { color: rgba(212, 192, 246, 0.85); text-decoration: underline; text-underline-offset: 2px; }
-.auth-legal a:hover { color: #efe6ff; }
 .auth-error,
 .auth-notice { margin: 0; padding: 9px 11px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .account-error { margin: 0; padding: 11px 13px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; }
@@ -231,8 +197,6 @@
   .login-top { padding: 16px 18px; }
   .login-main { justify-content: flex-start; padding: 12px 16px 40px; }
   .auth-card { padding: 24px 20px 18px; }
-  /* 16px keeps iOS from zooming into the field. */
-  .auth-field { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -321,4 +285,383 @@
   color: rgba(255, 255, 255, 0.4);
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ---- sign-in page (/login) ------------------------------------------------ */
+/* Two equal columns: Vector's aurora on the left under the logo, the form on the right in a
+   384px column. Under 768px the art goes and the form fills the page. */
+
+.signin {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  color: #eee7f7;
+  color-scheme: dark;
+  background:
+    radial-gradient(120% 55% at 0% 0%, rgba(105, 66, 180, 0.2), transparent 70%),
+    linear-gradient(180deg, #120d1d, #08060d 72%);
+  font-family: var(--font-sans);
+}
+
+.signin-top {
+  position: absolute;
+  top: 19px;
+  left: 44px;
+  z-index: 2;
+}
+
+.signin-logo {
+  min-height: 44px;
+  margin: -9px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #f4effb;
+  border-radius: 10px;
+  text-decoration: none;
+}
+
+.signin-logo img {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.signin-logo svg {
+  display: block;
+  width: 80px;
+  height: 14px;
+}
+
+.signin-art {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(80% 50% at 100% 0%, rgba(124, 84, 214, 0.16), transparent 70%),
+    radial-gradient(110% 70% at 0% 100%, rgba(143, 82, 255, 0.3), transparent 62%),
+    linear-gradient(180deg, #160f26 0%, #1d1332 46%, #2b1a45 100%);
+}
+
+/* The desktop app's chat backdrop, rising from the bottom-left edge of the panel. */
+.signin-art::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 62%;
+  background: url("/vector-space-backdrop.png") left bottom / cover no-repeat;
+  -webkit-mask-image: linear-gradient(to top, #000 50%, transparent);
+  mask-image: linear-gradient(to top, #000 50%, transparent);
+}
+
+.signin-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 40px 48px;
+  background: rgba(12, 9, 18, 0.72);
+  border-left: 1px solid rgba(206, 182, 255, 0.1);
+}
+
+.signin-form {
+  width: min(384px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.signin-form h1 {
+  margin: 0 0 22px;
+  color: #f6f1fc;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.024em;
+}
+
+.signin-sub {
+  margin: -16px 0 22px;
+  color: rgba(214, 203, 228, 0.72);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.signin-loading {
+  min-height: 376px;
+  align-items: center;
+  justify-content: center;
+  color: rgba(214, 203, 228, 0.66);
+  font-size: 13px;
+}
+
+.signin-button {
+  width: 100%;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 200ms ease, transform 120ms ease;
+}
+
+.signin-button svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.signin-button:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.signin-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* The site's light Login pill, with its violet side glow on hover. */
+.signin-primary {
+  color: #140d1d;
+  background: rgba(232, 222, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.signin-primary:hover:not(:disabled),
+.signin-primary:focus-visible {
+  background: rgba(240, 233, 255, 0.98);
+  border-color: rgba(214, 196, 255, 0.95);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), -12px 0 26px -6px rgba(160, 110, 255, 0.85), 12px 0 26px -6px rgba(160, 110, 255, 0.85);
+}
+
+/* Glass with a violet glow beneath it. */
+.signin-secondary {
+  color: #eee7f7;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(214, 192, 255, 0.2);
+  box-shadow: 0 18px 34px rgba(143, 82, 255, 0.22), 0 4px 10px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.signin-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(214, 192, 255, 0.32);
+  box-shadow: 0 18px 38px rgba(143, 82, 255, 0.32), 0 4px 10px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.signin-divider {
+  height: 18px;
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(214, 203, 228, 0.66);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.signin-divider::before,
+.signin-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: rgba(206, 182, 255, 0.14);
+}
+
+.signin-email {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.signin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.signin-field + .signin-field {
+  margin-top: 8px;
+}
+
+.signin-field > span:first-child {
+  color: rgba(226, 216, 238, 0.82);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.signin-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  color: #f1eaf9;
+  color-scheme: dark;
+  background: rgba(4, 3, 8, 0.66);
+  border: 1px solid rgba(207, 182, 240, 0.16);
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 14.5px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.signin-input:hover {
+  border-color: rgba(207, 182, 240, 0.26);
+}
+
+/* The border and ring are the focus mark; the transparent outline shows in forced colours. */
+.signin-input:focus,
+.signin-input:focus-visible {
+  border-color: #a98be6;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(165, 121, 230, 0.16);
+}
+
+.signin-input::placeholder {
+  color: rgba(184, 170, 200, 0.7);
+}
+
+.signin-password {
+  position: relative;
+  display: block;
+}
+
+.signin-password .signin-input {
+  padding-right: 48px;
+}
+
+.signin-password button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: rgba(206, 194, 222, 0.66);
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.signin-password button:hover {
+  color: #efe6fa;
+}
+
+.signin-password button:focus-visible {
+  outline-offset: -4px;
+}
+
+.signin-form .auth-error,
+.signin-form .auth-notice {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.signin-switch {
+  margin: 9px 0 0;
+  color: rgba(214, 203, 228, 0.72);
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+}
+
+.signin-switch button {
+  position: relative;
+  padding: 0;
+  color: var(--accent, #aa8cff);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+/* A 44px target around the link without moving the line. */
+.signin-switch button::after {
+  content: "";
+  position: absolute;
+  inset: -12px -8px;
+}
+
+.signin-switch button:hover:not(:disabled) {
+  color: var(--accent-strong, #c9b9ff);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.signin-switch button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.signin-legal {
+  max-width: 352px;
+  margin: 18px auto 0;
+  color: rgba(214, 203, 228, 0.66);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.signin-legal a {
+  color: rgba(232, 222, 248, 0.88);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.signin-legal a:hover {
+  color: #f4effb;
+}
+
+@media (max-width: 767px) {
+  .signin {
+    grid-template-columns: 1fr;
+  }
+
+  .signin-art {
+    display: none;
+  }
+
+  .signin-top {
+    top: 20px;
+    left: 20px;
+  }
+
+  /* Centred a little above the middle, so the heading sits about a quarter of the way down. */
+  .signin-panel {
+    padding: 64px 20px 112px;
+    background: transparent;
+    border-left: 0;
+  }
+
+  .signin-form h1 {
+    font-size: 32px;
+  }
+
+  /* 16px keeps iOS from zooming into the field. */
+  .signin-input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signin-button:active:not(:disabled) {
+    transform: none;
+  }
 }

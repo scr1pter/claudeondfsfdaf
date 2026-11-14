@@ -180,6 +180,65 @@ describe("swarm plan", () => {
     ])
   })
 
+  test("a Codium swarm never adds Auto, a locked model or a manual-only lane by itself", () => {
+    const connected = [
+      { provider: "vector-plan", model: "deepseek/deepseek-v4.1-flash", label: "Vector Codium DeepSeek" },
+      { provider: "vector-plan", model: "vector/codium-auto", codium: { auto: true } },
+      { provider: "vector-plan", model: "anthropic/claude-opus-5.5", codium: { locked: true } },
+      { provider: "vector-plan", model: "moonshotai/kimi-k3:long", codium: { manualOnly: true } },
+      { provider: "vector-plan", model: "google/gemini-3.5-pro:fast", codium: { manualOnly: true } },
+      { provider: "vector-plan", model: "anthropic/claude-haiku-5.5" },
+    ]
+    // An older listing names Auto by its id alone.
+    expect(
+      swarmModelPool({ provider: "vector-plan", model: "deepseek/deepseek-v4.1-flash" }, [
+        { provider: "vector-plan", model: "vector/codium-auto" },
+      ]).map((candidate) => candidate.model),
+    ).toEqual(["deepseek/deepseek-v4.1-flash"])
+    const pool = swarmModelPool({ provider: "vector-plan", model: "deepseek/deepseek-v4.1-flash" }, connected)
+    expect(pool.map((candidate) => candidate.model)).toEqual([
+      "deepseek/deepseek-v4.1-flash",
+      "anthropic/claude-haiku-5.5",
+    ])
+    // Strong and fast names would draw quality and economy work to them, so only the pool keeps them out.
+    const tasks = fallbackSwarmPlan("Build the feature").tasks
+    for (const strategy of ["economy", "balanced", "quality"] as const) {
+      for (const task of routeSwarmModels(tasks, pool, strategy))
+        expect(["deepseek/deepseek-v4.1-flash", "anthropic/claude-haiku-5.5"]).toContain(task.model)
+      expect(["deepseek/deepseek-v4.1-flash", "anthropic/claude-haiku-5.5"]).toContain(
+        selectSwarmPlannerModel(pool, strategy).model,
+      )
+    }
+  })
+
+  test("a swarm keeps the Codium model the person chose, unless the plan does not include it", () => {
+    const connected = [
+      { provider: "vector-plan", model: "deepseek/deepseek-v4.1-flash" },
+      { provider: "vector-plan", model: "vector/codium-auto", codium: { auto: true } },
+      { provider: "vector-plan", model: "moonshotai/kimi-k3:long", codium: { manualOnly: true } },
+      {
+        provider: "vector-plan",
+        model: "anthropic/claude-opus-5.5",
+        label: "Claude Opus 5.5",
+        codium: { locked: true },
+      },
+    ]
+    // Auto chosen: it stays, and the engine picks a model for each task's message.
+    expect(
+      swarmModelPool({ provider: "vector-plan", model: "vector/codium-auto" }, connected).map((item) => item.model),
+    ).toEqual(["vector/codium-auto", "deepseek/deepseek-v4.1-flash"])
+    // A manual-only model chosen by name stays; the other manual-only and Auto entries are not added.
+    expect(
+      swarmModelPool({ provider: "vector-plan", model: "moonshotai/kimi-k3:long" }, connected).map(
+        (item) => item.model,
+      ),
+    ).toEqual(["moonshotai/kimi-k3:long", "deepseek/deepseek-v4.1-flash"])
+    // A model the plan does not include is refused: every task on it would be refused too.
+    expect(() => swarmModelPool({ provider: "vector-plan", model: "anthropic/claude-opus-5.5" }, connected)).toThrow(
+      "Change your Codium plan to use Claude Opus 5.5, or choose another model for the swarm.",
+    )
+  })
+
   test("keeps every task the planner returns, past the old cap of 32", () => {
     const tasks = Array.from({ length: 40 }, (_, index) => ({
       id: `t${index}`,

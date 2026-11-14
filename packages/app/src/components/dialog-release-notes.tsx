@@ -8,6 +8,8 @@ import { useSettings } from "@/context/settings"
 export type Highlight = {
   title: string
   description: string
+  /** The titles of reports this computer sent that the update fixed, for the "fixed in this version" notice (WP A33). */
+  reports?: string[]
   media?: {
     type: "image" | "video"
     src: string
@@ -75,6 +77,18 @@ export function DialogReleaseNotes(props: { highlights: Highlight[] }) {
               <h1 class="text-16-medium text-text-strong">{feature()?.title ?? ""}</h1>
             </div>
             <p class="text-14-regular text-text-base">{feature()?.description ?? ""}</p>
+            {feature()?.reports?.length ? (
+              <ul
+                class="flex flex-col gap-1 pl-4 list-disc text-14-regular text-text-base"
+                data-component="fixed-reports"
+              >
+                {feature()!
+                  .reports!.slice(0, 3)
+                  .map((title) => (
+                    <li class="truncate">{title}</li>
+                  ))}
+              </ul>
+            ) : null}
           </div>
 
           {/* Spacer to push buttons to bottom */}

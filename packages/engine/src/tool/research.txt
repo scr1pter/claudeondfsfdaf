@@ -1,4 +1,4 @@
-Researches a question across the web and this repository's brain, as part of your work, and returns the answer with the notes it rests on. A research lead plans the run, searches, reads, saves quotes found in their sources and writes a report it keeps in this repository's brain; it makes no code changes.
+Researches a question across the web and this repository's brain, as part of your work, and returns the answer with the notes it rests on. A research lead plans the run, searches, reads, saves quotes found in their sources and writes a report held in this repository's brain until the user keeps it; it makes no code changes.
 
 Use it when the work needs facts from outside the repository: how a library or a standard behaves, what changed in a release, how others solve a problem, a comparison of options. Do not use it for questions the repository answers.
 

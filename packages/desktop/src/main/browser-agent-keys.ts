@@ -104,9 +104,11 @@ export function parseKeyPress(key: string, platform: string = process.platform):
   const name = base.toLowerCase()
   const only = (...expected: Modifier[]) =>
     held.length === expected.length && expected.every((modifier) => held.includes(modifier))
+  // Chromium on Windows and Linux also runs Shift+Delete as Cut, Shift+Insert as Paste and Control+Insert as Copy.
   if (
     (held.includes(mod) && ["c", "x", "v"].includes(name)) ||
-    (name === "insert" && (held.includes("shift") || held.includes("control")))
+    (name === "insert" && (held.includes("shift") || held.includes("control"))) ||
+    (platform !== "darwin" && ["delete", "del"].includes(name) && held.includes("shift"))
   )
     return { kind: "clipboard" }
   if (only(mod) && name === "a") return { kind: "edit", edit: "selectAll" }

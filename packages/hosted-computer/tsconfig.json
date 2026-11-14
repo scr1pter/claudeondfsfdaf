@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@tsconfig/bun/tsconfig.json",
+  "compilerOptions": {
+    // src/ runs under Node on the cloud computer (hostd and the viewer proxy are bundled for Node by `bun run build`),
+    // so it uses Node's modules only; test/source.test.ts checks that no Bun API reaches it. Bun's types are here for
+    // the tests and the bake script, which run under Bun.
+    "lib": ["ESNext", "DOM"]
+  },
+  "include": ["src", "test", "script"],
+  "exclude": ["test/docker"]
+}

@@ -1,3 +1,4 @@
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import {
   BoxRenderable,
   RGBA,
@@ -38,9 +39,10 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, UserMessage } from "@vectordevai/sdk/v2"
+import type { FilePart, UserMessage } from "@vectordevai/sdk/v2"
 import { BrainSchema } from "@vectordevai/core/brain/schema"
 import { Locale } from "../../util/locale"
+import { getSessionContext } from "../../util/session-context"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
@@ -49,6 +51,8 @@ import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
+import { countHelpers } from "../../routes/session/task-actions"
+import { helpersLeftMessage } from "../../routes/session/task-presentation"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
@@ -66,6 +70,11 @@ export type PromptProps = {
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
+  /**
+   * "Stop including helpers" for this session. Esc Esc uses it when the kv `interrupt_scope` is "all"; without it Esc
+   * Esc stops only the main turn.
+   */
+  onStopAll?: () => void
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -155,6 +164,11 @@ export function Prompt(props: PromptProps) {
   const kv = useKV()
   const vectorLocal = useVectorLocal()
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
+  // What Esc Esc stops (4.3): the main turn only (default), or the main turn and every helper it started.
+  const interruptScope = createMemo<"turn" | "all">(() =>
+    kv.get("interrupt_scope", "turn") === "all" ? "all" : "turn",
+  )
+  const stopAllShortcut = useCommandShortcut("session.interrupt.all")
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
@@ -250,19 +264,24 @@ export function Prompt(props: PromptProps) {
     if (!props.sessionID) return
     const session = sync.session.get(props.sessionID)
     const msg = sync.data.message[props.sessionID] ?? []
-    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) return
+    const context = getSessionContext(msg)
+    if (!context) return
 
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    if (tokens <= 0) return
-
-    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
-    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
-    const spend = Locale.sessionSpend(session)
+    const tokens = context.tokens
+    const model = sync.data.provider.find((item) => item.id === context.message.providerID)?.models[
+      context.message.modelID
+    ]
+    const spend = Locale.sessionSpend(
+      session,
+      msg,
+      sync.data.session.filter((child) => child.parentID !== undefined && child.parentID === session?.id),
+    )
     return {
-      context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
-      cost: spend.cost > 0 || spend.unpriced > 0 ? Locale.spend(spend.cost, spend.unpriced) : undefined,
+      context: Locale.context(tokens, model?.limit.context, context.message),
+      cost:
+        spend.cost > 0 || spend.unpriced > 0 || spend.codium > 0
+          ? Locale.spend(spend.cost, spend.unpriced, spend.codium)
+          : undefined,
     }
   })
 
@@ -309,9 +328,11 @@ export function Prompt(props: PromptProps) {
       if (msg.agent && isPrimaryAgent) {
         // Keep command line --agent if specified.
         if (!args.agent) local.agent.set(msg.agent)
-        if (msg.model) {
-          local.model.set(msg.model)
-          local.model.variant.set(msg.model.variant)
+        // A session on Codium Auto continues on Auto, not on the model it picked for the last message.
+        const model = ModelPlanStatus.sessionModel(msg)
+        if (model) {
+          local.model.set(model)
+          local.model.variant.set(model.variant)
         }
       }
     }
@@ -397,11 +418,47 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
             setStore("interrupt", 0)
+            if (interruptScope() === "all" && props.onStopAll) {
+              props.onStopAll()
+            } else {
+              const sessionID = props.sessionID
+              void sdk.client.session
+                .abort({
+                  sessionID,
+                })
+                // Plain Stop leaves helpers running, so say how many and how to stop them too.
+                .then(() =>
+                  countHelpers({
+                    client: sdk.client,
+                    sessionID,
+                    workspace: project.workspace.current(),
+                    capabilities: sync.data.capabilities,
+                  }),
+                )
+                .then((count) => {
+                  if (count > 0 && props.sessionID === sessionID)
+                    toast.show({ message: helpersLeftMessage(count, stopAllShortcut()), variant: "info" })
+                })
+                .catch(() => {})
+            }
           }
+          dialog.clear()
+        },
+      },
+      {
+        title: interruptScope() === "all" ? "Esc stops only the main turn" : "Esc also stops helpers",
+        name: "session.interrupt.scope",
+        category: "Session",
+        desc: `Esc Esc stops ${interruptScope() === "all" ? "the main turn and its helpers" : "only the main turn"} now`,
+        run: () => {
+          const next = interruptScope() === "all" ? "turn" : "all"
+          kv.set("interrupt_scope", next)
+          toast.show({
+            message: next === "all" ? "Esc Esc now also stops helpers." : "Esc Esc now stops only the main turn.",
+            variant: "info",
+            duration: 3000,
+          })
           dialog.clear()
         },
       },

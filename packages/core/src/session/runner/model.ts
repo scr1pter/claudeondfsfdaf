@@ -1,5 +1,6 @@
 export * as SessionRunnerModel from "./model"
 
+import { Billing } from "@vectordevai/schema/billing"
 import { makeLocationNode } from "../../effect/app-node"
 import { HttpOptions, LLMRequest, type Model, type ProviderMetadata } from "@vectordevai/llm"
 import * as AnthropicMessages from "@vectordevai/llm/protocols/anthropic-messages"
@@ -190,10 +191,15 @@ export const isFree = (model: Model) =>
 // One settled provider step as the spend guard counts it. An unpriced step's cost stays undefined, never $0. A
 // catalog entry with no input and no output rate still prices every step at $0, so a step is listed only with real
 // catalog rates or a cost the provider reported (Copilot's metered cost). That is Vectorscope's rule, so both call such
-// a model unknown. A Vector Codium step carries neither, so it counts as unpriced.
+// a model unknown. A Vector Codium step is counted separately from dollar-priced or unknown work.
 export const spendStep = (
   model: Model,
-  settlement: { readonly tokens: Tokens; readonly providerMetadata?: ProviderMetadata },
+  settlement: {
+    readonly tokens: Tokens
+    readonly providerMetadata?: ProviderMetadata
+    readonly incomplete?: boolean
+    readonly tools?: readonly SpendGuard.Sig[]
+  },
   step: { readonly continues: boolean; readonly patched: boolean },
 ): SpendGuard.Step => {
   const costUsd = calculateCost(model, settlement.tokens, settlement.providerMetadata)
@@ -201,7 +207,9 @@ export const spendStep = (
   const price = priceOf(model, contextTokens + NEXT_STEP_SLACK)
   return {
     costUsd,
+    ...(settlement.incomplete ? { unpriced: true } : {}),
     costKind: SpendGuard.costKindOf({
+      codium: Billing.isCodium(model.provider),
       free: isFree(model),
       // V2 does not detect OAuth plans yet.
       oauthPlan: false,
@@ -215,8 +223,7 @@ export const spendStep = (
     contextTokens,
     cachedTokens: settlement.tokens.cache.read,
     continues: step.continues,
-    // V2 does not collect loop signatures yet.
-    tools: [],
+    tools: settlement.tools ?? [],
     patched: step.patched,
   }
 }
@@ -243,6 +250,15 @@ function reportedUsd(model: Model, metadata?: ProviderMetadata) {
   if (typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0)
     // Copilot bills in nano AI units: 1 AI credit is 1e9 nano-AIU and costs $0.01, so USD = nano-AIU / 1e11.
     return totalNanoAiu / 100_000_000_000
+  if (sendsToOpenRouter({ providerID: model.provider, destinations: [model.route.endpoint.baseURL] })) {
+    const usage = metadata?.openrouter?.usage
+    const legacy = typeof usage === "object" && usage !== null && "cost" in usage ? usage.cost : undefined
+    // The native compatible protocol preserves the wire usage under openai; legacy adapters use openrouter.usage.
+    // Only an OpenRouter route may turn either field into a bill, including an explicitly reported zero charge.
+    for (const reported of [legacy, metadata?.openai?.cost]) {
+      if (typeof reported === "number" && Number.isFinite(reported) && reported >= 0) return reported
+    }
+  }
   // Vector Codium is not here: its gateway keeps the provider's charge on vectordev.ai, so a Codium step is unpriced.
   return undefined
 }

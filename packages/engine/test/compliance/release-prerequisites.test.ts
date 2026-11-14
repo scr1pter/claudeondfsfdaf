@@ -6,21 +6,31 @@ import path from "node:path"
 const root = path.resolve(import.meta.dir, "../../../..")
 
 test.skipIf(process.platform === "win32")("desktop preparation refuses missing matching npm packages", async () => {
-  const workflow = Bun.YAML.parse(await Bun.file(path.join(root, ".github/workflows/vector-desktop-release.yml")).text()) as {
+  const workflow = Bun.YAML.parse(
+    await Bun.file(path.join(root, ".github/workflows/vector-desktop-release.yml")).text(),
+  ) as {
     jobs: { prepare: { steps: { name: string; run?: string }[] } }
   }
-  const script = workflow.jobs.prepare.steps.find((step) => step.name === "Require published CLI and plugin packages")?.run
+  const script = workflow.jobs.prepare.steps.find(
+    (step) => step.name === "Require published CLI and plugin packages",
+  )?.run
   expect(script).toBeString()
   const directory = await mkdtemp(path.join(os.tmpdir(), "vector-release-prerequisites-"))
   try {
-    await Bun.write(path.join(directory, "packages/desktop/package.json"), '{"version":"1.2.3","vectorRequiredCliVersion":"4.5.6"}')
+    await Bun.write(
+      path.join(directory, "packages/desktop/package.json"),
+      '{"version":"1.2.3","vectorRequiredCliVersion":"4.5.6"}',
+    )
     const npm = path.join(directory, "bin/npm")
-    await Bun.write(npm, `#!/usr/bin/env node
+    await Bun.write(
+      npm,
+      `#!/usr/bin/env node
 const fs = require("node:fs")
 fs.appendFileSync(${JSON.stringify(path.join(directory, "requests"))}, process.argv[3] + "\\n")
 if (process.argv[3] === process.env.MISSING_PACKAGE) process.exit(1)
 console.log(JSON.stringify(process.argv[3].slice(process.argv[3].lastIndexOf("@") + 1)))
-`)
+`,
+    )
     await chmod(npm, 0o755)
     for (const missing of ["", "@vectordevai/plugin@4.5.6", "@vectordevai/cli-linux-arm64@4.5.6"]) {
       const child = Bun.spawn(["bash", "-c", script!], {
@@ -29,7 +39,11 @@ console.log(JSON.stringify(process.argv[3].slice(process.argv[3].lastIndexOf("@"
         stdout: "pipe",
         stderr: "pipe",
       })
-      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
       expect(code, stderr).toBe(missing ? 1 : 0)
       if (missing) expect(stdout).toContain(`Publish ${missing} before starting the desktop release.`)
     }
@@ -55,7 +69,9 @@ test("the prototype CLI cannot collide with the public CLI package", async () =>
 test("the desktop release installs ripgrep before it runs the engine suite", async () => {
   // test/preload.ts runs the suite under the strict network guard, which refuses Vector's own ripgrep download, so the
   // tests that search files need rg on PATH, and GitHub's Ubuntu image has none.
-  const workflow = Bun.YAML.parse(await Bun.file(path.join(root, ".github/workflows/vector-desktop-release.yml")).text()) as {
+  const workflow = Bun.YAML.parse(
+    await Bun.file(path.join(root, ".github/workflows/vector-desktop-release.yml")).text(),
+  ) as {
     jobs: {
       test: {
         strategy: { matrix: { include: { name: string; directory: string }[] } }
@@ -64,10 +80,16 @@ test("the desktop release installs ripgrep before it runs the engine suite", asy
     }
   }
   const job = workflow.jobs.test
-  const engine = job.strategy.matrix.include.find((entry) => entry.directory === "packages/engine")
-  expect(engine).toBeDefined()
+  // The engine suite may run in shards; the install's condition has to cover every one of them.
+  const engine = job.strategy.matrix.include.filter((entry) => entry.directory === "packages/engine")
+  expect(engine.length).toBeGreaterThan(0)
   const install = job.steps.findIndex((step) => /apt-get install\b.*\bripgrep\b/.test(step.run ?? ""))
   expect(install).toBeGreaterThan(-1)
   expect(install).toBeLessThan(job.steps.findIndex((step) => step.name === "Run package tests"))
-  expect([undefined, `matrix.name == '${engine?.name}'`]).toContain(job.steps[install].if)
+  const condition = job.steps[install].if
+  const prefix = condition?.match(/^startsWith\(matrix\.name, '([^']+)'\)$/)?.[1]
+  const exact = condition?.match(/^matrix\.name == '([^']+)'$/)?.[1]
+  expect(condition === undefined || prefix !== undefined || exact !== undefined).toBe(true)
+  for (const entry of engine)
+    expect(condition === undefined || entry.name.startsWith(prefix ?? "\0") || entry.name === exact).toBe(true)
 })

@@ -773,6 +773,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "เข้าถึงไฟล์นอกรีโพซิทอรี",
   "settings.permissions.tool.doom_loop.title": "Doom Loop",
   "settings.permissions.tool.doom_loop.description": "ตรวจจับการเรียกเครื่องมือซ้ำด้วยข้อมูลนำเข้าเหมือนกัน",
+  "settings.permissions.tool.terminal.description":
+    "อ่าน รอ ปรับขนาด หรือปิดเทอร์มินัลที่เอเจนต์ไม่ได้เปิด: ของคุณหรือของเซสชันอื่น",
+  "settings.permissions.tool.terminal_input.description":
+    "พิมพ์ข้อความหรือกดปุ่มในเทอร์มินัล ทุกบรรทัดที่ส่งจะถูกตรวจสอบเป็นคำสั่งเชลล์ด้วย",
+  "session.permission.terminal.name": "เทอร์มินัล",
+  "session.permission.terminal.action.read": "อ่านเอาต์พุต",
+  "session.permission.terminal.action.wait": "รอเอาต์พุต",
+  "session.permission.terminal.action.resize": "ปรับขนาด",
+  "session.permission.terminal.action.close": "ปิดและหยุดโปรเซส",
+  "session.permission.terminal.text": "ข้อความที่จะพิมพ์",
+  "session.permission.terminal.enter": "จากนั้นกด Enter",
+  "session.permission.terminal.keys": "ปุ่มที่จะกด",
 
   "session.delete.failed.title": "ไม่สามารถลบเซสชัน",
   "session.delete.title": "ลบเซสชัน",

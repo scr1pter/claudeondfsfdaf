@@ -787,6 +787,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "访问仓库之外的文件",
   "settings.permissions.tool.doom_loop.title": "死循环",
   "settings.permissions.tool.doom_loop.description": "检测具有相同输入的重复工具调用",
+  "settings.permissions.tool.terminal.description":
+    "读取、等待、调整大小或关闭智能体未打开的终端：你的终端或其他会话的终端",
+  "settings.permissions.tool.terminal_input.description":
+    "在终端中输入文本或按键。提交的每一行也会按 shell 命令进行检查",
+  "session.permission.terminal.name": "终端",
+  "session.permission.terminal.action.read": "读取其输出",
+  "session.permission.terminal.action.wait": "等待其输出",
+  "session.permission.terminal.action.resize": "调整其大小",
+  "session.permission.terminal.action.close": "关闭并结束其进程",
+  "session.permission.terminal.text": "要输入的文本",
+  "session.permission.terminal.enter": "然后按 Enter",
+  "session.permission.terminal.keys": "要按的键",
 
   "session.delete.failed.title": "删除会话失败",
   "session.delete.title": "删除会话",

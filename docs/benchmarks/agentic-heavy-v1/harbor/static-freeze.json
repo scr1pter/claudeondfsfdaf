@@ -1,0 +1,33 @@
+{
+  "kind": "harbor-static-freeze-v1",
+  "status": "pending_runtime_qualification",
+  "createdAt": "2026-11-03T03:39:13.961473+00:00",
+  "applicationImplementationSeeded": false,
+  "files": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    "browser-eval.cjs": "304d40f16167504a71c53ac060551c27d8c71ea517a01034caee1ae63f850721",
+    "BUILD_SPEC.md": "59ff8112ef16fc0ea4eab5826342ec50d8fa4982bc6afd5f7365b714c34193ef",
+    "code-quality-rubric.md": "55085be0108319c5ce7f9f709bc472c72a86ecf289cb70780b05e2ca4ca4597e",
+    "evaluate.py": "f014041405a81b28fbbef2b369c810add74ccbdafb3ea1ef4831d8db62f09b72",
+    "layout-probe.cjs": "2a7a4a780fd34560f67a8a31f33645a51aaaa0a3b671f8a282bc11d0c3bbaeef",
+    "owned_process.py": "42906aeebfee9104c513da7bc2af5d705578f6c4c18a5af884bd19810b037510",
+    "prepare.py": "1c0703a9fe9a10ca50d9e56facf2f784f2d35f19bf2e65b09287091ec90e4490",
+    "README.md": "1906313e3eceaebe03c3f00eac6139bbda906950d5c87d55ceda37d2ed460314",
+    "seed/.gitignore": "b8405ef2c1a9d4252527d1f0f84eaa2676689fb09d82075c2a6eb21131bf5ac3",
+    "seed/bun.lock": "f998df3682b4e1c8f80c6cca3cde577f031694ddadd8cdf5022b7ad104c1ee7e",
+    "seed/package.json": "1af43d3becce68e1beb7db477d7588dd02878b8d3fed8ee62c70f3c53415993f",
+    "seed/tsconfig.json": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860",
+    "seed/UI_CONTRACT.md": "266b4048213363029ffb12ba363e0534977fe101b3e09f3fa9ff7a58f3127472",
+    "task.json": "19770bd3c3066063abd47a97028c30a3109f7420600eb3df0e194430ee3f7ec8",
+    "test_evaluator.py": "b30398aaec87a4d97689c83faa9ae61ee1e23085d01c6282ea99e2e8007d730e",
+    "test_prepare.py": "e93f7003de23cc81dcdbdf8822af83491d60ed8190b893ee5ff314a1b1d4ea73",
+    "UI_CONTRACT.md": "266b4048213363029ffb12ba363e0534977fe101b3e09f3fa9ff7a58f3127472",
+    "visual-rubric.md": "88b0623866358f96845284a109d4bbe366ff823ff191e88b25f371ac6f0bbf40"
+  },
+  "aggregateSha256": "875b26c47c658bef1ff46668e183a77f4d738b788c3e8d2d236624f104f0807e",
+  "notes": [
+    "Static source snapshot before actual runtime qualification.",
+    "A static freeze is not a positive application pass.",
+    "Runtime repairs require recorded new hashes and complete requalification before paid calls."
+  ]
+}

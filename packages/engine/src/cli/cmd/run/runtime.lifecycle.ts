@@ -25,6 +25,7 @@ import type {
   QuestionReject,
   QuestionReply,
   RunAgent,
+  RunHelperActions,
   RunInput,
   RunPrompt,
   RunResource,
@@ -51,7 +52,7 @@ type FooterLabels = {
   modelLabel: string
 }
 
-export type LifecycleInput = {
+export type LifecycleInput = RunHelperActions & {
   directory: string
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
@@ -253,6 +254,8 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       onModelSelect: input.onModelSelect,
       onVariantSelect: input.onVariantSelect,
       onInterrupt: input.onInterrupt,
+      onInterruptAll: input.onInterruptAll,
+      onResumeInterrupted: input.onResumeInterrupted,
       onBackground: input.onBackground,
       onEditorOpen: async ({ value }) => {
         if (closed || renderer.isDestroyed) {

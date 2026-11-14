@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="data:," />
+    <title>Workflow Runner</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { font: 15px/1.5 system-ui, sans-serif; background: #f4f5f7; color: #18232e; margin: 0; }
+      main { max-width: 1180px; margin: auto; padding: 38px 24px 70px; }
+      header { border-bottom: 1px solid #d8dfe5; margin-bottom: 28px; padding-bottom: 22px; }
+      .eyebrow { text-transform: uppercase; letter-spacing: .13em; font-size: 11px; font-weight: 750; color: #526d80; }
+      h1 { font-size: clamp(30px, 5vw, 40px); letter-spacing: -.04em; margin: 6px 0; }
+      h2 { font-size: 20px; letter-spacing: -.02em; margin: 0 0 12px; }
+      h3 { font-size: 18px; margin: 0; }
+      h4 { margin: 0; font-size: 15px; }
+      p { margin: 8px 0; }
+      .muted, .empty { color: #596b79; }
+      .layout { display: grid; grid-template-columns: 350px minmax(0,1fr); gap: 28px; align-items: start; }
+      .layout > *, .card-head > * { min-width: 0; }
+      form, article { background: white; border: 1px solid #d8dfe5; border-radius: 12px; padding: 22px; margin-bottom: 16px; }
+      label { display: block; margin: 16px 0; font-weight: 600; font-size: 13px; }
+      input, select, textarea, button { font: inherit; padding: 10px 12px; max-width: 100%; border-radius: 6px; }
+      input, select, textarea { display: block; margin-top: 7px; border: 1px solid #aebcc7; color: #18232e; background: white; }
+      input, textarea { width: 100%; }
+      textarea { font: 12px/1.6 ui-monospace, monospace; resize: vertical; min-height: 270px; tab-size: 2; }
+      button { background: #254d71; color: white; border: 1px solid transparent; cursor: pointer; font-weight: 600; font-size: 13px; }
+      button:hover { background: #183a59; }
+      button:disabled { cursor: wait; opacity: .6; }
+      :focus-visible { outline: 3px solid #437db4; outline-offset: 3px; }
+      .secondary { background: white; color: #254d71; border-color: #bac8d4; }
+      .secondary:hover { background: #edf2f6; }
+      .danger { color: #9a302a; }
+      .card-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+      .status { font: 12px/1.5 ui-monospace, monospace; font-weight: 700; padding: 3px 8px; border-radius: 5px; background: #edf1f4; color: #465967; white-space: nowrap; }
+      .status[data-status="succeeded"] { background: #e5f2eb; color: #236747; }
+      .status[data-status="running"] { background: #e7effa; color: #245a99; }
+      .status[data-status="failed"], .status[data-status="blocked"] { background: #faeae7; color: #a32a25; }
+      .job { border-top: 1px solid #e4e9ee; padding-top: 14px; margin-top: 16px; }
+      .meta { font-size: 12px; color: #596b79; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+      .history { overflow: auto; max-height: 200px; background: #f5f7f9; border-radius: 6px; padding: 10px; font: 11px/1.8 ui-monospace, monospace; margin-top: 10px; }
+      .history ol { margin: 0; list-style: none; padding-left: 0; }
+      .history li { white-space: nowrap; }
+      pre { font: 11px/1.6 ui-monospace, monospace; overflow: auto; max-height: 130px; margin-bottom: 0; }
+      article, h3, h4, [role="alert"] { overflow-wrap: anywhere; }
+      [role="alert"] { color: #a32a25; font-size: 13px; }
+      [role="alert"]:empty { display: none; }
+      .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+      #legacy-section { border-top: 1px solid #d8dfe5; padding-top: 28px; margin-top: 34px; }
+      #jobs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+      #jobs article { margin: 0; }
+      details { margin-top: 18px; }
+      summary { cursor: pointer; color: #254d71; font-weight: 600; }
+      #job-form button { margin-top: 16px; }
+      @media (max-width: 760px) { .layout { grid-template-columns: minmax(0,1fr); gap: 18px; } main { padding: 24px 16px 48px; } #jobs { grid-template-columns: minmax(0,1fr); } form, article { padding: 18px; } textarea { min-height: 240px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="eyebrow">Local execution / durable history</div>
+        <h1>Workflow Runner</h1>
+        <p class="muted">Define the work. Connect the steps. Keep every attempt.</p>
+      </header>
+      <div class="layout">
+        <aside aria-label="Create work">
+          <form id="workflow-form">
+            <h2>New workflow</h2>
+            <p class="meta">Jobs run when their dependencies succeed.</p>
+            <label for="workflow-name">Workflow name</label><input id="workflow-name" type="text" name="name" required maxlength="120" placeholder="Publish checks" />
+            <label for="workflow-concurrency">Concurrency</label><select id="workflow-concurrency" name="concurrency"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select>
+            <label for="workflow-definition">Workflow definition</label><textarea id="workflow-definition" name="definition" spellcheck="false" required aria-describedby="definition-help">[
+  {
+    "key": "lint",
+    "name": "Lint",
+    "kind": "succeed"
+  },
+  {
+    "key": "test",
+    "name": "Tests",
+    "kind": "fail_once",
+    "dependsOn": ["lint"],
+    "maxAttempts": 2
+  }
+]</textarea>
+            <p class="meta" id="definition-help">JSON job array. Kinds: succeed, fail, fail_once, block. Up to 40 jobs; 1 to 3 attempts each.</p>
+            <button type="submit">Create workflow</button>
+            <p role="alert" id="workflow-error"></p>
+          </form>
+          <details>
+            <summary>Create a legacy job</summary>
+            <form id="job-form">
+              <h2>New legacy job</h2>
+              <label for="legacy-name">Job name</label><input id="legacy-name" type="text" name="name" required maxlength="120" />
+              <label for="legacy-kind">Job behavior</label><select id="legacy-kind" name="kind"><option value="succeed">Succeed</option><option value="fail">Fail</option><option value="fail_once">Fail once</option><option value="block">Wait for release</option></select>
+              <button type="submit">Create job</button>
+              <p role="alert" id="job-error"></p>
+            </form>
+          </details>
+        </aside>
+        <section aria-label="Workflow list">
+          <div class="section-heading"><h2>Workflows</h2><span class="meta" id="workflow-count"></span></div>
+          <p role="alert" id="refresh-error"></p>
+          <div id="workflows"><p class="empty">Loading workflows...</p></div>
+        </section>
+      </div>
+      <section aria-label="Legacy jobs" id="legacy-section">
+        <h2>Legacy jobs</h2>
+        <p class="meta">Your original queue and completed results are preserved.</p>
+        <div id="jobs"></div>
+      </section>
+    </main>
+    <script>
+      const $ = (selector) => document.querySelector(selector);
+      const opened = new Set();
+      const eventCache = new Map();
+      const signatures = new Map();
+      let refreshing = false;
+      function el(tag, text, className) {
+        const node = document.createElement(tag);
+        if (text !== undefined) node.textContent = text;
+        if (className) node.className = className;
+        return node;
+      }
+      function status(value) {
+        const node = el('span', value, 'status');
+        node.dataset.status = value;
+        return node;
+      }
+      async function api(path, options) {
+        const response = await fetch(path, options);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || 'Request failed');
+        return result;
+      }
+      function renderEvents(workflow, region) {
+        region.replaceChildren(el('h4', 'Event history'));
+        const list = el('ol');
+        for (const event of eventCache.get(workflow.id) || []) list.append(el('li', `${event.seq}. ${event.type}${event.jobKey ? ' / ' + event.jobKey : ''}${event.attempt ? ' / attempt ' + event.attempt : ''}`));
+        region.append(list);
+      }
+      function workflowCard(workflow) {
+        const card = el('article');
+        card.dataset.workflowId = workflow.id;
+        card.setAttribute('aria-label', 'Workflow ' + workflow.name);
+        const head = el('div', undefined, 'card-head');
+        const badge = status(workflow.status);
+        badge.dataset.testid = 'workflow-status';
+        head.append(el('h3', workflow.name), badge);
+        card.append(head, el('p', `${workflow.jobs.length} jobs / concurrency ${workflow.concurrency}`, 'meta'));
+        for (const job of workflow.jobs) {
+          const row = el('div', undefined, 'job');
+          const heading = el('div', undefined, 'card-head');
+          heading.append(el('h4', job.name), status(job.status));
+          row.append(heading, el('p', `${job.key} / ${job.kind}${job.dependsOn.length ? ' / after ' + job.dependsOn.join(', ') : ''}`, 'meta'));
+          if (job.error) { const error = el('p', job.error); if (job.status === 'failed') error.setAttribute('role', 'alert'); else error.className = 'meta'; row.append(error); }
+          if (job.result) row.append(el('pre', job.result));
+          if (job.attempts.length) {
+            const history = el('div', undefined, 'history');
+            history.setAttribute('aria-label', 'Attempts for ' + job.name);
+            for (const attempt of job.attempts) history.append(el('div', `Attempt ${attempt.number}: ${attempt.status} / PID ${attempt.pid ?? '-'} / ${new Date(attempt.startedAt).toLocaleTimeString()}${attempt.finishedAt ? ' - ' + new Date(attempt.finishedAt).toLocaleTimeString() : ''}`));
+            row.append(history);
+          }
+          card.append(row);
+        }
+        const actions = el('div', undefined, 'actions');
+        const view = el('button', 'View events ' + workflow.name, 'secondary');
+        view.type = 'button';
+        const region = el('section', undefined, 'history');
+        region.setAttribute('aria-label', 'Events for ' + workflow.name);
+        region.id = 'events-' + workflow.id;
+        region.hidden = !opened.has(workflow.id);
+        view.setAttribute('aria-controls', region.id);
+        view.setAttribute('aria-expanded', String(!region.hidden));
+        renderEvents(workflow, region);
+        const actionError = el('p'); actionError.setAttribute('role', 'alert');
+        view.addEventListener('click', async () => {
+          if (opened.has(workflow.id)) opened.delete(workflow.id); else opened.add(workflow.id);
+          region.hidden = !opened.has(workflow.id);
+          view.setAttribute('aria-expanded', String(!region.hidden));
+          if (!region.hidden) try { eventCache.set(workflow.id, (await api(`/api/workflows/${workflow.id}/events?after=0`)).events); renderEvents(workflow, region); } catch (failure) { actionError.textContent = failure.message; }
+        });
+        actions.append(view);
+        if (['queued', 'running'].includes(workflow.status)) {
+          const cancel = el('button', 'Cancel workflow ' + workflow.name, 'secondary danger');
+          cancel.type = 'button';
+          cancel.addEventListener('click', async () => {
+            const hadFocus = document.activeElement === cancel;
+            cancel.disabled = true;
+            try { await api(`/api/workflows/${workflow.id}/cancel`, { method: 'POST' }); await refresh(); }
+            catch (failure) { actionError.textContent = failure.message; cancel.disabled = false; }
+            finally {
+              if (hadFocus && document.activeElement === document.body) {
+                document.querySelector(`[data-workflow-id="${workflow.id}"] .actions button`)?.focus({ preventScroll: true });
+              }
+            }
+          });
+          actions.append(cancel);
+        }
+        card.append(actions, actionError, region);
+        return card;
+      }
+      async function refresh() {
+        if (refreshing) return;
+        refreshing = true;
+        try {
+          const [data, legacy] = await Promise.all([api('/api/workflows'), api('/api/jobs')]);
+          $('#refresh-error').textContent = '';
+          $('#workflow-count').textContent = data.workflows.length + ' total';
+          if (!data.workflows.length) $('#workflows').replaceChildren(el('p', 'No workflows yet. Create one to get started.', 'empty'));
+          for (const workflow of data.workflows) {
+            if (opened.has(workflow.id)) eventCache.set(workflow.id, (await api(`/api/workflows/${workflow.id}/events?after=0`)).events);
+            const signature = JSON.stringify(workflow);
+            const existing = document.querySelector(`[data-workflow-id="${workflow.id}"]`);
+            if (!existing || signatures.get(workflow.id) !== signature) {
+              if (!existing && !$('#workflows article')) $('#workflows').replaceChildren();
+              const card = workflowCard(workflow);
+              if (existing) {
+                const focused = existing.contains(document.activeElement) ? document.activeElement.textContent : null;
+                existing.replaceWith(card);
+                if (focused) {
+                  const target = [...card.querySelectorAll('button')].find(button => button.textContent === focused) || card.querySelector('.actions button');
+                  target?.focus({ preventScroll: true });
+                }
+              } else $('#workflows').prepend(card);
+              signatures.set(workflow.id, signature);
+            } else if (opened.has(workflow.id)) renderEvents(workflow, existing.querySelector('section'));
+          }
+          const legacySignature = JSON.stringify(legacy.jobs);
+          if (signatures.get('legacy') !== legacySignature) {
+            $('#jobs').replaceChildren(...legacy.jobs.map(job => {
+              const card = el('article'); card.setAttribute('aria-label', 'Legacy job ' + job.name);
+              const head = el('div', undefined, 'card-head'); head.append(el('h3', job.name), status(job.status));
+              card.append(head, el('p', `${job.kind} / attempts ${job.attempt}`, 'meta'));
+              if (job.error) { const error = el('p', job.error); error.setAttribute('role', 'alert'); card.append(error); }
+              if (job.result) card.append(el('pre', job.result));
+              return card;
+            }));
+            if (!legacy.jobs.length) $('#jobs').append(el('p', 'No legacy jobs.', 'empty'));
+            signatures.set('legacy', legacySignature);
+          }
+        } catch (failure) { $('#refresh-error').textContent = 'Could not refresh: ' + failure.message; }
+        finally { refreshing = false; }
+      }
+      for (const kind of ['workflow', 'job']) {
+        const form = $('#' + kind + '-form');
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          const button = form.querySelector('button');
+          if (button.disabled) return;
+          const hadFocus = document.activeElement === button;
+          const error = $('#' + kind + '-error'); error.textContent = '';
+          button.disabled = true;
+          try {
+            const data = new FormData(form);
+            const body = kind === 'workflow' ? { name: data.get('name'), concurrency: Number(data.get('concurrency')), jobs: JSON.parse(data.get('definition')) } : { name: data.get('name'), kind: data.get('kind') };
+            await api(kind === 'workflow' ? '/api/workflows' : '/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(kind === 'workflow' ? { 'Idempotency-Key': crypto.randomUUID() } : {}) }, body: JSON.stringify(body) });
+            form.reset();
+            await refresh();
+          } catch (failure) { error.textContent = failure.message; }
+          finally {
+            button.disabled = false;
+            if (hadFocus && document.activeElement === document.body) button.focus({ preventScroll: true });
+          }
+        });
+      }
+      refresh();
+      setInterval(refresh, 700);
+    </script>
+  </body>
+</html>

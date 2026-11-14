@@ -8,8 +8,8 @@ export const prerender = true
 
           <p>
             MCP servers and repository connections give an agent structured access to approved tools. Vector's catalog
-            has 135 connectors — GitHub, Linear, Sentry, Figma, Playwright, Postgres, Stripe, Slack and more — plus any
-            MCP server you add yourself.
+            lists 133 connectors — GitHub, Linear, Sentry, Figma, Playwright, Supabase, Stripe, Notion and more — plus
+            any MCP server you add yourself. Connectors marked Soon are listed but cannot be connected yet.
           </p>
 
           <h2 id="connections">Connect a server</h2>
@@ -35,6 +35,61 @@ vector mcp auth linear
 vector mcp list</code><button class="doc-cmd-copy" type="button" aria-label="Copy this command">Copy</button></p>
           <p>
             For OAuth-protected servers, <code>vector mcp auth</code> runs the flow, <code>vector mcp auth list</code> shows which servers are OAuth-capable and their status, <code>vector mcp logout</code> drops stored credentials, and <code>vector mcp debug &lt;name&gt;</code> diagnoses a failing connection.
+          </p>
+
+          <h2 id="mcp-config">MCP servers in vector.json</h2>
+          <p>
+            Servers live under the <code>mcp</code> key of <code>vector.json</code>, where <code>vector mcp add</code>
+            writes them and where you can write them yourself (see <a href="/docs/configuration">Configuration
+            files</a>). Servers you add in the desktop app are kept per repository in Vector's own state folder, not
+            in <code>vector.json</code>. Each entry's key is the server's name, and <code>type</code> says how Vector reaches it:
+            <code>remote</code> for a server at an address, <code>local</code> for a program Vector starts on this
+            computer.
+          </p>
+          <pre><code>{`{
+  "mcp": {
+    "issues": {
+      "type": "remote",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer {env:ISSUES_TOKEN}" }
+    },
+    "docs-search": {
+      "type": "local",
+      "command": ["node", "./tools/docs-mcp.js"],
+      "environment": { "DOCS_INDEX": "./build/index" },
+      "timeout": 10000
+    }
+  }
+}`}</code></pre>
+          <dl class="doc-rows">
+            <div><dt>url (remote)</dt><dd>The server's address. Vector connects with Streamable HTTP and falls back to SSE. In your own settings it must be <code>https://</code>, or <code>http://</code> to this computer or your own network; in a repository's settings, <code>https://</code> or <code>http://</code> to this computer only. An address with a username or password inside it is refused.</dd></div>
+            <div><dt>headers (remote)</dt><dd>Headers sent with every request to the server.</dd></div>
+            <div><dt>oauth (remote)</dt><dd>Vector detects OAuth by itself: a server that asks for a sign-in shows as needing authentication, and <code>vector mcp auth &lt;name&gt;</code> runs the flow. Without <code>clientId</code>, Vector registers itself with the server; a server that does not allow that needs <code>oauth.clientId</code>, and <code>clientSecret</code> if it requires one. <code>scope</code> sets the scopes asked for, and the sign-in returns to <code>http://127.0.0.1:19876/mcp/oauth/callback</code> unless you set <code>redirectUri</code>, or <code>callbackPort</code> for another port. <code>"oauth": false</code> turns detection off, for a server you authenticate with headers.</dd></div>
+            <div><dt>command (local)</dt><dd>The program and its arguments, as a list.</dd></div>
+            <div><dt>environment (local)</dt><dd>Variables added to the environment Vector passes on to the program.</dd></div>
+            <div><dt>cwd (local)</dt><dd>The program's working folder, relative to the folder you work in (for a repository's own server, the repository's root). Until you trust the repository, a server from your own settings starts in an empty folder of Vector's instead, so the repository's files cannot steer it.</dd></div>
+            <div><dt>timeout</dt><dd>How long Vector waits, in milliseconds, for the server to connect and list its tools (30 seconds by default), and for each request to it, tool calls included (by default <code>experimental.mcp_timeout</code>, or 60 seconds when that is not set). A tool call that reports progress starts its wait again. After two requests in a row time out, Vector disconnects the server and marks it failed until you connect it again.</dd></div>
+            <div><dt>enabled</dt><dd><code>false</code> keeps the server in your settings without starting it. An entry with only <code>"enabled": false</code> turns off a server that another settings file defines.</dd></div>
+          </dl>
+          <p>
+            Values in <code>headers</code>, <code>command</code> and <code>environment</code> can name a secret
+            instead of holding it. <code>{"{env:NAME}"}</code> is the environment variable <code>NAME</code>, filled in
+            when Vector loads the settings file. <code>{"{vault:NAME}"}</code> is a credential Vector keeps for that
+            server in its own credential store, outside every settings file: connecting a catalog plugin that asks for a
+            token in the desktop app's Plugins stores the token that way. A server whose <code>{"{vault:}"}</code>
+            credential is missing does not start, and its error names the credential. When you add a remote server in
+            the desktop app, a header that looks like a credential (<code>Authorization</code>, <code>Cookie</code>,
+            <code>Proxy-Authorization</code>, or a name containing <code>api-key</code>, <code>token</code>,
+            <code>secret</code> or <code>password</code>) must be such a reference, such as
+            <code>{"Bearer {env:MCP_TOKEN}"}</code>, so the key itself is never written to a settings file.
+          </p>
+          <p>
+            A server's tools reach the agent named <code>&lt;server&gt;_&lt;tool&gt;</code>, with any character other
+            than letters, digits, <code>-</code> and <code>_</code> turned into <code>_</code>. That is the name a
+            <a href="/docs/permissions">permission rule</a> matches, so <code>{`"issues_*": "ask"`}</code> asks before
+            any of the <code>issues</code> server's tools runs. A server's prompts become
+            <a href="/docs/skills-and-commands#commands">commands</a> named <code>&lt;server&gt;:&lt;prompt&gt;</code>.
+            A repository's servers start only once you trust it.
           </p>
 
           <h2 id="cli-plugins">Plugins</h2>

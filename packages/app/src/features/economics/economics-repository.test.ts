@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import {
+  clearOutcomes,
   isTerminalWorkspace,
   listOutcomes,
   outcomesFromWorkspaceRecord,
@@ -423,6 +424,31 @@ describe("economics-repository", () => {
     expect(await listOutcomes("/repo/a")).toHaveLength(1)
     expect(await listOutcomes("/repo/b")).toHaveLength(1)
     expect((await listOutcomes("/repo/a"))[0]?.id).toBe("a1")
+  })
+
+  test("clearing a project forgets its outcomes, one session's or all of them, and leaves other projects", async () => {
+    await recordSessionOutcome({
+      sessionID: "kept",
+      projectId: "/repo/clear",
+      updatedAt: 10,
+      outcome: makeOutcome({ id: "session:kept", projectId: "/repo/clear" }),
+    })
+    await recordSessionOutcome({
+      sessionID: "erased",
+      projectId: "/repo/clear",
+      updatedAt: 10,
+      outcome: makeOutcome({ id: "session:erased", projectId: "/repo/clear" }),
+    })
+    await recordWorkspaceOutcome(makeOutcome({ id: "workspace", projectId: "/repo/clear" }), {
+      workspaceRevision: 1,
+      sessionID: "erased",
+    })
+    await recordOutcome(makeOutcome({ id: "other", projectId: "/repo/other" }))
+    await clearOutcomes("/repo/clear", { sessionID: "erased" })
+    expect((await listOutcomes("/repo/clear")).map((outcome) => outcome.id)).toEqual(["session:kept"])
+    await clearOutcomes("/repo/clear")
+    expect(await listOutcomes("/repo/clear")).toEqual([])
+    expect((await listOutcomes("/repo/other")).map((outcome) => outcome.id)).toEqual(["other"])
   })
 
   test("later session turns replace one cumulative sample without duplicating it", async () => {

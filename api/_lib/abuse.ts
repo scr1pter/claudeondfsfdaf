@@ -12,6 +12,8 @@ type RateLimit = {
 
 const developmentCounters = new Map<string, Counter>()
 const REDIS_TIMEOUT_MS = 2_000
+export const ABUSE_RATE_LIMIT_SCRIPT =
+  "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]); end; return { count, redis.call('TTL', KEYS[1]) }"
 
 const production = () => process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production"
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -54,9 +56,14 @@ function isDevelopmentOrigin(origin: string) {
 /**
  * Reject browser cross-origin use and make Vercel's pre-parsed request body
  * obey the same byte ceiling as a streamed body. Originless requests are kept
- * for the signed desktop app's main-process fetch; they are still IP limited.
+ * for the signed desktop app's main-process fetch; they are still IP limited. `extraOrigins` adds origins one route
+ * trusts besides the site's own, such as the phone app's for push subscriptions.
  */
-export function requireTrustedJsonRequest(request: ApiRequest, maximumBytes: number) {
+export function requireTrustedJsonRequest(
+  request: ApiRequest,
+  maximumBytes: number,
+  extraOrigins: readonly string[] = [],
+) {
   const origin = header(request, "origin")
   if (origin) {
     const normalized = (() => {
@@ -66,7 +73,10 @@ export function requireTrustedJsonRequest(request: ApiRequest, maximumBytes: num
         return ""
       }
     })()
-    if (!normalized || (!allowedOrigins().has(normalized) && !isDevelopmentOrigin(normalized))) {
+    if (
+      !normalized ||
+      (!allowedOrigins().has(normalized) && !extraOrigins.includes(normalized) && !isDevelopmentOrigin(normalized))
+    ) {
       throw new ApiError(403, "ORIGIN_NOT_ALLOWED", "This request origin is not allowed.")
     }
   }
@@ -136,15 +146,13 @@ function redisConfiguration() {
   return undefined
 }
 
-async function incrementRemote(key: string, windowSeconds: number) {
+async function incrementRemote(key: string, windowSeconds: number, fetcher: typeof fetch) {
   const config = redisConfiguration()
   if (!config) return undefined
-  const script =
-    "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]); end; return { count, redis.call('TTL', KEYS[1]) }"
-  const response = await fetch(config.url, {
+  const response = await fetcher(config.url, {
     method: "POST",
     headers: { authorization: `Bearer ${config.token}`, "content-type": "application/json" },
-    body: JSON.stringify(["EVAL", script, "1", key, String(windowSeconds)]),
+    body: JSON.stringify(["EVAL", ABUSE_RATE_LIMIT_SCRIPT, "1", key, String(windowSeconds)]),
     signal: AbortSignal.timeout(REDIS_TIMEOUT_MS),
   }).catch(() => undefined)
   if (!response?.ok) return undefined
@@ -173,9 +181,14 @@ function incrementDevelopment(key: string, windowSeconds: number) {
  * Production uses one atomic Redis EVAL counter shared by every Vercel
  * instance. The in-memory fallback is deliberately development-only.
  */
-export async function enforceRateLimit(request: ApiRequest, response: ApiResponse, input: RateLimit) {
+export async function enforceRateLimit(
+  request: ApiRequest,
+  response: ApiResponse,
+  input: RateLimit,
+  fetcher: typeof fetch = fetch,
+) {
   const key = counterKey(request, input)
-  const remote = await incrementRemote(key, input.windowSeconds)
+  const remote = await incrementRemote(key, input.windowSeconds, fetcher)
   if (!remote && (production() || input.requirePersistent)) {
     throw new ApiError(503, "ABUSE_PROTECTION_UNAVAILABLE", "Request protection is temporarily unavailable.")
   }

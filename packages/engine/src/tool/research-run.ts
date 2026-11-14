@@ -32,6 +32,7 @@ import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { MCP } from "@/mcp"
 import { Session } from "@/session/session"
+import { TaskLimits } from "@/task/limits"
 import { Instruction } from "../session/instruction"
 import { SessionMemory } from "../session/memory"
 import { SessionID } from "../session/schema"
@@ -132,7 +133,13 @@ export type Found = {
 export type Current = Found | { readonly refused: string }
 
 export type Brief =
-  | { readonly type: "ok"; readonly prompt: string; readonly budget?: RunBudget.Info }
+  | {
+      readonly type: "ok"
+      readonly prompt: string
+      readonly budget?: RunBudget.Info
+      /** A lead's subagent slots held for its researchers, so they start without waiting (multi-agent 5.B.5). */
+      readonly reserve?: number
+    }
   | { readonly type: "refused"; readonly message: string }
 
 /** The sites the user chose for research: what may become a site: filter, and what reads as "You trust this site". */
@@ -565,6 +572,14 @@ const layer = Layer.effect(
       return { ...LIMITS[depth], ...own } satisfies Limits
     })
 
+    // The researchers a run may have: its depth's cap, held to the slots its lead can reserve for them beside its own in
+    // the conversation (5.B.5), so each one starts on a reserved slot and none is refused for want of one.
+    const researchers = Effect.fn("ResearchRun.researchers")(function* (depth: Research.Depth, sessionID: SessionID) {
+      const root = yield* top(sessionID)
+      const running = TaskLimits.resolve(yield* config.get(), yield* guests.marked(root.id)).running
+      return Math.max(0, Math.min((yield* limits(depth)).researchers, running - 1))
+    })
+
     const brief = Effect.fn("ResearchRun.brief")(function* (input: {
       readonly agent: string
       readonly ctx: Tool.Context
@@ -584,6 +599,9 @@ const layer = Layer.effect(
           size && typeof size === "object" && "tier" in size && size.tier === "thorough" ? "deep" : "focused"
         const own = (yield* guard.snapshot(input.ctx.sessionID))?.budget
         const caps = yield* limits(depth)
+        // As many slots as the run may have researchers; none where it can launch none (offline, or "no subagents").
+        const capped = size && typeof size === "object" && "capped" in size && size.capped === true
+        const reserve = capped || offline() ? 0 : yield* researchers(depth, input.ctx.sessionID)
         return {
           type: "ok",
           prompt: input.prompt,
@@ -591,6 +609,7 @@ const layer = Layer.effect(
           ...(own?.usd === undefined && own?.steps === undefined
             ? { budget: { usd: caps.usd, steps: caps.steps } }
             : {}),
+          ...(reserve > 0 ? { reserve } : {}),
         } satisfies Brief
       }
       if (input.agent !== RESEARCHER) return { type: "ok", prompt: input.prompt } satisfies Brief
@@ -606,7 +625,7 @@ const layer = Layer.effect(
         // One Run Guard run covers the lineage (section 11.2), so a research lead the build agent started counts the
         // build run's spend, and its own task budget too: once either warns, no new researcher starts.
         if (yield* warned(input.ctx.sessionID)) return { type: "refused", message: WARNED } satisfies Brief
-        const cap = (yield* limits(found.plan.depth)).researchers
+        const cap = yield* researchers(found.plan.depth, found.lead.id)
         // The task call and entry that start this researcher, as its child's record will name them.
         const key = `${input.ctx.sessionID}:${input.ctx.callID ?? input.ctx.messageID}:${input.index ?? 0}`
         const reserved = yield* slots.withPermits(1)(

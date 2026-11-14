@@ -1,0 +1,144 @@
+{
+  "kind": "headless-integrated-qualification-v1",
+  "status": "runtime_qualified",
+  "productRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+  "expectedChecks": {
+    "api": 50,
+    "browser": 0,
+    "prerequisite": 4,
+    "total": 54
+  },
+  "allRealProviderCalls": 0,
+  "referenceChecksPassed": 54,
+  "emptyBusinessChecksPassed": 0,
+  "businessChecksTotal": 50,
+  "negativeControlsRejected": 5,
+  "negativeControlsTotal": 5,
+  "nativeProofs": {
+    "codex": {
+      "runtime": "codex",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "sourceRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+      "profileSha256": "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226",
+      "fakeRequests": 37,
+      "unchangedRealSeed": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 4,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": false
+      },
+      "nativeImagePreviewRequests": 9,
+      "trustedRgAndGitAvailable": true,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 37,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "privateProofSha256": "3310a55d197fcf64580634f23436ad6c816caefd8a417ba8fe6d4141ea959a4f"
+    },
+    "vector": {
+      "runtime": "vector",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "sourceRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+      "profileSha256": "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226",
+      "fakeRequests": 32,
+      "unchangedRealSeed": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 4,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": true,
+        "backgroundTaskLaunches": 1,
+        "ownedCompletionNotifications": 1
+      },
+      "nativeImagePreviewRequests": 7,
+      "trustedRgAndGitAvailable": true,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 32,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "privateProofSha256": "51b8d32bc0b9270dcee88778cd3177fea441a41f47a69feb15445108771f25b3"
+    }
+  },
+  "nativeInstrumentSha256": "8442903ddc5e8b1eb4fc66fb856b9657c15883163f8eafdd95e3cadcb5f2ab80",
+  "taskInstrumentSha256": "4a4066bbd5e0f4a9afbd646768a8f7b913cce23e071ee5782aa8cb6ea5f87688",
+  "wrapperInstrumentSha256": "afd57a1cc210b3a908823ad2b6abbb65e0797b9ef883c5202f58e810372fe26d",
+  "profileSha256": "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226",
+  "reviewRubricFileSha256": "d5687aedbba30af2ef3baf8768cf1be0f270160305e73ec39f0cf6d3a9173760",
+  "binarySha256": {
+    "bun": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+    "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+    "codex_bin": "925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99",
+    "chrome": "46461accbdc87dc88a5bdd6d611be095dd6147db009863d794f742ca90662efa",
+    "typescript": "2cffde0b8c6760dfb0b5b0382bbb7e00ba6a8b2d981b9205b256a700a481d983",
+    "rg": "098027275423e375dca64f25accbd3c165e275c8220db0208ff3f1e3064392e1",
+    "git": "c53279919fdea03474bb23b465b3a82287157491f1bd69a5eb82dd9831582333",
+    "python": "f8b45d63047da9d9adf09892e4cc4317b859e86a93a478cc9616bc69d3b176e5",
+    "playwright_package": "f5c873af32da3a56849a77a73eb4e6acf9629d58564ba420077feea88800225c",
+    "codex_package": {
+      "codex-code-mode-host.exe": "ddd144291738f99b3f2254e0d9759fd7f8adac057405883ed8f1ccd9ad4502b4",
+      "codex-command-runner.exe": "c7accb2c88250ed936e97905db5d0fb5feeed5b3d7b8252f545d076d95867e92",
+      "codex-windows-sandbox-setup.exe": "6b2fc892154c86ba977eb486f91977d3580b89ab3cec7ca71379aeb535261b94"
+    }
+  },
+  "freeTestSuites": [
+    {
+      "suite": "owned native/role/paired and financial controls",
+      "testsRun": 172,
+      "passed": 169,
+      "skipped": 3,
+      "failed": 0
+    },
+    {
+      "suite": "wrapper admission and frozen task",
+      "testsRun": 9,
+      "passed": 9,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "suite": "independent task/bridge/process controls",
+      "testsRun": 14,
+      "passed": 14,
+      "skipped": 0,
+      "failed": 0
+    },
+    {
+      "suite": "conservative carry status controls",
+      "testsRun": 4,
+      "passed": 4,
+      "skipped": 0,
+      "failed": 0
+    }
+  ],
+  "totalTestsRun": 199,
+  "totalTestsPassed": 196,
+  "totalExplicitSkips": 3,
+  "totalFailures": 0,
+  "notes": [
+    "Capability controls only, not a paid quality or cost result",
+    "Original requirements and independent evaluator byte-identical to original holdout",
+    "Both original known costs and two uncertain liabilities remain retained",
+    "Original free diagnostic false negative retained privately; fresh corrected exact-byte proofs passed",
+    "Published source uses canonical LF for reproducible checked-in hashes",
+    "Private reference and vendor binaries never included in Git"
+  ]
+}

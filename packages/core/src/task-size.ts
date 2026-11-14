@@ -5,17 +5,20 @@ import type { Choice, Tier } from "@vectordevai/schema/task-size"
 export { Tier, Choice, JudgeMode } from "@vectordevai/schema/task-size"
 
 // Sizes a request with no model call, so "hi" gets one direct reply and only work that the user or the agent calls large
-// brings in subagents and the judge. The engine, the V2 runner, the app and desktop all use this one classifier.
+// brings in high effort and the judge. The engine, the V2 runner, the app and desktop all use this one classifier.
 //
 // It is built so that a wrong guess costs little and can be undone:
 // - Chat (one direct reply) is only a social message, and never while work waits on the user. It is offered one tool,
 //   escalate, so a message misread as social goes on as Work.
-// - Everything else is Work: every tool but subagents, at the provider's default effort. Light and Standard behave the
-//   same, except that Light, a size only a sender picks, skips the to-do list.
-// - Thorough (subagents, high effort, the judge) comes only from the user's own ask in the message, from the agent's
-//   escalate call, or from a message that continues Thorough work. Never from words about the work's scope. Thorough
-//   ends with its run: the next message is sized fresh unless the reply asked the user a question or the message
-//   carries the work on.
+// - Everything else is Work, at the provider's default effort. Standard is offered every tool, subagents included, and
+//   the agent decides when a part is worth handing off. Light, a size only a sender picks, skips the to-do list and
+//   launches nothing, but keeps control of the subagents already working.
+// - Thorough (high effort for the agent, the judge, and a push to split the work) comes only from the user's own ask in
+//   the message, from the agent's escalate call, or from a message that continues Thorough work. Never from words about
+//   the work's scope. Thorough ends with its run: the next message is sized fresh unless the reply asked the user a
+//   question or the message carries the work on.
+// - The user's "no subagents" stops new launches for that request at any size, and never takes away control of the
+//   subagents already working. Their "don't be thorough" only keeps the request at Work.
 
 /** Reasoning effort for a request when the user left effort on its default. */
 export type Effort = "off" | "default" | "high"
@@ -59,7 +62,10 @@ export type Result = {
   readonly source: Source
   /**
    * Stable reason codes, such as "greeting", "work" or "explicit:thorough"; clients turn them into copy. "capped" means
-   * the user said "no subagents" or "don't be thorough": nothing, escalate included, takes the request past Work.
+   * the user said "no subagents": no new subagents, and nothing, escalate included, takes the request past Work.
+   * "capped:thorough" (CAPPED_THOROUGH) means they said "don't be thorough": the request stays at Work, and subagents
+   * may still launch. "capped:joined" means a message that joined a running request said "no subagents": no new
+   * subagents from then on, and the size stays.
    */
   readonly reasons: readonly string[]
   /** false when the user said to skip the judge for this request. */
@@ -69,6 +75,9 @@ export type Result = {
 }
 
 const ORDER = { chat: 0, light: 1, standard: 2, thorough: 3 } as const satisfies Record<Tier, number>
+
+/** Reason a request gains when its user said "don't be thorough": it stays at Work, and subagents may still launch. */
+export const CAPPED_THOROUGH = "capped:thorough"
 
 export function rank(tier: Tier) {
   return ORDER[tier]
@@ -89,36 +98,102 @@ export function label(tier: Tier) {
   return { chat: "Chat", light: "Light", standard: "Standard", thorough: "Thorough" }[tier]
 }
 
+// Tags that frame instructions, messages or Vector's own task results. Text a model or a child wrote must not be able to
+// open or close one of them. Matched exactly as written, lowercase, so code such as `useState<User>` or `Array<Task>`
+// keeps its characters; so do YAML keys such as `user:`, since speaker labels are capitalized.
+const CONTROL_TAG =
+  /<(\/?)(system-reminder|system|task-notification|task|task_result|task_error|summary|orchestration_assignment|env|user|human|assistant|[a-z_]+_policy|[a-z_]+_instructions|vector_[a-z_]+)(?=[\s/>])/g
+const SPEAKER = /^([ \t]*)(Human|Assistant|System|User):/gm
+
+/**
+ * Text written by a model or a child, made safe to place inside another prompt: a backslash after the "<" of a control
+ * tag, and before a speaker label at the start of a line, keeps every character while it stops reading as markup or as
+ * another turn.
+ */
+export function neutralizeTags(text: string) {
+  return text.replace(CONTROL_TAG, "<\\$1$2").replace(SPEAKER, "$1\\$2:")
+}
+
+/** What a request has to do with subagents besides its size. */
+export type Offer = {
+  /** The user said "no subagents" for it. */
+  readonly capped?: boolean
+  /** Subagents launched earlier were still working when it opened. */
+  readonly children?: boolean
+  /** A subagent's completion note arrived in it. */
+  readonly notified?: boolean
+}
+
 /**
  * Built-in tools a request of this size is not offered. Chat is offered no tools at all and goes out on its own lane,
  * so this is for Work and Thorough. MCP, plugin and custom tools are never removed: the user installed them.
  */
-export function withheld(tier: Tier, agents = 0): ReadonlySet<string> {
+export function withheld(tier: Tier, agents = 0, offer: Offer = {}): ReadonlySet<string> {
   if (tier === "thorough") return new Set()
+  // A subagent the user named stays launchable, "no subagents" or not.
+  const capped = offer.capped === true && agents === 0
+  if (tier === "standard") return new Set(capped ? ["task", "workflow"] : [])
+  // Light launches only what the user named, or resumes a child whose report arrived in it, and keeps task_manage
+  // while subagents launched earlier are working or reporting.
   return new Set([
-    // A subagent the user named keeps the task tool; only that subagent may run.
-    ...(agents > 0 ? [] : ["task", "task_manage"]),
-    // Light is a small action the sender picked: it skips the to-do list, and nothing else.
-    ...(tier === "light" ? ["todowrite"] : []),
+    "todowrite",
+    "workflow",
+    ...((agents > 0 || offer.notified === true) && !capped ? [] : ["task"]),
+    ...(agents > 0 || offer.children === true || offer.notified === true ? [] : ["task_manage"]),
   ])
 }
 
 /**
  * The size guidance attached to a request's user message. It is worked out from that request alone, so a message renders
- * the same on every later request and the provider's prompt cache keeps it.
+ * the same on every later request and the provider's prompt cache keeps it. `solo`: this repository's runs say Thorough
+ * work passes as often without subagents for less (a learned workflow default), which only words the advice; the task
+ * tool is still offered. `capped`: the user said "no subagents"; the caller passes `escalate: false` with it.
  */
-export function note(tier: Tier, options: { readonly escalate: boolean; readonly judge: boolean }) {
+export function note(
+  tier: Tier,
+  options: { readonly escalate: boolean; readonly judge: boolean; readonly solo?: boolean; readonly capped?: boolean },
+) {
   const escalate = options.escalate
     ? " Call escalate only for exceptionally hard work across the whole system or dozens of files; an app, a feature, bug fixes or a deploy never need it."
     : ""
+  const capped = options.capped ? " The user asked for no new subagents." : ""
   if (tier === "light")
-    return `<task_size>Light request: do it directly, without a to-do list. Subagents are not offered.${escalate}</task_size>`
+    return `<task_size>Light request: do it directly, without a to-do list, and launch no subagents.${escalate}${capped}</task_size>`
+  // When to delegate is the subagent policy's; the note does not say it again.
   if (tier === "standard")
-    return `<task_size>Standard request: do the work yourself and keep a short to-do list for multi-step work. Subagents are not offered.${escalate}</task_size>`
+    return `<task_size>Standard request: Track only substantial milestones or a user-requested plan, not routine tool calls.${escalate}${capped}</task_size>`
   if (tier === "thorough")
-    return `<task_size>Thorough request: plan with the to-do list, split independent substantial parts across subagents when that is cheaper, and verify with the strongest checks available.${options.judge ? " Vector runs the judge after you finish, so do not launch it yourself." : ""}</task_size>`
+    return `<task_size>Thorough request: plan with the to-do list, split independent substantial parts across subagents launched together in the background when that is cheaper, and verify with the strongest checks available.${options.judge ? " Vector runs the judge after you finish, so do not launch it yourself." : ""}${options.solo ? " In this repository, Thorough work has passed as often without subagents for less: split only clearly independent, large parts." : ""}${capped}</task_size>`
   // A greeting goes out on the quick lane, which carries no note.
   return undefined
+}
+
+/** A subagent still working, as a request lists it: its task ID and the title it was launched with. */
+export type Running = { readonly id: string; readonly title: string }
+
+/**
+ * Which subagents are still working, for the agent: on the quick lane, which has no tools, or on the request that
+ * opened while they ran. Undefined when none are.
+ */
+export function running(children: readonly Running[], lane: "quick" | "work") {
+  if (children.length === 0) return undefined
+  const shown = children
+    .slice(0, RUNNING_SHOWN)
+    .map((child) => (lane === "work" ? `"${titled(child.title)}" (${child.id})` : `"${titled(child.title)}"`))
+  const more = children.length > RUNNING_SHOWN ? ` and ${children.length - RUNNING_SHOWN} more` : ""
+  const list = `${shown.join(", ")}${more}`
+  if (lane === "quick")
+    return `Subagents you launched are still working in the background: ${list}. Their reports arrive on their own; if the user asks, say so.`
+  return `<vector_subagents>Subagents still working from earlier: ${list}. Their reports arrive on their own. Use task_manage to check, steer or stop them, and do not redo their work.</vector_subagents>`
+}
+
+const RUNNING_SHOWN = 6
+const RUNNING_TITLE = 60
+
+/** A title a model wrote, as one short line that cannot close the quotes or the tags around it. */
+export function titled(title: string) {
+  const line = [...title.replace(/\s+/g, " ").replace(/"/g, "'").trim()].slice(0, RUNNING_TITLE).join("").trim()
+  return neutralizeTags(line) || "untitled"
 }
 
 export function classify(input: Input): Result {
@@ -140,10 +215,13 @@ export function classify(input: Input): Result {
   if (input.auto === false) return result("thorough", "auto", ["auto-off"])
 
   // The user's own "no subagents", "skip the judge" and "don't be thorough" come out first, so they never read as the
-  // ask itself. "No subagents" and "don't be thorough" keep the request at Work, Thorough work it continues included.
+  // ask itself. "No subagents" and "don't be thorough" keep the request at Work, Thorough work it continues included;
+  // only "no subagents" stops new launches.
   const noJudge = NO_JUDGE.test(lower)
-  const capped = NO_SUBAGENTS.test(lower) || NOT_THOROUGH.test(lower)
-  const cap = capped ? ["capped"] : []
+  const noSubagents = NO_SUBAGENTS.test(lower)
+  const notThorough = NOT_THOROUGH.test(lower)
+  const capped = noSubagents || notThorough
+  const cap = [...(noSubagents ? ["capped"] : []), ...(notThorough ? [CAPPED_THOROUGH] : [])]
   // A force word counts only as the user's instruction about this request: a clause that asks for it ("be thorough",
   // "use subagents", "run the judge"), never a mention ("fix the bug with subagents not starting").
   const forced = instructions([NO_SUBAGENTS, NO_JUDGE, NOT_THOROUGH].reduce(strip, lower))

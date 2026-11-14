@@ -7,6 +7,8 @@ import {
   freeModelChoices,
   freeModelOrder,
 } from "@vectordevai/core/free-model-choice"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { Billing } from "@vectordevai/schema/billing"
 import type { FreeDataPolicy } from "@vectordevai/schema/free-model"
 import { providerAllowed, providerUsable } from "@vectordevai/schema/provider-policy"
 
@@ -41,6 +43,8 @@ export type PickerModel = {
   modalities?: { output?: readonly string[] }
   limit?: { context?: number }
   cost?: unknown
+  /** What Vector Codium's list says about the entry: Auto, locked, manual-only or a preview. */
+  codium?: ModelPlanStatus.Listing
   provider: {
     id: string
     name?: string
@@ -90,9 +94,9 @@ export type ModelAccess = {
 const NO_ACCESS: ModelAccess = { kind: "none", label: "", title: "", spoken: "" }
 const CODIUM_ACCESS: ModelAccess = {
   kind: "codium",
-  label: "Codium credits",
-  title: "Uses your Vector Codium credits",
-  spoken: "uses your Codium credits",
+  label: "Codium",
+  title: "Included in your Vector Codium plan",
+  spoken: "included in your Codium plan",
 }
 
 export const costInput = (cost: unknown): number | undefined => {
@@ -109,8 +113,8 @@ export const costInput = (cost: unknown): number | undefined => {
 export function modelAccess(model: PickerModel): ModelAccess {
   const provider = model.provider
   if (isHiddenProvider(provider.id, provider)) return NO_ACCESS
-  // Vector Codium models are paid from the signed-in account's Codium credits, never from an API key.
-  if (provider.id === "vector-plan") return CODIUM_ACCESS
+  // Vector Codium models are included in the signed-in account's Codium plan, never paid from an API key.
+  if (Billing.isCodium(provider.id)) return CODIUM_ACCESS
   // An OAuth loader placeholder is not evidence that an API key pays for this model.
   if (provider.options?.apiKey === "vector-oauth-dummy-key") return NO_ACCESS
   const cost = costInput(model.cost)
@@ -196,7 +200,7 @@ function specWords(model: PickerModel, now: number) {
   const words: string[] = []
   const access = modelAccess(model)
   if (access.kind === "key") words.push("api", "key")
-  if (access.kind === "codium") words.push("codium", "credits")
+  if (access.kind === "codium") words.push("codium")
   if (model.capabilities?.reasoning) words.push("reasoning")
   if (isNewRelease(model, now)) words.push("new")
   const context = contextLabel(model.limit?.context).toLowerCase()
@@ -230,7 +234,8 @@ export function modelAriaLabel(model: PickerModel, now: number) {
     context ? `${context} context` : "",
     model.capabilities?.reasoning ? "reasoning" : "",
     isNewRelease(model, now) ? "new" : "",
-    freeModelSource(model) ?? access.spoken,
+    // A Codium model the plan does not include says which plan does, instead of claiming the account's plan.
+    codiumBadge(model)?.title.toLowerCase() ?? freeModelSource(model) ?? access.spoken,
     freeModelTrainingLabel(model) ?? "",
     freeModelRegionLabel(model) ?? "",
   ]
@@ -254,12 +259,27 @@ export function modelTitle(model: PickerModel) {
     about,
     contextTitle(model.limit?.context),
     releaseTitle(model),
-    freeModelSource(model) ?? access.title,
+    codiumBadge(model)?.title ?? freeModelSource(model) ?? access.title,
     freeModelTrainingLabel(model) ?? "",
     freeModelRegionLabel(model) ?? "",
   ]
     .filter(Boolean)
     .join("\n")
+}
+
+/** The badge beside a Codium entry the plan does not include ("Codium · Pro") or a preview ("Preview · Ultra"). */
+export function codiumBadge(model: PickerModel) {
+  if (model.provider.id !== ModelPlanStatus.PROVIDER_ID) return
+  return ModelPlanStatus.listingBadge(model.codium)
+}
+
+/**
+ * What choosing a row does: a Codium model the plan does not include opens Change plan instead of being chosen, since
+ * every request to it would be refused (label plan §10). Everything else is chosen.
+ */
+export function pickModel<T extends PickerModel>(model: T, actions: { set: (model: T) => void; plans: () => void }) {
+  if (model.provider.id === ModelPlanStatus.PROVIDER_ID && ModelPlanStatus.isLocked(model)) return actions.plans()
+  actions.set(model)
 }
 
 export type PickerSectionKind = "recent" | "provider" | "free"
@@ -361,10 +381,14 @@ export function buildModelSections<T extends PickerModel>(input: {
     else groups.set(model.provider.id, [model])
   }
   const rank = (model: T) => ranks.get(model) ?? 0
-  // Vector Codium keeps its catalog's order, led by the model it recommends: its models list no release date, so
-  // sorting by date and name would put Claude Haiku 5.5, the model that uses credits fastest, first.
+  // Vector Codium keeps its catalog's order with Codium Auto pinned first: its models list no release date, so sorting
+  // by date and name would put Claude Haiku 5.5, the model that uses the plan fastest, first.
+  const pinned = (model: T) =>
+    model.provider.id === ModelPlanStatus.PROVIDER_ID && ModelPlanStatus.isAuto(model) ? 0 : 1
   const order = (a: T, b: T) =>
-    rank(a) - rank(b) || (input.fixed || a.provider.id === "vector-plan" ? 0 : byRelease(a, b))
+    rank(a) - rank(b) ||
+    (a.provider.id === ModelPlanStatus.PROVIDER_ID ? pinned(a) - pinned(b) : 0) ||
+    (input.fixed || a.provider.id === ModelPlanStatus.PROVIDER_ID ? 0 : byRelease(a, b))
 
   const popular = (input.popular ?? []).filter(providerAllowed)
   const popularity = (id: string) => {

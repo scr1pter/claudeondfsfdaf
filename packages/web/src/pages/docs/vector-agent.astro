@@ -49,6 +49,21 @@ export const prerender = true
           <p>
             Compaction can also be triggered deliberately, and the transcript records where it happened.
           </p>
+          <p>The <code>compaction</code> key in <a href="/docs/configuration"><code>vector.json</code></a> changes when and how it happens:</p>
+          <dl class="doc-rows">
+            <div><dt>auto</dt><dd>Compact on its own as the conversation nears the model's context (default <code>true</code>). With <code>false</code>, a request that no longer fits ends with the provider's error instead. Setting <code>VECTOR_DISABLE_AUTOCOMPACT</code> does the same.</dd></div>
+            <div><dt>max_context</dt><dd>Compact once the conversation reaches this many tokens, even when the model's window is larger, since every request sends the whole conversation again. By default Vector compacts just below a model's long-context price tier, and just below 200,000 tokens on a model with a window of 500,000 or more and no tier. <code>0</code> uses the model's whole window, and any other value below 64,000 counts as 64,000.</dd></div>
+            <div><dt>tail_turns</dt><dd>How many of your most recent requests, with the work that answered them, are kept word for word (default 2). <code>preserve_recent_tokens</code> caps how many tokens that kept part may take; by default it is a quarter of the usable context, from 2,000 to 8,000 tokens.</dd></div>
+            <div><dt>reserved</dt><dd>Tokens kept free so that compaction itself fits. Setting it without <code>max_context</code> also turns the default ceiling off.</dd></div>
+            <div><dt>prune</dt><dd>When you send a prompt after the provider's prompt cache has expired, clear the output of older tool calls, since the provider writes the whole history to its cache again then anyway (default <code>true</code>). Setting <code>VECTOR_DISABLE_PRUNE</code> turns it off.</dd></div>
+            <div><dt>clear</dt><dd>During a long run, clear older tool output once the conversation passes 60,000 tokens and at least 40,000 tokens of it can go (default <code>false</code>).</dd></div>
+          </dl>
+          <pre><code>{`{
+  "compaction": {
+    "max_context": 120000,
+    "tail_turns": 3
+  }
+}`}</code></pre>
 
           <h2 id="repository-rules">Repository rules</h2>
           <p>
@@ -84,4 +99,78 @@ export const prerender = true
             A rule that conflicts with the task you asked for is reported rather than silently resolved. Vector tells
             the agent to say so instead of quietly picking a side.
           </p>
+
+          <h2 id="instructions">Instruction files</h2>
+          <p>
+            Vector's agent also gets your instruction files with its instructions: the <code>AGENTS.md</code> in
+            Vector's own config folder, or <code>~/.claude/CLAUDE.md</code> when that folder has none, and the
+            repository's <code>AGENTS.md</code> files from the folder you work in up to the repository's root, or its
+            <code>CLAUDE.md</code> files when there is no <code>AGENTS.md</code> on that path. When the agent reads a
+            file further down, an <code>AGENTS.md</code> or <code>CLAUDE.md</code> in a folder between that file and the
+            folder you work in comes with it. A repository's instruction file is read only where it really is inside the
+            repository, never through a link that leads outside it. Setting <code>VECTOR_DISABLE_CLAUDE_CODE_PROMPT</code>
+            leaves the <code>CLAUDE.md</code> files out.
+          </p>
+          <p>The <code>instructions</code> key in <a href="/docs/configuration"><code>vector.json</code></a> adds more. Each entry is one of these:</p>
+          <ul class="feature-list">
+            <li><strong>A relative path or pattern</strong><span>Such as <code>docs/conventions/*.md</code>, looked for in the folder you work in and each folder above it up to the repository's root. Every match is included.</span></li>
+            <li><strong>An absolute path</strong><span>Or one starting with <code>~/</code> for your home folder, naming a file anywhere on your computer. Its last part may be a pattern.</span></li>
+            <li><strong>A web address</strong><span>Starting with <code>http://</code> or <code>https://</code>. Vector fetches it with a five-second limit and at most 1 MiB, and leaves it out when the fetch fails.</span></li>
+          </ul>
+          <pre><code>{`{
+  "instructions": [
+    "CONTRIBUTING.md",
+    "docs/conventions/*.md",
+    "~/notes/house-style.md",
+    "https://intranet.example.com/agents.md"
+  ]
+}`}</code></pre>
+          <p>
+            Entries from every settings file add up. A repository's own <code>instructions</code> apply only once you
+            trust it.
+          </p>
+
+          <h2 id="formatters">Formatters and language servers</h2>
+          <p>
+            Both are off until you turn them on in <a href="/docs/configuration"><code>vector.json</code></a>, and both start only in a repository you
+            trust, even when the setting is in your own settings, because they run the repository's own tools and code.
+          </p>
+          <p>
+            With <code>{`"formatter": true`}</code>, Vector formats each file the agent writes, edits or patches, with
+            every built-in formatter for that file type whose tool it finds, such as <code>gofmt</code> on your
+            <code>PATH</code> for Go, or prettier when the repository's <code>package.json</code> lists it. An object
+            turns the built-ins on with your changes: a formatter's name with <code>{`"disabled": true`}</code> turns it
+            off, and a new name with a <code>command</code> and <code>extensions</code> adds your own, where
+            <code>$FILE</code> stands for the file's path. <code>environment</code> and <code>cwd</code> set its
+            variables and working folder.
+          </p>
+          <pre><code>{`{
+  "formatter": {
+    "prettier": { "disabled": true },
+    "sql": {
+      "command": ["my-sql-formatter", "--in-place", "$FILE"],
+      "extensions": [".sql"]
+    }
+  }
+}`}</code></pre>
+          <p>
+            With <code>{`"lsp": true`}</code>, Vector starts the built-in language server for a file type when the agent
+            first reads or changes a file of that type, and after each write, edit or patch it gives the agent the errors
+            the server reports for that file, so the agent can fix them. In the desktop app, the agent's
+            <code>lsp</code> tool asks the same servers. An object turns the built-ins on with your
+            changes: a server's name, such as <code>typescript</code>, <code>eslint</code>, <code>pyright</code>,
+            <code>gopls</code> or <code>rust</code>, with <code>{`"disabled": true`}</code> turns it off, and an entry
+            with a <code>command</code> replaces how a built-in starts or adds a server of your own, which also needs
+            <code>extensions</code>. <code>env</code> sets its variables, and <code>initialization</code> is sent to the
+            server when it starts.
+          </p>
+          <pre><code>{`{
+  "lsp": {
+    "eslint": { "disabled": true },
+    "my-dsl": {
+      "command": ["my-dsl-language-server", "--stdio"],
+      "extensions": [".dsl"]
+    }
+  }
+}`}</code></pre>
 </DocsPage>

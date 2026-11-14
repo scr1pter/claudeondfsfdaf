@@ -67,8 +67,11 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { memoryLearned } from "./memory-learned"
+import { hostedJobNote } from "./hosted-job-note"
+import { ReplyFooter } from "./reply-footer"
 import { chipTitle, cites, decorateCitations, delivered, segments, type KnowledgeCard } from "./knowledge-citations"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
+import { WorkflowPart, worktreeChip } from "./workflow-part"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -419,6 +422,15 @@ function taskAgent(
   }
 }
 
+// What a terminal call does, as its card's subtitle: the text it types (⏎ for the Enter it presses) or the keys it
+// presses, then the terminal's title, its command, its id or the action.
+function terminalSubtitle(input: any): string | undefined {
+  if (input.action === "type" && typeof input.text === "string" && (input.text || input.enter))
+    return (input.text.replace(/\r?\n/g, " ⏎ ") + (input.enter ? " ⏎" : "")).trim()
+  if (input.action === "keys" && Array.isArray(input.keys) && input.keys.length > 0) return input.keys.join(" ")
+  return input.title ?? input.command ?? input.id ?? input.action
+}
+
 export function getToolInfo(tool: string, input: any = {}): ToolInfo {
   const i18n = useI18n()
   switch (tool) {
@@ -482,6 +494,13 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         subtitle: input.description,
       }
     }
+    case "workflow":
+      return {
+        icon: "task",
+        title: "Workflow",
+        subtitle:
+          typeof input.title === "string" ? input.title : typeof input.name === "string" ? input.name : undefined,
+      }
     case "bash":
       return {
         icon: "console",
@@ -489,7 +508,7 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         subtitle: input.command,
       }
     case "terminal":
-      return { icon: "console", title: "Terminal", subtitle: input.title ?? input.command ?? input.id ?? input.action }
+      return { icon: "console", title: "Terminal", subtitle: terminalSubtitle(input) }
     case "edit":
       return {
         icon: "code-lines",
@@ -1149,8 +1168,9 @@ export function UserMessageDisplay(props: {
   const busy = () => state.busy
 
   const textPart = createMemo(
-    () => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined,
+    () => props.parts?.find((p) => p.type === "text" && (!(p as TextPart).synthetic || hostedJobNote(p))) as TextPart | undefined,
   )
+  const hosted = createMemo(() => hostedJobNote(textPart()))
 
   const text = createMemo(() => cleanVisibleUserText(textPart()?.text || ""))
 
@@ -1178,6 +1198,7 @@ export function UserMessageDisplay(props: {
   })
 
   const metaHead = createMemo(() => {
+    if (hosted()) return "Cloud computer report"
     const agent = props.message.agent
     const items = [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model()]
     return items.filter((x) => !!x).join("\u00A0\u00B7\u00A0")
@@ -1213,7 +1234,7 @@ export function UserMessageDisplay(props: {
   }
 
   return (
-    <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
+    <div data-component="user-message" data-kind={hosted() ? "hosted" : undefined} data-timeline-part-id={textPart()?.id}>
       <Show when={attachments().length > 0}>
         <div data-slot="user-message-attachments">
           <For each={attachments()}>
@@ -1275,7 +1296,7 @@ export function UserMessageDisplay(props: {
                 </Show>
               </span>
             </Show>
-            <Show when={props.actions?.revert}>
+            <Show when={props.actions?.revert && !hosted()}>
               <MessageActionButton
                 icon="reset"
                 label={i18n.t("ui.message.revertMessage")}
@@ -1411,20 +1432,9 @@ export const ToolRegistry = {
   render: getTool,
 }
 
-/** What the app draws under a finished reply, below its copy button and details. */
-export type ReplyFooterComponent = Component<{ message: AssistantMessage }>
-
-const replyFooter: { component?: ReplyFooterComponent } = {}
-
-/**
- * The app's slot under a reply, such as the "Learned 2 things" chip for what Vector learned from the request it
- * answers. session-ui has no engine client of its own, so the app registers the component that reads one.
- */
-export const ReplyFooter = {
-  register(component: ReplyFooterComponent) {
-    replyFooter.component = component
-  },
-}
+// What the app draws under a finished reply: every registered component, in registration order (reply-footer.ts).
+export { ReplyFooter } from "./reply-footer"
+export type { ReplyFooterComponent } from "./reply-footer"
 
 function ToolFileAccordion(props: { path: string; actions?: JSX.Element; children: JSX.Element }) {
   const value = createMemo(() => props.path || "tool-file")
@@ -1735,10 +1745,10 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
             </Show>
           </div>
         </Show>
-        <Show
-          when={showCopy() && props.message.role === "assistant" && !streaming() ? replyFooter.component : undefined}
-        >
-          {(footer) => <Dynamic component={footer()} message={props.message as AssistantMessage} />}
+        <Show when={showCopy() && props.message.role === "assistant" && !streaming()}>
+          <For each={ReplyFooter.list()}>
+            {(footer) => <Dynamic component={footer} message={props.message as AssistantMessage} />}
+          </For>
         </Show>
       </div>
     </Show>
@@ -2266,6 +2276,8 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
     props.indexed ? props.status === "running" : props.status === "pending" || props.status === "running",
   )
   const stateLabel = createMemo(() => (props.indexed ? taskItemLabel(props.metadata.status, props.status) : undefined))
+  // An isolated child's worktree (5.I.4): "3 files changed · branch" while its changes wait for review, or its state.
+  const worktree = createMemo(() => worktreeChip(props.metadata.isolation))
 
   const href = createMemo(() => sessionLink(childSessionId(), location.pathname, data.sessionHref))
   const clickable = createMemo(() => !!(childSessionId() && (data.navigateToSession || href())))
@@ -2318,6 +2330,13 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
           <Show when={stateLabel()}>
             <span data-slot="task-tool-state">{stateLabel()}</span>
           </Show>
+          <Show when={worktree()}>
+            {(label) => (
+              <span data-slot="basic-tool-tool-arg" data-component="task-tool-worktree">
+                {label()}
+              </span>
+            )}
+          </Show>
           <Show when={props.indexed && typeof props.metadata.error === "string" && props.metadata.error}>
             {(error) => <span data-slot="task-tool-error">{error()}</span>}
           </Show>
@@ -2345,6 +2364,11 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
     />
   )
 }
+
+ToolRegistry.register({
+  name: "workflow",
+  render: WorkflowPart,
+})
 
 ToolRegistry.register({
   name: "bash",

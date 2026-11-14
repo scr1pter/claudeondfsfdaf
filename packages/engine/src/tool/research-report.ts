@@ -44,7 +44,8 @@ type Metadata = {
   refused?: boolean
 }
 
-export const HELD = "This report and its sources stay private and out of later sessions until you keep them."
+export const HELD =
+  "This report and its sources stay private and out of later sessions until you keep them (Keep in brain, or ask Vector to keep it)."
 
 export const ResearchReportTool = Tool.define<
   typeof Parameters,
@@ -67,9 +68,9 @@ export const ResearchReportTool = Tool.define<
           if (found.lead.id !== ctx.sessionID)
             return { title: "Not saved", output: "Only the research lead writes the report.", metadata: {} }
           // A lead the build agent started shares its launcher's run, whose spend is not the research's alone.
-          const spent = found.lead.parentID
+          const spend = found.lead.parentID
             ? undefined
-            : (yield* guard.snapshot(SessionID.make(ctx.sessionID)))?.spentUsd
+            : SpendGuard.reportSpend(yield* guard.snapshot(SessionID.make(ctx.sessionID)))
           const input: Research.ReportInput = {
             title: params.title,
             answer: params.answer,
@@ -84,7 +85,7 @@ export const ResearchReportTool = Tool.define<
           }
           const saved = yield* store.report(found.place, found.run.id, input, {
             judged: found.detail.notes.some((note) => note.verdict !== undefined && note.verdict !== "not-judged"),
-            ...(spent ? { spend: `${SpendGuard.formatUsd(spent)} at list prices` } : {}),
+            ...(spend ? { spend } : {}),
             seconds: Math.round((Date.now() - found.run.created_at) / 1000),
           })
           if (saved.type === "refused")

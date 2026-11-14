@@ -1,5 +1,6 @@
 import "./background-tasks.css"
-import { createEffect, on, Show, type Accessor } from "solid-js"
+import { createEffect, createSignal, on, Show, type Accessor } from "solid-js"
+import { useLanguage } from "@/context/language"
 import { backgroundTasksPane } from "./background-tasks-state"
 import { ChevronIcon } from "./icons"
 import {
@@ -19,9 +20,12 @@ import { useBackgroundTasks } from "./use-background-tasks"
  * The inline card where a phase of subagents started: one chip per assistant
  * message, drawn at its first task part. Clicking it shows the phase in
  * Background tasks; Cmd or Ctrl-click on a single agent opens its session.
+ * While the phase blocks the main turn, "Move to background" sits beside the
+ * chip, never inside its button.
  */
 export function SubagentTaskChip(props: { location: Accessor<TaskLocation>; onSizeChange?: () => void }) {
   const tasks = useBackgroundTasks()
+  const language = useLanguage()
   const card = () => props.location().card
   const phase = () => props.location().phase
   const agents = () => phase().agents
@@ -49,6 +53,24 @@ export function SubagentTaskChip(props: { location: Accessor<TaskLocation>; onSi
   const label = () =>
     [title(), kind(), count(), elapsed(), statusSummary(agents().map((a) => a.status))].filter(Boolean).join(", ") +
     ". Show in Background tasks"
+
+  // Only agents the root launched in the foreground, offered by the engine (`controls.background`).
+  const promotable = () => (tasks ? tasks.promotable(agents()) : [])
+  const blocked = () => !!tasks && promotable().length > 0 && tasks.promoteBlocked(agents())
+  const [promoting, setPromoting] = createSignal(false)
+  // The row grows or shrinks when the control comes or goes; the timeline measures it again.
+  createEffect(
+    on(
+      () => [promotable().length > 0, blocked()] as const,
+      () => props.onSizeChange?.(),
+      { defer: true },
+    ),
+  )
+  const promote = async () => {
+    if (!tasks || promoting()) return
+    setPromoting(true)
+    await tasks.promote(agents()).finally(() => setPromoting(false))
+  }
 
   const open = (event: MouseEvent) => {
     const agent = single()
@@ -89,6 +111,26 @@ export function SubagentTaskChip(props: { location: Accessor<TaskLocation>; onSi
         </span>
         <TaskSquares agents={agents()} class="vector-task-chip-squares" squareClass="vector-task-chip-square" />
       </button>
+      <Show when={promotable().length > 0}>
+        <div class="vector-task-chip-actions">
+          <Show
+            when={!blocked()}
+            fallback={
+              <span class="vector-task-chip-note">{language.t("backgroundTasks.promote.batchUnsupported")}</span>
+            }
+          >
+            <button
+              type="button"
+              class="vector-task-chip-promote"
+              disabled={promoting()}
+              aria-busy={promoting()}
+              onClick={promote}
+            >
+              {language.t("backgroundTasks.promote")}
+            </button>
+          </Show>
+        </div>
+      </Show>
     </div>
   )
 }

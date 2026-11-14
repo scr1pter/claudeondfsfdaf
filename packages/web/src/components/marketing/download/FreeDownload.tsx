@@ -83,11 +83,19 @@ export function FreeDownload({ accessToken }: { accessToken?: string }) {
       <details className="free-download-firstrun" open>
         <summary>Opening Vector for the first time</summary>
         {target.os === "macOS" ? (
-          <p>
-            This preview build is not yet notarized by Apple, so macOS blocks it on first launch. Try to open Vector
-            once, then go to System Settings → {"Privacy & Security"} and choose <strong>Open Anyway</strong>. You only
-            need to do this once.
-          </p>
+          <>
+            <p>
+              This preview build is not yet notarized by Apple, so macOS blocks it on first launch. Try to open Vector
+              once, then go to System Settings → {"Privacy & Security"} and choose <strong>Open Anyway</strong>. You
+              only need to do this once.
+            </p>
+            {/* Each update of a build without an Apple Developer ID signature is a new app to the Keychain. */}
+            <p>
+              After an update, macOS may ask once for your password so Vector can open “Vector Safe Storage”, the
+              keychain item that protects your sign-ins. Choose <strong>Always Allow</strong> and it stops asking.
+              Until Vector is signed with an Apple Developer ID, this can happen once after each update.
+            </p>
+          </>
         ) : target.os === "Windows" ? (
           <p>
             This preview installer is not yet code-signed, so Windows shows a SmartScreen warning. Choose{" "}

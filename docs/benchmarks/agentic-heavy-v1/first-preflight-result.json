@@ -1,0 +1,40 @@
+{
+  "kind": "heavy-first-launch-preflight-failure-v1",
+  "originalPlanSha256": "9bf16a71b543acc0a870b750cd1de3d08c6a8e868665a74428d261b236113931",
+  "originalFreezeFile": "first-pair-freeze.json",
+  "classification": "instrument preflight rejection before funding; not an application outcome",
+  "originalExitCode": 2,
+  "originalErrorType": "PolicyError",
+  "originalRedactedOutput": {
+    "errorType": "PolicyError",
+    "automaticRetry": false,
+    "automaticNextPair": false
+  },
+  "fundingScopeOpened": false,
+  "providerRequestsBefore": 889,
+  "providerRequestsAfter": 889,
+  "measuredUsdBefore": 20.3038291,
+  "measuredUsdAfter": 20.3038291,
+  "active": 0,
+  "reservedUsd": 0,
+  "openBatchCalls": 0,
+  "cause": "Strict historical-money comparisons rejected floating-point accumulation roundoff; sealed-history equality had the same issue.",
+  "example": {
+    "historicalFloorUsd": 20.3038291,
+    "accumulatedStatusUsd": 20.303829099999998
+  },
+  "correction": "Use the existing 1e-8 money-comparison tolerance for historical floors and sealed-history zero-headroom checks. Never alter raw balances or authoritative v5 actor/global caps.",
+  "validation": {
+    "beforeRegression": "actual accumulated-state fixture rejected by global historical-floor guard",
+    "relatedFreeControlsPassed": 78,
+    "finalFocusedFundingControlsPassed": 8,
+    "materialRewindNegativeUsesSpecificGuardReason": true,
+    "readOnlyActualControllerPreflight": "both actors affordable; phase/hash/caps/counters exact; no scope opened"
+  },
+  "changedSourceSha256": {
+    "scripts/benchmarks/matched-agentic-study/owned_team_witness.py": "10fb6412a9b79f1b9a2242665f7a67d73589fd1b68961fbc0018ba4cef227dbd",
+    "scripts/benchmarks/matched-agentic-study/test_heavy_funding_profile.py": "263c67bdb3f2962f44e14a279e32990236a01bbb5340df4f25f344ca9c303d38"
+  },
+  "historicalChargesRetained": true,
+  "nextLaunchRequiresNewPlanAndFreshOutput": true
+}

@@ -77,6 +77,14 @@ export type RunInput = {
   demo?: boolean
 }
 
+// The footer's helper commands (5.I.6): "Stop including helpers" (keymap `session.interrupt.all`) stops the main turn
+// and every helper the conversation started; "Resume interrupted helpers" resumes the ones a restart interrupted.
+// Each is offered only when the runtime passes it.
+export type RunHelperActions = {
+  onInterruptAll?: () => void
+  onResumeInterrupted?: () => void
+}
+
 // The semantic role of a scrollback entry. Maps 1:1 to theme colors.
 export type EntryKind = "system" | "user" | "assistant" | "reasoning" | "tool" | "error"
 

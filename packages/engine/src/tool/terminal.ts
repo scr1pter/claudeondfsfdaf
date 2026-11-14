@@ -1,6 +1,7 @@
 import { Clock, Effect, Option, Schema } from "effect"
 import stripAnsi from "strip-ansi"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { Location } from "@vectordevai/core/location"
@@ -89,14 +90,14 @@ export const Parameters = Schema.Struct({
     description: "read: without a cursor, how many of the last lines to show (200 by default, at most 2000)",
   }),
   pattern: Schema.optional(Schema.String).annotate({
-    description: "wait: a regular expression to wait for in the output",
+    description: "open, wait: a regular expression to wait for in the output; open waits for readiness when supplied",
   }),
   exit: Schema.optional(Schema.Boolean).annotate({ description: "wait: wait for the process to exit" }),
   quiet: Schema.optional(PositiveInt).annotate({
     description: "wait: wait until there is no new output for this many milliseconds",
   }),
   timeout: Schema.optional(PositiveInt).annotate({
-    description: "wait: give up after this many milliseconds (30000 by default, at most 60000)",
+    description: "open with pattern, wait: give up after this many milliseconds (30000 by default, at most 60000)",
   }),
   cols: Schema.optional(PositiveInt).annotate({ description: "open, resize: columns" }),
   rows: Schema.optional(PositiveInt).annotate({ description: "open, resize: rows" }),
@@ -120,6 +121,9 @@ export const POLLING_ACTIONS: ReadonlySet<string> = new Set(["list", "read", "wa
 
 const OFFLINE =
   "Vector did not use the terminal. With Web access None in Vector Local, commands run only inside Vector's sandbox, and a terminal cannot run there. Use the shell tool, or change Web access in Vector Local."
+
+const GUESTED =
+  "In a session an invited guest has acted in, you can use only the terminals you opened: the user's terminals and other sessions' stay with the user."
 
 // The bytes each key sends. A ctrl-<letter> key not listed sends the letter's control code.
 const SEQUENCES: Partial<Record<Key, string>> = {
@@ -174,7 +178,12 @@ const EMPTY: Line = { text: "", exact: true }
 export const TerminalTool = Tool.define<
   typeof Parameters,
   Metadata,
-  Config.Service | Plugin.Service | LocationServiceMap.Service | ChildProcessSpawner | FSUtil.Service
+  | Config.Service
+  | Plugin.Service
+  | LocationServiceMap.Service
+  | ChildProcessSpawner
+  | FSUtil.Service
+  | FreeModelGuests.Service
 >(
   "terminal",
   Effect.gen(function* () {
@@ -182,12 +191,31 @@ export const TerminalTool = Tool.define<
     const plugin = yield* Plugin.Service
     const locations = yield* LocationServiceMap.Service
     const permission = yield* ShellPermission
+    const guests = yield* FreeModelGuests.Service
     // By terminal. Lines the user types themselves are not here: the scan sees only what the agent typed.
     const pending = new Map<PtyID, Line>()
 
+    // In a session an invited guest has acted in, the terminals the agent did not open (the user's, such as the one a
+    // Host locally agent runs in, and other sessions') are neither listed nor used: what the agent reads there would
+    // reach the transcript the guest sees, and Full access would approve the asks for them on its own.
+    const guested = (ctx: Tool.Context) => guests.marked(ctx.sessionID)
+
+    // Reading, waiting on, resizing or closing a terminal the agent did not open asks first, under other:<id>.
+    const askOther = Effect.fn("TerminalTool.askOther")(function* (params: Params, ctx: Tool.Context, info: Pty.Info) {
+      if (own(info, ctx)) return
+      const pattern = `${PermissionPolicy.TERMINAL_OTHER}${info.id}`
+      yield* ctx.ask({
+        permission: PermissionPolicy.TERMINAL,
+        patterns: [pattern],
+        always: [pattern],
+        metadata: { action: params.action, id: info.id, title: info.title },
+      })
+    })
+
     const list = Effect.fn("TerminalTool.list")(function* (ctx: Tool.Context) {
       const pty = yield* Pty.Service
-      const infos = yield* pty.list()
+      const all = yield* pty.list()
+      const infos = (yield* guested(ctx)) ? all.filter((info) => own(info, ctx)) : all
       return {
         title: "Terminals",
         metadata: { action: "list" as const },
@@ -227,13 +255,20 @@ export const TerminalTool = Tool.define<
           params,
           `Vector did not open the terminal: ${Shell.name(shell)} cannot pass one of the arguments literally. Run the command line instead.`,
         )
-      if (Sandbox.sandboxEnabled()) yield* ctx.ask(unsandboxed(line || shell))
-      yield* permission.ask(ctx, { command: line, cwd, shell })
+      // A terminal runs outside the shell sandbox: with it on, that is asked after the refusals, before the shell asks.
+      const scan = yield* permission.ask(ctx, {
+        command: line,
+        cwd,
+        shell,
+        ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line || shell) } : {}),
+      })
       const extra = yield* plugin.trigger(
         "shell.env",
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
+      // As the shell tool does before it spawns: the files the command line writes become this session's changes.
+      yield* permission.admit(ctx, [scan])
       const created = yield* pty.create(
         {
           title: params.title ?? (line.split("\n")[0].slice(0, 80) || undefined),
@@ -250,6 +285,8 @@ export const TerminalTool = Tool.define<
       if (params.cols !== undefined || params.rows !== undefined)
         yield* pty.update(created.id, { size: size(params.cols ?? 80, params.rows ?? 24) })
       if (params.reveal) yield* pty.reveal(created.id, { focus: false })
+      if (params.pattern !== undefined)
+        return yield* wait({ action: "open", pattern: params.pattern, timeout: params.timeout }, ctx, created)
       // Up to 500 ms for the first output, so the result shows a prompt, an error or a banner.
       for (let tries = 0; tries < 10; tries++) {
         const read = yield* pty.read(created.id, { limit: 0 })
@@ -271,6 +308,7 @@ export const TerminalTool = Tool.define<
 
     const read = Effect.fn("TerminalTool.read")(function* (params: Params, ctx: Tool.Context, info: Pty.Info) {
       const pty = yield* Pty.Service
+      yield* askOther(params, ctx, info)
       const read = yield* params.cursor === undefined
         ? pty.read(info.id, { lines: Math.min(params.lines ?? 200, 2000), limit: 256_000 })
         : pty.read(info.id, { cursor: params.cursor, limit: 32_000 })
@@ -310,6 +348,7 @@ export const TerminalTool = Tool.define<
           id: info.id,
           title: info.title,
           ...(params.text === undefined ? {} : { text: params.text }),
+          ...(params.text !== undefined && params.enter ? { enter: true } : {}),
           ...(params.keys === undefined ? {} : { keys: params.keys }),
         },
       })
@@ -320,23 +359,28 @@ export const TerminalTool = Tool.define<
         strokes,
         Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\",
       )
-      for (const line of typed.lines) {
-        if (Sandbox.sandboxEnabled()) yield* ctx.ask(unsandboxed(line.text))
-        const recalled = line.recalled === true || HISTORY.test(line.text)
-        yield* permission.ask(ctx, {
-          command: line.text,
-          cwd: info.cwd,
-          shell,
-          unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
-          // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
-          recalled:
-            recalled ||
-            (!line.exact &&
-              line.text
-                .split(/[\s;&|()`{}]+/)
-                .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
-        })
-      }
+      const scans = yield* Effect.forEach(typed.lines, (line) =>
+        Effect.gen(function* () {
+          const recalled = line.recalled === true || HISTORY.test(line.text)
+          return yield* permission.ask(ctx, {
+            command: line.text,
+            cwd: info.cwd,
+            shell,
+            ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line.text) } : {}),
+            unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
+            // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
+            recalled:
+              recalled ||
+              (!line.exact &&
+                line.text
+                  .split(/[\s;&|()`{}]+/)
+                  .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
+          })
+        }),
+      )
+      // One admission for every line the strokes submit, before the first keystroke: a line refused above or here types
+      // nothing, and leaves no claim on a file an earlier line of the same call names.
+      yield* permission.admit(ctx, scans)
       pending.set(info.id, typed.line)
       const from = (yield* pty.read(info.id, { limit: 0 })).end
       for (const [index, data] of writes.entries()) {
@@ -369,6 +413,7 @@ export const TerminalTool = Tool.define<
       const pty = yield* Pty.Service
       if (params.pattern === undefined && params.exit !== true && params.quiet === undefined)
         return usage(params, "wait needs pattern, exit: true or quiet, to know what to wait for.")
+      yield* askOther(params, ctx, info)
       const pattern = params.pattern === undefined ? undefined : matcher(params.pattern)
       const timeout = Math.min(params.timeout ?? 30_000, 60_000)
       const started = yield* Clock.currentTimeMillis
@@ -425,15 +470,7 @@ export const TerminalTool = Tool.define<
 
     const change = Effect.fn("TerminalTool.change")(function* (params: Params, ctx: Tool.Context, info: Pty.Info) {
       const pty = yield* Pty.Service
-      if (!own(info, ctx)) {
-        const pattern = `${PermissionPolicy.TERMINAL_OTHER}${info.id}`
-        yield* ctx.ask({
-          permission: PermissionPolicy.TERMINAL,
-          patterns: [pattern],
-          always: [pattern],
-          metadata: { action: params.action, id: info.id, title: info.title },
-        })
-      }
+      yield* askOther(params, ctx, info)
       if (params.action === "close") {
         yield* pty.remove(info.id)
         pending.delete(info.id)
@@ -480,6 +517,8 @@ export const TerminalTool = Tool.define<
       if (id === undefined) return notFound(params, params.id)
       const pty = yield* Pty.Service
       const info = yield* pty.get(id)
+      if (!own(info, ctx) && (yield* guested(ctx)))
+        return { title: params.action, metadata: { action: params.action, id: info.id }, output: GUESTED }
       if (params.action === "read") return yield* read(params, ctx, info)
       if (params.action === "wait") return yield* wait(params, ctx, info)
       if (params.action === "reveal") return yield* reveal(params, info)

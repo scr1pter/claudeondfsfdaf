@@ -316,3 +316,51 @@ describe("renderLocalReview", () => {
     expect(render({ outcome: value, color: true })).toContain("\x1b[91m\x1b[1mBlocking")
   })
 })
+
+test("Codium footer and passes omit legacy numbers while mixed own passes retain theirs", () => {
+  const raw = {
+    ...outcome().cost!,
+    model: "vector-plan/vector-flash",
+    kind: "codium" as const,
+    costUsd: 99,
+    input: 987654,
+  }
+  const codium = {
+    name: "review" as const,
+    model: raw.model,
+    costKind: "codium" as const,
+    costUsd: 99,
+    input: 987654,
+    output: 1234,
+    cacheRead: 0,
+  }
+  const only = render({ outcome: outcome({ cost: raw, passes: [codium, { ...codium, name: "security" }] }) })
+  expect(only).toContain("Vector Codium · vector-flash · Codium · 1m 52s")
+  expect(only).toContain("review: Codium")
+  expect(only).not.toContain("987")
+  expect(only).not.toContain("$99")
+  const mixed = render({
+    outcome: outcome({
+      cost: { ...raw, kind: "priced", codium: true, costUsd: 0.12, model: "openai/gpt-4.1 + vector-plan/vector-flash" },
+      passes: [
+        codium,
+        {
+          name: "verify",
+          model: "openai/gpt-4.1",
+          costKind: "priced",
+          costUsd: 0.12,
+          input: 100,
+          output: 20,
+          cacheRead: 0,
+        },
+      ],
+    }),
+  })
+  expect(mixed).toContain("$0.12")
+  expect(mixed).toContain("100 in / 20 out")
+  expect(mixed).toContain("Codium")
+  expect(mixed).not.toContain("987")
+  // Label plan §2: the Codium model reads "Vector Codium · <model>", never its vector-plan id.
+  expect(mixed).toContain("openai/gpt-4.1 + Vector Codium · vector-flash · $0.12 + Codium · 1m 52s")
+  expect(mixed).not.toContain("vector-plan")
+})

@@ -1,0 +1,136 @@
+{
+  "kind": "workflow-runner-postlaunch-keyboard-v2-free-controls",
+  "atUtc": "2026-11-02T01:33:08.454691+00:00",
+  "modelCalls": 0,
+  "paidUsd": 0,
+  "bunRuns": 0,
+  "pythonPureControls": {
+    "passed": 18,
+    "failed": 0
+  },
+  "nodeSyntaxChecks": {
+    "passed": 3,
+    "failed": 0
+  },
+  "browserControls": {
+    "controls": [
+      {
+        "control": "positive_accessible_live_contract",
+        "verdict": "passed",
+        "passed": 8,
+        "failed": 0
+      },
+      {
+        "control": "positive_delayed_form_with_early_legacy_content",
+        "verdict": "passed",
+        "passed": 8,
+        "failed": 0,
+        "earlyLegacyVisible": true,
+        "formInitiallyAbsent": true,
+        "formDelayMs": 1508
+      },
+      {
+        "control": "positive_healthy_wrap_from_last_events_button",
+        "verdict": "passed",
+        "passed": 8,
+        "failed": 0,
+        "keyboard": {
+          "startingControl": {
+            "tag": "button",
+            "text": "View events UI created"
+          },
+          "visibleCandidates": 8,
+          "tabLimit": 10,
+          "tabPresses": 4,
+          "bodyTransitions": 0,
+          "reachedControls": [
+            "Workflow name",
+            "Concurrency",
+            "Workflow definition",
+            "Create workflow"
+          ],
+          "missingControls": []
+        }
+      },
+      {
+        "control": "negative_form_excluded_from_native_tab_order",
+        "verdict": "product_failure",
+        "passed": 7,
+        "failed": 1,
+        "keyboard": {
+          "startingControl": {
+            "tag": "button",
+            "text": "View events UI created"
+          },
+          "visibleCandidates": 8,
+          "tabLimit": 10,
+          "tabPresses": 10,
+          "bodyTransitions": 2,
+          "reachedControls": [],
+          "missingControls": [
+            "Workflow name",
+            "Concurrency",
+            "Workflow definition",
+            "Create workflow"
+          ]
+        }
+      },
+      {
+        "control": "negative_missing_exact_label",
+        "verdict": "product_failure",
+        "passed": 5,
+        "failed": 3
+      }
+    ],
+    "modelCalls": 0,
+    "productPassClaim": false
+  },
+  "focusProof": "focus-proof.json",
+  "originalSnapshotsVerified": true,
+  "unchangedContracts": {
+    "apiAssertions": 16,
+    "browserChecks": 7,
+    "evaluatePySha256": "ce4837bff913f1670a6c1f7d2b2bd7323cc667b422aee2b4ae343bbc21c93cc4"
+  },
+  "currentSourceHashes": {
+    "browser-check.cjs": "d68122e788b73e7e70b541a9c9807ae3b6962d0fe496987fb49243558caa0562",
+    "browser-controls.cjs": "8defe0753d24a2ec36aeb5b2c1a70e1d085d1f8354683cb5bbe14fff2b383446",
+    "test_controls.py": "65fde364aa64ada2593e12bc19e1d66af6942f6b9f09c1220b764845fde25709"
+  },
+  "fullCandidateReevaluations": {
+    "performedBy": "study_owner",
+    "modelCalls": 0,
+    "report": "unchanged-candidate-reevaluations.json",
+    "cases": {
+      "codex-first": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 235,
+        "failedChecks": []
+      },
+      "vector-first": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 14,
+        "failedChecks": []
+      },
+      "vector-repair": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 15,
+        "failedChecks": []
+      }
+    }
+  },
+  "originalRootManifestVerifiedBeforeReplacement": true,
+  "reviewedFreezeApprovedByStudyOwner": true
+}

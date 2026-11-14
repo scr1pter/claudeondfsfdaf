@@ -34,3 +34,19 @@ it.live("auth presence is secret-free and create-only writes return a conflict",
     yield* Effect.promise(() => client.auth.remove({ providerID }, { throwOnError: true }))
   }),
 )
+
+it.live("writing the Vector account credential through the real route graph answers at once", () =>
+  Effect.gen(function* () {
+    const server = yield* HttpServer.HttpServer
+    const client = createVectorClient({ baseUrl: HttpServer.formatAddress(server.address) })
+    // Engine tests set VECTOR_DISABLE_MODELS_FETCH, which keeps the forced Codium read off vectordev.ai like every
+    // catalog read, so this checks only that the handler's services are bound and it answers. That the write forces the
+    // read, with which credential and for how long, is httpapi-auth-codium.test.ts.
+    const saved = yield* Effect.promise(() =>
+      client.auth.set({ providerID: "vector", auth: { type: "api", key: "vct_synthetic-account.token" } }),
+    )
+    expect(saved.response.status).toBe(200)
+    expect(saved.data).toBe(true)
+    yield* Effect.promise(() => client.auth.remove({ providerID: "vector" }, { throwOnError: true }))
+  }),
+)

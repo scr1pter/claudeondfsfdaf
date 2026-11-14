@@ -1,4 +1,10 @@
-export const SCHEMA_PATHS = ["/config.json", "/tui.json", "/theme.json", "/desktop-theme.json"] as const
+export const SCHEMA_PATHS = [
+  "/config.json",
+  "/tui.json",
+  "/theme.json",
+  "/desktop-theme.json",
+  "/workflow.json",
+] as const
 
 export async function verifyDeployedSchemas(origin: string, request: typeof fetch = fetch) {
   return Promise.all(
