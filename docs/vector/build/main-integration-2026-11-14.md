@@ -14,6 +14,7 @@ histories. This record concerns source integration, not release publication or p
 | Cloud workspaces | `cloud-workspaces` at `d0300404e` | Preserved pilot admission and confirmed remote erasure before account removal. |
 | Agent environment | `agent-environment` at `fa938a090` | Terminal input serialization, lifecycle and notification work, browser controls and cleanup; late Hands authority checks remain before every typed byte. |
 | Locks | `v2-locks` at `06814f1df` | Included cleanup error reporting and competing directory-creation repairs. |
+| Native isolation | `build-native-shell` through `19aabf9ee`, stat-refresh repair `c3ce00d12` | Inactive build; owned/native combinations and fixed helper bypasses refuse before launch. |
 | Owner setup / build coordination | `6f4a7c5bb`, `41dac6f72` | Retained as clearly labelled historical proposals and receipts. |
 
 ## Repairs made while joining the work
@@ -28,6 +29,10 @@ histories. This record concerns source integration, not release publication or p
   a real isolated child rather than weakening a cleanup deadline.
 - Fixed the combined browser fixture build to resolve Vite's configuration callback before merging its settings.
 - Removed temporary compatibility/diagnostic workflows and retained permanent dispatchable validation lanes for `main`.
+- Kept review leases valid across harmless Git stat-cache refreshes while comparing the actual staged entries, tree and
+  HEAD/ref. A captured private index remains private; real content, mode, staged and ref changes still invalidate it.
+- Kept confirmed Everywhere publication receipts stable across retry/restart. Ambiguous pushes say to check the remote,
+  and bounded atomic journal writes cannot replace the last readable file with an oversized record.
 
 ## Validation ledger
 
@@ -42,6 +47,8 @@ The current exact-head GitHub checks remain the merge gate.
 | Merged terminal safety regression | 16 passed, 63 assertions | 39 explicit POSIX PTY cases skipped on Windows; these require Linux CI. |
 | Connected read policy / hub / qualified capability | 42 / 41 / 3 passed; 767 / 321 / 15 assertions | Genuine provider-success and secret-negative paths require Linux private-Git qualification. |
 | Linear OAuth / webhook regression | 15 / 15 passed; 112 / 146 assertions | Four webhook cases explicitly require disposable Redis in CI. API typecheck passed. |
+| Everywhere runner / ledger / engine regressions | 47 passed; 773 assertions | Source-level fixtures and real atomic file preservation; the production runner is still held pending VE-21 composition. |
+| Native pure policy / adapter / spawner checks | 134 passed | Four explicit Windows/platform skips; Core and Engine types passed. Real-host bootstrap remains unqualified. |
 | Prior integrated account erasure regression | 34 passed; 369 assertions | One explicit Valkey-dependent skip; held loopback HTTP exercises the unchanged one-second abort deadline. |
 | Generated clients | Client generator and legacy SDK build passed in initial integration | Regenerate after the last public API merge; commit only actual drift. |
 | First shared candidate `fbf1eb1b3` | Vercel preview build, cloud-workspace lane, public-sharing lane and standalone-installer lane passed | Browser fixture callback and task fixture owner-model failures were diagnosed and fixed afterward; this head does not qualify later changes. |
@@ -55,14 +62,18 @@ lineage, spend or cancellation assertion was relaxed to hide the failure.
 - All existing experimental flags remain off by default. Source inclusion does not list Codium perks or enable cloud
   agents, native isolation, GitHub Brain transport, Everywhere, connected workflows or cloud workspaces.
 - Native isolation still needs a qualified real-host bootstrap, cleanup and adversarial matrix. The last completed
-  diagnostic (`43620478356`) passed pure policy and metadata preflights, then refused prepare at bubblewrap destination
-  creation. It is not an isolation pass. No mask or cleanup policy was relaxed to make that run green.
+  diagnostic (`43621985900`, `f141ef16e`) passed 31 pure policy cases and metadata preflights, then refused prepare at
+  bubblewrap's inaccessible host-temp destination before keeper startup; cleanup proof remained refused. It is not an
+  isolation pass. No mask or cleanup policy was relaxed to make that run green.
 - The legal branch contains live consent/version/page changes, despite its historical "docs-only" label. Those proposals
   require the owner's legal review; the current deployed terms and consent date are preserved.
 - Provider/payment acceptance, platform app registration, protected secrets, code signing, release publication and live
   company deployments remain separate owner-controlled gates.
 - V27 encrypted session save/restore and attestation, later VectorScope executors and connected automatic repair remain
   explicit disabled follow-ups under the reviewed Tier C plan. A source merge is not evidence that those workflows run.
+- `integration-runtime-boundaries.md` records the remaining production composition and credential-authority contracts.
+  Connected adapters currently register VectorScope; source for Hands/GitHub does not automatically register them as
+  connected members. Those registrations require their declared lifecycle, cancellation, privacy and budget contracts.
 - The Signature design specification is present. The Mac redesign implementation is not represented by an unpushed local
   checkout; this integration does not claim to have imported it.
 
