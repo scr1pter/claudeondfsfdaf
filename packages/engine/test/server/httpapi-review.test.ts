@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { afterEach, describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { ConfigProvider, Effect, Layer, Option, Schema } from "effect"
+import { Cause, ConfigProvider, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { inArray } from "drizzle-orm"
 import { HttpServer } from "effect/unstable/http"
 import { createVectorClient } from "@vectordevai/sdk/v2"
@@ -12,6 +12,7 @@ import { decodeLocalRun } from "@vectordevai/core/review/local-result"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Database } from "@vectordevai/core/database/database"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { foreignReview } from "../../../core/test/fixture/review-deletion"
@@ -20,6 +21,7 @@ import { ReviewLocalRun } from "@/review/local-run"
 import { Config } from "@/config/config"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceHooks } from "@/project/instance-hooks"
 import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
@@ -157,12 +159,140 @@ function data<S extends Schema.Top>(response: Response, schema: S) {
   expect(response.status).toBe(200)
   return call(() => response.json()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)))
 }
-function finished(f: Effect.Success<ReturnType<typeof fixture>>, runID: string) {
+type Diagnostic = {
+  case: "discovery" | "read-asks"
+  phase: "fixture" | "post" | "get-run" | "get-list" | "idle"
+  runID?: string
+  runStatus: ReviewRun.Status | "unavailable"
+  modelRequests: number | "unavailable"
+  backgroundRunning: number | "unavailable"
+  stores: Map<string, BackgroundJobStore.Interface>
+  storeObserved: boolean
+  jobStatus:
+    | "unavailable"
+    | "missing"
+    | "running"
+    | "completed"
+    | "error"
+    | "cancelled"
+    | "interrupted"
+    | "other"
+    | "query-timeout"
+    | "query-failed"
+  sample?: Effect.Effect<void>
+}
+const diagnostic = (kind: Diagnostic["case"]): Diagnostic | undefined =>
+  process.env.VECTOR_REVIEW_HTTP_DIAGNOSTICS === "1"
+    ? {
+        case: kind,
+        phase: "fixture",
+        runStatus: "unavailable",
+        modelRequests: "unavailable",
+        backgroundRunning: "unavailable",
+        jobStatus: "unavailable",
+        stores: new Map(),
+        storeObserved: false,
+      }
+    : undefined
+const captureDiagnostic = (state: Diagnostic | undefined, f: Effect.Success<ReturnType<typeof fixture>>) =>
+  Effect.gen(function* () {
+    if (!state) return
+    state.sample = Effect.gen(function* () {
+      state.modelRequests = yield* f.llm.calls
+      const store = state.stores.get(f.directory)
+      state.storeObserved = store !== undefined
+      if (!store) return
+      const rows = yield* store.forParent(parentID)
+      state.backgroundRunning = rows.filter((job) => job.status === "running").length
+      if (!state.runID) return
+      const job = rows.find((job) => job.id === state.runID)
+      state.jobStatus = !job
+        ? "missing"
+        : ["running", "completed", "error", "cancelled", "interrupted"].includes(job.status)
+          ? job.status
+          : "other"
+    })
+    state.phase = "idle"
+  })
+const reportDiagnostic = (state: Diagnostic, trigger: "watchdog" | "failure") =>
+  Effect.gen(function* () {
+    const phase = state.phase
+    yield* (state.sample ?? Effect.void).pipe(
+      Effect.timeoutOrElse({
+        duration: "250 millis",
+        orElse: () =>
+          Effect.sync(() => {
+            state.jobStatus = "query-timeout"
+          }),
+      }),
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.interrupt
+          : Effect.sync(() => {
+              state.jobStatus = "query-failed"
+            }),
+      ),
+    )
+    yield* Effect.sync(() =>
+      console.error(
+        "review-http-diagnostic",
+        JSON.stringify({
+          case: state.case,
+          trigger,
+          phase,
+          runStatus: state.runStatus,
+          runKnown: state.runID !== undefined,
+          modelRequests: state.modelRequests,
+          backgroundRunning: state.backgroundRunning,
+          storeObserved: state.storeObserved,
+          jobStatus: state.jobStatus,
+        }),
+      ),
+    )
+  })
+const diagnosed =
+  (state: Diagnostic | undefined) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+    if (!state) return effect
+    return Effect.gen(function* () {
+      const hooks = yield* Effect.serviceOption(InstanceHooks.Service)
+      if (Option.isSome(hooks))
+        yield* hooks.value.register(
+          `review-http-diagnostic-${state.case}`,
+          Effect.gen(function* () {
+            const instance = yield* InstanceRef
+            const store = yield* Effect.serviceOption(BackgroundJobStore.Service)
+            if (instance && Option.isSome(store)) state.stores.set(instance.directory, store.value)
+          }),
+        )
+      const watchdog = yield* Effect.sleep("25 seconds").pipe(
+        Effect.andThen(reportDiagnostic(state, "watchdog")),
+        Effect.forkScoped,
+      )
+      return yield* effect.pipe(
+        Effect.onExit((exit) => (Exit.isFailure(exit) ? reportDiagnostic(state, "failure") : Effect.void)),
+        Effect.ensuring(Fiber.interrupt(watchdog)),
+      )
+    })
+  }
+
+function finished(f: Effect.Success<ReturnType<typeof fixture>>, runID: string, state?: Diagnostic) {
+  const read = f.raw("GET", `${root}/${runID}`).pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))
   return pollWithTimeout(
-    f.raw("GET", `${root}/${runID}`).pipe(
-      Effect.flatMap((response) => data(response, ReviewRun.Info)),
-      Effect.map((state) => (state.status === "running" ? undefined : state)),
-    ),
+    (state
+      ? Effect.suspend(() => {
+          state.phase = "get-run"
+          return read.pipe(
+            Effect.tap((value) =>
+              Effect.sync(() => {
+                state.runStatus = value.status
+                state.phase = "idle"
+              }),
+            ),
+          )
+        })
+      : read
+    ).pipe(Effect.map((state) => (state.status === "running" ? undefined : state))),
     "Local review did not settle",
     "15 seconds",
   )
@@ -344,9 +474,11 @@ describe("owner local review HTTP boundary", () => {
 
   it.live(
     "local execution and bounded cross-client discovery need no GitHub connection and never leak result JSON in summaries",
-    () =>
-      Effect.gen(function* () {
+    () => {
+      const state = diagnostic("discovery")
+      return Effect.gen(function* () {
         const f = yield* fixture()
+        yield* captureDiagnostic(state, f)
         const ids: string[] = []
         for (let n = 0; n < 3; n++) {
           const request = { ...f.request, requestID: `request_http_page_${n}` }
@@ -368,26 +500,40 @@ describe("owner local review HTTP boundary", () => {
               )
               .usage({ input: 120, output: 30 }),
           )
+          if (state) {
+            state.phase = "post"
+            state.runID = undefined
+            state.runStatus = "unavailable"
+            state.jobStatus = "unavailable"
+          }
           const started = yield* f
             .raw("POST", root, owner, request)
             .pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))
+          if (state) {
+            state.runID = started.runID
+            state.runStatus = started.status
+            state.phase = "idle"
+          }
           ids.push(started.runID)
-          const complete = yield* finished(f, started.runID)
+          const complete = yield* finished(f, started.runID, state)
           expect(complete.status).toBe("completed")
           const decoded = yield* call(() => decodeLocalRun(complete, { parentID, request, runID: started.runID }))
           expect(decoded?.result?.outcome?.selection.inline).toHaveLength(1)
           expect(decoded?.result?.outcome?.cost?.input).toBe(120)
           expect(decoded?.verdict.verdict).toBe("blocking")
           expect(complete.artifact?.json).toContain("PRIVATE_RESULT_BODY_MARKER")
+          if (state) state.phase = "post"
           expect(
             (yield* f
               .raw("POST", root, owner, request)
               .pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))).runID,
           ).toBe(started.runID)
+          if (state) state.phase = "idle"
         }
         const pages: string[] = []
         let cursor: string | undefined
         do {
+          if (state) state.phase = "get-list"
           const response = yield* f.raw("GET", `${root}?limit=1${cursor ? `&cursor=${cursor}` : ""}`)
           expect(response.status).toBe(200)
           const text = yield* call(() => response.text())
@@ -400,31 +546,50 @@ describe("owner local review HTTP boundary", () => {
           expect(parsed.value.runs[0]!.hasResult).toBe(true)
           pages.push(parsed.value.runs[0]!.runID)
           cursor = parsed.value.next
+          if (state) state.phase = "idle"
         } while (cursor)
         expect(new Set(pages)).toEqual(new Set(ids))
         expect(yield* f.llm.inputs).toHaveLength(3)
+        if (state) state.phase = "get-list"
         expect((yield* f.raw("GET", `${root}?limit=51`)).status).toBe(400)
-      }),
+        if (state) state.phase = "idle"
+      }).pipe(diagnosed(state))
+    },
     30_000,
   )
 
   it.live(
     "the server derives inherited read asks and excludes protected payloads and tools",
-    () =>
-      Effect.gen(function* () {
+    () => {
+      const state = diagnostic("read-asks")
+      return Effect.gen(function* () {
         const f = yield* fixture()
+        yield* captureDiagnostic(state, f)
+        if (state) state.phase = "fixture"
         yield* call(() =>
           f.sdk.session.update({
             sessionID: parentID,
             permission: [{ permission: "read", pattern: "private.ts", action: "ask" }],
           }),
         )
+        if (state) state.phase = "idle"
         yield* f.llm.push(reply().tool("read", { filePath: "private.ts" }))
         yield* f.llm.push(reply().tool("StructuredOutput", report()))
+        if (state) {
+          state.phase = "post"
+          state.runID = undefined
+          state.runStatus = "unavailable"
+          state.jobStatus = "unavailable"
+        }
         const started = yield* f
           .raw("POST", root, owner, f.request)
           .pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))
-        const complete = yield* finished(f, started.runID)
+        if (state) {
+          state.runID = started.runID
+          state.runStatus = started.status
+          state.phase = "idle"
+        }
+        const complete = yield* finished(f, started.runID, state)
         const decoded = yield* call(() =>
           decodeLocalRun(complete, { parentID, request: f.request, runID: started.runID }),
         )
@@ -432,7 +597,8 @@ describe("owner local review HTTP boundary", () => {
         expect(decoded?.result?.outcome?.unreviewed).toContain("private.ts")
         expect(JSON.stringify(yield* f.llm.inputs)).not.toContain("WITHHELD_HTTP_CONTENT")
         expect(yield* f.llm.inputs).toHaveLength(2)
-      }),
+      }).pipe(diagnosed(state))
+    },
     30_000,
   )
 
