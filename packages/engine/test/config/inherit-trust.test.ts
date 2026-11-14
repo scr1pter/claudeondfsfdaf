@@ -14,6 +14,7 @@ import { Config } from "@/config/config"
 import { ConfigPaths } from "@/config/paths"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Auth } from "@/auth"
 import { Env } from "@/env"
 import { AuthTest } from "../fake/auth"
@@ -21,8 +22,9 @@ import { NpmTest } from "../fake/npm"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(
+const configLayer = (experimentalConnect: boolean) =>
   LayerNode.compile(LayerNode.group([Config.node, FSUtil.node, Env.node, CrossSpawnSpawner.node]), [
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect })],
     [Auth.node, AuthTest.empty],
     [Npm.node, NpmTest.noop],
     [
@@ -32,8 +34,9 @@ const it = testEffect(
         HttpClient.make((request) => Effect.die(`unexpected http request: ${request.url}`)),
       ),
     ],
-  ]),
-)
+  ])
+const it = testEffect(configLayer(true))
+const off = testEffect(configLayer(false))
 
 const withEnv = <A, E, R>(name: string, value: string, self: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
@@ -52,6 +55,44 @@ const withEnv = <A, E, R>(name: string, value: string, self: Effect.Effect<A, E,
 
 const providerConfig = { model: "fixture/model", provider: { fixture: { models: { model: { name: "Fixture" } } } } }
 const linkType = process.platform === "win32" ? "junction" : "dir"
+
+off.instance(
+  "Connect off preserves already trusted ordinary settings and consistent directory aliases",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const config = yield* Config.Service
+      const parent = yield* InstanceRef
+      if (!parent) throw new Error("Missing parent instance")
+      expect((yield* config.trust()).trusted).toBe(true)
+      expect((yield* config.get()).provider?.fixture?.models?.model).toEqual({ name: "Fixture" })
+      const outside = yield* tmpdirScoped()
+      const alias = path.join(outside, "project")
+      yield* Effect.promise(() => fs.symlink(test.directory, alias, linkType))
+      const context = { ...parent, directory: alias, worktree: alias }
+      expect((yield* config.trust().pipe(Effect.provideService(InstanceRef, context))).trusted).toBe(true)
+      expect(
+        (yield* config.get().pipe(Effect.provideService(InstanceRef, context))).provider?.fixture?.models?.model,
+      ).toEqual({ name: "Fixture" })
+    }),
+  { git: true, trusted: true, config: providerConfig },
+)
+
+it.instance("an unavailable canonical scope refuses project trust without crashing the actual Config service", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const parent = yield* InstanceRef
+    if (!parent) throw new Error("Missing parent instance")
+    const target = yield* tmpdirScoped()
+    const outside = yield* tmpdirScoped()
+    const file = path.join(target, "vector.json")
+    yield* Effect.promise(() => fs.writeFile(file, JSON.stringify(providerConfig)))
+    const context = { ...parent, directory: target, worktree: outside }
+    expect((yield* config.trust().pipe(Effect.provideService(InstanceRef, context))).trusted).toBe(false)
+    expect((yield* config.get().pipe(Effect.provideService(InstanceRef, context))).provider?.fixture).toBeUndefined()
+    expect(yield* config.trustedPath(file).pipe(Effect.provideService(InstanceRef, context))).toBeUndefined()
+  }),
+)
 
 it.instance(
   "mixed real-directory and aliased-worktree spellings load only the exact inherited project bytes",

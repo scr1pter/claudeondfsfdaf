@@ -57,6 +57,7 @@ import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { ConfigLocalV1 } from "@vectordevai/core/v1/config/local"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { ConnectConfig } from "@/connect/config"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 
 // Custom merge function that concatenates array fields instead of replacing them
 // Keep remeda's deep conditional merge type out of hot config-loading paths; TS profiling showed it dominates here.
@@ -1654,6 +1655,7 @@ const layer = Layer.effect(
     const teams = yield* Teams.Service
     const env = yield* Env.Service
     const dependencies = yield* ConfigDependencies.Service
+    const flags = yield* RuntimeFlags.Service
     // An organization's config is the remote-config source's, so Vector Local decides each read of it.
     const http = EgressHttpClient.make(yield* HttpClient.HttpClient)
     const flock = yield* EffectFlock.Service
@@ -1907,15 +1909,19 @@ const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (current: InstanceContext) {
-        const resolved = yield* Effect.tryPromise({
-          try: () => ConfigPaths.canonicalScope(current),
-          catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-        }).pipe(
-          Effect.map(Option.some),
-          Effect.catch((cause) =>
-            Effect.logWarning("configuration scope could not be canonicalized", { cause }).pipe(Effect.as(Option.none())),
-          ),
-        )
+        const resolved = yield* flags.experimentalConnect
+          ? Effect.tryPromise({
+              try: () => ConfigPaths.canonicalScope(current),
+              catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+            }).pipe(
+              Effect.map(Option.some),
+              Effect.catch((cause) =>
+                Effect.logWarning("configuration scope could not be canonicalized", { cause }).pipe(
+                  Effect.as(Option.none()),
+                ),
+              ),
+            )
+          : Effect.succeed(Option.some(current))
         const ctx = Option.getOrElse(resolved, () => current)
         const auth = yield* authSvc.all().pipe(Effect.orDie)
         const managed = ConfigManaged.read()
@@ -1983,10 +1989,13 @@ const layer = Layer.effect(
         ]
         const captureTrustSnapshot = async () => {
           if (Option.isNone(resolved))
-            return WorkspaceTrust.unavailableSnapshot(trustWorkspace, new Error("The configuration scope is unavailable."))
+            return WorkspaceTrust.unavailableSnapshot(
+              trustWorkspace,
+              new Error("The configuration scope is unavailable."),
+            )
           try {
             const captured = await WorkspaceTrust.snapshot(trustWorkspace, trustInputs)
-            const latest = await ConfigPaths.canonicalScope(current)
+            const latest = flags.experimentalConnect ? await ConfigPaths.canonicalScope(current) : current
             if (latest.directory !== ctx.directory || latest.worktree !== ctx.worktree)
               throw new Error("The configuration scope changed while its trusted inputs were captured.")
             return captured
@@ -2767,7 +2776,16 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Auth.node, Teams.node, Env.node, ConfigDependencies.node, httpClient, EffectFlock.node],
+  deps: [
+    FSUtil.node,
+    Auth.node,
+    Teams.node,
+    Env.node,
+    ConfigDependencies.node,
+    RuntimeFlags.node,
+    httpClient,
+    EffectFlock.node,
+  ],
 })
 
 export * as Config from "./config"

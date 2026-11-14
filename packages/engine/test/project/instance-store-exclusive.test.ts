@@ -7,6 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { registerDisposer } from "@/effect/instance-registry"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
 import { InstanceStore } from "@/project/instance-store"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 
@@ -15,12 +16,15 @@ import { awaitWithTimeout, testEffect } from "../lib/effect"
 const Bootstrap = Context.Reference<Effect.Effect<void>>("test/InstanceStore/Bootstrap", {
   defaultValue: () => Effect.void,
 })
-const storeLayer = AppNodeBuilder.build(LayerNode.group([InstanceStore.node, CrossSpawnSpawner.node]), [
-  [
-    InstanceStore.bootstrapNode,
-    Layer.succeed(InstanceBootstrap.Service, { run: Effect.flatMap(Bootstrap, (run) => run) }),
-  ],
-])
+const storeLayers = (experimentalConnect: boolean) =>
+  AppNodeBuilder.build(LayerNode.group([InstanceStore.node, CrossSpawnSpawner.node]), [
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect })],
+    [
+      InstanceStore.bootstrapNode,
+      Layer.succeed(InstanceBootstrap.Service, { run: Effect.flatMap(Bootstrap, (run) => run) }),
+    ],
+  ])
+const storeLayer = storeLayers(true)
 const it = testEffect(storeLayer)
 const selection = Effect.gen(function* () {
   const directory = yield* tmpdirScoped()
@@ -45,6 +49,32 @@ const isolated = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => close.pipe(Effect.ignoreCause))
   return { store: Context.get(services, InstanceStore.Service), close }
 })
+
+it.instance("exclusive admission is inert with Connect off while ordinary instance loading still works", () =>
+  Effect.gen(function* () {
+    const services = yield* Layer.build(Layer.fresh(storeLayers(false)))
+    const store = Context.get(services, InstanceStore.Service)
+    const input = yield* selection
+    let bootstraps = 0
+    let callbacks = 0
+    const boot = Effect.sync(() => {
+      bootstraps++
+    })
+    const result = yield* fresh(store)(input, () =>
+      Effect.sync(() => {
+        callbacks++
+      }),
+    ).pipe(Effect.provideService(Bootstrap, boot))
+    expect(Option.isNone(result)).toBe(true)
+    expect(bootstraps).toBe(0)
+    expect(callbacks).toBe(0)
+    expect(yield* store.loaded()).toEqual([])
+    const context = yield* store.load(input).pipe(Effect.provideService(Bootstrap, boot))
+    expect(bootstraps).toBe(1)
+    expect(context.directory).toBe(input.directory)
+    yield* store.dispose(context)
+  }),
+)
 
 it.instance(
   "a waiting loaded snapshot hides retired leases and cannot authorize disposing a later shared instance",
@@ -368,7 +398,12 @@ it.instance("global disposal continues through an exclusive cleanup failure to e
     const ready = yield* Deferred.make<void>()
     let cleaned = false
     yield* disposer(bad.directory, Effect.die(new Error("PRIVATE_DISPOSER_REJECTION")))
-    yield* disposer(good.directory, Effect.sync(() => { cleaned = true }))
+    yield* disposer(
+      good.directory,
+      Effect.sync(() => {
+        cleaned = true
+      }),
+    )
     const first = yield* fresh(store)(bad, () =>
       Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
     ).pipe(Effect.forkChild({ startImmediately: true }))
