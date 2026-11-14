@@ -4,7 +4,7 @@ import { Effect, Fiber, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
-import { mkdir } from "node:fs/promises"
+import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { registerAdapter } from "../../src/control-plane/adapters"
 import { WorkspaceV2 } from "@vectordevai/core/workspace"
@@ -46,7 +46,7 @@ const testStateLayer = Layer.effectDiscard(
   }),
 )
 
-const workspaceLayer = workspaceLayerWithRuntimeFlags({ experimentalWorkspaces: true })
+const workspaceLayer = workspaceLayerWithRuntimeFlags({ experimentalWorkspaces: true, experimentalConnect: false })
 
 const it = testEffect(
   Layer.mergeAll(
@@ -195,9 +195,17 @@ describe("HttpApi instance context middleware", () => {
     }),
   )
 
-  it.live("refuses a nonexistent raw directory after malformed header or query decoding", () =>
+  it.live("with Connect off, refuses a nonexistent raw directory after malformed header or query decoding", () =>
     Effect.gen(function* () {
       const missing = path.join(yield* tmpdirScoped({ git: true }), "%E0%A4%A")
+      expect(
+        yield* Effect.promise(() =>
+          access(missing).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      ).toBe(false)
       yield* serveProbe()
 
       const header = yield* HttpClientRequest.get("/probe").pipe(
@@ -208,6 +216,30 @@ describe("HttpApi instance context middleware", () => {
 
       expect(header.status).toBe(500)
       expect(query.status).toBe(500)
+      expect(
+        yield* Effect.promise(() =>
+          access(missing).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      ).toBe(false)
+    }),
+  )
+
+  it.live("refuses an existing file before instance bootstrap without changing its literal-percent contents", () =>
+    Effect.gen(function* () {
+      const file = path.join(yield* tmpdirScoped({ git: true }), "%E0%A4%A")
+      yield* Effect.promise(() => writeFile(file, "This is a file, not an instance directory.\n"))
+      yield* serveProbe()
+      const header = yield* HttpClientRequest.get("/probe").pipe(
+        HttpClientRequest.setHeader("x-vector-directory", file),
+        HttpClient.execute,
+      )
+      const query = yield* HttpClient.get(`/probe?directory=${encodeURIComponent(file)}`)
+      expect(header.status).toBe(500)
+      expect(query.status).toBe(500)
+      expect(yield* Effect.promise(() => readFile(file, "utf8"))).toBe("This is a file, not an instance directory.\n")
     }),
   )
 
@@ -249,7 +281,7 @@ describe("HttpApi instance context middleware", () => {
       yield* serveProbe()
 
       const response = yield* HttpClientRequest.get(`/probe?workspace=${workspace.id}`).pipe(
-        HttpClientRequest.setHeader("x-vector-directory", dir),
+        HttpClientRequest.setHeader("x-vector-directory", path.join(dir, "unavailable-raw-hint")),
         HttpClient.execute,
       )
 
