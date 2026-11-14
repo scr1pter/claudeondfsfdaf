@@ -75,9 +75,9 @@ env:
 jobs:
   validate-dispatch:
     name: Validate workflow selectors
-    # The Windows-only diagnostic must not wait for an unrelated Linux runner pool.
+    # The focused desktop diagnostics must not wait for an unrelated Linux runner pool.
     # This unchanged builtins-only validator uses the runner's Git for Windows Bash.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'windows-units' && 'windows-2025' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && ((inputs.computer_helper && inputs.computer_helper_target == 'windows-units') || inputs.hands_ui) && 'windows-2025' || 'ubuntu-24.04' }}
     timeout-minutes: 2
     permissions:
       contents: read

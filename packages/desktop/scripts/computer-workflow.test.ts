@@ -317,7 +317,7 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
   }
 })
 
-test("Windows diagnostic validation uses its native runner without changing other modes", () => {
+test("focused desktop validation uses its native runner without changing regular CI", () => {
   const host = String(record(record(main.document.jobs)["validate-dispatch"])["runs-on"])
   for (const target of targets)
     expect(mainExpression(host, { computer_helper: true, computer_helper_target: target }), target).toBe(
@@ -333,6 +333,11 @@ test("Windows diagnostic validation uses its native runner without changing othe
     { computer_helper: false, computer_helper_target: "windows-units" },
   ])
     expect(mainExpression(host, mode)).toBe("ubuntu-24.04")
+  expect(mainExpression(host, { hands_ui: true })).toBe("windows-2025")
+  expect(mainExpression(host, { hands_ui: true, hands_benchmark: true })).toBe("windows-2025")
+  expect(mainExpression(host, { hands_benchmark: true })).toBe("ubuntu-24.04")
+  for (const event of ["pull_request", "push"])
+    expect(mainExpression(host, { hands_ui: true }, event)).toBe("ubuntu-24.04")
 })
 
 test("valid native choices, Node, Hands and study modes run only their named jobs", () => {

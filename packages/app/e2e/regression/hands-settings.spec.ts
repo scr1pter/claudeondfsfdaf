@@ -330,7 +330,9 @@ test("an Escape stop shortcut is recorded on Windows without closing Settings", 
   await page.keyboard.press("Control+Alt+Shift+Escape")
   await expect(stop).toContainText("This shortcut stops it any time: Ctrl+Alt+Shift+Esc")
   await expect(settings).toBeVisible()
-  expect(await calls(page)).toEqual([{ method: "setPrefs", prefs: { stopChord: Hands.STOP_CHORD.win32 } }])
+  expect((await calls(page)).filter((call) => call.method !== "inputSetup" || call.action !== "status")).toEqual([
+    { method: "setPrefs", prefs: { stopChord: Hands.STOP_CHORD.win32 } },
+  ])
   // Windows has no macOS mode or pointer choices.
   await expect(settings.getByRole("radio")).toHaveCount(0)
 })

@@ -3,7 +3,7 @@ import { base64Encode } from "@vectordevai/core/util/encode"
 import type { Computer } from "@vectordevai/schema/computer"
 import { Hands } from "@vectordevai/schema/hands"
 import type { FakeComputerScript } from "../../src/features/computer/fake-platform"
-import { calls, installFakeComputer, type ComputerTestWindow } from "../utils/fake-computer"
+import { calls, installFakeComputer, pushInputSetup, type ComputerTestWindow } from "../utils/fake-computer"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/Vector/ComputerOnboarding"
@@ -18,7 +18,11 @@ const windows: Computer.PermissionsView = {
   adhoc: false,
   helperStart: "ok",
   vectorHoldsGrant: { screen: false, accessibility: false },
-  windows: { captureBlocked: false, elevated: false },
+  windows: {
+    captureBlocked: false,
+    elevated: false,
+    inputSetup: { state: "needs-calibration", mouse: false, keyboard: false },
+  },
 }
 
 test("macOS records consent, refreshes grants by button, timer and focus, then enables only on Finish", async ({
@@ -112,7 +116,9 @@ test("a verified reset acts only on the selected helper grant and refreshes its 
   await finish(page, dialog)
 })
 
-test("Windows skips permission rows and reaches Try it after consent", async ({ page }) => {
+test("Windows requires both calibration deliveries and listener health before explicit Continue and Finish", async ({
+  page,
+}) => {
   const dialog = await openOnboarding(page, {
     state: { backend: "local-windows" },
     permissions: windows,
@@ -120,9 +126,25 @@ test("Windows skips permission rows and reaches Try it after consent", async ({ 
   await expect(dialog).not.toContainText("Preview: this build")
   await expect(dialog).toContainText("No extra permission needed")
   await consent(page, dialog)
-  await expect(dialog.getByRole("heading", { name: "Try it", exact: true })).toBeVisible()
+  const setup = await startWindowsCalibration(page, dialog)
   await expect(dialog.locator("[data-permission]")).toHaveCount(0)
   await expect(dialog.getByRole("button", { name: "Open System Settings", exact: true })).toHaveCount(0)
+  await pushInputSetup(page, { state: "calibrating", mouse: true, keyboard: false })
+  await page.clock.runFor(1000)
+  await expect(setup.locator('[data-input-setup="mouse"]')).toHaveText("Mouse delivery: Verified")
+  await expect(setup.locator('[data-input-setup="keyboard"]')).toHaveText("Keyboard delivery: Waiting")
+  await expect(dialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled()
+  await expect(dialog.getByRole("button", { name: "Finish", exact: true })).toHaveCount(0)
+  await expectNoEnable(page)
+
+  await pushInputSetup(page, { state: "calibrating", mouse: true, keyboard: true })
+  await page.clock.runFor(1000)
+  await expect(setup).toContainText("Checking listener health…")
+  await expect(dialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled()
+  await expect(dialog.getByRole("button", { name: "Finish", exact: true })).toHaveCount(0)
+  await expectNoEnable(page)
+
+  await completeWindowsCalibration(page, dialog)
   await finish(page, dialog)
 })
 
@@ -150,7 +172,8 @@ for (const failure of [
       recheck: failure.permissions,
     })
     await consent(page, dialog)
-    await expect(dialog.getByRole("heading", { name: "Try it", exact: true })).toBeVisible()
+    await startWindowsCalibration(page, dialog)
+    await completeWindowsCalibration(page, dialog)
     await dialog.getByRole("button", { name: "Finish", exact: true }).click()
     await expect(dialog.getByText(failure.message, { exact: true })).toBeVisible()
     await expect(dialog.getByRole("button", { name: "Finish", exact: true, disabled: false })).toHaveCount(0)
@@ -240,6 +263,37 @@ async function consent(page: Page, dialog: Locator) {
 
 async function expectNoEnable(page: Page) {
   expect((await calls(page)).filter((call) => call.method === "setPrefs" && call.prefs.enabled === true)).toEqual([])
+}
+
+async function startWindowsCalibration(page: Page, dialog: Locator) {
+  await expect(dialog.getByRole("heading", { name: "Permissions", exact: true })).toBeVisible()
+  await expect(dialog.getByRole("button", { name: "Continue", exact: true })).toBeDisabled()
+  await expect(dialog.getByRole("button", { name: "Finish", exact: true })).toHaveCount(0)
+  const setup = dialog.locator('[data-component="computer-input-setup"]')
+  await setup.getByRole("button", { name: "Start calibration", exact: true }).click()
+  await expect(setup).toContainText("Waiting for your mouse and keyboard")
+  expect((await calls(page)).filter((call) => call.method === "inputSetup" && call.action === "start")).toEqual([
+    { method: "inputSetup", action: "start" },
+  ])
+  await expectNoEnable(page)
+  return setup
+}
+
+async function completeWindowsCalibration(page: Page, dialog: Locator) {
+  // The fake emits native metadata explicitly. Playwright mouse/key events are not hardware proof.
+  await pushInputSetup(page, { state: "ready", mouse: true, keyboard: true })
+  // One component poll; the two-second onboarding probe in the final-failure cases stays for Finish.
+  await page.clock.runFor(1000)
+  const setup = dialog.locator('[data-component="computer-input-setup"]')
+  await expect(setup).toContainText("Calibrated — listener healthy")
+  await expect(setup.locator('[data-input-setup="mouse"]')).toHaveText("Mouse delivery: Verified")
+  await expect(setup.locator('[data-input-setup="keyboard"]')).toHaveText("Keyboard delivery: Verified")
+  await expect(dialog.getByRole("button", { name: "Continue", exact: true })).toBeEnabled()
+  await expectNoEnable(page)
+  expect((await calls(page)).filter((call) => call.method === "command" && call.command === "resume")).toEqual([])
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click()
+  await expect(dialog.getByRole("heading", { name: "Try it", exact: true })).toBeVisible()
+  await expectNoEnable(page)
 }
 
 async function finish(page: Page, dialog: Locator) {

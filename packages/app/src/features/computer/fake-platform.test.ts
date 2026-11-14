@@ -79,6 +79,68 @@ describe("fake computer platform", () => {
     expect((await linux.permissions()).rows).toEqual([])
   })
 
+  test("Windows calibration is explicit synthetic metadata and preserves fresh permission failures", async () => {
+    const windows: Computer.PermissionsView = {
+      rows: [],
+      canReset: false,
+      adhoc: false,
+      helperStart: "ok",
+      vectorHoldsGrant: { screen: false, accessibility: false },
+      windows: { captureBlocked: false, elevated: false },
+    }
+    const fake = createFakeComputer({
+      state: { backend: "local-windows", phase: "paused" },
+      prefs: { consentedAt: 1 },
+      permissions: windows,
+      recheck: { ...windows, windows: { captureBlocked: true, elevated: false } },
+    })
+    expect(await fake.inputSetup!("start")).toEqual({ state: "calibrating", mouse: false, keyboard: false })
+    fake.emitInputSetup({ state: "calibrating", mouse: true, keyboard: false })
+    expect(Computer.inputSetupReady(await fake.inputSetup!("status"))).toBe(false)
+    fake.emitInputSetup({ state: "ready", mouse: true, keyboard: true })
+    expect((await fake.permissions()).windows?.inputSetup).toEqual({ state: "ready", mouse: true, keyboard: true })
+    expect((await fake.recheck()).windows).toEqual({
+      captureBlocked: true,
+      elevated: false,
+      inputSetup: { state: "ready", mouse: true, keyboard: true },
+    })
+    expect((await fake.state()).phase).toBe("paused")
+    expect((await fake.prefs()).prefs.enabled).toBe(false)
+    expect(fake.calls).toEqual([
+      { method: "inputSetup", action: "start" },
+      { method: "inputSetup", action: "status" },
+    ])
+    expect(await fake.inputSetup!("reset")).toEqual({ state: "needs-calibration", mouse: false, keyboard: false })
+  })
+
+  test("passive setup status reads preserve a scripted fresh loss of readiness", async () => {
+    const windows: Computer.PermissionsView = {
+      rows: [],
+      canReset: false,
+      adhoc: false,
+      helperStart: "ok",
+      vectorHoldsGrant: { screen: false, accessibility: false },
+      windows: {
+        captureBlocked: false,
+        elevated: false,
+        inputSetup: { state: "ready", mouse: true, keyboard: true },
+      },
+    }
+    const unavailable: Computer.InputSetupStatus = { state: "unavailable", mouse: false, keyboard: false }
+    const fake = createFakeComputer({
+      state: { backend: "local-windows" },
+      permissions: windows,
+      recheck: { ...windows, windows: { ...windows.windows!, inputSetup: unavailable } },
+    })
+    const status = await fake.inputSetup!("status")
+    expect(status).toEqual({ state: "ready", mouse: true, keyboard: true })
+    Object.assign(status, { mouse: false })
+    expect(await fake.inputSetup!("status")).toEqual({ state: "ready", mouse: true, keyboard: true })
+    expect((await fake.recheck()).windows?.inputSetup).toEqual(unavailable)
+    expect(await fake.inputSetup!("status")).toEqual(unavailable)
+    expect(fake.calls.every((call) => call.method === "inputSetup" && call.action === "status")).toBe(true)
+  })
+
   test("scripts survive JSON transport and policy entries become detached maps", async () => {
     const script: FakeComputerScript = {
       status: { available: false, reason: "policy_disabled" },

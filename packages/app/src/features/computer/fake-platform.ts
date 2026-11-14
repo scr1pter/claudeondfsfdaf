@@ -48,6 +48,8 @@ export type FakeComputerCall =
 export interface FakeComputer extends Computer.ComputerPlatform {
   /** Commands only record intent. Tests explicitly emit the next desktop state. */
   emit(state: Computer.ComputerState): void
+  /** Synthetic native status only; browser mouse/keyboard events never establish hardware calibration. */
+  emitInputSetup(status: Computer.InputSetupStatus): void
   /** A detached snapshot; callers cannot edit the recorded calls. Read methods are not logged. */
   readonly calls: readonly FakeComputerCall[]
   /** Answers the apps() calls held by `holdApps`; later calls answer at once. */
@@ -159,10 +161,24 @@ export function createFakeComputer(script: FakeComputerScript = {}): FakeCompute
     reset: sequence(seed.reset),
   }
   let releaseApps = () => {}
+  let setupState: Computer.InputSetupStatus | undefined
   const held = seed.holdApps ? new Promise<void>((resolve) => (releaseApps = resolve)) : undefined
   const permissionView = (method: keyof typeof sequences) => {
-    current.permissions = sequences[method]() ?? current.permissions
+    const value = sequences[method]() ?? current.permissions
+    current.permissions =
+      setupState && value.windows
+        ? { ...value, windows: { ...value.windows, inputSetup: structuredClone(setupState) } }
+        : value
     return structuredClone(current.permissions)
+  }
+  const updateInputSetup = (setup: Computer.InputSetupStatus) => {
+    if (!windows) throw new Error("Input calibration is unavailable on this platform.")
+    setupState = structuredClone(setup)
+    current.permissions = {
+      ...current.permissions,
+      windows: { captureBlocked: false, elevated: false, ...current.permissions.windows, inputSetup: setupState },
+    }
+    return structuredClone(setupState)
   }
   return {
     supported,
@@ -182,6 +198,9 @@ export function createFakeComputer(script: FakeComputerScript = {}): FakeCompute
       current.state = snapshot
       // Snapshot the subscriber set as well: subscriptions added by a callback start with the next event.
       for (const listener of [...listeners]) listener(structuredClone(snapshot))
+    },
+    emitInputSetup: (setup) => {
+      updateInputSetup(setup)
     },
     command: async (command, arg) => {
       log.push({ method: "command", command, ...(arg === undefined ? {} : { arg: structuredClone(arg) }) })
@@ -206,18 +225,17 @@ export function createFakeComputer(script: FakeComputerScript = {}): FakeCompute
     inputSetup: async (action) => {
       log.push({ method: "inputSetup", action })
       if (!windows) throw new Error("Input calibration is unavailable on this platform.")
-      const setup =
+      if (action === "status")
+        return structuredClone(
+          setupState ??
+            current.permissions.windows?.inputSetup ??
+            seed.inputSetup ?? { state: "unavailable" as const, mouse: false, keyboard: false },
+        )
+      return updateInputSetup(
         action === "reset"
           ? { state: "needs-calibration" as const, mouse: false, keyboard: false }
-          : action === "start"
-            ? { state: "calibrating" as const, mouse: false, keyboard: false }
-            : (current.permissions.windows?.inputSetup ??
-              seed.inputSetup ?? { state: "unavailable" as const, mouse: false, keyboard: false })
-      current.permissions = {
-        ...current.permissions,
-        windows: { captureBlocked: false, elevated: false, ...current.permissions.windows, inputSetup: setup },
-      }
-      return structuredClone(setup)
+          : { state: "calibrating" as const, mouse: false, keyboard: false },
+      )
     },
     openPane: async (id) => {
       log.push({ method: "openPane", id })
