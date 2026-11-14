@@ -81,6 +81,15 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 | `v2-codium-acceptance` | Codium B09, B10 and B11 acceptance runs | Finish, CI, merge. B08 waits until @vector is in |
 | `v2-locks` | Lock follow-ups: `forceRemove` swallowed errors, twin `flock.ts` mkdir, `LockCompromisedError` message | Finish, CI, merge |
 
+**State when this session stopped its lanes (2026-11-14, about 18:00 UTC).** All work was pushed; nothing is left only on the owner's Mac. Re-fetch, check each PR's latest CI, and continue from these heads:
+- `v2-hands` at `3d5a45a09`, PR #30 (base `main`): the v2 merge and conflict resolution were in progress. Last commit: "count Hands' computer.state in the public event manifest". Full CI not confirmed.
+- `agent-environment` at `fa938a090`, PR #32: Verify and typecheck green. Last commit: "double and right clicks". Full test not confirmed. Set the PR base to `main` if it still says `v2`.
+- `cloud-workspaces` at `d0300404e`, PR #21 (base `main`): Verify and typecheck green. Full test not confirmed.
+- `v2-locks` at `06814f1df`, PR #31 (base `main`): the three lock fixes are done and documented. Verify and typecheck green. Full test not confirmed.
+- `v2-codium-acceptance`: never started. Do B09–B11 from scratch.
+- `v2-complete`: not created. Follow `docs/vector/build/v2-notes/v2-complete-plan.md`.
+- Draft PR #29 (`v2-scope`) is superseded by the `v2-complete` plan. Close it once `v2-complete` has its own PR.
+
 **Other branches still to resolve:**
 - `build-native-shell` and `build-isolation` (@vector native isolation): merge switched off after `v2-complete`. Its real-machine qualification is a shipping gate.
 - `owner-setup`, `build-coordination` and `codium-legal`: docs-only, merge them. `codium-legal` holds the legal drafts for the owner's legal read.
