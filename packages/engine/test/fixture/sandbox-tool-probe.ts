@@ -28,6 +28,8 @@ export async function probeToolProcesses() {
     const { FSUtil } = await import("@vectordevai/core/fs-util")
     const { Config } = await import("../../src/config/config")
     const { Agent } = await import("../../src/agent/agent")
+    const { ComputerSession } = await import("../../src/computer/session")
+    const { Session } = await import("../../src/session/session")
     const { Plugin } = await import("../../src/plugin")
     const { Truncate } = await import("../../src/tool/truncate")
     const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
@@ -54,6 +56,8 @@ export async function probeToolProcesses() {
         Truncate.node,
         Config.node,
         Agent.node,
+        ComputerSession.node,
+        Session.node,
         RuntimeFlags.node,
         InstanceStore.node,
         Instruction.node,
@@ -174,6 +178,8 @@ export async function probeToolProcesses() {
           return yield* store.provide(
             { directory: process.cwd() },
             Effect.gen(function* () {
+              const sessions = yield* Session.Service
+              const session = yield* sessions.create({ title: "Synthetic tool-process isolation probe" })
               const info = yield* ShellTool
               const tool = yield* info.init()
               return yield* tool.execute(
@@ -182,7 +188,7 @@ export async function probeToolProcesses() {
                   timeout: 10000,
                 },
                 {
-                  sessionID: SessionID.make("ses_tool_pid_probe"),
+                  sessionID: session.id,
                   messageID: MessageID.make("msg_tool_pid_probe"),
                   callID: "tool-process-probe",
                   agent: "build",

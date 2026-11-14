@@ -192,7 +192,7 @@ async function serve(bundle: string | undefined) {
 
 type ListenOptions = { port: number; hostname: string; username: string; password: string; cors: string[] }
 
-async function startEngine(bundle: string, root: string, modelUrl: string, computer: { url: string; token: string }) {
+async function startEngine(bundle: string, root: string, modelUrl: string, computer?: { url: string; token: string }) {
   const home = path.join(root, "home")
   const userData = path.join(root, "user-data")
   const configDir = path.join(userData, "config", "vector")
@@ -207,8 +207,7 @@ async function startEngine(bundle: string, root: string, modelUrl: string, compu
     cwd: root,
     env: {
       ...sidecarEnv({ home, userData, configDir, password }),
-      VECTOR_COMPUTER_BRIDGE_URL: computer.url,
-      VECTOR_COMPUTER_BRIDGE_TOKEN: computer.token,
+      ...(computer ? { VECTOR_COMPUTER_BRIDGE_URL: computer.url, VECTOR_COMPUTER_BRIDGE_TOKEN: computer.token } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   })

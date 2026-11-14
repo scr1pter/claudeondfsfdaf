@@ -55,8 +55,6 @@ import { ComputerWatch } from "./computer-watch"
 import { limitsLine, type TaskTranslate } from "./task-limits"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { useLanguage } from "@/context/language"
-import { useSDK } from "@/context/sdk"
-import { useDialog } from "@vectordevai/ui/context/dialog"
 
 const MAX_ROWS = 12
 /** How long a first click on Merge or Discard stays armed, as the workspace controls' confirmTwice. */
@@ -142,7 +140,9 @@ function Pane(props: { tasks: BackgroundTasks }) {
     const sessionID = tasks.rootID()
     if (!sessionID || !tasks.capabilities().workflows) return
     const client = sdk().client
-    void import("@/features/race/dialog").then((module) => dialog.show(() => <module.DialogRace client={client} sessionID={sessionID} />))
+    void import("@/features/race/dialog").then((module) =>
+      dialog.show(() => <module.DialogRace client={client} sessionID={sessionID} />),
+    )
   }
   const pane = backgroundTasksPane
   const language = useLanguage()
@@ -157,9 +157,7 @@ function Pane(props: { tasks: BackgroundTasks }) {
   // The pinned Hands card, while this conversation holds or waits for the computer.
   const computer = useComputerState()
   const sync = useSync()
-  const sdk = useSDK()
   const settings = useSettings()
-  const dialog = useDialog()
   const navigate = useNavigate()
   const params = useParams<{ serverKey?: string; id?: string }>()
   const computerCard = createMemo(() => cardModel(computer?.state(), tasks.rootID()))
@@ -425,7 +423,15 @@ function Pane(props: { tasks: BackgroundTasks }) {
           Background tasks
         </h2>
         <Show when={tasks.capabilities().workflows}>
-          <button type="button" class="vector-bg-tasks-icon-btn" onClick={race} aria-label="Race models" title="Race models">Race</button>
+          <button
+            type="button"
+            class="vector-bg-tasks-icon-btn"
+            onClick={race}
+            aria-label="Race models"
+            title="Race models"
+          >
+            Race
+          </button>
         </Show>
         <button
           type="button"
