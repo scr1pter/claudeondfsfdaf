@@ -240,6 +240,13 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
       const auto state=attachment->state;
       if (message==WM_INPUT) state->raw(wparam,lparam);
       if (message==WM_INPUT_DEVICE_CHANGE) state->configuration();
+      if (message==WM_NCDESTROY) {
+        state->route_write.retire();
+        if (!state->closed.load()) {
+          state->record_failure(state->installed.load()?UserInputFailure::native_failed:UserInputFailure::native_window);
+          state->configuration();state->fail();
+        }
+      }
     }
     if (message==WM_NCDESTROY) SetWindowLongPtrW(hwnd,GWLP_USERDATA,0);
     // In particular RIM_INPUT must reach DefWindowProc for the system's Raw Input cleanup.
