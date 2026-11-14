@@ -91,6 +91,12 @@ export const Parameters = Schema.Struct({
   filter: Schema.optional(Schema.String).annotate({
     description: "read_network: show only requests whose URL contains this text",
   }),
+  count: Schema.optional(Schema.Literals([1, 2])).annotate({
+    description: "click: 2 for a double click (1 by default)",
+  }),
+  button: Schema.optional(Schema.Literals(["left", "right"])).annotate({
+    description: "click: the mouse button, left by default; right opens the page's own context menu",
+  }),
 })
 
 export type BrowserReport = {
@@ -613,6 +619,8 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
                 deltaY: params.deltaY,
                 tabId: params.tab,
                 values: params.values,
+                ...(params.action === "click" && params.count !== undefined ? { clickCount: params.count } : {}),
+                ...(params.action === "click" && params.button !== undefined ? { button: params.button } : {}),
                 // The page and the element the asks above judged: the desktop does nothing once either changed, so
                 // a navigation or another call in between cannot get an action past them (B17).
                 // A tab with no page yet is held to having none (""), so a page another call opens in between cannot

@@ -18,6 +18,14 @@ describe("browser bridge input", () => {
     })
   })
 
+  test("a click is single or double, with the left or right button, and nothing else", () => {
+    expect(
+      parseBrowserAgentInput({ contextId: "ses_1", command: "clickRef", ref: "ref_2", clickCount: 2, button: "right" }),
+    ).toMatchObject({ clickCount: 2, button: "right" })
+    for (const field of [{ clickCount: 3 }, { clickCount: "2" }, { button: "middle" }])
+      expect(() => parseBrowserAgentInput({ contextId: "ses_1", command: "click", selector: "#a", ...field })).toThrow()
+  })
+
   test("rejects unknown commands and oversized context ids", () => {
     expect(() => parseBrowserAgentInput({ contextId: "session-1", command: "executeJavaScript" })).toThrow()
     expect(() => parseBrowserAgentInput({ contextId: "x".repeat(300), command: "observe" })).toThrow()

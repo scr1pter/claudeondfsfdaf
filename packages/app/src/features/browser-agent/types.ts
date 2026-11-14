@@ -78,6 +78,10 @@ export type BrowserAgentInput = {
   tabId?: string
   /** selectOption: the option values or visible labels to select. */
   values?: string[]
+  /** click and clickRef: 2 for a double click (1 by default). */
+  clickCount?: number
+  /** click and clickRef: which mouse button (left by default). */
+  button?: "left" | "right"
   /** A driving command runs only while the active tab's page still has this origin: the one the engine checked and asked about. */
   expectOrigin?: string
   /** A click runs only while its target still has this name (clickTargetLabel): the one the engine judged. */

@@ -1026,8 +1026,10 @@ async function boundSelector(selector: string) {
  * Clicks what a selector matches first, as clickRef clicks a ref: trusted input at its centre, the DOM's click when
  * something else covers it, and a file field, or a label for one, refused.
  */
-export async function click(selector: string) {
-  await clickTarget(await boundSelector(selector), selector)
+export type ClickKind = { readonly count?: number; readonly button?: "left" | "right" }
+
+export async function click(selector: string, kind: ClickKind = {}) {
+  await clickTarget(await boundSelector(selector), selector, kind)
 }
 
 /**
@@ -1264,24 +1266,44 @@ export async function runInWorld<T>(
  * Clicks what observePage named `ref` with trusted input at its centre, as the user's own click would land, or with the
  * DOM's click when something else covers that point. A file field, or a label for one, is refused.
  */
-export async function clickRef(ref: string) {
-  await clickTarget(ref, ref)
+export async function clickRef(ref: string, kind: ClickKind = {}) {
+  await clickTarget(ref, ref, kind)
 }
 
-async function clickTarget(ref: string, label: string) {
+async function clickTarget(ref: string, label: string, kind: ClickKind = {}) {
   const contents = ensureView()
   const point = await runPageScript<ClickPoint>(clickPoint, ref)
   if (!point.ok) throw new Error(point.reason)
+  const count = kind.count === 2 ? 2 : 1
+  const button = kind.button === "right" ? "right" : "left"
+  const plain = count === 1 && button === "left"
+  // A double or a right click has no DOM stand-in that acts as the user's would, so it needs the point uncovered.
+  if (!point.hit && !plain)
+    throw new Error(`Something covers ${label} where Vector would click it, so it did not ${describeClick(count, button)} it.`)
   // The page measures in CSS pixels; input goes to the view in its own coordinates.
   const zoom = contents.getZoomFactor()
   const at = { x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) }
   if (point.hit) {
     contents.sendInputEvent({ type: "mouseMove", ...at })
-    contents.sendInputEvent({ type: "mouseDown", ...at, button: "left", clickCount: 1 })
-    contents.sendInputEvent({ type: "mouseUp", ...at, button: "left", clickCount: 1 })
+    // A double click is two presses, the second counted as the second of a pair, as Chromium reads a user's.
+    for (let press = 1; press <= count; press++) {
+      contents.sendInputEvent({ type: "mouseDown", ...at, button, clickCount: press })
+      contents.sendInputEvent({ type: "mouseUp", ...at, button, clickCount: press })
+    }
   }
   if (!point.hit) await runPageScript(clickElement, ref)
-  pushAction(`Clicked ${label}`)
+  pushAction(plain ? `Clicked ${label}` : `${capitalize(describeClick(count, button))}ed ${label}`)
+}
+
+function describeClick(count: number, button: "left" | "right") {
+  return [count === 2 ? "double-click" : "click", button === "right" ? "with the right button" : ""]
+    .filter(Boolean)
+    .join(" ")
+    .replace("click with the right button", "right-click")
+}
+
+function capitalize(text: string) {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** Moves the pointer onto what a ref names, scrolled into view, with a trusted mouse move at its centre. */
@@ -1720,11 +1742,11 @@ async function runBrowserAgentInContext(
         break
       case "click":
         if (!input.selector) throw new Error("The controlled browser needs a selector to click.")
-        await click(input.selector)
+        await click(input.selector, { count: input.clickCount, button: input.button })
         break
       case "clickRef":
         if (!input.ref) throw new Error("The controlled browser needs a ref from observe to click.")
-        await clickRef(input.ref)
+        await clickRef(input.ref, { count: input.clickCount, button: input.button })
         break
       case "hover":
         if (input.ref) await hover(input.ref)
