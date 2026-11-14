@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { expect } from "bun:test"
 import { Effect } from "effect"
@@ -8,6 +9,44 @@ import { Permission } from "../../src/permission"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(Agent.node))
+
+it.effect("a connected fix retains requester read questions without reopening either side's denials", () =>
+  Effect.sync(() => {
+    const child = testAgent({
+      name: ConnectPolicy.FIX_AGENT,
+      mode: "subagent",
+      permission: { "*": "deny", read: { "*": "allow", "restricted/*": "deny" }, edit: "allow" },
+    })
+    const effective = Permission.merge(
+      child.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: Permission.fromConfig({
+          read: { "secrets/*": "ask", "restricted/*": "ask", "private/*": "deny" },
+        }),
+        subagent: child,
+      }),
+    )
+    expect(Permission.evaluate("read", "secrets/key.txt", effective).action).toBe("ask")
+    expect(Permission.evaluate("read", "restricted/key.txt", effective).action).toBe("deny")
+    expect(Permission.evaluate("read", "private/key.txt", effective).action).toBe("deny")
+    expect(Permission.evaluate("read", "public.ts", effective).action).toBe("allow")
+    expect(Permission.evaluate("bash", "curl example.invalid", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("requester read questions do not change unrelated specialist delegation", () =>
+  Effect.sync(() => {
+    const child = testAgent({ name: "general", mode: "subagent", permission: { read: "allow" } })
+    const effective = Permission.merge(
+      child.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: Permission.fromConfig({ read: { "secrets/*": "ask" } }),
+        subagent: child,
+      }),
+    )
+    expect(Permission.evaluate("read", "secrets/key.txt", effective).action).toBe("allow")
+  }),
+)
 
 function testAgent(input: {
   name: string
