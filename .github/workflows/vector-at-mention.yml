@@ -302,8 +302,10 @@ jobs:
           grep -q 'run' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           grep -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
-          bun packages/engine/script/stage-sandbox-probe.ts
+          bun packages/engine/script/stage-sandbox-probe.ts node
+          bun packages/engine/script/stage-sandbox-probe.ts bun
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe-bun.mjs" /opt/vector-sandbox-probe-bun.mjs
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
           sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
           cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
@@ -327,7 +329,7 @@ jobs:
           elif [ "$PROBE_SCENARIO" = session-replaced ]; then
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
           elif [ "$PROBE_RUNTIME" = bun ]; then
-            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe.mjs
+            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe-bun.mjs
           else
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
           fi
