@@ -1,3 +1,9 @@
+# Historical integration snapshot
+
+This is the original build-coordination receipt, retained with its source revision and original qualification limits.
+It does not qualify the later combined `release-finish` source or activate any feature. See the current integration
+record and its exact-head CI results before using its commands or claims.
+
 # Build continuation — 14 November 2026
 
 This records the isolated build work completed overnight. It is not a release approval. The combined candidate joins connected workspace, local VectorScope review, owner controls and history/model guards. The other feature lanes remain separate unless listed as ancestors below.

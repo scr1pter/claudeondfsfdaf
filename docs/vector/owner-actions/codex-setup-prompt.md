@@ -1,3 +1,9 @@
+# Owner setup template — review before use
+
+Preserved from `owner-setup` at `6f4a7c5bb` as a proposed owner workflow. Its original version references and service
+assumptions are historical; this integration does not authorize registrations, credentials, purchases or activation.
+Reconcile it with the current disabled feature flags and the v2 owner gates before running any setup step.
+
 # Codex browser setup prompt: GitHub App, Slack and OpenRouter
 
 Prepared on 2 November 2026 against `main` at `78526052`, `codium` at `d13d91e3`, `vector-at-mention` at `0b68e8f6` and `self-evolving` at `7c26a834`. It replaces the 28 October version on `vector-takeover`; section 1 is still the GitHub App baseline that the @vector contract's section 4 step 3 points to. This is a prompt for a setup session that the owner supervises. It records no registration, installation, account change or live check as done.
