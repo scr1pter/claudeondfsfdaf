@@ -7,7 +7,7 @@ histories. This record concerns source integration, not release publication or p
 
 | Workstream | Included source | Integration notes |
 | --- | --- | --- |
-| v2 foundation / Codium / process ownership / release coordination | `main` at `2f8802184` | Kept the staged erasure and Windows Job Object ownership contracts. |
+| v2 foundation / Codium / process ownership / release coordination | `main` through `58f85edc8` (same code foundation as `2f8802184`) | Kept staged erasure, Windows Job Object ownership and the updated master handoff. |
 | @Vector, connected workspace, Everywhere | `build-complete` at `00b87034f`, `v2-vector` at `5dbdcfb46`, `v2-connect` at `0c58e7f69`, `v2-everywhere` at `40e708614` | Included continuation repairs; guarded launches refuse before creating a durable background job. |
 | VectorScope | `v2-scope` at `76b5619f1` and its folded branches | Renumbered Brain migrations retain aliases for databases that already applied the old IDs. Real Session ownership fixtures replace incomplete test doubles. |
 | Hands | `hands` at `4eb9f52fd`, `v2-hands` at `5681ba012` | Preserved early admission and final native pre-spawn checks. Account broadcasts cannot carry Hands overlay messages. |
@@ -24,7 +24,8 @@ histories. This record concerns source integration, not release publication or p
 - Persisted rotated Linear credentials before viewer verification. Pending credentials cannot be used by older readers;
   definite identity mismatches remain quarantined. Account deletion and reconnect races retain compare-and-swap fences.
 - Quarantined failed exclusive instance cleanup without retaining a dead owner that blocks global disposal. Ordinary
-  disposal keeps its existing compatibility contract. Scope-resolution failure falls back without enabling project trust.
+  disposal keeps its existing compatibility contract. Exclusive admission and extended scope canonicalization require
+  the injected Connect flag; scope-resolution failure falls back without enabling project trust.
 - Preserved the original Windows startup error across Effect boundaries and owned cancellation; the regression exercises
   a real isolated child rather than weakening a cleanup deadline.
 - Fixed the combined browser fixture build to resolve Vite's configuration callback before merging its settings.
@@ -43,7 +44,8 @@ The current exact-head GitHub checks remain the merge gate.
 | --- | --- | --- |
 | Workspace package types | All 27 packages across the initial integration and affected-package repairs | Recheck affected packages after new source changes. |
 | Agent-environment combined types | Schema, Core, Engine, App, Desktop passed | App/desktop required removing a duplicated notification import. |
-| Exclusive instance ownership regression | 13 passed, 64 assertions | Actual store, bootstrap, disposer and cancellation lifecycle; no company data. |
+| Exclusive instance ownership regression | 14 passed, 70 assertions | Includes inert admission with Connect off and unchanged ordinary loading. Actual store, bootstrap, disposer and cancellation lifecycle; no company data. |
+| Actual Config trust and aliases | 12 passed, 41 assertions | Explicit off/on, consistent/mixed aliases, unavailable scopes and changed inputs. Trusted fixtures approve before first load, matching real lifecycle. |
 | Merged terminal safety regression | 16 passed, 63 assertions | 39 explicit POSIX PTY cases skipped on Windows; these require Linux CI. |
 | Connected read policy / hub / qualified capability | 42 / 41 / 3 passed; 767 / 321 / 15 assertions | Genuine provider-success and secret-negative paths require Linux private-Git qualification. |
 | Linear OAuth / webhook regression | 15 / 15 passed; 112 / 146 assertions | Four webhook cases explicitly require disposable Redis in CI. API typecheck passed. |
@@ -51,6 +53,9 @@ The current exact-head GitHub checks remain the merge gate.
 | Native pure policy / adapter / spawner checks | 134 passed | Four explicit Windows/platform skips; Core and Engine types passed. Real-host bootstrap remains unqualified. |
 | Prior integrated account erasure regression | 34 passed; 369 assertions | One explicit Valkey-dependent skip; held loopback HTTP exercises the unchanged one-second abort deadline. |
 | Generated clients | Client generator and legacy SDK build passed in initial integration | Regenerate after the last public API merge; commit only actual drift. |
+| Final client/schema generation and CLI help | Client, legacy SDK, config and workflow generation passed; CLI help 2 passed / 58 assertions | Real drift only: held repair description and hidden experimental command description. |
+| Workflow policy fixtures | 51 passed, 930 assertions | Real local Bash and its utilities, isolated synthetic CLI functions; no live service calls. |
+| Codium/Scope admission integration | 2 passed, 20 assertions | Loopback transport plus real SQLite parent fence, retry/finalizer admission and verify/judge token-stop order; no paid gateway claim. |
 | First shared candidate `fbf1eb1b3` | Vercel preview build, cloud-workspace lane, public-sharing lane and standalone-installer lane passed | Browser fixture callback and task fixture owner-model failures were diagnosed and fixed afterward; this head does not qualify later changes. |
 
 Initial full task-provider Linux CI selected no owner VectorScope model and refused before consent. The test fixture now
@@ -76,7 +81,18 @@ lineage, spend or cancellation assertion was relaxed to hide the failure.
   Connected adapters currently register VectorScope; source for Hands/GitHub does not automatically register them as
   connected members. Those registrations require their declared lifecycle, cancellation, privacy and budget contracts.
 - The Signature design specification is present. The Mac redesign implementation is not represented by an unpushed local
-  checkout; this integration does not claim to have imported it.
+  checkout; the updated master plan schedules its desktop implementation after source integration.
+
+The production UI baseline completed successfully in run `43623921815`, job `132535820126`, using exact source
+`2f88021845bd5fc74ea001d96729b4fcfb2524fa` and Node 24.15.0. All nine navigation measurements (three scenarios, three
+repeats) are preserved in `evidence/ui-navigation-baseline-2026-11-14.json`. Raw traces are in GitHub artifact
+`14125262951`, SHA-256 `00892816ee1ef3e8f64b8ac2ba5e5b1bf4d990dedccadab28bc56afb5025ec12`.
+The candidate comparison and actual C7 browser assertion are still pending at this record's preparation; no performance
+improvement or final-head CI result is inferred from the baseline.
+
+The no-content merges for `hands-diagnostics` and `codium-legal` retain original history without reverting current code.
+The former is backed by the explicit supersession map; the latter follows the owner's archive-only decision and an
+exact gzip round-trip/checksum check. Neither merge activates the old helper or draft policies.
 
 ## Branch cleanup
 
