@@ -3,7 +3,9 @@ import type { DatabaseMigration } from "../../database/migration"
 
 // Content-free source registrations only; legacy review text is never adopted.
 export default {
-  id: "20261215000000_review_memory_source",
+  id: "20261218000000_review_memory_source",
+  // Renumbered after Codium's Brain migrations; a brain.db from an earlier VectorScope build recorded the old id.
+  replaces: ["20261215000000_review_memory_source"],
   up(tx) {
     return Effect.gen(function* () {
       yield* tx.run(`CREATE TABLE brain_review_memory_source (

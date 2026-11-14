@@ -3,7 +3,9 @@ import type { DatabaseMigration } from "../../database/migration"
 
 // Keep existing ProjectIDs and erase epochs. Unbound legacy content remains NULL and cannot authorize a clone.
 export default {
-  id: "20261214000000_review_memory_scope",
+  id: "20261217000000_review_memory_scope",
+  // Renumbered after Codium's Brain migrations; a brain.db from an earlier VectorScope build recorded the old id.
+  replaces: ["20261214000000_review_memory_scope"],
   up(tx) {
     return Effect.gen(function* () {
       yield* tx.run("ALTER TABLE brain_review_memory ADD COLUMN scope_id text")

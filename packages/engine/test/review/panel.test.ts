@@ -290,13 +290,13 @@ describe("Review.run: the panel", () => {
         const { llm, directory } = yield* useServer
         yield* llm.pushMatch(
           REVIEW,
-          reply().tool("StructuredOutput", report([finding()])).usage({ input: 2_000, output: 100 }),
+          reply()
+            .tool("StructuredOutput", report([finding()]))
+            .usage({ input: 2_000, output: 100 }),
         )
         yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
         yield* llm.pushMatch(JUDGE, verdict("rejected", "The caller never passes an empty list."))
-        const rejected = yield* Review.run(
-          input(directory, { judge: JUDGE_MODEL, config: config({ panel: true }) }),
-        )
+        const rejected = yield* Review.run(input(directory, { judge: JUDGE_MODEL, config: config({ panel: true }) }))
         const hits = yield* llm.hits
         expect(hits.filter(REVIEW).map((hit) => hit.body.model)).toEqual(["claude-first"])
         expect(hits.filter(VERIFY).map((hit) => hit.body.model)).toEqual(["gpt-check"])
@@ -441,7 +441,9 @@ describe("Review.run: the Codium review token stop", () => {
 
         yield* llm.pushMatch(
           REVIEW,
-          reply().tool("StructuredOutput", report([finding()])).usage({ input: 2_000, output: 100 }),
+          reply()
+            .tool("StructuredOutput", report([finding()]))
+            .usage({ input: 2_000, output: 100 }),
         )
         yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
         yield* llm.pushMatch(JUDGE, verdict("confirmed", "Reproduced again."))
@@ -528,6 +530,91 @@ describe("Review.run: the Codium review token stop", () => {
           ["verify", "skipped", "budget"],
         ])
         expect((yield* llm.hits).filter(VERIFY)).toEqual([])
+      }),
+    TIMEOUT,
+  )
+
+  // The panel joins VectorScope's runner: the judge is admitted per provider attempt like every other pass, its
+  // reservation counts against the review's dollar cap, and only a projection (VS-21b) may lift that cap.
+  it.instance(
+    "the panel's judge goes through the review's per-attempt admission and dollar cap",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer
+        const panel = (overrides: Partial<Review.RunInput> = {}) =>
+          input(directory, { judge: JUDGE_MODEL, config: config({ panel: true }), ...overrides })
+        const answers = (judge = true) =>
+          Effect.gen(function* () {
+            yield* llm.pushMatch(
+              REVIEW,
+              reply()
+                .tool("StructuredOutput", report([finding()]))
+                .usage({ input: 2_000, output: 100 }),
+            )
+            yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
+            if (judge) yield* llm.pushMatch(JUDGE, verdict("rejected", "The caller never passes an empty list."))
+          })
+
+        // Admitted: one observed pass and one admitted attempt on the judge's own model and session.
+        const events: Review.Observation[] = []
+        yield* answers()
+        const admitted = yield* Review.run(panel({ observe: (event) => events.push(event) }))
+        expect(admitted.specialists.map((item) => [item.name, item.status])).toEqual([
+          ["review", "ok"],
+          ["verify", "ok"],
+          ["judge", "ok"],
+        ])
+        const judging = events.filter((event) => "pass" in event && event.pass === "judge")
+        expect(judging.map((event) => event.type)).toEqual(["pass", "attempt", "settle"])
+        expect(judging[0]).toMatchObject({ type: "pass", model: "lmstudio/gemini-judge", maxSteps: 10 })
+        expect(judging[1]).toMatchObject({
+          type: "attempt",
+          admitted: true,
+          model: { providerID: "lmstudio", modelID: "gemini-judge" },
+        })
+        const attempt = judging[1] as Extract<Review.Observation, { type: "attempt" }>
+        expect(admitted.sessions).toContain(attempt.sessionID!)
+
+        // A priced judge over the cap never reaches the provider: the review reports what the check confirmed and says
+        // the judge did not finish.
+        const priced = { ...JUDGE_MODEL, costKind: "priced" as const, price: { input: 10, output: 10 } }
+        const refused: Review.Observation[] = []
+        yield* llm.reset
+        yield* answers(false)
+        const capped = yield* Review.run(
+          panel({
+            judge: priced,
+            config: config({ panel: true, maxCostUsd: 0.00001 }),
+            observe: (e) => refused.push(e),
+          }),
+        )
+        expect((yield* llm.hits).filter(JUDGE)).toEqual([])
+        expect(capped.specialists.at(-1)).toEqual({ name: "judge", status: "skipped", steps: 0, detail: "budget" })
+        expect(capped.notes).toContain(noteJudgeUnfinished("lmstudio/gemini-judge"))
+        expect(capped.selection.inline.map((item) => item.id)).toEqual([ID])
+        expect(refused.filter((event) => "pass" in event && event.pass === "judge")).toMatchObject([
+          { type: "pass", model: "lmstudio/gemini-judge" },
+          { type: "attempt", admitted: false, stop: "budget" },
+        ])
+
+        // A projection that lifts the cap is asked at the judge's pre-check, before its session and at its attempt.
+        const asked: Review.OverCap[] = []
+        yield* llm.reset
+        yield* answers()
+        const lifted = yield* Review.run(
+          panel({
+            judge: priced,
+            config: config({ panel: true, maxCostUsd: 0.00001 }),
+            projection: { overCap: (decision) => (asked.push(decision), true) },
+          }),
+        )
+        expect((yield* llm.hits).filter(JUDGE)).toHaveLength(1)
+        expect(lifted.specialists.at(-1)).toMatchObject({ name: "judge", status: "ok" })
+        expect(asked.map((decision) => [decision.pass, decision.site])).toEqual([
+          ["judge", "verify"],
+          ["judge", "pass"],
+          ["judge", "attempt"],
+        ])
       }),
     TIMEOUT,
   )

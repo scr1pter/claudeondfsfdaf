@@ -26,11 +26,11 @@ import {
   BrainPendingTable,
   BrainPostingTable,
   BrainRecordTable,
-  BrainReviewTable,
-  BrainReviewMemoryTable,
   BrainReviewMemoryScopeStateTable,
   BrainReviewMemorySourceTable,
   BrainReviewMemoryStateTable,
+  BrainReviewMemoryTable,
+  BrainReviewTable,
   BrainSectionTable,
   BrainSkillListingTable,
   BrainSkillTable,
@@ -74,13 +74,13 @@ const TABLES: readonly SQLiteTable[] = [
   BrainVectorTable,
   BrainJobTable,
   BrainReviewTable,
-  BrainReviewMemoryTable,
-  BrainReviewMemoryScopeStateTable,
-  BrainReviewMemorySourceTable,
-  BrainReviewMemoryStateTable,
   BrainCodeFileTable,
   BrainCodeSymbolTable,
   BrainCodeLiteralTable,
+  BrainReviewMemoryTable,
+  BrainReviewMemorySourceTable,
+  BrainReviewMemoryStateTable,
+  BrainReviewMemoryScopeStateTable,
 ]
 
 // The knowledge tables, which only documents and the code they are linked to fill.
@@ -178,10 +178,10 @@ describe("Brain knowledge migration", () => {
       { id: "20261211000000_workflow" },
       { id: "20261212000000_research_claims" },
       { id: "20261213000000_codium_brain" },
-      { id: "20261213000000_review_memory" },
       { id: "20261214000000_codium_workflow" },
-      { id: "20261214000000_review_memory_scope" },
-      { id: "20261215000000_review_memory_source" },
+      { id: "20261216000000_review_memory" },
+      { id: "20261217000000_review_memory_scope" },
+      { id: "20261218000000_review_memory_source" },
     ])
     // What was learned before private memory existed is not private.
     expect(entries).toEqual([{ id: "m1a2b3", private: 0 }])

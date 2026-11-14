@@ -256,6 +256,57 @@ describe("review read authority reaches actual tools", () => {
     { git: true },
   )
 
+  it.instance(
+    "a denial named through a link keeps refusing that name after the link is retargeted",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const secretA = path.join(test.directory, "secret-a/sensitive.txt")
+        const secretB = path.join(test.directory, "secret-b/sensitive.txt")
+        const link = path.join(test.directory, "secret-link")
+        const kind = process.platform === "win32" ? "junction" : "dir"
+        yield* Effect.promise(() => fs.mkdir(path.dirname(secretA)))
+        yield* Effect.promise(() => fs.mkdir(path.dirname(secretB)))
+        yield* Effect.promise(() => fs.writeFile(secretA, "VECTOR_AUTHORITY_MARKER WITHHELD_ADMITTED_A\n"))
+        yield* Effect.promise(() => fs.writeFile(secretB, "VECTOR_AUTHORITY_MARKER RETARGET_B\n"))
+        yield* Effect.promise(() => fs.symlink(path.dirname(secretA), link, kind))
+        const instance = yield* InstanceState.context
+        // Admitted while the link points at secret-a, then moved to secret-b before any tool runs.
+        const authority = readAuthority([path.join(link, "sensitive.txt")], {
+          directory: test.directory,
+          worktree: instance.worktree,
+        })
+        yield* Effect.promise(() => fs.unlink(link))
+        yield* Effect.promise(() => fs.symlink(path.dirname(secretB), link, kind))
+        const ctx = context(authority.patterns)
+        const read = yield* (yield* ReadTool).init()
+        const grep = yield* (yield* GrepTool).init()
+        const refused = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.exit, Effect.map(Exit.isFailure))
+
+        // The name the requester denied, under every spelling a tool may be handed, and where it pointed at admission.
+        const named = [
+          path.join(link, "sensitive.txt"),
+          path.join("secret-link", "sensitive.txt"),
+          path.join(link, "sensitive.txt").replaceAll("\\", "/"),
+          ...(process.platform === "win32" ? [path.join(link, "sensitive.txt").toUpperCase()] : []),
+        ]
+        for (const filePath of [...named, secretA]) {
+          expect(authority.denied(filePath)).toBe(true)
+          expect(yield* refused(read.execute({ filePath }, ctx))).toBe(true)
+          expect(yield* refused(grep.execute({ pattern: "VECTOR_AUTHORITY_MARKER", path: filePath }, ctx))).toBe(true)
+        }
+        // A listing through the link never names the denied file, and a search through it never reads it.
+        const listed = yield* read.execute({ filePath: link }, ctx)
+        expect(listed.output).not.toContain("sensitive.txt")
+        const searched = yield* grep.execute({ pattern: "VECTOR_AUTHORITY_MARKER", path: link }, ctx)
+        expect(searched.output).not.toContain("RETARGET_B")
+        // secret-b under its own name was never denied.
+        expect(authority.denied(secretB)).toBe(false)
+        expect((yield* read.execute({ filePath: secretB }, ctx)).output).toContain("RETARGET_B")
+      }),
+    { git: true },
+  )
+
   it.live("nested placement and a symlinked root retain the actual worktree-relative denial", () =>
     Effect.gen(function* () {
       const root = yield* tmpdirScoped({ git: true })

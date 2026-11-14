@@ -933,17 +933,14 @@ export const run: (
       : 0
     const late = deadline - Date.now() < VERIFY_MIN_MS
     // A projection is asked only about a verify pass that would otherwise run: one skipped for time never mattered.
+    // The Codium token stop (CODIUM_REVIEW_TOKEN_STOP) is not a dollar decision, so no projection lifts it.
     const unaffordable =
+      (yield* overTokenStop(verifyText)) ||
       (capped &&
         state.spent + state.uncertain + estimate > config.maxCostUsd &&
-        !(
-          verifyText !== "" &&
-          !late &&
-          lift({ pass: "verify", phase: "turn", site: "verify", estimateUsd: estimate })
-        )) ||
-      (yield* overTokenStop(verifyText))
+        !(verifyText !== "" && !late && lift({ pass: "verify", phase: "turn", site: "verify", estimateUsd: estimate })))
     if (verifyText && (unaffordable || late)) {
-      observe({ type: "pass", pass: "verify", model: nameOf(input.model), text: verifyText, maxSteps: VERIFY_STEPS })
+      observe({ type: "pass", pass: "verify", model: nameOf(model), text: verifyText, maxSteps: VERIFY_STEPS })
       observe({
         type: "attempt",
         pass: "verify",
@@ -983,12 +980,32 @@ export const run: (
       ? estimateCostUsd({ promptTokens: Math.ceil(judgeText.length / 3.5), maxSteps: VERIFY_STEPS, price: judgePrice })
           .low
       : 0
+    const judgeLate = deadline - Date.now() < VERIFY_MIN_MS
+    // As verify's pre-check: a projection may lift only the dollar cap, and only for a judge that would otherwise run.
     const judgeUnaffordable =
-      (capped && state.spent + state.uncertain + judgeEstimate > config.maxCostUsd) || (yield* overTokenStop(judgeText))
+      (yield* overTokenStop(judgeText)) ||
+      (capped &&
+        state.spent + state.uncertain + judgeEstimate > config.maxCostUsd &&
+        !(
+          judgeText !== "" &&
+          !judgeLate &&
+          lift({ pass: "judge", phase: "turn", site: "verify", estimateUsd: judgeEstimate })
+        ))
+    if (judgeModel && judgeText && (judgeUnaffordable || judgeLate)) {
+      observe({ type: "pass", pass: "judge", model: nameOf(judgeModel), text: judgeText, maxSteps: VERIFY_STEPS })
+      observe({
+        type: "attempt",
+        pass: "judge",
+        phase: "turn",
+        admitted: false,
+        stop: judgeUnaffordable ? "budget" : "timeout",
+        estimateUsd: judgeEstimate,
+      })
+    }
     const judged: Asked<ReturnType<typeof decodeVerify>> | undefined =
       !judgeModel || !judgeText
         ? undefined
-        : judgeUnaffordable || deadline - Date.now() < VERIFY_MIN_MS
+        : judgeUnaffordable || judgeLate
           ? { name: "judge", status: "skipped", steps: 0, detail: judgeUnaffordable ? "budget" : "time" }
           : yield* ask({
               name: "judge",

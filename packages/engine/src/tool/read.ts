@@ -253,6 +253,9 @@ export const ReadTool = Tool.define<
       if (!path.isAbsolute(filepath)) {
         filepath = path.resolve(instance.directory, filepath)
       }
+      // The name the caller used. Windows resolves links (junctions too) below, and a read denial can name a link: it
+      // must keep refusing that name after the link moves, as it does where the name is never resolved.
+      const spelled = process.platform === "win32" ? path.resolve(FSUtil.windowsPath(filepath)) : filepath
       if (process.platform === "win32") {
         filepath = FSUtil.normalizePath(filepath)
       }
@@ -278,7 +281,7 @@ export const ReadTool = Tool.define<
 
       yield* ctx.ask({
         permission: "read",
-        patterns: readPatterns(instance.worktree, filepath),
+        patterns: [...new Set([spelled, filepath].flatMap((file) => readPatterns(instance.worktree, file)))],
         always: ["*"],
         metadata: {},
       })
@@ -287,7 +290,10 @@ export const ReadTool = Tool.define<
       if (stat.type === "Directory") {
         const items = yield* list(filepath).pipe(
           Effect.flatMap((entries) =>
-            filterReadListing(ctx, instance.worktree, entries, (entry) => path.resolve(filepath, entry)),
+            filterReadListing(ctx, instance.worktree, entries, (entry) => [
+              path.resolve(spelled, entry),
+              path.resolve(filepath, entry),
+            ]),
           ),
         )
         const limit = params.limit ?? DEFAULT_READ_LIMIT

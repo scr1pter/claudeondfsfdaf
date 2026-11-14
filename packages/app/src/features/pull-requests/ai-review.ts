@@ -1256,7 +1256,17 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           ]
         : []),
       ...(config.modelEvidence === "warn"
-        ? evidenceNotes({ config, model, configured, agentModel, triage, served: new Set(identities), input })
+        ? evidenceNotes({
+            config,
+            model,
+            chosen,
+            configured,
+            agentModel,
+            triage,
+            named,
+            served: new Set(identities),
+            input,
+          })
         : []),
     ],
     context: {
@@ -1291,27 +1301,38 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 function evidenceNotes(context: {
   config: ReviewConfig
   model: ReviewModel
+  // The model the settings below picked, before Vector Codium's review pair (WP A35) may have put another in its place.
+  chosen: ReviewModel
   configured: ReviewModel | undefined
   agentModel: ReviewModel | undefined
   triage: ReviewModel | undefined
+  named: ReviewModel | undefined
   served: ReadonlySet<string>
   input: Pick<ReviewRunInput, "now" | "certificates">
 }): string[] {
-  const { config, model, configured, agentModel, triage } = context
+  const { config, model, chosen, configured, agentModel, triage, named } = context
   const missing = config.model && !configured ? config.model : undefined
+  const pair: ModelSubject["choice"] = {
+    explicit: false,
+    setting: "Vector Codium's review pair",
+    unset: `no triageModel is set in ${REVIEW_CONFIG_PATH}`,
+  }
   // The agent's model may be one the person chose for reviews (agent.review.model) or their agent's last pick, and the
   // list does not say which, so the note says only what review.json left unset.
-  const choice: ModelSubject["choice"] = configured
-    ? { explicit: true, setting: `model in ${REVIEW_CONFIG_PATH}` }
-    : missing
-      ? undefined
-      : agentModel
-        ? { explicit: false, setting: "your agent's model", unset: `no model is set in ${REVIEW_CONFIG_PATH}` }
-        : {
-            explicit: false,
-            setting: model.costKind === "free" ? "the first connected free model" : "the first connected model",
-            unset: `no model is set in ${REVIEW_CONFIG_PATH} and none of your agent's models is connected`,
-          }
+  const choice: ModelSubject["choice"] =
+    modelName(model) !== modelName(chosen)
+      ? pair
+      : configured
+        ? { explicit: true, setting: `model in ${REVIEW_CONFIG_PATH}` }
+        : missing
+          ? undefined
+          : agentModel
+            ? { explicit: false, setting: "your agent's model", unset: `no model is set in ${REVIEW_CONFIG_PATH}` }
+            : {
+                explicit: false,
+                setting: model.costKind === "free" ? "the first connected free model" : "the first connected model",
+                unset: `no model is set in ${REVIEW_CONFIG_PATH} and none of your agent's models is connected`,
+              }
   return [
     ...(missing
       ? [
@@ -1323,7 +1344,14 @@ function evidenceNotes(context: {
       assessReview({
         review: subjectOf(model, choice),
         ...(triage
-          ? { triage: subjectOf(triage, { explicit: true, setting: `triageModel in ${REVIEW_CONFIG_PATH}` }) }
+          ? {
+              triage: subjectOf(
+                triage,
+                named && modelName(named) === modelName(triage)
+                  ? { explicit: true, setting: `triageModel in ${REVIEW_CONFIG_PATH}` }
+                  : pair,
+              ),
+            }
           : {}),
         scope: evidenceScope({ adapter: "desktop", config, ...(triage ? { triage: modelName(triage) } : {}) }),
         served: [...context.served],
