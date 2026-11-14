@@ -257,13 +257,23 @@ function parse(body: unknown): Catalog | undefined {
   }
 }
 
+export const REVIEW_ROLES = ["triage", "confirm", "panelJudge"] as const
+export type ReviewRole = (typeof REVIEW_ROLES)[number]
+
 /**
  * What a picker shows of a catalog entry (ModelV2.Codium): its lab, role, locks and Auto's models, never its weight. Only
- * the fields that are set: an unset one is left out, not kept as undefined.
+ * the fields that are set: an unset one is left out, not kept as undefined. With the catalog it also names the entry's
+ * Second opinion judge and its parts in the plan's review pair (WP A35), which parse keeps to listed entries.
  */
 export function listing(
   model: Model,
-): Partial<Pick<Model, "lab" | "role" | "manualOnly" | "locked" | "preview" | "auto">> {
+  catalog?: Pick<Catalog, "judges" | "review">,
+): Partial<Pick<Model, "lab" | "role" | "manualOnly" | "locked" | "preview" | "auto">> & {
+  judge?: string
+  review?: ReviewRole[]
+} {
+  const judge = catalog?.judges?.[model.id]
+  const review = REVIEW_ROLES.filter((role) => catalog?.review?.[role] === model.id)
   return defined({
     lab: model.lab,
     role: model.role,
@@ -271,6 +281,8 @@ export function listing(
     locked: model.locked,
     preview: model.preview,
     auto: model.auto,
+    judge: judge && judge !== model.id ? judge : undefined,
+    review: review.length ? review : undefined,
   })
 }
 

@@ -283,8 +283,19 @@ const APPLY = `for i = 3, #ARGV, 2 do local debit = redis.call('HGET', KEYS[1], 
 /** DEBITS. One key's debits as a flat list of ref, record, … whatever protocol the store speaks. */
 const DEBITS = "return redis.call('HGETALL', KEYS[1])"
 
+/**
+ * LOWER. A true-up (WP A51, M8): lowers the debit `ref` (ARGV[1]) to ARGV[2] whole micro-dollars, never raising it.
+ * The debit's own held member is renamed to the new amount, keeping its score while the debit is unapplied, so the
+ * ledger's READ still finds every unapplied debit held at exactly its amount. The key is queued for `debit-apply`
+ * (member ARGV[3] at ARGV[4], or earlier if it already is), whose convergence then sets the key's limit to credits +
+ * carry less the lowered debits (M1). Returns 1 when lowered, 0 when the debit is already at or under ARGV[2], -2
+ * when the key has no such debit, and -1 when it cannot be read. String surgery, not cjson, keeps the record byte for byte as
+ * JSON.stringify wrote it, which the other scripts read as text.
+ */
+const LOWER = `local raw = redis.call('HGET', KEYS[1], ARGV[1]) if not raw then return -2 end local micro = string.match(raw, '^{"micro":(%d+),') local hold = string.match(raw, '"hold":"([^"]+)"') local target = tonumber(ARGV[2]) if not micro or not hold or not target or target < 0 or target ~= math.floor(target) or not string.match(ARGV[2], '^%d+$') then return -1 end if target >= tonumber(micro) then return 0 end local prefix = string.match(hold, '^(.+):' .. micro .. '$') if not prefix then return -1 end local lowered = prefix .. ':' .. ARGV[2] local updated = '{"micro":' .. ARGV[2] .. ',' .. string.sub(raw, #micro + 11) local first, last = string.find(updated, '"hold":"' .. hold .. '"', 1, true) if not first then return -1 end updated = string.sub(updated, 1, first - 1) .. '"hold":"' .. lowered .. '"' .. string.sub(updated, last + 1) if string.find(raw, '"applied":false', 1, true) then local score = redis.call('ZSCORE', KEYS[2], hold) if not score then return -1 end redis.call('ZREM', KEYS[2], hold) redis.call('ZADD', KEYS[2], score, lowered) end redis.call('HSET', KEYS[1], ARGV[1], updated) local due = redis.call('ZSCORE', KEYS[3], ARGV[3]) if not due or tonumber(due) > tonumber(ARGV[4]) then redis.call('ZADD', KEYS[3], ARGV[4], ARGV[3]) end return 1`
+
 /** The scripts, for the tests and any store fake that has to recognise them. The pool's READ is the ledger's. */
-export const POOL_SCRIPTS = Object.freeze({ HOLD, DEBIT, APPLY, DEBITS })
+export const POOL_SCRIPTS = Object.freeze({ HOLD, DEBIT, APPLY, DEBITS, LOWER })
 
 // ── Store operations ───────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -468,6 +479,40 @@ export async function recordDebit(
     fetcher,
   )
   return recorded === 1
+}
+
+/**
+ * Lowers the debit `ref` on one key to `micro` (a true-up, WP A51), never raising it, and queues the key for
+ * `debit-apply` so its limit rises by the difference: `lowered`, `unchanged` (already at or under `micro`) or `missing`
+ * (no such debit on this key). A debit that cannot be read is a 503. The caller applies the pool's debits afterwards
+ * (or the minute outbox does).
+ */
+export async function lowerDebit(
+  input: { account: string; keyHash: string; ref: string; micro: number; now: number },
+  fetcher: typeof fetch = fetch,
+) {
+  if (!validDebitRef(input.ref) || !Number.isSafeInteger(input.micro) || input.micro < 0) throw invalidCharge()
+  const result = Number(
+    await persistentStore(
+      [
+        "EVAL",
+        LOWER,
+        3,
+        debitsKey(input.account, input.keyHash),
+        heldKey(input.keyHash),
+        debitApplyKey(),
+        input.ref,
+        String(input.micro),
+        debitApplyMember(input.account, input.keyHash),
+        input.now,
+      ],
+      fetcher,
+    ),
+  )
+  if (result === 1) return "lowered" as const
+  if (result === 0) return "unchanged" as const
+  if (result === -2) return "missing" as const
+  throw ledgerUnavailable()
 }
 
 /** Every debit recorded against one key. A record that cannot be read fails closed: it might lower the limit. */

@@ -75,6 +75,8 @@ describe("memory routes for learning about you", () => {
       ["GET", "/memory/export"],
       ["POST", "/memory/import", { text: "## Preferences\n- I prefer tables" }],
       ["PATCH", "/memory/settings", { facets: { format: false } }],
+      ["PATCH", "/memory/settings", { codiumHelpers: "on", distillation: true }],
+      ["POST", "/memory/bootstrap", {}],
       ["DELETE", "/memory/sessions/ses_none"],
     ] as const)
       expect((await call(method, route, body, guest)).status).toBe(403)
@@ -102,6 +104,18 @@ describe("memory routes for learning about you", () => {
     expect(after.modelLearner).toBe("off")
     expect(after.learning).toBe(true)
     await call("PATCH", "/memory/settings", { facets: { tooling: true }, modelLearner: "local-only" })
+  }, 30_000)
+
+  test("Brain helper consent is ask until the owner chooses, and a subscription cannot enable it", async () => {
+    const before = (await (await call("GET", "/memory/settings")).json()) as { codiumHelpers?: string }
+    expect(before.codiumHelpers).toBe("ask")
+    const on = await call("PATCH", "/memory/settings", { codiumHelpers: "on", distillation: true })
+    expect(on.status).toBe(200)
+    expect(await on.json()).toMatchObject({ codiumHelpers: "on", distillation: true })
+    const off = await call("PATCH", "/memory/settings", { codiumHelpers: "off", distillation: false })
+    expect(await off.json()).toMatchObject({ codiumHelpers: "off", distillation: false })
+    expect((await call("PATCH", "/memory/settings", { codiumHelpers: true })).status).toBe(400)
+    await call("PATCH", "/memory/settings", { codiumHelpers: "ask" })
   }, 30_000)
 
   test("an import lands every entry waiting for approval, and the export carries it as an attachment", async () => {

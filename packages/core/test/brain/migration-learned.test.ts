@@ -127,16 +127,18 @@ describe("Brain learned-skills migrations", () => {
     const entries = db.query("SELECT id, kind, status FROM brain_entry").all()
     const state = db
       .query(
-        "SELECT learning, model_learner, skill_learning, skill_drafter, workflow_learning, workflow_explore FROM brain_state",
+        "SELECT learning, model_learner, skill_learning, skill_drafter, workflow_learning, workflow_explore, codium_helpers, knowledge_distill FROM brain_state",
       )
       .all()
     db.close()
-    expect(migrations.slice(-5)).toEqual([
+    expect(migrations.slice(-7)).toEqual([
       "20261202000000_facets",
       "20261203000000_revocation",
       "20261210000000_learned_skills",
       "20261211000000_workflow",
       "20261212000000_research_claims",
+      "20261213000000_codium_brain",
+      "20261214000000_codium_workflow",
     ])
     expect(entries).toEqual([{ id: "m1a2b3", kind: "lesson", status: "active" }])
     // Unset settings read as the defaults: review, local-only, apply, no exploring.
@@ -148,6 +150,8 @@ describe("Brain learned-skills migrations", () => {
         skill_drafter: null,
         workflow_learning: null,
         workflow_explore: null,
+        codium_helpers: null,
+        knowledge_distill: null,
       },
     ])
   })

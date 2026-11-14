@@ -11,9 +11,33 @@
       "includeFiles": "design-lab/**"
     }
   },
-  "buildCommand": "bun --cwd packages/web build && node script/prune-vector-site.mjs",
+  "buildCommand": "bun run --cwd packages/app build:phone && bun --cwd packages/web build && node script/prune-vector-site.mjs",
   "outputDirectory": "packages/web/dist",
   "redirects": [
+    {
+      "source": "/((?!phone/|api/).*)",
+      "has": [{ "type": "host", "value": "remote.vectordev.ai" }],
+      "destination": "/phone/",
+      "permanent": false
+    },
+    {
+      "source": "/((?!api/hosted/sessions/|api/hosted/jobs/jb_|api/model-plans/chat|api/model-plans/models|api/model-plans/estimate).*)",
+      "has": [{ "type": "host", "value": "hosted-run.vectordev.ai" }],
+      "destination": "https://vectordev.ai/",
+      "permanent": false
+    },
+    {
+      "source": "/phone/:path*",
+      "has": [{ "type": "host", "value": "vectordev.ai" }],
+      "destination": "https://remote.vectordev.ai/phone/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/phone/:path*",
+      "has": [{ "type": "host", "value": "www.vectordev.ai" }],
+      "destination": "https://remote.vectordev.ai/phone/:path*",
+      "permanent": false
+    },
     {
       "source": "/pricing",
       "destination": "/codium",
@@ -203,6 +227,16 @@
       "source": "/docs/local-memory",
       "destination": "/docs/brain",
       "permanent": true
+    },
+    {
+      "source": "/docs/plans",
+      "destination": "/docs/codium",
+      "permanent": false
+    },
+    {
+      "source": "/docs/pricing",
+      "destination": "/docs/codium",
+      "permanent": false
     },
     {
       "source": "/docs/cli-terminal",
@@ -420,9 +454,46 @@
           "value": "no-store"
         }
       ]
+    },
+    {
+      "source": "/(.*)",
+      "has": [{ "type": "host", "value": "remote.vectordev.ai" }],
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://*.r2.cloudflarestorage.com; font-src 'self'; connect-src 'self' https://*.supabase.co wss://relay.vectordev.ai; manifest-src 'self'; worker-src 'self'; media-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(self), geolocation=(), payment=(), microphone=()"
+        },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+      ]
+    },
+    {
+      "source": "/phone/(.*)",
+      "has": [{ "type": "host", "value": "remote.vectordev.ai" }],
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    },
+    {
+      "source": "/phone/assets/(.*)",
+      "has": [{ "type": "host", "value": "remote.vectordev.ai" }],
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "/phone/sw.js",
+      "has": [{ "type": "host", "value": "remote.vectordev.ai" }],
+      "headers": [{ "key": "Service-Worker-Allowed", "value": "/" }]
     }
   ],
   "rewrites": [
+    {
+      "source": "/phone/:path*",
+      "has": [{ "type": "host", "value": "remote.vectordev.ai" }],
+      "destination": "/phone/index.html"
+    },
     {
       "source": "/owner/codium",
       "destination": "/owner/codium/index.html"
@@ -446,6 +517,10 @@
     {
       "source": "/api/billing/status",
       "destination": "/api/legacy-desktop-access"
+    },
+    {
+      "source": "/api/ops/image/:card/:n",
+      "destination": "/api/ops/image?card=:card&n=:n"
     }
   ],
   "crons": [
@@ -476,6 +551,38 @@
     {
       "path": "/api/model-plans/sweep",
       "schedule": "23 4 * * *"
+    },
+    {
+      "path": "/api/hosted/reaper",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/hosted/drift",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/hosted/nightly",
+      "schedule": "30 2 * * *"
+    },
+    {
+      "path": "/api/vault/cleanup",
+      "schedule": "40 3 * * *"
+    },
+    {
+      "path": "/api/ops/domains",
+      "schedule": "10 4 * * *"
+    },
+    {
+      "path": "/api/ops/guard",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/ops/cleanup",
+      "schedule": "40 4 * * *"
+    },
+    {
+      "path": "/api/account/deletions",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

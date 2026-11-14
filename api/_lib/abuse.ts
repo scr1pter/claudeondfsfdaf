@@ -56,9 +56,14 @@ function isDevelopmentOrigin(origin: string) {
 /**
  * Reject browser cross-origin use and make Vercel's pre-parsed request body
  * obey the same byte ceiling as a streamed body. Originless requests are kept
- * for the signed desktop app's main-process fetch; they are still IP limited.
+ * for the signed desktop app's main-process fetch; they are still IP limited. `extraOrigins` adds origins one route
+ * trusts besides the site's own, such as the phone app's for push subscriptions.
  */
-export function requireTrustedJsonRequest(request: ApiRequest, maximumBytes: number) {
+export function requireTrustedJsonRequest(
+  request: ApiRequest,
+  maximumBytes: number,
+  extraOrigins: readonly string[] = [],
+) {
   const origin = header(request, "origin")
   if (origin) {
     const normalized = (() => {
@@ -68,7 +73,10 @@ export function requireTrustedJsonRequest(request: ApiRequest, maximumBytes: num
         return ""
       }
     })()
-    if (!normalized || (!allowedOrigins().has(normalized) && !isDevelopmentOrigin(normalized))) {
+    if (
+      !normalized ||
+      (!allowedOrigins().has(normalized) && !extraOrigins.includes(normalized) && !isDevelopmentOrigin(normalized))
+    ) {
       throw new ApiError(403, "ORIGIN_NOT_ALLOWED", "This request origin is not allowed.")
     }
   }

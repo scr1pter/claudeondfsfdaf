@@ -55,6 +55,8 @@ import { ComputerWatch } from "./computer-watch"
 import { limitsLine, type TaskTranslate } from "./task-limits"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { useLanguage } from "@/context/language"
+import { useSDK } from "@/context/sdk"
+import { useDialog } from "@vectordevai/ui/context/dialog"
 
 const MAX_ROWS = 12
 /** How long a first click on Merge or Discard stays armed, as the workspace controls' confirmTwice. */
@@ -134,6 +136,14 @@ export function BackgroundTasksPane() {
 
 function Pane(props: { tasks: BackgroundTasks }) {
   const tasks = props.tasks
+  const sdk = useSDK()
+  const dialog = useDialog()
+  const race = () => {
+    const sessionID = tasks.rootID()
+    if (!sessionID || !tasks.capabilities().workflows) return
+    const client = sdk().client
+    void import("@/features/race/dialog").then((module) => dialog.show(() => <module.DialogRace client={client} sessionID={sessionID} />))
+  }
   const pane = backgroundTasksPane
   const language = useLanguage()
   const [finishedOpen, setFinishedOpen] = createSignal(false)
@@ -414,6 +424,9 @@ function Pane(props: { tasks: BackgroundTasks }) {
         <h2 id="vector-bg-tasks-title" class="vector-bg-tasks-title" tabIndex={-1}>
           Background tasks
         </h2>
+        <Show when={tasks.capabilities().workflows}>
+          <button type="button" class="vector-bg-tasks-icon-btn" onClick={race} aria-label="Race models" title="Race models">Race</button>
+        </Show>
         <button
           type="button"
           class="vector-bg-tasks-icon-btn"

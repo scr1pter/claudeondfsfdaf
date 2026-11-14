@@ -80,6 +80,8 @@ import { electronComputerDeps } from "./computer-electron"
 import { setComputerService } from "./computer-ipc"
 import { createComputerLifecycle } from "./computer-lifecycle"
 import { engineEventSource, setDesktopWorkBlocker, startKeepAwake } from "./keep-awake"
+import { remoteLink, startRemote, stopRemote } from "./remote-runtime"
+import { startVault, stopVault } from "./vault-runtime"
 import { getStore } from "./store"
 import { USAGE_STORE } from "./store-keys"
 import { createUsageCheckin, usageCheckinEndpoint } from "./usage-checkin"
@@ -232,6 +234,8 @@ const main = Effect.gen(function* () {
   const stopSidecars = () => {
     if (sidecarsStopping) return sidecarsStopping
     unregisterManagedAccount()
+    stopRemote()
+    stopVault()
     keepAwake?.stop()
     setDesktopWorkBlocker(undefined)
     // Hands first releases input and closes its overlays, then stops its helper and bridge (INV-R3, INV-T3).
@@ -636,6 +640,8 @@ const main = Effect.gen(function* () {
     keepAwake = startKeepAwake({
       source: engineEventSource({ url, username: "vector", password }),
       blocker,
+      // While a paired phone watches, busy sessions keep the computer awake, those waiting on a person included.
+      watching: () => remoteLink()?.watching() ?? false,
       log: (message, meta) => logger.log(message, meta),
     })
     setDesktopWorkBlocker(blocker)
@@ -644,6 +650,20 @@ const main = Effect.gen(function* () {
       hands.attach({ url, password, source: engineEventSource({ url, username: "vector", password }) })
 
     yield* Effect.promise(() => vectorAccount.restore())
+    // Vector Remote (WP A41): connects only while Remote is on and a phone is paired or pairing.
+    startRemote({
+      engine: { url, password },
+      packaged: app.isPackaged,
+      watchingChanged: () => {
+        keepAwake?.refresh()
+        void updateTray()
+      },
+      log: (message, meta) => logger.log(message, meta),
+    })
+    app.once("will-quit", () => stopRemote())
+    // Brain Vault (WP A45): Settings → Memory → Backup, and the nightly backup while the app is open.
+    startVault({ engine: { url, password }, log: (message, meta) => logger.log(message, meta) })
+    app.once("will-quit", () => stopVault())
     // The sidebar's name and photo; never holds up startup.
     void vectorAccount.refreshProfile()
     if (process.platform === "win32") {
@@ -718,6 +738,21 @@ const main = Effect.gen(function* () {
     },
     computer: () => computer?.tray(),
     computerCommand: (command) => computer?.trayCommand(command),
+    remote: {
+      read: () => {
+        const status = remoteLink()?.status()
+        return {
+          phones: status?.phones.length ?? 0,
+          connected: status?.phones.filter((phone) => phone.connected).length ?? 0,
+          watching: status?.phones.some((phone) => phone.watching) ?? false,
+        }
+      },
+      disconnectAll: () =>
+        void remoteLink()
+          ?.disconnectAll()
+          .then(() => updateTray())
+          .catch((error) => logger.warn("could not disconnect Remote's phones", error)),
+    },
   })
   onScheduledAgentsChanged(() => void updateTray())
   onScheduledAgentRunFinished((record) => {

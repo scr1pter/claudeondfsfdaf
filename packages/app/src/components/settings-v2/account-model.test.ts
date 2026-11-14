@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
-import { accountIdentity, codiumSummary, deletionStep, sameEmail, settingsIdentity } from "./account-model"
+import {
+  accountIdentity,
+  codiumSummary,
+  deletionStep,
+  FOUNDING_LOCK,
+  sameEmail,
+  settingsIdentity,
+} from "./account-model"
 
 const renewsAt = Date.UTC(2026, 10, 1, 12)
 
@@ -71,6 +78,14 @@ describe("Codium on the Account page", () => {
     expect(none).not.toHaveProperty("usage")
     expect(none).not.toHaveProperty("renewal")
     expect(none).not.toHaveProperty("purchased")
+  })
+
+  test("a founding member's number shows with the plan, with the lock in the terms' words", () => {
+    const plan = { id: "vector-10", name: "Plus", renewsAt, cancelAtPeriodEnd: false }
+    expect(codiumSummary(status({ plan, founding: { number: 7 } }))).toMatchObject({ founding: { number: 7 } })
+    expect(codiumSummary(status({ plan }))).not.toHaveProperty("founding")
+    expect(codiumSummary(status({ founding: { number: 7 } }))).not.toHaveProperty("founding")
+    expect(FOUNDING_LOCK).toBe("Your price won't go up while you stay subscribed.")
   })
 
   test("a smaller plan scheduled for renewal shows its name and date", () => {

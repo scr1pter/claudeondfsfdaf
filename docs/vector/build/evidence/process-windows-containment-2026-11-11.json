@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "repository": "scr1pter/claudeondfsfdaf",
+  "scope": "Background command ownership; no Hands or cloud-workspace changes",
+  "evidenceSource": "Selected decoded official GitHub Actions job log rows",
+  "artifactZipVerification": false,
+  "before": [
+    {
+      "source": "6c7c8e293237e132434e0db4778091f4d1c2eead",
+      "run": 43144413334,
+      "job": 130938752437,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43144413334",
+      "tests": { "passed": 14, "skipped": 1, "failed": 9, "assertions": 62 },
+      "observation": "Host environment control reaches ready/proven cleanup; minimal four-variable helper environment, trusted PATH/module-path and profile controls time out before C# Run."
+    },
+    {
+      "source": "eaaaebf5ce32412fc20b5e507106471a4c598678",
+      "run": 43147345526,
+      "job": 130948149232,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43147345526",
+      "tests": { "passed": 14, "skipped": 1, "failed": 9, "assertions": 62 },
+      "observation": "Closed phase locates the stall before Get-Command Add-Type completes. PowerShell environment group reaches ready/proven cleanup in 484 ms; other host-key groups do not."
+    }
+  ],
+  "nativeAcceptance": {
+    "source": "a193d18d9053f4240443415c64b9935fb2a7f8ec",
+    "run": 43150320218,
+    "job": 130957680536,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43150320218",
+    "workflow": "Windows background containment",
+    "runnerLabel": "windows-latest",
+    "testFile": "packages/engine/test/tool/shell-windows-process.test.ts",
+    "tests": {
+      "passed": 23,
+      "nativePassed": 14,
+      "portablePassed": 9,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 97,
+      "elapsedSeconds": 13.91
+    },
+    "skip": "Non-Windows refusal case does not apply on native Windows",
+    "controls": {
+      "oldMinimalEnvironment": {
+        "phase": "host",
+        "ready": false,
+        "closed": true,
+        "terminationProven": false,
+        "timedOut": true,
+        "elapsedMs": 15030
+      },
+      "exactUtilityAssembly": {
+        "phase": "ready",
+        "ready": true,
+        "closed": true,
+        "terminationProven": true,
+        "timedOut": false,
+        "elapsedMs": 240
+      },
+      "moduleAnalysisCacheEnvironment": {
+        "phase": "ready",
+        "ready": true,
+        "closed": true,
+        "terminationProven": true,
+        "timedOut": false,
+        "elapsedMs": 272
+      }
+    },
+    "notAPerformanceBenchmark": true
+  },
+  "preservedBoundaries": [
+    "Helper receives only SystemRoot, WINDIR, TEMP and TMP",
+    "Static script and JSON stdin remain separate",
+    "Exact Microsoft Utility assembly strong name replaces module discovery",
+    "Suspended payload and atomic Job Object assignment",
+    "Durable PID acknowledgement before resume",
+    "No persisted PID becomes process-control authority",
+    "Confirmed termination and output settlement before successful cleanup",
+    "Uncertain cleanup retains admission until restart",
+    "Existing startup/persistence/stop/close and native acknowledgement/cleanup bounds",
+    "Existing 30000-character encoded-command guard"
+  ],
+  "remainingAtCheckpoint": [
+    "Focused actual Windows ShellJobs and task-management integration at final source",
+    "Exact-source general repository CI",
+    "Separate release review and any broader platform qualification"
+  ]
+}

@@ -776,6 +776,7 @@ describe("follow-up optimistic echo", () => {
     parts: SentPart[]
     budget?: unknown
     judge?: unknown
+    secondOpinion?: unknown
     agent?: string
     size?: unknown
   }
@@ -820,6 +821,7 @@ describe("follow-up optimistic echo", () => {
             parts: SentPart[]
             budget?: unknown
             judge?: unknown
+            secondOpinion?: unknown
             agent?: string
             size?: unknown
           }) => {
@@ -828,6 +830,7 @@ describe("follow-up optimistic echo", () => {
               parts: input.parts,
               budget: input.budget,
               judge: input.judge,
+              secondOpinion: input.secondOpinion,
               agent: input.agent,
               size: input.size,
             })
@@ -1068,6 +1071,13 @@ describe("follow-up optimistic echo", () => {
     // Only the build agent: Plan mode has nothing to judge, and a custom agent is never judged by a current engine.
     expectOneEchoBeforeRequest(await send({ judge: "thorough", agent: "plan" }), 0)
     expectOneEchoBeforeRequest(await send({ judge: "thorough", agent: "reviewer" }), 0)
+  })
+
+  test("sends Second opinion only while the judge is on", async () => {
+    expect((await send({ judge: "changes", secondOpinion: true })).at(-1)?.secondOpinion).toBe(true)
+    // Without the judge there is nothing for a second lab to check, so nothing is sent.
+    expect((await send({ secondOpinion: true })).at(-1)?.secondOpinion).toBeUndefined()
+    expect((await send({ judge: "thorough" })).at(-1)?.secondOpinion).toBeUndefined()
   })
 
   test("keeps the echoed ids when the judge is on and the desktop adds task context", async () => {

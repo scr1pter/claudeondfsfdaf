@@ -6,7 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
-import { HEARTBEAT, type BackgroundJob } from "./background-job"
+import { HEARTBEAT, metadataSnapshot, type BackgroundJob } from "./background-job"
 import { BackgroundJobTable } from "./background-job.sql"
 import { Database } from "./database/database"
 import { makeGlobalNode } from "./effect/app-node"
@@ -339,6 +339,34 @@ export function make(db: Database.Interface["db"]): Interface {
     yield* db.update(BackgroundJobTable).set({ background: true }).where(held(id, p)).run().pipe(Effect.orDie)
   })
 
+  const metadataUpdated = Effect.fn("BackgroundJobStore.metadataUpdated")(function* (
+    id: string,
+    p: BackgroundJob.MetadataUpdated,
+    publish: Effect.Effect<void> = Effect.void,
+  ) {
+    const metadata = metadataSnapshot(p.metadata)
+    if (!metadata) return false
+    const query = db
+      .update(BackgroundJobTable)
+      .set({ metadata })
+      .where(held(id, p))
+      .returning({ id: BackgroundJobTable.id })
+      .toSQL()
+    return yield* Effect.scoped(
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          // Connection admission remains interruptible. The reserved native statement has no asynchronous result
+          // mapping/acknowledgement between SQLite autocommit and the registry's short, database-free publication.
+          const connection = yield* restore(db.$client.reserve)
+          const rows = yield* connection.executeUnprepared(query.sql, query.params, undefined).pipe(Effect.orDie)
+          if (!rows.length) return false
+          yield* publish
+          return true
+        }),
+      ),
+    )
+  })
+
   const heartbeat = Effect.fn("BackgroundJobStore.heartbeat")(function* (owner: string, at: number) {
     yield* db
       .update(BackgroundJobTable)
@@ -506,6 +534,7 @@ export function make(db: Database.Interface["db"]): Interface {
     started,
     settled,
     promoted,
+    metadataUpdated,
     heartbeat,
     candidates,
     claim,

@@ -143,4 +143,51 @@ describe("memory workflow routes", () => {
     expect(await json(await call(tmp.path, "DELETE", "/memory/workflow"))).toEqual({ removed: 2 })
     expect((await call(tmp.path, "DELETE", "/memory/workflow?tier=chat")).status).toBe(400)
   }, 60_000)
+
+  test("Codium workflow summaries omit inclusive figures from rows and advice without changing internal learning", async () => {
+    await using tmp = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
+    const where = await place(tmp.path)
+    await record(where, [
+      ...runs("thorough", "default", 0).map((row) => ({
+        ...row,
+        costUsd: undefined,
+        costKinds: { priced: 1, codium: 2 },
+        unpricedSteps: 2,
+        tokens: { input: 500, output: 0, reasoning: 0, cacheRead: 0 },
+      })),
+      ...runs("thorough", "high", 0, 8, 2).map((row) => ({
+        ...row,
+        costUsd: undefined,
+        costKinds: { codium: 3 },
+        unpricedSteps: 3,
+      })),
+      { ...run(0, "light", "default", 0), providerID: "vector-plan", costKinds: { codium: 3 }, unpricedSteps: 3 },
+      run(0, "standard", "default", 0.2),
+    ])
+    const internal = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflow = yield* BrainWorkflow.Service
+        return yield* workflow.insights(where)
+      }),
+    )
+    const insights = (await json(await call(tmp.path, "GET", "/memory/workflow"))) as BrainWorkflow.Insights
+    for (const tier of insights.tiers.filter((tier) => tier.tier !== "standard")) {
+      for (const arm of tier.arms) {
+        expect(arm.codium).toBeDefined()
+        expect(arm).not.toHaveProperty("tokens")
+        expect(arm).not.toHaveProperty("costUsd")
+      }
+    }
+    const advice = insights.tiers.find((tier) => tier.tier === "thorough")!.advice!
+    expect(advice.effort).toBe("default")
+    expect(advice.reason).toContain("(unknown + Codium)")
+    expect(advice.reason).not.toContain("tokens")
+    expect(advice.basis.chosen).not.toHaveProperty("tokens")
+    expect(advice.basis.instead).not.toHaveProperty("tokens")
+    expect(internal.tiers.find((tier) => tier.tier === "thorough")!.advice!.basis.chosen.tokens).toBeCloseTo(500)
+    expect(insights.tiers.find((tier) => tier.tier === "standard")!.arms[0]).toMatchObject({
+      tokens: 1200,
+      costUsd: 0.2,
+    })
+  }, 30_000)
 })

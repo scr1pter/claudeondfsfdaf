@@ -162,6 +162,9 @@ export interface SkippedFile {
 
 export interface ReviewCost {
   costUsd: number
+  // How many labs' models checked the reported findings (WP A35): 2 after a first pass checked by a model from another
+  // lab, 3 when the panel's judge from a third lab finished too. Set by the review runner; absent otherwise.
+  labs?: 2 | 3
   // Codium activity can accompany any own-provider cost kind.
   codium?: boolean
   // Set only by fresh per-message reducers that positively attribute all reported tokens to own usage.
@@ -193,7 +196,7 @@ export interface ReviewOutcome {
   partial?: "budget" | "steps" | "timeout" | "model-error"
   unreviewed: string[]
   specialists: {
-    name: "review" | "security" | "verify"
+    name: "review" | "security" | "verify" | "judge"
     status: "ok" | "failed" | "timeout" | "stopped" | "skipped"
     steps: number
     detail?: string
@@ -208,7 +211,7 @@ export interface ReviewOutcome {
 export interface ReviewPass {
   usageMissing?: boolean
   costKind?: CostKind
-  name: "review" | "security" | "verify"
+  name: "review" | "security" | "verify" | "judge"
   model: string // "provider/model"
   costUsd?: number // absent when the pass's usage carried no price
   input: number // cache reads and writes included
@@ -246,6 +249,12 @@ export interface ReviewConfig {
   // A cheaper "provider/model" for the first pass. The review and security reviewers run on it, and every finding
   // above a nit is then double-checked on `model`; only the ones it confirmed are reported, and `verify` cannot be off.
   triageModel?: string
+  // The review panel (WP A35): a first pass, a check and a judge, each from a different lab. The judge makes the final
+  // call on each finding the check looked at. Off by default; it needs triageModel and model from two labs (on Vector
+  // Codium, the plan's review pair) and a judge from a third.
+  panel: boolean
+  // The panel's judge, "provider/model". On Vector Codium the plan's panel judge is used when this is not set.
+  judgeModel?: string
   // Style nits are left out unless this is true or minSeverity is "nit".
   nits: boolean
   paths: { path: string; instructions: string }[] // JSON alternative to review.md sections
@@ -275,6 +284,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   maxCostUsdPerPr: 10,
   maxCostUsdPerMonth: 0,
   timeoutMinutes: 12,
+  panel: false,
   nits: false,
   paths: [],
 }

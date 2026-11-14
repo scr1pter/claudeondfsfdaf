@@ -11,6 +11,7 @@ import { Context, Effect, Layer, Ref } from "effect"
 import { RunBudget } from "@vectordevai/schema/run-budget"
 import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import type { SessionID } from "@vectordevai/schema/session-id"
+import { CodiumUsage } from "./codium-usage"
 import { makeGlobalNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { NEXT_STEP_SLACK, nextStepCostUsd, type ReviewPrice } from "./review/plan"
@@ -258,6 +259,14 @@ export function formatUsd(usd: number) {
   const fixed = usd.toFixed(2)
   if (usd > 0 && fixed === "0.00") return "<$0.01"
   return `$${fixed}`
+}
+
+// A research report's Spend line (label plan §3.2): the run's own dollars at list prices, with "+ Codium" when Codium
+// steps ran beside them. A run that spent no dollars gets no line, a Codium-only run included, so a saved report never
+// names Codium without own dollars beside it.
+export function reportSpend(run: Pick<Run, "spentUsd" | "codiumSteps"> | undefined) {
+  if (!run || !(run.spentUsd > 0)) return undefined
+  return CodiumUsage.withCodium(`${formatUsd(run.spentUsd)} at list prices`, run.codiumSteps)
 }
 
 function formatRange(estimate: Estimate) {

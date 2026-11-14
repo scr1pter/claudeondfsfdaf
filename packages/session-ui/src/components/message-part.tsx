@@ -77,6 +77,7 @@ import {
   type PartGroup,
 } from "./message-part-group"
 import { memoryLearned } from "./memory-learned"
+import { hostedJobNote } from "./hosted-job-note"
 import { ReplyFooter } from "./reply-footer"
 import { chipTitle, cites, decorateCitations, delivered, segments, type KnowledgeCard } from "./knowledge-citations"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
@@ -1186,8 +1187,9 @@ export function UserMessageDisplay(props: {
   const busy = () => state.busy
 
   const textPart = createMemo(
-    () => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined,
+    () => props.parts?.find((p) => p.type === "text" && (!(p as TextPart).synthetic || hostedJobNote(p))) as TextPart | undefined,
   )
+  const hosted = createMemo(() => hostedJobNote(textPart()))
 
   const text = createMemo(() => cleanVisibleUserText(textPart()?.text || ""))
 
@@ -1215,6 +1217,7 @@ export function UserMessageDisplay(props: {
   })
 
   const metaHead = createMemo(() => {
+    if (hosted()) return "Cloud computer report"
     const agent = props.message.agent
     const items = [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model()]
     return items.filter((x) => !!x).join("\u00A0\u00B7\u00A0")
@@ -1250,7 +1253,7 @@ export function UserMessageDisplay(props: {
   }
 
   return (
-    <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
+    <div data-component="user-message" data-kind={hosted() ? "hosted" : undefined} data-timeline-part-id={textPart()?.id}>
       <Show when={attachments().length > 0}>
         <div data-slot="user-message-attachments">
           <For each={attachments()}>
@@ -1312,7 +1315,7 @@ export function UserMessageDisplay(props: {
                 </Show>
               </span>
             </Show>
-            <Show when={props.actions?.revert}>
+            <Show when={props.actions?.revert && !hosted()}>
               <MessageActionButton
                 icon="reset"
                 label={i18n.t("ui.message.revertMessage")}

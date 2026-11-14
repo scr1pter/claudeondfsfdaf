@@ -7,6 +7,7 @@ import { usePlatform } from "../../context/platform"
 import { useServerSDK } from "../../context/server-sdk"
 import { useServerSync } from "../../context/server-sync"
 import { useSettings } from "../../context/settings"
+import { alertTitle, sendPhoneAlert } from "../../context/phone-alerts"
 import { pathKey } from "../../utils/path-key"
 import { playSoundById } from "../../utils/sound"
 import { showToast } from "../../utils/toast"
@@ -32,7 +33,7 @@ export function useAskNotificationAlerts(input: {
     const sync = serverSync()
     const alerts = createAskNotificationController({
       resolve: (id) => sync.session.resolve(id),
-      autoResponds: (request, directory) => permission.autoResponds(request, directory),
+      autoResponds: (request, directory) => permission.willAutoRespond(request, directory),
       desktopOwns: () => desktopOwns(platform.computer, sdk.scope),
       preferences: () => ({
         permissions: settings.notifications.permissions(),
@@ -54,6 +55,12 @@ export function useAskNotificationAlerts(input: {
       },
       notify: (title, description, href) => platform.notify(title, description, href),
       sound: () => playSoundById(settings.sounds.permissions()),
+      phoneAlert: (session) =>
+        sendPhoneAlert(platform, settings.notifications, {
+          event: "needsYou",
+          title: alertTitle("Needs you", session.title ?? undefined),
+          route: "approvals",
+        }),
       viewed(session, directory) {
         const currentDirectory = input.directory()
         const currentSession = input.sessionID()

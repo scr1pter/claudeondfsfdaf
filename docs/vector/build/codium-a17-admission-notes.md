@@ -6,6 +6,12 @@ checked at the commit gate but not re-reviewed by that reviewer (see "Commit gat
 change was made. All service boundaries in the tests are loopback fakes and a disposable local `redis-server` 7.0.15
 (Lua-compatible; CI uses Valkey 7.2.14).
 
+**Status on 8 Nov 2026.** A17's commit `66007529` has since run in GitHub CI: Vector Codium run 41008803316 (push)
+passed. Its Codium tests job 123909751251 shows `packages/web/test/model-plan-admit.test.ts` (66 pass, none skipped, so
+its Valkey cases ran), `model-plans-api.test.ts` (67 pass), `model-plan-reservations.test.ts` (9 pass) and
+`test/codium-pool.test.ts` (26 pass), with 64 of 64 picked files passing. The P3 phase review (`codium-p3-repairs.md`)
+later covered A17 to A20.
+
 ## What changed against the draft
 
 The handoff's eight unresolved items (8.7) map to these changes:

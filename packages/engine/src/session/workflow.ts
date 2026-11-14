@@ -4,6 +4,7 @@ import { Context, Effect, Layer } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
+import type { CodiumAuto } from "@vectordevai/core/codium-auto"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { TaskSize } from "@vectordevai/core/task-size"
@@ -55,6 +56,7 @@ export type Step = {
 }
 
 export interface Interface {
+  readonly autoModels?: (sessionID: SessionID, tier: TaskSize.Tier) => Effect.Effect<readonly CodiumAuto.Suggestion[]>
   /**
    * Whether a request may take a learned default (I10): the build agent's own run in a root session with no guest, its
    * size from Vector's rules, no variant from the user or the agent, no reasoning option from the agent, the model or
@@ -201,7 +203,9 @@ const layer = Layer.effect(
         : SessionMemory.judged(turn)
           ? ("judged" as const)
           : failed
-      const tokens = yield* spent(input.session.id, input.since, opening.time.created)
+      const usage = yield* spent(input.session.id, input.since, opening.time.created)
+      const units = input.run?.steps === usage.steps.length && provider.codiumUnits
+        ? yield* provider.codiumUnits(usage.steps) : undefined
       // Unknown is not zero: a local, plan, free or unknown step leaves the run's cost unknown.
       const priced =
         input.run !== undefined &&
@@ -230,7 +234,8 @@ const layer = Layer.effect(
         costKinds: input.run?.kinds ?? {},
         steps: input.run?.steps ?? 0,
         unpricedSteps: input.run?.unpricedSteps ?? 0,
-        tokens,
+        tokens: usage.tokens,
+        ...(units === undefined ? {} : { codiumUnits: units }),
         partial:
           input.background > 0 ||
           turn.some((message) => message.parts.some((part) => part.type === "tool" && part.tool === "workflow")),
@@ -247,10 +252,15 @@ const layer = Layer.effect(
       const all = yield* Effect.forEach([sessionID, ...ids], (id) =>
         sessions.messages({ sessionID: id }).pipe(Effect.catch(() => Effect.succeed([] as SessionV1.WithParts[]))),
       )
-      return all
+      const steps = all
         .flat()
         .flatMap((message) => (message.info.role === "assistant" && message.info.id > since ? [message.info] : []))
-        .reduce(
+      return { steps: steps.filter((info) => info.tokens.input + info.tokens.output + info.tokens.reasoning +
+        info.tokens.cache.read + info.tokens.cache.write > 0).map((info) => ({
+        providerID: info.providerID, modelID: info.modelID,
+        input: info.tokens.input, output: info.tokens.output,
+        reasoning: info.tokens.reasoning, cacheRead: info.tokens.cache.read,
+      })), tokens: steps.reduce(
           (sum, info) => ({
             input: sum.input + info.tokens.input,
             output: sum.output + info.tokens.output,
@@ -258,7 +268,7 @@ const layer = Layer.effect(
             cacheRead: sum.cacheRead + info.tokens.cache.read,
           }),
           { input: 0, output: 0, reasoning: 0, cacheRead: 0 },
-        )
+        ) }
     })
 
     const descendants = (sessionID: SessionID, opened: number): Effect.Effect<SessionID[]> =>
@@ -272,7 +282,14 @@ const layer = Layer.effect(
         Effect.map((found) => found.flat()),
       )
 
-    return Service.of({ eligible, advice, current, observe })
+    const autoModels = Effect.fn("SessionWorkflow.autoModels")(function* (sessionID: SessionID, tier: TaskSize.Tier) {
+      if (flags.pure || Config.local().enabled || SessionMemory.agentStarted() ||
+        (yield* config.get()).sizing?.learn === false || (yield* guests.marked(sessionID))) return []
+      const session = yield* sessions.get(sessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!session || session.parentID || session.internal || !workflow.autoModels) return []
+      return yield* workflow.autoModels(yield* instruction.place(), tier)
+    })
+    return Service.of({ eligible, advice, current, observe, autoModels })
   }),
 )
 

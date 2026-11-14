@@ -42,6 +42,18 @@ export type VectorBillingResult =
 
 export type VectorDeletionResult = { deleted: true } | { deleted: false; message: string }
 
+/**
+ * What Settings > Roadmap vote asks vectordev.ai (WP A34): the roadmap as this account sees it, a vote on this quarter's
+ * ballot, or Ultra's one nomination of the quarter. vectordev.ai decides who may vote from the account's plan.
+ */
+export type VectorRoadmapRequest =
+  | { kind: "read" }
+  | { kind: "vote"; quarter: string; choice: string }
+  | { kind: "nominate"; quarter: string; title: string; detail?: string }
+
+/** vectordev.ai's answer, which the app decodes (settings-v2/roadmap-model.ts), or why there is none. */
+export type VectorRoadmapResult = { ok: true; roadmap: unknown } | { ok: false; code?: string; message: string }
+
 export type VectorAccountPlatform = {
   status(): Promise<VectorAccountStatus>
   start(): Promise<VectorAccountStatus>
@@ -61,21 +73,27 @@ export type VectorAccountPlatform = {
   cancelDeletion?(): Promise<VectorAccountStatus>
   /** Deletes the account with the confirmation the desktop holds; `email` is what the person typed. */
   deleteAccount?(email: string): Promise<VectorDeletionResult>
+  /** Reads the roadmap vote, votes or nominates, with the account token kept in the desktop main process. */
+  roadmap?(request: VectorRoadmapRequest): Promise<VectorRoadmapResult>
   onChange(listener: (status: VectorAccountStatus) => void): () => void
 }
 
 /**
  * What the sidebar's account chip shows, as Claude and Codex show it: the photo, else the first letter, beside the
  * first name from Google or the account, else the email, and then the Codium plan: Free without a subscription, else
- * the plan's name. The plan is left out until Vector has read it, and when it could not.
+ * the plan's name. The plan is left out until Vector has read it, and when it could not. A founding member's number
+ * (WP A31) comes with the plan, from vectordev.ai's status, never from anything the app decides.
  */
 export function accountChip(status: VectorAccountStatus, codium?: ModelPlanStatus.Status) {
   const name = status.name?.trim() || status.email || ""
   const label = name.split(/\s+/)[0] ?? ""
+  const shown = codium?.signedIn && !codium.error
+  const founding = shown && codium.plan ? codium.founding?.number : undefined
   return {
     label,
     name,
-    plan: codium?.signedIn && !codium.error ? (codium.plan?.name ?? CodiumPlan.FREE) : undefined,
+    plan: shown ? (codium.plan?.name ?? CodiumPlan.FREE) : undefined,
+    ...(founding ? { founding } : {}),
     initial: label.charAt(0),
     // Only an inline raster image, so the chip never loads a URL whatever the status carries.
     photo:

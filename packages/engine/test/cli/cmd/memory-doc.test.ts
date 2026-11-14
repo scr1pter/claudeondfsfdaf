@@ -212,7 +212,7 @@ cliIt.concurrent(
 )
 
 cliIt.concurrent(
-  "doc distill shows the estimate first, sends only with --yes and the flag, and keeps the verbatim suggestion only",
+  "doc distill defaults off, shows the estimate first, and the legacy flag sends only with --yes",
   (fixture) =>
     Effect.gen(function* () {
       const billing =
@@ -235,7 +235,7 @@ cliIt.concurrent(
       // Off by default.
       const off = yield* run(["distill", id, ...model, "--yes"], false)
       fixture.vector.expectExit(off, 1, "vector memory doc distill with the flag off")
-      expect(`${off.stdout}${off.stderr}`).toContain("VECTOR_KNOWLEDGE_DISTILL")
+      expect(`${off.stdout}${off.stderr}`).toContain("Turn on document distillation in Settings > Memory")
       // The estimate sends nothing.
       const estimate = yield* run(["distill", id, ...model, "--json"], true)
       fixture.vector.expectExit(estimate, 0, "vector memory doc distill estimate")

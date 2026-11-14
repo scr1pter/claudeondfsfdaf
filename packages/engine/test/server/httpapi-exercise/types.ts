@@ -71,6 +71,7 @@ export type ScenarioContext = {
   worktreeRemove: (directory: string) => Effect.Effect<void>
   llmText: TestLLMServer["Service"]["text"]
   llmWait: (count: number) => Effect.Effect<void>
+  llmCalls: () => Effect.Effect<number>
   tuiRequest: (request: { path: string; body: unknown }) => Effect.Effect<void>
 }
 

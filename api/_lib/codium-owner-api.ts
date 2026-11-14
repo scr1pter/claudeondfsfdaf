@@ -16,6 +16,8 @@ import {
 import { configuredPlanModels } from "./model-plan-config.js"
 import { stripeRecord } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
+import { syncOpsKillFlag } from "./ops-worker.js"
+import { syncRelayKillFlag } from "./remote-relay.js"
 import { requireUsageOwner } from "./usage.js"
 import { replayStripeEvents } from "../model-plans/replay.js"
 
@@ -143,6 +145,13 @@ async function run(
         now,
       )
     else await writeSwitch(name as SwitchName, raw.value as SwitchValue, actor, fetcher, now)
+    // WP A40: the relay Worker reads its own kill flag on every connection, refresh and alarm, so the `remote` switch
+    // is copied there too. The switch itself already stops new tickets; `relay: "failed"` tells the owner to apply it
+    // again (or to set the flag directly, owner-actions/remote.md).
+    if (name === "remote") return { relay: await syncRelayKillFlag(raw.value === "off", fetcher, now) }
+    // WP A47: the same for the ops Worker, whose accounts read its kill flag at every wake. The switch itself already
+    // stops new settings and release watches here.
+    if (name === "ops") return { worker: await syncOpsKillFlag(raw.value === "off", fetcher, now) }
     return {}
   }
   if (action === "replay")
@@ -183,7 +192,8 @@ function invalid() {
 }
 
 /** Supabase verified this token above; refreshing JWT/MFA must not refresh the original OAuth sign-in. */
-function requireRecentGoogleSignIn(request: ApiRequest, now: number) {
+/** S5: an owner change needs a Google sign-in under 10 minutes old, from the OAuth `amr` timestamp (not `iat`). */
+export function requireRecentGoogleSignIn(request: Pick<ApiRequest, "headers">, now: number) {
   const value = request.headers.authorization
   const header = Array.isArray(value) ? value[0] : value
   const token = /^Bearer\s+(.+)$/i.exec(header ?? "")?.[1]

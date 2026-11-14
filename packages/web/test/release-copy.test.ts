@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 import { changelog } from "../src/data/docs-content"
 import { handsReleasePreview, publishedDesktopVersion, release199, upcomingRelease } from "../src/data/vector-releases"
 
@@ -7,7 +8,7 @@ import { handsReleasePreview, publishedDesktopVersion, release199, upcomingRelea
 // 2026-10-23, 1.99.109 on 2026-10-19 and 1.99.108 on 2026-10-17 by release run #88; 1.99.107 was skipped and never
 // published.
 const shipped = "1.99.112"
-const web = new URL("..", import.meta.url).pathname
+const web = fileURLToPath(new URL("..", import.meta.url))
 // The source repository is private, so its releases and files 404 for visitors. Installers come from the account
 // download page, which needs a free Vector account.
 const accountDownload = 'href="/download"'
@@ -31,7 +32,7 @@ const sources = await Promise.all(
   [
     ...(await Array.fromAsync(new Bun.Glob("src/{pages,components,data}/**/*.{astro,ts,tsx}").scan({ cwd: web }))),
     "../../README.md",
-  ].map(async (file) => ({ file, text: await Bun.file(`${web}${file}`).text() })),
+  ].map(async (file) => ({ file: file.replaceAll("\\", "/"), text: await Bun.file(`${web}${file}`).text() })),
 )
 
 test("the site marks the latest shipped desktop release as published", () => {

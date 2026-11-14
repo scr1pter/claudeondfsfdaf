@@ -41,13 +41,14 @@ function fixture() {
     now: 10_000,
     owned: true,
     viewed: true,
-    auto: false,
+    auto: false as boolean | Promise<boolean>,
     session: session as (typeof session & { internal?: string }) | undefined,
     preferences: { agent: true, permissions: true, permissionSound: true },
     sounds: 0,
     notifications: [] as { title: string; href: string }[],
     toasts: [] as { kind: string; href: string }[],
     dismissed: [] as number[],
+    phones: [] as string[],
   }
   const controller = createAskNotificationController({
     resolve: async () => state.session,
@@ -59,6 +60,7 @@ function fixture() {
     sound: () => {
       state.sounds++
     },
+    phoneAlert: (session) => state.phones.push(session.id),
     viewed: () => state.viewed,
     toast(kind, _title, _description, href) {
       state.toasts.push({ kind, href })
@@ -179,5 +181,45 @@ test("auto-answered permissions, absent conversations and internal helper sessio
   expect(fake.state.notifications).toEqual([])
   expect(fake.state.toasts).toEqual([])
   expect(fake.state.sounds).toBe(0)
+  expect(fake.state.phones).toEqual([])
   fake.controller.close()
+})
+
+test("paired-phone alerts share the observed-ask cooldown without duplicating desktop-owned notifications", async () => {
+  const fake = fixture()
+  await fake.controller.observe(permission("per_phone"))
+  await fake.controller.observe(question("que_cooldown"))
+  expect(fake.state.phones).toEqual([sessionID])
+  expect(fake.state.notifications).toEqual([])
+  fake.state.now += 5000
+  await fake.controller.observe(question("que_phone"))
+  expect(fake.state.phones).toEqual([sessionID, sessionID])
+  fake.controller.close()
+  await fake.controller.observe(question("que_closed"))
+  expect(fake.state.phones).toHaveLength(2)
+})
+
+test("the asynchronous phone-turn decision can retain an auto-accept request for a person", async () => {
+  const fake = fixture()
+  fake.state.auto = Promise.resolve(false)
+  await fake.controller.observe(permission("per_phone_turn", "bash"))
+  expect(fake.state.phones).toEqual([sessionID])
+  fake.state.now += 5000
+  fake.state.auto = Promise.resolve(true)
+  await fake.controller.observe(permission("per_auto_turn", "bash"))
+  expect(fake.state.phones).toHaveLength(1)
+  fake.controller.close()
+})
+
+test("closing a server while the phone-turn check waits fences every later alert", async () => {
+  const fake = fixture()
+  const decision = Promise.withResolvers<boolean>()
+  fake.state.auto = decision.promise
+  const pending = fake.controller.observe(permission("per_waiting", "bash"))
+  fake.controller.close()
+  decision.resolve(false)
+  await pending
+  expect(fake.state.phones).toEqual([])
+  expect(fake.state.notifications).toEqual([])
+  expect(fake.state.toasts).toEqual([])
 })

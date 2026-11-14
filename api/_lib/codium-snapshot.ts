@@ -243,6 +243,8 @@ export type SnapshotFacts = {
   periodEnd: number
   cancelAtPeriodEnd: boolean
   scheduled?: { plan: PlanId; at: number }
+  /** The founding membership (WP A31): its number, and whether the boost applies to the current plan. */
+  founding?: { number: number; boost: boolean }
   firstPaidAt?: number
   firstHighPaidAt?: number
   memberSince?: number
@@ -284,6 +286,7 @@ export function buildSnapshot(
     meterEpoch: facts.subscription ? `${facts.subscription}:${facts.periodStart}` : "none",
     cancelAtPeriodEnd: facts.cancelAtPeriodEnd,
     ...(facts.scheduled ? { scheduled: facts.scheduled } : {}),
+    ...(facts.founding ? { founding: { number: facts.founding.number, boost: facts.founding.boost } } : {}),
     ...(facts.firstPaidAt === undefined ? {} : { firstPaidAt: facts.firstPaidAt }),
     ...(high === undefined ? {} : { firstHighPaidAt: high }),
     ...(facts.memberSince === undefined ? {} : { memberSince: facts.memberSince }),
