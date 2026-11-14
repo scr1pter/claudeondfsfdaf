@@ -1,6 +1,6 @@
 # Integrated CI harness repairs
 
-2026-11-14; isolated `ci-fixture-repairs` branch from `641db1209`. No production store, erasure ordering, external model call, feature flag or paid evaluation behavior is changed.
+2026-11-14; isolated `ci-fixture-repairs` branch from `641db1209`. No production store, erasure ordering, external model call, application feature flag or paid evaluation behavior is changed.
 
 ## Desktop account fixture
 
@@ -35,6 +35,16 @@ The fixture now derives the real global path from the exact child environment an
 No product config loader, fallback, feature flag, identity requirement or timeout changed. This is not an owner UI/browser/native-input test. A successful local typecheck does not establish that the repaired native smoke passed; GitHub must run it on the new exact source revision.
 
 Follow-up validation from an isolated worktree based on `f2988d6ad`: Bun 1.3.14 frozen installation with scripts disabled completed in 28.07 seconds with no lockfile change; `bun run typecheck` from `packages/engine` exited 0 without diagnostics. No smoke server, native input, browser, model or bundle execution ran locally.
+
+### Follow-up: isolated smoke child desktop identity
+
+At exact `f830e3fdf`, both full Node jobs [132557600960](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43631024090/job/132557600960) and [132557497868](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43631024061/job/132557497868) progressed beyond the owner-global/consent failure and reported only the synthetic computer flow failing, with zero computer tools, commands, frames, clicks or consumed approvals.
+
+The fixture's private `sidecarEnv` inherited `GITHUB_ACTIONS=true` from its hosted runner. `registry.ts` deliberately withholds computer tools under that identity through `GithubAgents.onActionsRunner` (INV-S13), including when a bridge is ready. The existing registry tests expressly cover both the withheld Actions case and an offered synthetic-ready desktop case. The product guard was working; the fixture was describing its isolated child as an Actions agent.
+
+Only the private smoke child now receives `GITHUB_ACTIONS=false`, matching the desktop it simulates. The runner's environment is never modified. Existing isolated HOME/XDG roots, removal of inherited Vector bridge credentials and injection of only the generated-pixel, authenticated fake bridge remain intact. No production sidecar helper, registry, feature flag, capture, native input, browser, approval, image-attachment, lease or timeout behavior changed.
+
+This narrowed repair is based on `f830e3fdf` in isolated branch `smoke-child-env`. `bun run typecheck` from `packages/engine` exited 0 with no diagnostics. Full smoke build/execution remains GitHub-only and still requires a fresh successful receipt; the local typecheck is not that receipt.
 
 ## Validation
 

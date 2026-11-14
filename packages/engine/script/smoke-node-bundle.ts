@@ -262,6 +262,8 @@ function sidecarEnv(input: { home: string; userData: string; configDir: string; 
   )
   return {
     ...inherited,
+    // Only this generated-pixel/fake-bridge child models a desktop. The CI runner and real Actions agents keep INV-S13.
+    GITHUB_ACTIONS: "false",
     HOME: input.home,
     USERPROFILE: input.home,
     VECTOR_TEST_HOME: input.home,
