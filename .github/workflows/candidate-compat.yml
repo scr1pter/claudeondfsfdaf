@@ -1,6 +1,14 @@
 name: Candidate compatibility
 
 on:
+  push:
+    branches: [build-candidate]
+    paths:
+      - .github/workflows/candidate-compat.yml
+      - packages/engine/test/session/structured-output-thinking.test.ts
+      - packages/engine/test/session/llm-native-recorded.test.ts
+      - packages/engine/test/review/memory-boundary.test.ts
+      - packages/engine/test/compliance/egress-inventory.test.ts
   workflow_dispatch:
 
 permissions:
