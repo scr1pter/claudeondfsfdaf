@@ -26,6 +26,10 @@ The version becomes **2.0.0**. The 1.99.112 and 1.99.113 strings are retargeted 
 | 10 | `build-native-shell`: @vector native isolation | After step 4. Needs its qualification matrix. |
 | 11 | `agent-environment`: the agent's own terminals and browser | In progress: bug review, finish, update onto v2. |
 
+## main
+
+On 2026-11-14 the owner chose to have everything live in `main` with no long-lived integration branch. `main` was fast-forwarded to `v2` at `983fe7025`, and every later merge goes straight into `main`. Each push to `main` deploys vectordev.ai, so new features stay off by default.
+
 ## After the merges
 
 1. Retarget the version to 2.0.0, including the live site copy that still says "Coming in desktop 1.99.113".
