@@ -550,6 +550,10 @@ test("Settings > Vector Local asks before Add server loosens it, and lists every
   expect(state.servers).toEqual([{ url: "http://gpu-box:8000" }, { url: "http://gpu-box:8000", confirm: true }])
 
   // Cancelling sends nothing more. The field empties once the server is added, before it is typed in again.
+  // The closing content disappears before its stack entry is popped; wait until Settings can take focus again.
+  await expect
+    .poll(() => pane.evaluate((element) => element.closest("[data-dialog-layer]")?.hasAttribute("inert")))
+    .toBe(false)
   await expect(servers.getByLabel("Server address")).toHaveValue("")
   // The dialog stack drops a closed confirmation 100 ms after it closes, and Settings stays inert until then. The
   // confirmation can leave the page and the field can read empty before that, while what is typed still goes nowhere

@@ -1,0 +1,1301 @@
+import { execFile } from "node:child_process"
+import { realpath } from "node:fs/promises"
+import { homedir } from "node:os"
+import { isDeepStrictEqual } from "node:util"
+import path from "node:path"
+import { Option, Schema } from "effect"
+import { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
+import { PermissionV1 } from "@vectordevai/schema/v1/permission"
+import { QuestionV1 } from "@vectordevai/schema/v1/question"
+import { ComputerMainCopy } from "@vectordevai/app/computer/main-copy"
+import identity from "../../native/computer-helper/identity.json"
+import { NativeHelperBackend } from "./computer-backend"
+import { ComputerError, startComputerBridge, type ComputerExecutor } from "./computer-bridge"
+import { createComputerExecutor } from "./computer-executor"
+import { createComputerFrames } from "./computer-frames"
+import { createComputerGrants } from "./computer-grants"
+import { ComputerHelper, HelperUnavailableError } from "./computer-helper"
+import { broadcastComputerState, broadcastScreenshotsRemoved, type ComputerIpcService } from "./computer-ipc"
+import { createComputerNotify, type ComputerNotification, type ComputerNotifyTarget } from "./computer-notify"
+import { createComputerOverlay } from "./computer-overlay"
+import { setComputerOverlayControls } from "./computer-overlay-ipc"
+import { createComputerPermissions } from "./computer-permissions"
+import { createComputerPolicy } from "./computer-policy"
+import { computerPrune, createComputerRetention, type ComputerRetentionTimers } from "./computer-retention"
+import { createComputerSession } from "./computer-session"
+import type { createComputerSettings } from "./computer-settings"
+import { createComputerTakeover, validateChord } from "./computer-takeover"
+import { computerTrayState, type ComputerTrayCommand, type ComputerTrayState } from "./computer-tray"
+import { createComputerKeepAwake, type KeepAwakeEvent, type KeepAwakeSource, type PowerBlocker } from "./keep-awake"
+
+type Settings = Awaited<ReturnType<typeof createComputerSettings>>
+type Controller = ReturnType<typeof createComputerSession>
+type Retention = ReturnType<typeof createComputerRetention>
+type Ask = NonNullable<Computer.ComputerState["ask"]>
+type Platform = "darwin" | "win32"
+type Window = Parameters<typeof broadcastComputerState>[1] extends () => readonly (infer W)[] ? W : never
+
+export type ComputerAvailability = { available: true } | { available: false; reason: Computer.UnavailableReason }
+
+const ENGINE_MS = 5_000
+const LEASES_MAX = 64
+const POWER_EVENTS = [
+  "lock-screen",
+  "unlock-screen",
+  "suspend",
+  "resume",
+  "user-did-resign-active",
+  "user-did-become-active",
+] as const
+
+/** Section 2.8: the env pair exists only on supported desktops, unelevated, when company policy leaves Hands on. */
+export function computerAvailability(input: {
+  platform: NodeJS.Platform
+  release: string
+  elevated: boolean
+  policy: Pick<Computer.ComputerPolicy, "enabled">
+}): ComputerAvailability {
+  if (!/^\d+(?:\.\d+)*$/.test(input.release)) return { available: false, reason: "unsupported_os" }
+  const version = input.release.split(".").map(Number)
+  if (version.some((part) => !Number.isSafeInteger(part))) return { available: false, reason: "unsupported_os" }
+  if (input.platform !== "darwin" && input.platform !== "win32") return { available: false, reason: "unsupported_os" }
+  if (input.platform === "darwin" && !(Number.isInteger(version[0]) && version[0]! >= 23))
+    return { available: false, reason: "unsupported_os" }
+  if (input.platform === "win32" && !(version[0] === 10 && Number.isInteger(version[2]) && version[2]! >= 19041))
+    return { available: false, reason: "unsupported_os" }
+  if (input.elevated) return { available: false, reason: "elevated" }
+  if (!input.policy.enabled) return { available: false, reason: "policy_disabled" }
+  return { available: true }
+}
+
+/** The pair the engine sidecar receives in its start message only (never its spawn environment). */
+export function computerEnvironment(bridge?: { url: string; token: string }): Record<string, string> {
+  return bridge ? { [Computer.BRIDGE.urlEnv]: bridge.url, [Computer.BRIDGE.tokenEnv]: bridge.token } : {}
+}
+
+/**
+ * Whether Vector itself runs elevated: uid 0 on macOS, a high or system integrity token on Windows. A check that
+ * cannot run counts as elevated, so Hands fails closed rather than operating apps from an administrator token.
+ */
+export async function processElevated(
+  platform: NodeJS.Platform,
+  options: { uid?: () => number | undefined; groups?: () => Promise<string> } = {},
+): Promise<boolean> {
+  if (platform === "darwin") {
+    try {
+      const uid = (options.uid ?? (() => process.geteuid?.() ?? process.getuid?.()))()
+      return !Number.isSafeInteger(uid) || uid! <= 0
+    } catch {
+      return true
+    }
+  }
+  if (platform !== "win32") return false
+  try {
+    const output = await (options.groups ?? whoamiGroups)()
+    return /\bS-1-16-(?:12288|16384)\b/.test(output) || !/\bS-1-16-\d+\b/.test(output)
+  } catch {
+    return true
+  }
+}
+
+function whoamiGroups() {
+  return new Promise<string>((resolve, reject) => {
+    execFile(
+      path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "whoami.exe"),
+      ["/groups", "/fo", "csv", "/nh"],
+      { windowsHide: true, timeout: ENGINE_MS, maxBuffer: 256 * 1024 },
+      (error, stdout) => (error ? reject(error) : resolve(String(stdout))),
+    )
+  })
+}
+
+/** Directories Hands never types into: Vector's own config, prompt, memory and data locations (D16, INV-S11). */
+export function protectedLocations(input: { userData: string; env: NodeJS.ProcessEnv; home?: string }): string[] {
+  const home = input.home ?? homedir()
+  const locations = [
+    input.userData,
+    input.env.VECTOR_AGENT_CONFIG_DIR,
+    input.env.XDG_DATA_HOME && path.join(input.env.XDG_DATA_HOME, "vector"),
+    input.env.XDG_CONFIG_HOME && path.join(input.env.XDG_CONFIG_HOME, "vector"),
+    input.env.XDG_STATE_HOME && path.join(input.env.XDG_STATE_HOME, "vector"),
+    input.env.XDG_CACHE_HOME && path.join(input.env.XDG_CACHE_HOME, "vector"),
+    path.join(home, ".config", "vector"),
+    path.join(home, ".local", "share", "vector"),
+    path.join(home, ".vector"),
+  ]
+  return [...new Set(locations.filter((value): value is string => !!value && path.isAbsolute(value)))]
+}
+
+/** Preserve missing leaf names while resolving the nearest existing parent, including linked configuration roots. */
+export async function canonicalComputerPath(file: string): Promise<string> {
+  const absolute = path.resolve(file)
+  const suffix: string[] = []
+  let parent = absolute
+  while (true) {
+    try {
+      return path.join(await realpath(parent), ...suffix)
+    } catch (error) {
+      if (
+        !error ||
+        typeof error !== "object" ||
+        !("code" in error) ||
+        (error.code !== "ENOENT" && error.code !== "ENOTDIR")
+      )
+        throw error
+      const next = path.dirname(parent)
+      if (next === parent) throw error
+      suffix.unshift(path.basename(parent))
+      parent = next
+    }
+  }
+}
+
+/** Read ahead from SSE while ordered ancestry/proof work is pending; input drains only events already received. */
+export function createComputerEventDrain(input: { consume(event: KeepAwakeEvent): Promise<void>; failed(): void }) {
+  let received = 0
+  let completed = 0
+  let closed = false
+  let tail = Promise.resolve()
+  const waiting = new Set<{ ticket: number; resolve(): void; reject(error: unknown): void }>()
+  function close() {
+    if (closed) return
+    closed = true
+    for (const waiter of waiting)
+      waiter.reject(new ComputerError("unavailable", "The computer event connection changed."))
+    waiting.clear()
+  }
+  return {
+    push(event: KeepAwakeEvent) {
+      if (closed) return
+      if (received - completed >= 256) {
+        close()
+        input.failed()
+        return
+      }
+      const ticket = ++received
+      tail = tail
+        .then(async () => {
+          if (closed) return
+          await input.consume(event)
+          if (closed) return
+          completed = ticket
+          for (const waiter of waiting)
+            if (waiter.ticket <= completed) {
+              waiting.delete(waiter)
+              waiter.resolve()
+            }
+        })
+        .catch(() => {
+          close()
+          input.failed()
+        })
+    },
+    synchronize() {
+      if (closed) return Promise.reject(new ComputerError("unavailable", "The computer event connection changed."))
+      if (completed === received) return Promise.resolve()
+      const ticket = received
+      return new Promise<void>((resolve, reject) => waiting.add({ ticket, resolve, reject }))
+    },
+    close,
+  }
+}
+
+/** The local engine's HTTP API, as desktop main uses it for Hands: abort, session ancestry and the banner's replies. */
+export function computerEngine(
+  connection: { url: string; password: string },
+  fetcher: (input: URL, init: RequestInit) => Promise<Response> = (input, init) => fetch(input, init),
+) {
+  const authorization = `Basic ${Buffer.from(`vector:${connection.password}`).toString("base64")}`
+  const decodeSession = Schema.decodeUnknownOption(
+    Schema.Struct({ id: Schema.String, parentID: Schema.optional(Schema.String) }),
+  )
+  async function request(method: "GET" | "POST", route: string, directory: string, body?: unknown) {
+    const url = new URL(route, connection.url)
+    url.searchParams.set("directory", directory)
+    const response = await fetcher(url, {
+      method,
+      headers: { authorization, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(ENGINE_MS),
+    })
+    if (!response.ok) throw new Error(`The engine answered ${response.status}.`)
+    return response
+  }
+  const id = (value: string) => encodeURIComponent(value)
+  return {
+    async abort(scope: { rootSessionID: string; sessionID?: string; directory: string }) {
+      await request("POST", `/session/${id(scope.sessionID ?? scope.rootSessionID)}/abort`, scope.directory)
+    },
+    async rootOf(sessionID: string, directory: string): Promise<string | undefined> {
+      let current = sessionID
+      for (let depth = 0; depth < 64; depth++) {
+        const session = decodeSession(await (await request("GET", `/session/${id(current)}`, directory)).json())
+        if (Option.isNone(session) || session.value.id !== current) return undefined
+        if (!session.value.parentID) return current
+        current = session.value.parentID
+      }
+      return undefined
+    },
+    async protectedPaths(directory: string) {
+      const response = await request("GET", "/computer/protected-paths", directory)
+      const reader = response.body?.getReader()
+      if (!reader) throw new ComputerError("blocked", "The protected paths response is empty.")
+      const decoder = new TextDecoder("utf-8", { fatal: true })
+      const chunks: string[] = []
+      let bytes = 0
+      try {
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          bytes += chunk.value.byteLength
+          if (bytes > 1024 * 1024) throw new ComputerError("blocked", "The protected paths response is too large.")
+          chunks.push(decoder.decode(chunk.value, { stream: true }))
+        }
+        chunks.push(decoder.decode())
+      } catch (error) {
+        void reader.cancel().catch(() => {})
+        throw error
+      } finally {
+        reader.releaseLock()
+      }
+      const text = chunks.join("")
+      const decode = Schema.decodeUnknownOption(
+        Schema.Struct({ paths: Schema.Array(Schema.String), directories: Schema.Array(Schema.String) }),
+      )
+      const value = decode(JSON.parse(text))
+      if (
+        Option.isNone(value) ||
+        value.value.paths.length > 4096 ||
+        value.value.directories.length > 4096 ||
+        [...value.value.paths, ...value.value.directories].some(
+          (file) => !path.isAbsolute(file) || file.length > 16384 || file.includes("\0"),
+        )
+      )
+        throw new ComputerError("blocked", "The protected paths response is invalid.")
+      return value.value
+    },
+    async replyPermission(requestID: string, directory: string, reply: "once" | "reject") {
+      await request("POST", `/permission/${id(requestID)}/reply`, directory, { reply })
+    },
+    async replyQuestion(requestID: string, directory: string, answer: "Continue" | "Keep going") {
+      await request("POST", `/question/${id(requestID)}/reply`, directory, { answers: [[answer]] })
+    },
+  }
+}
+type Engine = ReturnType<typeof computerEngine>
+
+const decodePermission = Schema.decodeUnknownOption(PermissionV1.Request)
+const decodeQuestion = Schema.decodeUnknownOption(QuestionV1.Request)
+const decodeAnswered = Schema.decodeUnknownOption(Schema.Struct({ sessionID: Schema.String, requestID: Schema.String }))
+const decodeApp = Schema.decodeUnknownOption(Computer.AppAskMetadata)
+const decodeSensitive = Schema.decodeUnknownOption(Computer.SensitiveAskMetadata)
+
+function line(text: string) {
+  return Computer.clean(text, 256)
+    .slice(0, 256)
+    .replace(/[\ud800-\udbff]$/, "")
+}
+
+/**
+ * Mirrors the holder's Hands asks into `state.ask` with fixed Vector-built titles (D18's transition seam), so the
+ * banner shows them (INV-T6). Only exact Hands asks (`PermissionPolicy.handsAsk`) and Hands questions qualify; the
+ * agent's words, paths, typed text and model-supplied app names never enter the title.
+ */
+export function createAskMirror(input: {
+  controller: Pick<Controller, "state" | "transition">
+  /** The child session that holds each lease, from the bridge's acquire. */
+  holder(lease: number): string | undefined
+  now?(): number
+}) {
+  const now = input.now ?? Date.now
+  let pending: { phase: "asking" | "handoff"; ask: Ask; lease: number } | undefined
+
+  function ours(state: Computer.ComputerState, sessionID: string, directory: string | undefined) {
+    return (
+      !!state.holder &&
+      directory === state.holder.directory &&
+      (sessionID === state.holder.sessionID || sessionID === input.holder(state.lease))
+    )
+  }
+
+  function show(phase: "asking" | "handoff", ask: Ask) {
+    const lease = input.controller.state().lease
+    pending = undefined
+    void input.controller.transition(phase, ask).catch((error: unknown) => {
+      // Paused: the ask waits in the dock and reaches the banner once the user resumes.
+      if (error instanceof ComputerError && error.code === "paused") pending = { phase, ask, lease }
+    })
+  }
+
+  function answered(requestID: string) {
+    if (pending?.ask.requestID === requestID) pending = undefined
+    const state = input.controller.state()
+    if (state.ask?.requestID !== requestID) return
+    if (state.phase === "asking") void input.controller.transition("working").catch(() => {})
+    else if (state.phase === "handoff") void input.controller.transition("handoff").catch(() => {})
+  }
+
+  return {
+    event(event: KeepAwakeEvent) {
+      const state = input.controller.state()
+      const properties = event.payload.properties
+      if (event.payload.type === "permission.asked") {
+        const request = decodePermission(properties)
+        if (Option.isNone(request) || !PermissionPolicy.handsAsk(request.value.permission)) return
+        if (request.value.id.length > 128 || !ours(state, request.value.sessionID, event.directory)) return
+        const base = { requestID: request.value.id, directory: event.directory!, canAlways: false, shownAt: now() }
+        if (request.value.permission === PermissionPolicy.COMPUTER_APP) {
+          const metadata = decodeApp(request.value.metadata)
+          if (Option.isNone(metadata)) return
+          const app = Computer.clean(metadata.value.target.appName, 256)
+          if (!app) return
+          show("asking", { ...base, kind: "app", title: line(ComputerMainCopy.askApp({ app })) })
+          return
+        }
+        const metadata = decodeSensitive(request.value.metadata)
+        if (Option.isNone(metadata)) return
+        const app = Computer.clean(metadata.value.target.appName, 256) || "the app"
+        show("asking", {
+          ...base,
+          kind: "sensitive",
+          title: line(
+            ComputerMainCopy.askSensitive({
+              action: metadata.value.action,
+              why: metadata.value.why,
+              app,
+              label: metadata.value.targetName,
+            }),
+          ),
+        })
+        return
+      }
+      if (event.payload.type === "question.asked") {
+        const request = decodeQuestion(properties)
+        if (Option.isNone(request) || !request.value.metadata) return
+        if (request.value.id.length > 128 || !ours(state, request.value.sessionID, event.directory)) return
+        const base = { requestID: request.value.id, directory: event.directory!, canAlways: false, shownAt: now() }
+        const computer = request.value.metadata.computer
+        if (computer.kind === "handoff") {
+          // The handoff's app can come from the model's own arguments, so the banner names only the fixed reason.
+          show("handoff", {
+            ...base,
+            kind: "handoff",
+            title: line(ComputerMainCopy.handoff({ reason: computer.reason })),
+          })
+          return
+        }
+        show("asking", {
+          ...base,
+          kind: "check_in",
+          title: line(
+            computer.minutes >= Computer.LIMITS.checkInMinutes
+              ? ComputerMainCopy.checkIn({ reason: "minutes", count: computer.minutes })
+              : ComputerMainCopy.checkIn({ reason: "actions", count: computer.actions }),
+          ),
+        })
+        return
+      }
+      if (
+        event.payload.type === "permission.replied" ||
+        event.payload.type === "question.replied" ||
+        event.payload.type === "question.rejected"
+      ) {
+        const reply = decodeAnswered(properties)
+        if (Option.isSome(reply) && ours(state, reply.value.sessionID, event.directory)) answered(reply.value.requestID)
+      }
+    },
+    /** A paused ask is shown once its run works again, unless it was answered meanwhile. */
+    state(state: Computer.ComputerState) {
+      if (!pending) return
+      if (!state.holder || state.lease !== pending.lease) {
+        pending = undefined
+        return
+      }
+      if (state.phase === "working" && !state.ask) {
+        const next = pending
+        show(next.phase, next.ask)
+      }
+    },
+  }
+}
+
+/**
+ * What a banner answer sends to the engine: the same reply the dock would, for the ask the banner shows. Allow is
+ * always once (the banner never offers Always allow); anything else, or another request, sends nothing.
+ */
+export function bannerReply(
+  action: Computer.OverlayAction,
+  requestID: string | undefined,
+  ask: Ask | undefined,
+):
+  | { route: "permission"; reply: "once" | "reject" }
+  | { route: "question"; answer: "Continue" | "Keep going" }
+  | undefined {
+  if (!ask || !requestID || ask.requestID !== requestID) return
+  if ((action === "allow" || action === "deny") && (ask.kind === "app" || ask.kind === "sensitive"))
+    return { route: "permission", reply: action === "allow" ? "once" : "reject" }
+  if (action === "continue" && ask.kind === "handoff") return { route: "question", answer: "Continue" }
+  if (action === "keep-going" && ask.kind === "check_in") return { route: "question", answer: "Keep going" }
+}
+
+/** Missing OS grants, read strictly: anything not plainly granted is missing (no optimistic enabling). */
+function missingGrants(kind: Computer.Backend, permissions: Computer.PermissionsStatus) {
+  const allowed = kind === "local-windows" ? ["granted", "n/a"] : ["granted"]
+  return (
+    !allowed.includes(permissions.screen) ||
+    permissions.captureBlocked === true ||
+    !allowed.includes(permissions.accessibility) ||
+    permissions.postEvent === "denied" ||
+    (kind !== "local-windows" && permissions.postEvent !== undefined && permissions.postEvent !== "granted")
+  )
+}
+
+function windowsInputReady(view: Computer.PermissionsView): boolean {
+  return (
+    view.helperStart === "ok" &&
+    view.windows?.captureBlocked === false &&
+    view.windows.elevated === false &&
+    Computer.inputSetupReady(view.windows.inputSetup)
+  )
+}
+
+/**
+ * A renderer's preference write, checked in main: company-locked fields and main's own permission record are
+ * refused, and a stop shortcut must pass D20's validation (stored in its canonical form).
+ */
+function checkedPatch(
+  patch: Partial<Computer.ComputerPrefs>,
+  resolved: Computer.ResolvedComputerSettings,
+  platform: Platform,
+): Partial<Computer.ComputerPrefs> {
+  if (Object.hasOwn(patch, "granted")) throw new Error(`Vector records ${Hands.NAME}' permission history itself.`)
+  for (const field of Object.keys(patch) as (keyof Computer.ComputerPrefs)[])
+    if (resolved.locked.includes(field)) throw new Error("Set by your company.")
+  if (patch.stopChord === undefined) return { ...patch }
+  const chord = validateChord(patch.stopChord, platform)
+  if (!chord) throw new Error(`That shortcut can't stop ${Hands.NAME}.`)
+  return { ...patch, stopChord: chord }
+}
+
+function enabled(settings: Computer.ResolvedComputerSettings) {
+  return (
+    settings.prefs.enabled &&
+    settings.policy.enabled &&
+    typeof settings.prefs.consentedAt === "number" &&
+    Number.isFinite(settings.prefs.consentedAt) &&
+    settings.prefs.consentedAt > 0
+  )
+}
+
+function reasonOf(error: unknown): Computer.UnavailableReason {
+  if (error instanceof HelperUnavailableError) return error.reason
+  if (error instanceof ComputerError) {
+    if (error.code === "helper_incompatible" || error.code === "responsible_missing" || error.code === "unsupported_os")
+      return error.code
+    if (error.code === "blocked_by_os") return "blocked_by_os"
+  }
+  return "helper_missing"
+}
+
+function idleState(
+  backend: Computer.ComputerState["backend"],
+  settings: Computer.ResolvedComputerSettings | undefined,
+  platform: Platform,
+): Computer.ComputerState {
+  return {
+    phase: settings && enabled(settings) ? "ready" : "off",
+    backend,
+    mode: "foreground",
+    apps: [],
+    queue: [],
+    escStops: false,
+    stopChord: Computer.clean(settings?.prefs.stopChord ?? Hands.STOP_CHORD[platform], 64),
+    lease: 0,
+    reduceMotion: settings?.prefs.reduceMotion ?? false,
+  }
+}
+
+/** Electron and OS facts that index.ts supplies after app readiness; tests of the pure pieces need none of them. */
+export type ComputerStartupDeps = {
+  platform: NodeJS.Platform
+  /** Defaults: processElevated, createComputerPolicy and startComputerBridge. Tests replace only these seams. */
+  elevated?(): Promise<boolean>
+  policy?: { get(): Computer.ComputerPolicy }
+  startBridge?: typeof startComputerBridge
+  /** The helper supervisor; tests inject one whose native seams are virtual. */
+  helper?: ComputerHelper
+  release: string
+  channel: "dev" | "beta" | "prod"
+  packaged: boolean
+  devRoot: string
+  resourcesPath?: string
+  userData: string
+  env: NodeJS.ProcessEnv
+  hashes?: Readonly<Record<string, string>>
+  openSettings(policy: () => Computer.ComputerPolicy): Promise<Settings>
+  promptStore: { get(key: string): unknown; set(key: string, value: unknown): void }
+  systemPreferences: {
+    getMediaAccessStatus(type: "screen"): string
+    isTrustedAccessibilityClient(prompt: false): boolean
+  }
+  openExternal(url: string): Promise<void>
+  clipboard: { readText(): string; writeText(text: string): void }
+  shortcuts: Parameters<typeof createComputerTakeover>[0]["shortcuts"]
+  toDip?(rect: Computer.Rect): Computer.Rect
+  displayBlocker: PowerBlocker
+  power: {
+    on(event: string, callback: () => void): unknown
+    removeListener(event: string, callback: () => void): unknown
+  }
+  exclusions(): { vectorPids: readonly number[]; vectorWindowIds: readonly string[] }
+  windows(): readonly Window[]
+  trustedUrl(url?: string): boolean
+  notification(message: ComputerNotification, onClick: () => void): void
+  focused(): boolean
+  open(target: ComputerNotifyTarget): void
+  front(): void
+  trayChanged(): void
+  overlayPreload?: string
+  /** Tests replace the screenshot retention timers; the prune request uses the global fetch. */
+  retentionTimers?: ComputerRetentionTimers
+  warn(message: string, ...fields: unknown[]): void
+}
+
+export type ComputerRuntime = {
+  /** The bridge pair for the sidecar's start message; empty where Hands may not run. */
+  environment: Record<string, string>
+  service: ComputerIpcService
+  tray(): ComputerTrayState | undefined
+  trayCommand(command: ComputerTrayCommand): void
+  /** After the engine connects: its event stream, abort route, session ancestry and reply routes. */
+  attach(engine: { url: string; password: string; source: KeepAwakeSource }): void
+  /** The engine sidecar exited: revoke at once (INV-T3). */
+  engineExit(): void
+  stop(): Promise<void>
+}
+
+function limited(
+  reason: Computer.UnavailableReason,
+  platform: Platform,
+  settings: Settings | undefined,
+  permissions: ReturnType<typeof createComputerPermissions> | undefined,
+  helper: ComputerHelper | undefined,
+  retention?: Retention,
+): ComputerRuntime {
+  const backend = platform === "win32" ? "local-windows" : "local-macos"
+  const off = () => Promise.reject(new Error(`${Hands.NAME} is not available on this computer.`))
+  const service: ComputerIpcService = {
+    status: async () => ({ available: false, reason, backend }),
+    state: () => idleState(backend, settings?.get(), platform),
+    command: off,
+    prefs: () => {
+      if (!settings) throw new Error(`${Hands.NAME} settings are unavailable.`)
+      return settings.get()
+    },
+    setPrefs: async (patch) => {
+      if (!settings) return off()
+      const previous = settings.get()
+      const checked = checkedPatch(patch, previous, platform)
+      if (
+        platform === "win32" &&
+        checked.enabled === true &&
+        (!permissions || !windowsInputReady(await permissions.list()))
+      )
+        throw new ComputerError("unavailable", `Calibrate input detection before enabling ${Hands.NAME}.`)
+      const saved = await settings.setPrefs(checked)
+      retention?.changed(previous)
+      return saved
+    },
+    permissions: () => (permissions ? permissions.list() : off()),
+    recheck: () => (permissions ? permissions.recheck() : off()),
+    inputSetup: (action) => (permissions ? permissions.inputSetup(action) : off()),
+    openPane: (id) => (permissions ? permissions.openPane(id) : off()),
+    reset: (id) => (permissions ? permissions.reset(id) : off()),
+    apps: async () => [],
+    removeAlways: (key) => (settings ? settings.removeAlways(key) : off()),
+    removeAllAlways: () => (settings ? settings.removeAllAlways() : off()),
+    block: (app) => (settings ? settings.block(app) : off()),
+    unblock: (key) => (settings ? settings.unblock(key) : off()),
+    // Screenshots taken before Hands became unavailable still follow the schedule, and Delete all still works.
+    deleteScreenshots: () => (retention ? retention.deleteAll() : off()),
+  }
+  return {
+    environment: {},
+    service,
+    tray: () => undefined,
+    trayCommand() {},
+    attach(engine) {
+      retention?.attach(computerPrune(engine))
+    },
+    engineExit() {},
+    stop: async () => {
+      retention?.stop()
+      await helper?.close().catch(() => {})
+    },
+  }
+}
+
+/**
+ * Wires D13 to D21 into the running app: the bridge before the sidecar spawns (its pair goes in the start message),
+ * then the controller, executor, take-over, overlays, permissions, notifications and IPC service. Never throws: a
+ * failure leaves Hands unavailable with its reason.
+ */
+export async function startComputer(deps: ComputerStartupDeps): Promise<ComputerRuntime> {
+  if (deps.platform !== "darwin" && deps.platform !== "win32")
+    return limited("unsupported_os", "darwin", undefined, undefined, undefined)
+  const platform: Platform = deps.platform
+  const policy = deps.policy ?? createComputerPolicy()
+  const settings = await deps
+    .openSettings(() => policy.get())
+    .catch((error: unknown) => {
+      deps.warn("Computer settings unavailable", error instanceof Error ? error.name : "Error")
+      return undefined
+    })
+  if (!settings) return limited("helper_missing", platform, undefined, undefined, undefined)
+  // The child session that took each lease, from the bridge's acquire (the ask mirror and retention read it).
+  const leases = new Map<number, string>()
+  const retention = createComputerRetention({
+    settings,
+    holderSession: (lease) => leases.get(lease),
+    removed: (removal) => broadcastScreenshotsRemoved(removal, deps.windows, deps.trustedUrl),
+    warn: (message, ...fields) => deps.warn(message, ...fields),
+    ...(deps.retentionTimers ? { timers: deps.retentionTimers } : {}),
+  })
+  const helper =
+    deps.helper ??
+    new ComputerHelper({
+      platform,
+      channel: deps.channel,
+      packaged: deps.packaged,
+      devRoot: deps.devRoot,
+      ...(deps.resourcesPath ? { resourcesPath: deps.resourcesPath } : {}),
+      ...(deps.hashes ? { hashes: deps.hashes } : {}),
+    })
+  const elevated = await (
+    deps.elevated
+      ? deps.elevated()
+      : platform === "win32"
+        ? helper.probe().then((view) => view.elevated !== false)
+        : processElevated(platform)
+  ).catch(() => true)
+  const permissions = createComputerPermissions({
+    platform,
+    helperVersion: identity.helperVersion,
+    helper,
+    settings,
+    promptStore: deps.promptStore,
+    signing: () => helper.runtimeSigningKind(),
+    vector: deps.systemPreferences,
+    openExternal: (url) => deps.openExternal(url),
+    elevated: () => elevated,
+  })
+  const availability = computerAvailability({ platform, release: deps.release, elevated, policy: policy.get() })
+  if (!availability.available) return limited(availability.reason, platform, settings, permissions, helper, retention)
+
+  const kind = platform === "win32" ? "local-windows" : "local-macos"
+  const backend = new NativeHelperBackend(helper, kind)
+  // `connected` admits leases only while the engine's event stream is open, so every ask and reply is observed (D16).
+  const connection: {
+    engine?: Engine
+    abort?: AbortController
+    drain?: ReturnType<typeof createComputerEventDrain>
+    connected: boolean
+    closed: boolean
+    closing?: Promise<void>
+  } = {
+    connected: false,
+    closed: false,
+  }
+  const grants = createComputerGrants({
+    settings,
+    rootOf: (sessionID, directory) =>
+      connection.engine ? connection.engine.rootOf(sessionID, directory) : Promise.resolve(undefined),
+  })
+  const overlay = createComputerOverlay({
+    platform,
+    ...(deps.overlayPreload ? { preloadPath: deps.overlayPreload } : {}),
+  })
+  const keepAwake = createComputerKeepAwake({ blocker: deps.displayBlocker })
+  const controller = createComputerSession({
+    backend,
+    overlay,
+    settings,
+    grants,
+    async approved(scope) {
+      const current = grants.grants(scope)
+      return (await backend.apps())
+        .filter((app) => settings.access(app.identity, current).verdict === "granted")
+        .map((app) => app.identity)
+    },
+    helper,
+    exclusions: () => deps.exclusions(),
+    async abort(scope) {
+      if (!connection.engine) return
+      await connection.engine.abort(scope).catch((error: unknown) => {
+        deps.warn("Computer stop could not abort the conversation", error instanceof Error ? error.name : "Error")
+      })
+    },
+    keepAwake,
+  })
+  const frames = createComputerFrames({
+    backend,
+    platform: platform === "win32" ? "windows" : "macos",
+    phase: (scope) => {
+      try {
+        return controller.nativePhase(scope)
+      } catch {
+        return undefined
+      }
+    },
+    ...(platform === "win32" && deps.toDip ? { toDip: (rect: Computer.Rect) => deps.toDip!(rect) } : {}),
+  })
+  const takeovers: { current?: ReturnType<typeof createComputerTakeover> } = {}
+  const protectedPaths: string[] = []
+  const protections = new Map<string, { paths: readonly string[]; directories: readonly string[] }>()
+  const rawDirectories = protectedLocations({ userData: deps.userData, env: deps.env })
+  const protectedDirectories = [
+    ...new Set([...rawDirectories, ...(await Promise.all(rawDirectories.map(canonicalComputerPath)))]),
+  ]
+  const executor = createComputerExecutor({
+    backend,
+    controller,
+    settings,
+    grants: {
+      ...grants,
+      async synchronize() {
+        const drain = connection.drain
+        if (!connection.connected || connection.closed || !drain)
+          throw new ComputerError("unavailable", "The computer event connection is unavailable.")
+        await drain.synchronize()
+        await grants.synchronize()
+        if (!connection.connected || connection.closed || connection.drain !== drain)
+          throw new ComputerError("unavailable", "The computer event connection changed.")
+      },
+    },
+    registry: frames,
+    canonicalPath: (file) => realpath(file).catch(() => undefined),
+    protectedPaths,
+    protectedDirectories,
+    clipboard: {
+      readText: () => deps.clipboard.readText(),
+      writeText: (text, phase) => {
+        controller.assertNativePhase(phase)
+        if (backend.capabilities().features.clipboard === true) return backend.writeClipboard(text, phase)
+        deps.clipboard.writeText(text)
+      },
+    },
+    overlay,
+    beforeInput(scope, hit) {
+      if (hit.owner.platform === "remote" || !hit.owner.pid)
+        throw new ComputerError("changed", "The input target has no live process.")
+      takeovers.current?.target(scope, { pid: hit.owner.pid, name: hit.owner.name })
+    },
+    suspendEsc: () => takeovers.current?.suspendEsc(),
+    resumeEsc: () => takeovers.current?.resumeEsc(),
+  })
+  // Take-over owns the helper's events and routes each one to the controller exactly once (D20).
+  const takeover = createComputerTakeover({
+    platform,
+    controller,
+    backend,
+    shortcuts: deps.shortcuts,
+    onUnavailable: (reason) => deps.warn("Computer stop shortcut unavailable", reason),
+  })
+  takeovers.current = takeover
+
+  const notify = createComputerNotify({
+    show: (message, onClick) => deps.notification(message, onClick),
+    enabled: () => settings.get().prefs.notify,
+    focused: () => deps.focused(),
+    open: (target) => deps.open(target),
+    front: () => deps.front(),
+  })
+  const mirror = createAskMirror({ controller, holder: (lease) => leases.get(lease) })
+
+  function view(): Computer.ComputerState {
+    const state = controller.state()
+    if (state.holder || (state.phase !== "off" && state.phase !== "ready")) return state
+    const resolved = settings!.get()
+    return {
+      ...state,
+      phase: enabled(resolved) ? "ready" : "off",
+      stopChord: Computer.clean(resolved.prefs.stopChord, 64),
+      reduceMotion: resolved.prefs.reduceMotion,
+    }
+  }
+  function changed() {
+    if (connection.closed) return
+    broadcastComputerState(view(), deps.windows, deps.trustedUrl)
+    try {
+      deps.trayChanged()
+    } catch {
+      // The tray reads live state when it is next opened.
+    }
+  }
+  const unsubscribe = controller.subscribe((state) => {
+    notify.state(state)
+    mirror.state(state)
+    retention.observe(state)
+    changed()
+  })
+  const power = POWER_EVENTS.map((name) => {
+    const callback = () => controller.powerEvent(name)
+    deps.power.on(name, callback)
+    return () => deps.power.removeListener(name, callback)
+  })
+  async function trustedControl(action: Computer.OverlayAction, requestID?: string) {
+    if (
+      (action === "resume" || action === "hand-over" || action === "not-now") &&
+      platform === "win32" &&
+      !windowsInputReady(await permissions.list())
+    )
+      throw new ComputerError("unavailable", `Calibrate input detection before resuming ${Hands.NAME}.`)
+    return executor.control(action, requestID)
+  }
+  const detachOverlayControls = setComputerOverlayControls({
+    banner: () => overlay.banner(),
+    state: () => controller.state(),
+    armed: (requestID) => overlay.armed(requestID),
+    hover: (on) => overlay.hover(on),
+    async act(action, requestID) {
+      if (action === "stop" || action === "takeover" || action === "resume") return trustedControl(action)
+      if (action === "hand-over" || action === "not-now") return trustedControl(action, requestID)
+      const ask = controller.state().ask
+      const reply = bannerReply(action, requestID, ask)
+      const engine = connection.engine
+      if (!engine || !ask || !reply) return false
+      if (reply.route === "permission") await engine.replyPermission(ask.requestID, ask.directory, reply.reply)
+      else await engine.replyQuestion(ask.requestID, ask.directory, reply.answer)
+      return true
+    },
+  })
+
+  /**
+   * D21's fresh probe is the truth about the helper's grants: a failed or ungranted view keeps Hands unavailable
+   * until a later probe reads healthy, and pauses a run in progress rather than letting it continue (D21.1).
+   */
+  const probe: { healthy: boolean } = { healthy: true }
+  function observed(view: Computer.PermissionsView) {
+    if (connection.closed) return view
+    probe.healthy = view.helperStart === "ok"
+    const granted =
+      probe.healthy &&
+      (platform === "win32"
+        ? windowsInputReady(view)
+        : view.rows.length === 2 && view.rows.every((row) => row.status === "granted"))
+    if (!granted && controller.state().holder) void controller.pause("helper").catch(() => {})
+    return view
+  }
+
+  async function availabilityNow(): Promise<{ reason?: Computer.UnavailableReason; hello?: Computer.HelperHello }> {
+    if (connection.closed) return { reason: "helper_missing" }
+    if (!policy.get().enabled) {
+      void controller.refreshSettings().catch(() => {})
+      return { reason: "policy_disabled" }
+    }
+    if (!probe.healthy) return { reason: "helper_missing" }
+    // Before consent no helper starts (INV-C1); onboarding reads its own fresh probe.
+    if (!enabled(settings!.get())) {
+      void controller.refreshSettings().catch(() => {})
+      return { reason: "permissions" }
+    }
+    const hello = await backend.hello().catch((error: unknown) => error)
+    if (!hello || hello instanceof Error || typeof hello !== "object") {
+      if (controller.state().holder) void controller.pause("helper").catch(() => {})
+      return { reason: reasonOf(hello) }
+    }
+    const fresh = await permissions.list().then(observed, () => undefined)
+    if (connection.closed) return { reason: "helper_missing" }
+    if (!fresh || fresh.helperStart !== "ok") {
+      if (controller.state().holder) void controller.pause("helper").catch(() => {})
+      return { reason: "helper_missing", hello: hello as Computer.HelperHello }
+    }
+    if (
+      platform === "win32"
+        ? !windowsInputReady(fresh)
+        : fresh.rows.length !== 2 ||
+          !["screen", "accessibility"].every(
+            (id) => fresh.rows.filter((row) => row.id === id && row.status === "granted").length === 1,
+          )
+    )
+      return {
+        reason:
+          platform === "win32" && fresh.windows?.elevated === true
+            ? "elevated"
+            : platform === "win32" && fresh.windows?.captureBlocked === true
+              ? "blocked_by_os"
+              : "permissions",
+        hello: hello as Computer.HelperHello,
+      }
+    const status = await backend.permissions().catch(() => undefined)
+    if (connection.closed) return { reason: "helper_missing" }
+    if (!status) {
+      if (controller.state().holder) void controller.pause("helper").catch(() => {})
+      return { reason: "helper_missing", hello: hello as Computer.HelperHello }
+    }
+    if (missingGrants(kind, status) && controller.state().holder) void controller.pause("helper").catch(() => {})
+    return missingGrants(kind, status)
+      ? { reason: "permissions", hello: hello as Computer.HelperHello }
+      : { hello: hello as Computer.HelperHello }
+  }
+
+  async function signing(): Promise<"developer-id" | "adhoc" | "unsigned" | "dev"> {
+    if (!deps.packaged) return "dev"
+    const value = await helper.runtimeSigningKind()
+    if (platform === "darwin") return value === "signed" ? "developer-id" : value === "adhoc" ? "adhoc" : "unsigned"
+    return "unsigned"
+  }
+
+  const tracked: ComputerExecutor = {
+    async run(request, key) {
+      if (!["release", "cancel"].includes(request.command) && (!connection.connected || connection.closed))
+        return Promise.reject(new ComputerError("unavailable", "The engine's event stream is not connected."))
+      if (["acquire", "act", "openApp"].includes(request.command)) {
+        const engine = connection.engine
+        const drain = connection.drain
+        if (!engine || !drain) throw new ComputerError("unavailable", "The computer event connection is unavailable.")
+        await drain.synchronize()
+        const protection = await engine.protectedPaths(request.directory)
+        if (!connection.connected || connection.closed || connection.engine !== engine || connection.drain !== drain)
+          throw new ComputerError("unavailable", "The computer event connection changed.")
+        protections.delete(request.directory)
+        protections.set(request.directory, protection)
+        const holderDirectory = controller.state().holder?.directory
+        while (protections.size > 64) {
+          const retired = [...protections.keys()].find(
+            (directory) => directory !== holderDirectory && directory !== request.directory,
+          )
+          if (!retired) break
+          protections.delete(retired)
+        }
+        const paths = [...new Set([...protections.values()].flatMap((entry) => [...entry.paths]))]
+        const directories = [
+          ...new Set([
+            ...rawDirectories,
+            ...(await Promise.all(rawDirectories.map(canonicalComputerPath))),
+            ...[...protections.values()].flatMap((entry) => [...entry.directories]),
+          ]),
+        ]
+        if (paths.length + directories.length > 16384)
+          throw new ComputerError("blocked", "Too many protected paths are active.")
+        if (!connection.connected || connection.closed || connection.engine !== engine || connection.drain !== drain)
+          throw new ComputerError("unavailable", "The computer event connection changed.")
+        protectedPaths.splice(0, protectedPaths.length, ...paths)
+        protectedDirectories.splice(0, protectedDirectories.length, ...directories)
+      }
+      const result = executor.run(request, key)
+      if (request.command === "acquire")
+        void result.then(
+          (value) => {
+            if (!value || typeof value !== "object" || !("lease" in value)) return
+            leases.set(value.lease as number, request.sessionID)
+            while (leases.size > LEASES_MAX) leases.delete(leases.keys().next().value!)
+          },
+          () => {},
+        )
+      return result
+    },
+    cancel: (key) => executor.cancel(key),
+  }
+  const bridge = await (deps.startBridge ?? startComputerBridge)({
+    executor: tracked,
+    capabilities: async (): Promise<Computer.Capabilities> => {
+      const current = await availabilityNow()
+      const features = current.hello ? backend.capabilities() : { actions: [], features: {} }
+      return {
+        protocol: Computer.PROTOCOL,
+        available: !current.reason,
+        ...(current.reason ? { reason: current.reason } : {}),
+        backend: kind,
+        actions: current.hello ? features.actions : [],
+        features: {
+          background: features.features.background === true,
+          uiTree: features.features["ui.tree"] === true,
+          zoom: features.features["capture.zoom"] === true,
+          clipboard: features.features.clipboard === true,
+          locked: false,
+        },
+      }
+    },
+    warn: (message, ...fields) => deps.warn(message, ...fields),
+  }).catch((error: unknown) => {
+    deps.warn("Computer bridge could not start", error instanceof Error ? error.name : "Error")
+    return undefined
+  })
+  if (!bridge) {
+    // Nothing ran yet: close the helper before the controller, so its halt cannot start one.
+    await backend.close().catch(() => {})
+    executor.close()
+    takeover.close()
+    unsubscribe()
+    for (const off of power) off()
+    detachOverlayControls()
+    return limited("helper_missing", platform, settings, permissions, undefined, retention)
+  }
+
+  function alive() {
+    if (connection.closed) throw new ComputerError("unavailable", "The computer runtime is closed.")
+  }
+
+  function afterSettings(previous: Computer.ResolvedComputerSettings) {
+    if (connection.closed) return
+    takeover.refresh()
+    retention.changed(previous)
+    changed()
+    const next = settings!.get()
+    void controller.refreshSettings().catch(() => {})
+    if (!enabled(previous) && enabled(next)) void backend.hello().catch(() => {})
+  }
+  function regrant() {
+    if (connection.closed) return
+    void controller.updateGrants().catch(() => {})
+  }
+
+  const service: ComputerIpcService = {
+    async status() {
+      const current = await availabilityNow()
+      return {
+        available: !current.reason,
+        ...(current.reason ? { reason: current.reason } : {}),
+        backend: kind,
+        ...(current.hello
+          ? { helper: { version: current.hello.helper.version, protocol: Computer.PROTOCOL, signing: await signing() } }
+          : {}),
+      }
+    },
+    state: view,
+    async command(command, arg) {
+      alive()
+      if (command === "stop-session") {
+        if (!arg?.sessionID) throw new Error("That conversation is not waiting for the computer.")
+        await controller.stopSession(arg.sessionID)
+        return
+      }
+      if (command === "hand-over" || command === "not-now") {
+        const ask = controller.state().ask
+        if (!(await trustedControl(command, ask?.kind === "pointer" ? ask.requestID : undefined)))
+          throw new Error("That request is no longer open.")
+        return
+      }
+      await trustedControl(command)
+    },
+    prefs: () => settings.get(),
+    async setPrefs(patch) {
+      alive()
+      const previous = settings.get()
+      const checked = checkedPatch(patch, previous, platform)
+      if (platform === "win32" && checked.enabled === true && !windowsInputReady(await permissions.list()))
+        throw new ComputerError("unavailable", `Calibrate input detection before enabling ${Hands.NAME}.`)
+      if (checked.enabled === false) await controller.stop()
+      const saved = await settings.setPrefs(checked)
+      alive()
+      afterSettings(previous)
+      return saved
+    },
+    permissions: () => {
+      alive()
+      return permissions.list().then(observed)
+    },
+    recheck: () => {
+      alive()
+      return permissions.recheck().then(observed)
+    },
+    async inputSetup(action) {
+      alive()
+      if (platform !== "win32")
+        throw new ComputerError("unsupported_action", "Input calibration is only available on Windows.")
+      if (action !== "status") await controller.pause("button")
+      const setup = await permissions.inputSetup(action)
+      alive()
+      return setup
+    },
+    openPane: (id) => {
+      alive()
+      return permissions.openPane(id)
+    },
+    reset: (id) => {
+      alive()
+      return permissions.reset(id).then(observed)
+    },
+    async apps(query) {
+      alive()
+      if (!enabled(settings.get())) return []
+      const [running, installed] = await Promise.all([backend.apps(), backend.apps({ installed: true })])
+      alive()
+      const live = new Set(running.map((app) => Computer.appKey(app.identity)))
+      const rows = new Map<string, Awaited<ReturnType<Computer.ComputerPlatform["apps"]>>[number]>()
+      const needle = query?.toLocaleLowerCase()
+      for (const app of [...running, ...installed]) {
+        if (app.identity.platform === "remote") continue
+        const key = Computer.appKey(app.identity)
+        const name = Computer.clean(app.identity.name, 256)
+        if (rows.has(key) || !name || (needle && !name.toLocaleLowerCase().includes(needle))) continue
+        const verdict = settings.access(app.identity).verdict
+        const rule = verdict === "never" || verdict === "blocked" || verdict === "company-deny" ? verdict : undefined
+        rows.set(key, {
+          key,
+          name,
+          running: live.has(key),
+          ...(app.icon ? { icon: app.icon } : {}),
+          ...(rule ? { rule } : {}),
+        })
+        if (rows.size >= 200) break
+      }
+      return [...rows.values()]
+    },
+    async removeAlways(key) {
+      alive()
+      await settings.removeAlways(key)
+      regrant()
+      changed()
+    },
+    async removeAllAlways() {
+      alive()
+      await settings.removeAllAlways()
+      regrant()
+      changed()
+    },
+    async block(app) {
+      alive()
+      await settings.block(app)
+      regrant()
+      changed()
+    },
+    async unblock(key) {
+      alive()
+      await settings.unblock(key)
+      changed()
+    },
+    deleteScreenshots: () => {
+      alive()
+      return retention.deleteAll()
+    },
+  }
+
+  /**
+   * The engine is gone or silent: revoke at once (INV-T3). With nothing held or queued there is nothing to halt, and
+   * halting would start an idle helper, so only the admission latch closes.
+   */
+  function lost() {
+    connection.connected = false
+    const state = controller.state()
+    if (!state.holder && state.queue.length === 0) return
+    notify.fail(state.holder ?? { sessionID: "", directory: "" }, "engine")
+    executor.disconnect()
+  }
+
+  async function events(engine: { source: KeepAwakeSource }, signal: AbortSignal) {
+    let delay = 1_000
+    while (!signal.aborted) {
+      const read = new AbortController()
+      const aborted = () => read.abort()
+      signal.addEventListener("abort", aborted, { once: true })
+      const drain = createComputerEventDrain({
+        async consume(event) {
+          const state = controller.state()
+          const info = event.payload.properties as Record<string, unknown> | undefined
+          if (
+            event.payload.type === "session.error" &&
+            state.holder &&
+            event.directory === state.holder.directory &&
+            info?.sessionID === state.holder.sessionID
+          )
+            notify.fail(state.holder, "error")
+          await controller.observe(event)
+          if (!signal.aborted && connection.drain === drain) mirror.event(event)
+        },
+        failed() {
+          lost()
+          read.abort()
+        },
+      })
+      connection.drain = drain
+      try {
+        for await (const event of engine.source.events(read.signal)) {
+          if (signal.aborted || connection.closed) break
+          delay = 1_000
+          if (event.payload.type === "server.connected") connection.connected = true
+          drain.push(event)
+        }
+      } catch {
+        // Closing the reader revokes immediately, without waiting for queued ancestry/helper requests.
+      }
+      read.abort()
+      signal.removeEventListener("abort", aborted)
+      drain.close()
+      if (connection.drain === drain) connection.drain = undefined
+      if (signal.aborted) return
+      lost()
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer)
+          signal.removeEventListener("abort", finish)
+          resolve()
+        }
+        const timer = setTimeout(finish, delay)
+        signal.addEventListener("abort", finish, { once: true })
+      })
+      delay = Math.min(delay * 2, 30_000)
+    }
+  }
+
+  let previousPolicy = policy.get()
+  let previousResolved = settings.get()
+  const policyTimer = setInterval(() => {
+    if (connection.closed) return
+    const current = policy.get()
+    if (isDeepStrictEqual(previousPolicy, current)) return
+    previousPolicy = current
+    retention.changed(previousResolved)
+    previousResolved = settings.get()
+    void controller
+      .refreshSettings()
+      .then(changed, () => {})
+      .catch(() => {})
+  }, 30_000)
+  policyTimer.unref?.()
+
+  const runtime: ComputerRuntime = {
+    environment: computerEnvironment(bridge),
+    service,
+    tray: () => computerTrayState(controller.state()),
+    trayCommand(command) {
+      void trustedControl(command).catch(() => {})
+    },
+    attach(engine) {
+      if (connection.closed || connection.abort) return
+      connection.engine = computerEngine(engine)
+      connection.abort = new AbortController()
+      void events(engine, connection.abort.signal)
+      retention.attach(computerPrune(engine))
+      if (enabled(settings.get())) void backend.hello().catch(() => {})
+    },
+    engineExit() {
+      if (connection.closed) return
+      connection.abort?.abort()
+      connection.drain?.close()
+      lost()
+    },
+    stop() {
+      if (connection.closing) return connection.closing
+      connection.closed = true
+      clearInterval(policyTimer)
+      connection.drain?.close()
+      notify.close()
+      retention.stop()
+      detachOverlayControls()
+      connection.abort?.abort()
+      unsubscribe()
+      for (const off of power) off()
+      // Revocation is synchronous; helper and bridge teardown cannot leave a live lease while awaiting I/O.
+      executor.close()
+      takeover.close()
+      overlay.close()
+      connection.closing = Promise.allSettled([bridge.stop(), backend.close()]).then(() => {})
+      return connection.closing
+    },
+  }
+  return runtime
+}

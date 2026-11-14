@@ -8,6 +8,8 @@ import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { Config } from "@/config/config"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
@@ -31,6 +33,8 @@ const it = testEffect(
         Plugin.node,
         Truncate.node,
         Config.node,
+        ComputerSession.node,
+        Session.node,
         Agent.node,
         RuntimeFlags.node,
       ]),

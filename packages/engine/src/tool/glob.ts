@@ -3,7 +3,8 @@ import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryEffect, filterReadListing } from "./external-directory"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
@@ -27,6 +28,7 @@ export const GlobTool = Tool.define(
           const ins = yield* InstanceState.context
           let search = params.path ?? ins.directory
           search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          ProcessIsolation.assertToolPath(search)
           // A guest family may not list a private task folder or a folder holding one, nor learn through a stat or an
           // ask whether one exists.
           if (ctx.assertReadable) yield* ctx.assertReadable({ files: [search], recursive: true })
@@ -53,8 +55,11 @@ export const GlobTool = Tool.define(
           // One over the limit distinguishes "exactly limit files matched" from
           // "more than we are showing"; only the first limit are reported.
           const files = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit: limit + 1 })
+          // Preserve the existing glob ask; filtering reports hard read denials
+          // without granting an ask or changing ordinary non-review listings.
+          const admitted = yield* filterReadListing(ctx, ins.worktree, files, (file) => path.resolve(search, file.path))
           const truncated = files.length > limit
-          const shown = files.slice(0, limit)
+          const shown = admitted.slice(0, limit)
 
           const output = []
           if (shown.length === 0) output.push("No files found")

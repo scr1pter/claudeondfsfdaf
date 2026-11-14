@@ -15,6 +15,8 @@ export function SessionWorkingStatus(props: {
   tokens: () => number
   codium?: () => boolean
   runningTasks: () => number
+  /** The Hands line: "Using <app>" or "Waiting for the computer". */
+  computer?: () => string | undefined
   phrase?: () => string | undefined
 }) {
   const [elapsed, setElapsed] = createSignal(0)
@@ -50,6 +52,8 @@ export function SessionWorkingStatus(props: {
     if (!props.codium?.() && tokens > 0) out.push(`${tokenFormatter.format(tokens)} tokens`)
     const tasks = props.runningTasks()
     if (tasks > 0) out.push(`${tasks} running task${tasks === 1 ? "" : "s"}`)
+    const computer = props.computer?.()
+    if (computer) out.push(computer)
     const phrase = props.phrase?.()
     if (phrase) out.push(phrase)
     return out

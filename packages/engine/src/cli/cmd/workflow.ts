@@ -259,9 +259,10 @@ export function formatWorkflowPlan(plan: Workflow.Plan) {
   return [
     sanitizeTerminalText(plan.title),
     `Limits: ${plan.maxAgents} agents · ${plan.concurrency} concurrent · ${plan.steps} steps · ${plan.perAgentSteps} steps/agent · ${plan.minutes} minutes${plan.usd === undefined ? "" : ` · $${plan.usd}`}${plan.tokens === undefined ? "" : ` · ${plan.tokens} tokens`}`,
-    ...plan.stages.map(
-      (stage) =>
-        `  ${sanitizeTerminalText(stage.id)}: ${sanitizeTerminalText(stage.title)} · ${sanitizeTerminalText(stage.agent)}${stage.model ? ` · ${sanitizeTerminalText(stage.model)}` : ""}${stage.effort ? ` · ${sanitizeTerminalText(stage.effort)}` : ""} · ${stage.items} items · ${sanitizeTerminalText(stage.writes)}${stage.asks.length ? ` · asks: ${stage.asks.map(sanitizeTerminalText).join(", ")}` : ""}`,
+    ...plan.stages.map((stage) =>
+      stage.kind === "connect"
+        ? `  ${sanitizeTerminalText(stage.id)}: ${sanitizeTerminalText(stage.title)} · ${sanitizeTerminalText(stage.connect.to)}.${sanitizeTerminalText(stage.connect.action)} · ${stage.items} items · read only; execution unavailable${stage.asks.length ? ` · asks: ${stage.asks.map(sanitizeTerminalText).join(", ")}` : ""}`
+        : `  ${sanitizeTerminalText(stage.id)}: ${sanitizeTerminalText(stage.title)} · ${sanitizeTerminalText(stage.agent)}${stage.model ? ` · ${sanitizeTerminalText(stage.model)}` : ""}${stage.effort ? ` · ${sanitizeTerminalText(stage.effort)}` : ""} · ${stage.items} items · ${sanitizeTerminalText(stage.writes)}${stage.asks.length ? ` · asks: ${stage.asks.map(sanitizeTerminalText).join(", ")}` : ""}`,
     ),
   ].join("\n")
 }

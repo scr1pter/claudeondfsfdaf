@@ -57,11 +57,17 @@ type BrowserTransport = Window & {
 
 export async function installSseTransport<T>(
   page: Page,
-  options: { server: string; path: SseConnectionRecord["path"]; retry?: number },
+  options: {
+    server: string
+    path: SseConnectionRecord["path"]
+    retry?: number
+    /** Opens every stream with `server.connected`, as the real servers do, so a replaced stream makes the page resync. */
+    connected?: boolean
+  },
 ): Promise<SseTransport<T>> {
   const server = new URL(options.server).origin
   await page.addInitScript(
-    ({ server, path, retry }) => {
+    ({ server, path, retry, connected }) => {
       type Connection = SseConnectionRecord & { controller: ReadableStreamDefaultController<Uint8Array> }
       type ProbeWindow = Window & {
         __visualStabilityProbe?: { startedAt: number; markers: { at: number; label: string }[] }
@@ -185,6 +191,18 @@ export async function installSseTransport<T>(
             record.controller = controller
             connections.push(record)
             if (retry !== undefined) controller.enqueue(encoder.encode(`retry: ${retry}\n\n`))
+            // The page counts each server.connected after its first as a reconnect and re-reads what the old stream
+            // may have dropped. Like the retry frame, it is not a delivery and is not acknowledged.
+            if (connected)
+              controller.enqueue(
+                encoder.encode(
+                  frame(
+                    record.path === "/global/event"
+                      ? { directory: "global", payload: { type: "server.connected", properties: {} } }
+                      : { type: "server.connected", properties: {} },
+                  ),
+                ),
+              )
             request.signal.addEventListener(
               "abort",
               () => {
@@ -214,7 +232,7 @@ export async function installSseTransport<T>(
       }
       Object.defineProperty(window, "fetch", { configurable: true, writable: true, value: fetch })
     },
-    { server, path: options.path, retry: options.retry },
+    { server, path: options.path, retry: options.retry, connected: options.connected },
   )
 
   const command = <Result>(input: BrowserCommand<T>) =>

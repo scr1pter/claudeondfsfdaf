@@ -7,6 +7,8 @@ import { NamedError } from "@vectordevai/core/util/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "@/config/config"
 import { ConfigManaged } from "@vectordevai/core/config/managed"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { Flag } from "@vectordevai/core/flag/flag"
 import { ConfigParse } from "../../src/config/parse"
 import { Npm } from "@vectordevai/core/npm"
 
@@ -2364,6 +2366,188 @@ it.instance("migrates legacy write tool to edit permission", () =>
 
 // Managed settings tests
 // Note: preload.ts sets VECTOR_TEST_MANAGED_CONFIG which Global.Path.managedConfig uses
+
+describe("computer is dropped from non-managed layers (INV-C7)", () => {
+  const computer = { enabled: true, apps: { macos: { "com.apple.TextEdit": "allow" as const } } }
+  for (const name of ["config.json", "vector.json", "vector.jsonc"]) {
+    it.instance(`user/global ${name}`, () =>
+      withGlobalConfig({ config: { computer, username: "global-policy-fixture" }, name }, () =>
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
+          expect(config.username).toBe("global-policy-fixture")
+          expect(config.computer).toBeUndefined()
+        }),
+      ),
+    )
+  }
+
+  for (const trusted of [false, true]) {
+    it.instance(
+      `project config, trusted=${trusted}`,
+      Effect.gen(function* () {
+        const config = yield* Config.use.get()
+        expect(config.username).toBe("project-policy-fixture")
+        expect(config.computer).toBeUndefined()
+      }),
+      { trusted, config: { computer, username: "project-policy-fixture" } },
+    )
+  }
+
+  it.instance("user home config", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* writeConfigEffect(path.join(test.directory, ".vector"), { computer, username: "home-policy-fixture" })
+      yield* withProcessEnv(
+        "VECTOR_TEST_HOME",
+        test.directory,
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
+          expect(config.username).toBe("home-policy-fixture")
+          expect(config.computer).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  it.instance("VECTOR_CONFIG_CONTENT", () =>
+    withProcessEnv(
+      "VECTOR_CONFIG_CONTENT",
+      JSON.stringify({ computer, username: "env-policy-fixture" }),
+      Effect.gen(function* () {
+        const config = yield* Config.use.get()
+        expect(config.username).toBe("env-policy-fixture")
+        expect(config.computer).toBeUndefined()
+      }),
+    ),
+  )
+
+  it.instance("custom config directory", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* writeConfigEffect(directory, { computer, username: "custom-policy-fixture" })
+      yield* withProcessEnv(
+        "VECTOR_AGENT_CONFIG_DIR",
+        directory,
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
+          expect(config.username).toBe("custom-policy-fixture")
+          expect(config.computer).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  it.instance("custom config file", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* writeConfigEffect(directory, { computer, username: "custom-file-fixture" })
+      // This flag is captured at process start, unlike the config-directory getter.
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const previous = Flag.VECTOR_AGENT_CONFIG
+          Flag.VECTOR_AGENT_CONFIG = path.join(directory, "vector.json")
+          return previous
+        }),
+        (previous) =>
+          Effect.sync(() => {
+            Flag.VECTOR_AGENT_CONFIG = previous
+          }),
+      )
+      const config = yield* Config.use.get()
+      expect(config.username).toBe("custom-file-fixture")
+      expect(config.computer).toBeUndefined()
+    }),
+  )
+
+  for (const name of ["vector.json", "vector.local.json"]) {
+    it.instance(`trusted .vector/${name}`, () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* writeTrustedConfigEffect(
+          path.join(test.directory, ".vector"),
+          { computer, username: "dot-vector-fixture" },
+          name,
+        )
+        const config = yield* Config.use.get()
+        expect(config.username).toBe("dot-vector-fixture")
+        expect(config.computer).toBeUndefined()
+      }),
+    )
+  }
+
+  it.instance("machine-local integration store", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* FSUtil.use.writeWithDirs(
+        Config.integrationStore(test.directory),
+        JSON.stringify({ computer, username: "integration-fixture" }),
+      )
+      const config = yield* Config.use.get()
+      expect(config.username).toBe("integration-fixture")
+      expect(config.computer).toBeUndefined()
+    }),
+  )
+
+  for (const remote of [false, true]) {
+    const fixture = wellKnown(
+      remote
+        ? {
+            remoteConfig: { url: "https://config.example.com/vector.json" },
+            remote: { computer, username: "org-policy-fixture" },
+          }
+        : { config: { computer, username: "org-policy-fixture" } },
+    )
+    fixture.it.instance(`remote org config, remote_config=${remote}`, () =>
+      Effect.gen(function* () {
+        const config = yield* Config.use.get()
+        expect(config.username).toBe("org-policy-fixture")
+        expect(config.computer).toBeUndefined()
+      }),
+    )
+  }
+})
+
+it.instance("computer policy comes only from managed files, without requiring a lock", () =>
+  withGlobalConfig(
+    { config: { computer: { enabled: true, apps: { macos: { "com.apple.TextEdit": "allow" } } } } },
+    () =>
+      Effect.gen(function* () {
+        yield* writeManagedSettingsEffect({
+          computer: { enabled: false, default_app_access: "deny", max_actions: 100 },
+        })
+        yield* writeManagedSettingsEffect({ computer: { max_actions: 50 } }, "vector.jsonc")
+        const config = yield* Config.use.get()
+        expect(config.computer).toEqual({ enabled: false, default_app_access: "deny", max_actions: 50 })
+      }),
+  ),
+)
+
+test("computer can be locked against global and repository config writes", () => {
+  const policy = LocalPolicy.resolve({ managed: { lock: true, locked_keys: ["computer"] } })
+  expect(Config.lockedKeys(policy)).toContain("computer")
+  for (const scope of ["global", "repository"] as const)
+    expect(Config.lockedIn({ computer: { enabled: true } }, scope, policy)).toEqual(["computer"])
+})
+
+for (const source of ["/Library/Managed Preferences/ai.vector.managed.plist", "HKLM\\SOFTWARE\\Policies\\Vector"]) {
+  it.instance(`computer policy is retained from ${source}`, () =>
+    Effect.gen(function* () {
+      const computer = { enabled: false, default_app_access: "deny" as const, allow_always: false }
+      const read = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          spyOn(ConfigManaged, "read").mockReturnValue({
+            files: [],
+            policies: [{ source, text: JSON.stringify({ computer }) }],
+            ignored: [],
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      )
+      expect((yield* Config.use.get()).computer).toEqual(computer)
+      expect(read).toHaveBeenCalled()
+    }),
+  )
+}
 
 it.instance(
   "managed settings override user settings",

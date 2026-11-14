@@ -1,14 +1,31 @@
 import { describe, expect, test } from "bun:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { GithubAgents, GithubConnectionError, githubAgentsVisible, readGithubBindings,
-  requestGithubBindCode, requestGithubUnbind, type GithubAgentsPreview, type GithubBinding } from "../src/components/marketing/account/GithubAgents"
+import {
+  GithubAgents,
+  GithubConnectionError,
+  githubAgentsVisible,
+  readGithubBindings,
+  requestGithubBindCode,
+  requestGithubUnbind,
+  type GithubAgentsPreview,
+  type GithubBinding,
+} from "../src/components/marketing/account/GithubAgents"
 
-const binding: GithubBinding = { repositoryId: "42", repository: "owner/parser", binder: { login: "maintainer" },
-  boundAt: Date.UTC(2026, 10, 10), lastUsedAt: Date.UTC(2026, 10, 11), workflowVersion: "3", codium: "ready" }
+const binding: GithubBinding = {
+  repositoryId: "42",
+  generation: 7,
+  repository: "owner/parser",
+  binder: { login: "maintainer" },
+  boundAt: Date.UTC(2026, 10, 10),
+  lastUsedAt: Date.UTC(2026, 10, 11),
+  workflowVersion: "3",
+  codium: "ready",
+}
 const config = { enabled: true, listed: ["github-agents"] }
 const code = { code: `vbc_${"a".repeat(43)}`, expiresAt: Date.now() + 600_000, repository: "owner/parser" }
-const render = (preview: GithubAgentsPreview, search = "") => renderToStaticMarkup(createElement(GithubAgents, { accessToken: "", preview, search }))
+const render = (preview: GithubAgentsPreview, search = "") =>
+  renderToStaticMarkup(createElement(GithubAgents, { accessToken: "", preview, search }))
 
 describe("account GitHub agents", () => {
   test("missing or disabled public listing stays hidden; only the exact owner preview parameter overrides it", () => {
@@ -42,15 +59,29 @@ describe("account GitHub agents", () => {
   })
 
   test("binder-left names stay hidden even when a stale response includes them", () => {
-    const lost: GithubBinding = { ...binding, repository: "secret/internal-name", binder: { login: "private-person" }, suspended: "binder-left" }
+    const lost: GithubBinding = {
+      ...binding,
+      repository: "secret/internal-name",
+      binder: { login: "private-person" },
+      suspended: "binder-left",
+    }
     const html = render({ config, bindings: [lost] })
     expect(html).toContain("Repository access changed")
     expect(html).toContain("Codium unavailable")
     expect(html).not.toContain("secret/internal-name")
     expect(html).not.toContain("private-person")
     expect(html).not.toContain("Codium ready")
-    expect(readGithubBindings({ bindings: [lost] })).toEqual([{ repositoryId: "42", boundAt: lost.boundAt,
-      lastUsedAt: lost.lastUsedAt, workflowVersion: "3", codium: "unavailable", suspended: "binder-left" }])
+    expect(readGithubBindings({ bindings: [lost] })).toEqual([
+      {
+        repositoryId: "42",
+        generation: 7,
+        boundAt: lost.boundAt,
+        lastUsedAt: lost.lastUsedAt,
+        workflowVersion: "3",
+        codium: "unavailable",
+        suspended: "binder-left",
+      },
+    ])
   })
 
   test("an expired code is absent and the section copy has no account details or misleading service claims", () => {
@@ -58,13 +89,15 @@ describe("account GitHub agents", () => {
     expect(html).not.toContain(code.code)
     expect(html).not.toMatch(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
     expect(html).not.toMatch(/[$€£]|\b(?:billing|invoice|payment|credits|dollars|tokens)\b/i)
-    expect(html).not.toMatch(/\b(?:hosted|compute|exclusive|guaranteed|SLA)\b|cloud hours|cloud capacity|our cloud|every PR|every pull request|24\/7|when my Mac is off/i)
+    expect(html).not.toMatch(
+      /\b(?:hosted|compute|exclusive|guaranteed|SLA)\b|cloud hours|cloud capacity|our cloud|every PR|every pull request|24\/7|when my Mac is off/i,
+    )
     expect(html).toContain("/vector")
   })
 
-  test("unbind posts only the selected repository ID using the existing account sign-in", async () => {
+  test("unbind posts the displayed repository ID and exact generation using the existing account sign-in", async () => {
     const calls: { url: string; body: unknown }[] = []
-    await requestGithubUnbind("fixture-account-session", "42", async (url, init) => {
+    await requestGithubUnbind("fixture-account-session", "42", 7, async (url, init) => {
       expect(init?.method).toBe("POST")
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-account-session")
       expect(init?.redirect).toBe("error")
@@ -72,8 +105,18 @@ describe("account GitHub agents", () => {
       calls.push({ url, body: JSON.parse(String(init?.body)) })
       return Response.json({ ok: true })
     })
-    expect(calls).toEqual([{ url: "/api/cloud-agents/unbind", body: { repositoryId: "42" } }])
-    await expect(requestGithubUnbind("fixture-account-session", "../other", async () => { throw new Error("must not call") })).rejects.toMatchObject({ status: 400 })
+    expect(calls).toEqual([{ url: "/api/cloud-agents/unbind", body: { repositoryId: "42", expectedGeneration: 7 } }])
+    await expect(
+      requestGithubUnbind("fixture-account-session", "../other", 7, async () => {
+        throw new Error("must not call")
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    for (const generation of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])
+      await expect(
+        requestGithubUnbind("fixture-account-session", "42", generation, async () => {
+          throw new Error("must not call")
+        }),
+      ).rejects.toMatchObject({ status: 400 })
   })
 
   test("bind-code creation is an explicit repository-only request with a one-time typed response", async () => {
@@ -86,27 +129,54 @@ describe("account GitHub agents", () => {
     })
     expect(result).toEqual(code)
     for (const name of ["https://github.com/owner/parser", "../other", "owner/..", "owner/name with spaces"])
-      await expect(requestGithubBindCode("fixture-account-session", name, async () => { throw new Error("must not call") })).rejects.toMatchObject({ status: 400 })
-    await expect(requestGithubBindCode("fixture-account-session", "owner/parser", async () => Response.json({ code: "vrt_wrong-audience", expiresAt: code.expiresAt }))).rejects.toMatchObject({ status: 503 })
+      await expect(
+        requestGithubBindCode("fixture-account-session", name, async () => {
+          throw new Error("must not call")
+        }),
+      ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      requestGithubBindCode("fixture-account-session", "owner/parser", async () =>
+        Response.json({ code: "vrt_wrong-audience", expiresAt: code.expiresAt }),
+      ),
+    ).rejects.toMatchObject({ status: 503 })
   })
 
   test("authentication and service failures expose neutral recovery copy rather than server account details", async () => {
     try {
-      await requestGithubUnbind("fixture-account-session", "42", async () => Response.json({ error: {
-        message: "private@example.test has a payment issue and $100 left", code: "PRIVATE_REASON" } }, { status: 401 }))
+      await requestGithubUnbind("fixture-account-session", "42", 7, async () =>
+        Response.json(
+          {
+            error: {
+              message: "private@example.test has a payment issue and $100 left",
+              code: "PRIVATE_REASON",
+            },
+          },
+          { status: 401 },
+        ),
+      )
       throw new Error("expected refusal")
     } catch (error) {
       expect(error).toBeInstanceOf(GithubConnectionError)
       expect((error as Error).message).toBe("Sign in again to manage your GitHub repositories.")
       expect((error as Error).message).not.toMatch(/@|\$|payment|PRIVATE_REASON/)
     }
-    await expect(requestGithubUnbind("", "42", async () => { throw new Error("must not call") })).rejects.toMatchObject({ status: 401 })
+    await expect(
+      requestGithubUnbind("", "42", 7, async () => {
+        throw new Error("must not call")
+      }),
+    ).rejects.toMatchObject({ status: 401 })
   })
 
   test("malformed connection identities and duplicate rows fail closed", () => {
-    expect(() => readGithubBindings({ bindings: [{ ...binding, repositoryId: "../other" }] })).toThrow(GithubConnectionError)
+    expect(() => readGithubBindings({ bindings: [{ ...binding, repositoryId: "../other" }] })).toThrow(
+      GithubConnectionError,
+    )
     expect(() => readGithubBindings({ bindings: [binding, binding] })).toThrow(GithubConnectionError)
-    expect(() => readGithubBindings({ bindings: [{ ...binding, binder: { login: "private@example.test" } }] })).toThrow(GithubConnectionError)
+    expect(() => readGithubBindings({ bindings: [{ ...binding, binder: { login: "private@example.test" } }] })).toThrow(
+      GithubConnectionError,
+    )
     expect(() => readGithubBindings({ bindings: [{ ...binding, codium: "maybe" }] })).toThrow(GithubConnectionError)
+    for (const generation of [undefined, null, "7", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
+      expect(() => readGithubBindings({ bindings: [{ ...binding, generation }] })).toThrow(GithubConnectionError)
   })
 })

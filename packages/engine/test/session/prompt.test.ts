@@ -5,6 +5,9 @@ import { EventTable } from "@vectordevai/core/event/sql"
 import { SessionEvent } from "@vectordevai/schema/session-event"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { Computer } from "@vectordevai/schema/computer"
+import { ComputerAvailability } from "@/computer/availability"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { FREE_MODEL_FALLBACKS } from "@vectordevai/schema/free-model"
@@ -71,7 +74,6 @@ import { reply, TestLLMServer, type Reply } from "../lib/llm-server"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
-import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Auth } from "@/auth"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -143,6 +145,7 @@ function makeMcp(input: McpFake = {}) {
   return Layer.succeed(
     MCP.Service,
     MCP.Service.of({
+      snapshot: () => Effect.succeed({}),
       status: () => Effect.succeed({}),
       clients: () => Effect.succeed({}),
       instructions: () => Effect.succeed(input.instructions ?? []),
@@ -245,6 +248,7 @@ const promptRoot = LayerNode.group([
   RuntimeFlags.node,
   SpendGuard.node,
   Auth.node,
+  FreeModelGuests.node,
 ])
 
 function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
@@ -260,13 +264,48 @@ function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; proces
   return LayerNode.compile(promptRoot, replacements)
 }
 
-function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; mcp?: McpFake; processor?: "blocking" }) {
+const computerRequests: LLM.StreamInput[] = []
+
+function makeHttp(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  mcp?: McpFake
+  processor?: "blocking"
+  computer?: boolean
+}) {
   const root = LayerNode.group([promptRoot, testLLMServerNode])
   const replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp({ instructions: input?.mcpInstructions, ...input?.mcp })],
     [RuntimeFlags.node, runtimeFlags],
+    ...(input?.computer
+      ? [
+          [
+            ComputerAvailability.node,
+            Layer.succeed(ComputerAvailability.Service, {
+              unavailable: () => Effect.succeed(undefined),
+              capabilities: () => Effect.succeed({ available: true, protocol: 1 }),
+              actions: () => Effect.succeed(["read_ui"] as const),
+            }),
+          ] as const,
+          [
+            LLM.node,
+            Layer.succeed(LLM.Service, {
+              stream: (input) =>
+                Stream.suspend(() => {
+                  computerRequests.push(input)
+                  return Stream.make(
+                    LLMEvent.textStart({ id: "computer" }),
+                    LLMEvent.textDelta({ id: "computer", text: "ok" }),
+                    LLMEvent.textEnd({ id: "computer" }),
+                    LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+                    LLMEvent.finish({ reason: "stop" }),
+                  )
+                }),
+            }),
+          ] as const,
+        ]
+      : []),
   ] as const
   if (input?.processor === "blocking") {
     return LayerNode.compile(root, [...replacements, [SessionProcessor.node, blockingProcessor]])
@@ -279,6 +318,74 @@ function makeHttpNoLLMServer(input?: { mcpInstructions?: MCP.ServerInstructions[
 }
 
 const it = testEffect(makeHttp())
+const computerPrompts = testEffect(makeHttp({ computer: true }))
+
+computerPrompts.instance("the model request prunes old computer images while retaining recent and other images", () =>
+  withComputer(
+    Effect.gen(function* () {
+      yield* useServerConfig(providerCfg)
+      const sessions = yield* Session.Service
+      const provider = yield* ProviderSvc.Service
+      const prompt = yield* SessionPrompt.Service
+      const model = yield* provider.getModel(ref.providerID, ref.modelID)
+      model.limit.context = 64_000
+      model.capabilities.input.image = true
+      const chat = yield* sessions.create({ title: "Screenshot history" })
+      const previous = yield* seed(chat.id, { finish: "stop" })
+      const data = ["old-one", "old-two", "recent-one", "recent-two", "browser-image"].map((text) =>
+        Buffer.from(text).toString("base64"),
+      )
+      for (const [index, encoded] of data.entries()) {
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          sessionID: chat.id,
+          messageID: previous.assistant.id,
+          type: "tool",
+          tool: index === 4 ? "browser" : "computer",
+          callID: `screenshot-${index}`,
+          state: {
+            status: "completed",
+            input: { action: "screenshot" },
+            output: `Screenshot ${index}`,
+            title: "Read screen",
+            metadata: {
+              action: "screenshot",
+              frame: { id: `frame-${index}`, width: 1, height: 1, hash: "0123456789abcdef" },
+            },
+            time: { start: index, end: index + 1 },
+            attachments: [
+              {
+                id: PartID.ascending(),
+                sessionID: chat.id,
+                messageID: previous.assistant.id,
+                type: "file",
+                mime: "image/png",
+                url: `data:image/png;base64,${encoded}`,
+              },
+            ],
+          },
+        })
+      }
+      yield* user(chat.id, "Continue", "build", "thorough")
+      yield* prompt.loop({ sessionID: chat.id })
+      const request = computerRequests.findLast((request) => request.sessionID === chat.id)
+      if (!request) throw new Error("No model request captured")
+      const messages = JSON.stringify(request.messages)
+      expect(messages).not.toContain(data[0])
+      expect(messages).not.toContain(data[1])
+      for (const encoded of data.slice(2)) expect(messages).toContain(encoded)
+      expect(messages.split("[Earlier screenshot removed]")).toHaveLength(3)
+      const stored = (yield* sessions.messages({ sessionID: chat.id })).find(
+        (message) => message.info.id === previous.assistant.id,
+      )
+      expect(
+        stored?.parts.filter(
+          (part) => part.type === "tool" && part.state.status === "completed" && part.state.attachments?.length,
+        ),
+      ).toHaveLength(5)
+    }),
+  ),
+)
 const closingSnapshot = { entered: defer<void>(), release: defer<void>(), tracks: 0 }
 const finishingSnapshots = testEffect(
   LayerNode.compile(LayerNode.group([promptRoot, testLLMServerNode]), [
@@ -1499,19 +1606,55 @@ const firstRequestBody = Effect.fn("test.firstRequestBody")(function* (input: {
   config?: Partial<ConfigV1.Info>
   /** Run the turn in a child session whose own rules still allow the task tool. */
   nested?: boolean
+  internal?: string
+  guest?: boolean | "child"
+  computerMention?: boolean
+  freeModel?: NonNullable<ProviderSvc.Model["freeModel"]>
+  captureComputer?: boolean
 }) {
   const { llm } = yield* useServerConfig((url) => ({ ...providerCfg(url), ...input.config }))
   const prompt = yield* SessionPrompt.Service
   const sessions = yield* Session.Service
+  if (input.freeModel) {
+    const provider = yield* ProviderSvc.Service
+    const model = yield* provider.getModel(ref.providerID, ref.modelID)
+    model.freeModel = input.freeModel
+  }
   const parent = input.nested ? yield* sessions.create({ title: "Parent" }) : undefined
   const chat = yield* sessions.create({
     title: "Pinned",
+    internal: input.internal,
     ...(parent
       ? { parentID: parent.id, permission: [{ permission: "task", pattern: "*", action: "allow" as const }] }
       : {}),
   })
   yield* llm.hang
-  yield* user(chat.id, "hello", input.agent, "thorough")
+  const message = yield* user(chat.id, "hello", input.agent, "thorough")
+  if (input.computerMention)
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: message.id,
+      sessionID: chat.id,
+      type: "text",
+      text: "",
+      synthetic: true,
+      metadata: { [Computer.MENTION_KEY]: { kind: "feature" } },
+    })
+  if (input.guest) {
+    const guests = yield* FreeModelGuests.Service
+    const target = input.guest === "child" ? yield* sessions.create({ parentID: chat.id }) : chat
+    yield* guests.mark(target.id)
+  }
+
+  if (input.captureComputer) {
+    yield* prompt.loop({ sessionID: chat.id })
+    const request = computerRequests.findLast((request) => request.sessionID === chat.id)
+    if (!request) throw new Error("The computer fixture received no model request")
+    return JSON.stringify({
+      tools: Object.keys(request.tools).map((name) => ({ name })),
+      system: request.system,
+    })
+  }
 
   const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
   yield* awaitWithTimeout(llm.wait(1), "timed out waiting for the first model request", "10 seconds")
@@ -1519,6 +1662,87 @@ const firstRequestBody = Effect.fn("test.firstRequestBody")(function* (input: {
   yield* Fiber.interrupt(fiber)
   return body
 })
+
+// The fake availability layer above supplies no OS capability or input access.
+function withComputer<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const before = { url: process.env.VECTOR_COMPUTER_BRIDGE_URL, token: process.env.VECTOR_COMPUTER_BRIDGE_TOKEN }
+      process.env.VECTOR_COMPUTER_BRIDGE_URL = "http://127.0.0.1:1"
+      process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = "computer-prompt-fixture"
+      return before
+    }),
+    () => effect,
+    (before) =>
+      Effect.sync(() => {
+        if (before.url === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_URL
+        else process.env.VECTOR_COMPUTER_BRIDGE_URL = before.url
+        if (before.token === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+        else process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = before.token
+      }),
+  )
+}
+
+computerPrompts.instance(
+  "computer is offered in an attended owner conversation",
+  () =>
+    withComputer(
+      Effect.gen(function* () {
+        const body = yield* firstRequestBody({ captureComputer: true })
+        expect(body).toContain('"name":"computer"')
+      }),
+    ),
+  30_000,
+)
+
+for (const [name, input, reason] of [
+  ["subagent", { nested: true }, "unattended"],
+  ["internal session", { internal: "computer-fixture" }, "unattended"],
+  ["guest", { guest: true }, "guest"],
+  ["guest in a child session", { guest: "child" }, "guest"],
+  ["model that may train", { freeModel: { source: "openrouter", dataPolicy: "may-train" } }, "may-train"],
+  ["model with unreviewed training policy", { freeModel: { source: "openrouter" } }, "may-train"],
+  ["disabled computer tool", { config: { tools: { computer: false } } }, "disabled"],
+] as const) {
+  computerPrompts.instance(
+    `computer is withheld from a ${name} and its mention explains why`,
+    () =>
+      withComputer(
+        Effect.gen(function* () {
+          const body = yield* firstRequestBody({ ...input, computerMention: true, captureComputer: true })
+          expect(body).not.toContain('"name":"computer"')
+          expect(body).toContain(ComputerAvailability.message(reason))
+        }),
+      ),
+    30_000,
+  )
+}
+
+computerPrompts.instance(
+  "computer stays offered for a no-training model",
+  () =>
+    withComputer(
+      Effect.gen(function* () {
+        const body = yield* firstRequestBody({
+          freeModel: { source: "openrouter", dataPolicy: "no-training" },
+          captureComputer: true,
+        })
+        expect(body).toContain('"name":"computer"')
+      }),
+    ),
+  30_000,
+)
+
+it.instance(
+  "a computer mention without the desktop bridge gives the desktop explanation",
+  () =>
+    Effect.gen(function* () {
+      const body = yield* firstRequestBody({ computerMention: true })
+      expect(body).not.toContain('"name":"computer"')
+      expect(body).toContain(ComputerAvailability.message("desktop"))
+    }),
+  30_000,
+)
 
 it.instance(
   "loop puts the stable system prompt ahead of the directory and date, as its own block where the provider caches by breakpoint",
@@ -2138,6 +2362,54 @@ it.instance("loop continues after a missing-file read with a valid read and fina
     )
     expect(yield* setup.llm.pending).toBe(0)
     expect(yield* setup.llm.misses).toEqual([])
+  }),
+)
+
+it.instance("one prompt task signal spans provider requests and ends before the run returns", () =>
+  Effect.gen(function* () {
+    const setup = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const registry = yield* ToolRegistry.Service
+    const { read } = yield* registry.named()
+    const original = read.execute
+    const seen: { abort: AbortSignal; taskAbort?: AbortSignal }[] = []
+    read.execute = (args, context) =>
+      Effect.gen(function* () {
+        expect(context.taskAbort).toBeDefined()
+        expect(context.taskAbort?.aborted).toBe(false)
+        if (seen.length) {
+          expect(seen[0]!.abort.aborted).toBe(true)
+          expect(context.taskAbort).toBe(seen[0]!.taskAbort)
+          expect(context.abort).not.toBe(seen[0]!.abort)
+        }
+        seen.push({ abort: context.abort, taskAbort: context.taskAbort })
+        return yield* original(args, context)
+      })
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        read.execute = original
+      }),
+    )
+    const session = yield* sessions.create({
+      title: "Task signal",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const file = path.join(setup.dir, "task-signal.txt")
+    yield* writeText(file, "owned task signal fixture")
+    yield* setup.llm.tool("read", { filePath: file })
+    yield* setup.llm.tool("read", { filePath: file })
+    yield* setup.llm.text("Read twice.")
+    yield* prompt.prompt({
+      sessionID: session.id,
+      model: ref,
+      agent: "build",
+      parts: [{ type: "text", text: "Read the requested file and recover if it is missing." }],
+    })
+    expect(seen).toHaveLength(2)
+    expect(seen[0]!.taskAbort).toBe(seen[1]!.taskAbort)
+    expect(seen.every((value) => value.abort.aborted && value.taskAbort?.aborted)).toBe(true)
+    expect(yield* setup.llm.pending).toBe(0)
   }),
 )
 

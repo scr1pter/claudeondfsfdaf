@@ -1,21 +1,24 @@
 import { spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
+import { ComputerSession } from "@/computer/session"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Plugin } from "@/plugin"
 import { InstanceStore } from "@/project/instance-store"
@@ -90,6 +93,7 @@ const it = testEffect(
       Plugin.node,
       Truncate.node,
       Config.node,
+      ComputerSession.node,
       Agent.node,
       RuntimeFlags.node,
     ]),
@@ -196,6 +200,117 @@ const refusalOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   )
 
 describe("background shell commands", () => {
+  it.instance("a late pre-spawn refusal releases its reserved slot and starts no process", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const { directory } = yield* TestInstance
+      const root = yield* sessions.create()
+      const marker = path.join(directory, "must-not-start.txt")
+      const ready = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      const state = { completed: false }
+      const running = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "write a start witness",
+          process: script(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            yield* Deferred.succeed(ready, undefined)
+            yield* Deferred.await(proceed)
+            if (state.completed)
+              return yield* Effect.die(new Error("A fresh Allow once is required after computer use."))
+          }),
+        })
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(ready)
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shells.list(root.id)).toEqual([])
+      state.completed = true
+      yield* Deferred.succeed(proceed, undefined)
+      const result = yield* Fiber.join(running)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toContain("fresh Allow once")
+      expect(existsSync(marker)).toBe(false)
+      expect(yield* shells.full(root.id)).toBe(false)
+      expect(yield* shells.list(root.id)).toEqual([])
+    }),
+  )
+
+  it.instance("cancelling a waiting pre-spawn recheck leaves no durable row or process", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const { directory } = yield* TestInstance
+      const root = yield* sessions.create()
+      const marker = path.join(directory, "cancelled-must-not-start.txt")
+      const ready = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      const running = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "cancel before spawning",
+          process: script(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            yield* Deferred.succeed(ready, undefined)
+            yield* Deferred.await(proceed)
+          }),
+        })
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(ready)
+      expect(yield* store.forParent(root.id)).toEqual([])
+      yield* Fiber.interrupt(running)
+      yield* Deferred.succeed(proceed, undefined)
+      expect(existsSync(marker)).toBe(false)
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shells.list(root.id)).toEqual([])
+      expect(yield* shells.full(root.id)).toBe(false)
+    }),
+  )
+
+  it.instance("the final owned-start recheck can refuse without running the payload or losing its cause", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const { directory } = yield* TestInstance
+      const root = yield* sessions.create()
+      const marker = path.join(directory, "final-recheck-must-not-start.txt")
+      const state = { checks: 0 }
+      const result = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "refuse the final start boundary",
+          process: script(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            state.checks++
+            if (state.checks === 1) {
+              expect(yield* store.forParent(root.id)).toEqual([])
+              return
+            }
+            return yield* Effect.die(new Error("The final computer-use authority changed."))
+          }),
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toContain("authority changed")
+      expect(state.checks).toBe(2)
+      expect(existsSync(marker)).toBe(false)
+      expect(yield* shells.full(root.id)).toBe(false)
+      const rows = yield* store.forParent(root.id)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.metadata?.cleanup).toBe("confirmed")
+    }),
+  )
+
   test("shutdown without persisted cleanup proof never claims the command stopped", () => {
     for (const cause of ["disposed", "shutdown"] as const) {
       const note = ShellJobs.interrupted({ id: "shl_unknown", cause, metadata: { command: "sleep", pid: 4242 } })
@@ -203,6 +318,80 @@ describe("background shell commands", () => {
       expect(note).not.toContain("confirmed")
     }
   })
+
+  it.instance("the pre-spawn recheck runs before the durable job row, and a refusal leaves no row", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const jobs = yield* BackgroundJob.Service
+      const root = yield* sessions.create()
+      const shellJobs = () =>
+        jobs
+          .list()
+          .pipe(
+            Effect.map((all) => all.filter((job) => job.type === "shell" && job.metadata?.parentSessionId === root.id)),
+          )
+      const checking = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      const running = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "refused after the recheck",
+          process: sleeper(),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            yield* Deferred.succeed(checking, undefined)
+            yield* Deferred.await(answer)
+            return yield* Effect.die(new Error("Vector Hands holds the computer; this command was refused."))
+          }),
+        })
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(checking)
+      // While the recheck waits (it could be a permission prompt), nothing durable or running exists yet.
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shellJobs()).toEqual([])
+      yield* Deferred.succeed(answer, undefined)
+      const result = yield* Fiber.join(running)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result))
+        expect(String(Cause.squash(result.cause))).toContain(
+          "Vector Hands holds the computer; this command was refused.",
+        )
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shellJobs()).toEqual([])
+      expect(yield* shells.list(root.id)).toEqual([])
+      expect(yield* shells.full(root.id)).toBe(false)
+    }),
+  )
+
+  it.instance("allowed authority rechecks bracket durable admission before the command starts", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const root = yield* sessions.create()
+      const seen: number[] = []
+      const shell = yield* shells.start({
+        sessionID: root.id,
+        command: "allowed after the recheck",
+        process: script("console.log('allowed')"),
+        ops,
+        agent: "build",
+        beforeSpawn: store.forParent(root.id).pipe(
+          Effect.map((rows) => {
+            seen.push(rows.length)
+          }),
+        ),
+      })
+      // The recheck ran exactly once, when the session had no job row yet.
+      expect(seen).toEqual([0, 1])
+      expect((yield* shells.wait([shell.id], 20_000))[0]).toMatchObject({ status: "completed", exitCode: 0 })
+      expect((yield* store.forParent(root.id)).map((row) => row.id)).toEqual([shell.id])
+      expect(seen).toEqual([0, 1])
+    }),
+  )
 
   it.instance("start writes the output file, and the exit note carries the exit code and the output's end", () =>
     Effect.gen(function* () {
@@ -494,6 +683,10 @@ describe("background shell commands", () => {
       ).toBe(ShellJobs.SUBAGENT_REFUSAL)
       expect(ShellJobs.refusal({ subagent: false, enabled: false })).toBe(ShellJobs.DISABLED_REFUSAL)
       expect(ShellJobs.refusal({ subagent: false, enabled: true })).toBeUndefined()
+      // The Windows holder bypasses the shared launcher, so a hosted agent run refuses it before any row or slot.
+      expect(ShellJobs.isolationRefusal({ platform: "win32", required: true })).toBe(ProcessIsolation.REFUSAL)
+      expect(ShellJobs.isolationRefusal({ platform: "win32", required: false })).toBeUndefined()
+      expect(ShellJobs.isolationRefusal({ platform: "linux", required: true })).toBeUndefined()
 
       const tool = yield* (yield* ShellTool).init()
       const asked: string[] = []

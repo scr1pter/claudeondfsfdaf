@@ -13,6 +13,7 @@ import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { UNREAD } from "@/tool/shell/unread"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = AppNodeBuilder.build(
@@ -20,6 +21,61 @@ const env = AppNodeBuilder.build(
   [[InstanceStore.bootstrapNode, noopBootstrap]],
 )
 const it = testEffect(env)
+
+test("after-screen command markers preserve shell allowlists, denials and unread-command rules", () => {
+  const rules: PermissionV1.Ruleset = [
+    { permission: "bash", pattern: "*", action: "deny" },
+    { permission: "bash", pattern: "git status*", action: "allow" },
+  ]
+  expect(Permission.evaluate("bash", "#after-screen git status", rules).action).toBe("allow")
+  expect(Permission.evaluate("bash", "#after-screen rm report.txt", rules).action).toBe("deny")
+  expect(
+    Permission.evaluate("bash", "after-screen dangerous", [
+      { permission: "bash", pattern: "after-screen *", action: "deny" },
+    ]).action,
+  ).toBe("deny")
+  expect(
+    Permission.evaluate("bash", `#after-screen ${UNREAD}incomplete`, [
+      { permission: "bash", pattern: "*", action: "allow" },
+    ]).action,
+  ).toBe("ask")
+})
+
+it.instance("after-screen shell asks remain fresh under saved and configured allows", () =>
+  Effect.gen(function* () {
+    yield* approve("bash", ["*"])
+    const permission = yield* Permission.Service
+    const before = yield* permission.approved()
+    for (const index of [0, 1]) {
+      const pending = yield* permission
+        .ask({
+          sessionID: SessionID.make("ses_after_screen"),
+          permission: "bash",
+          patterns: ["git status", "#after-screen git status"],
+          always: [],
+          metadata: { command: "git status" },
+          ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+        })
+        .pipe(Effect.forkScoped)
+      const [request] = yield* waitForPending(1)
+      expect(request.always).toEqual([])
+      yield* permission.reply({ requestID: request.id, reply: index === 0 ? "always" : "once" })
+      expect(yield* Fiber.join(pending)).toBe("once")
+      expect(yield* permission.approved()).toEqual(before)
+    }
+    const denied = yield* permission
+      .ask({
+        sessionID: SessionID.make("ses_after_screen"),
+        permission: "bash",
+        patterns: ["#after-screen git status"],
+        always: [],
+        metadata: {},
+        ruleset: [{ permission: "bash", pattern: "git *", action: "deny" }],
+      })
+      .pipe(Effect.flip)
+    expect(denied).toBeInstanceOf(PermissionV1.DeniedError)
+  }),
+)
 
 const rejectAll = (message?: string) =>
   Effect.gen(function* () {
@@ -1460,6 +1516,271 @@ it.instance(
         ruleset: [{ permission: "webfetch", pattern: "*", action: "ask" }],
       })
       expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+// ctx.ask returns the answer, and the engine never remembers a computer grant (Vector Hands; build contract E2,
+// INV-C5). The desktop keeps Always-allowed apps in its own sealed store, so a revoke in Settings takes effect at once.
+
+const approved = () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    return yield* permission.approved()
+  })
+
+const calculator = "app:macos:com.apple.calculator"
+
+it.instance(
+  "ask - resolves with the person's reply: once, always, or undefined when a rule allows",
+  () =>
+    Effect.gen(function* () {
+      const input = {
+        sessionID: SessionID.make("session_answer"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: [],
+      }
+      for (const decision of ["once", "always"] as const) {
+        const fiber = yield* ask(input).pipe(Effect.forkScoped)
+        const [pending] = yield* waitForPending(1)
+        yield* reply({ requestID: pending.id, reply: decision })
+        expect(yield* Fiber.join(fiber)).toBe(decision)
+      }
+      // The "always" above is remembered, so the same request is now allowed without a prompt.
+      expect(yield* ask(input)).toBeUndefined()
+      expect(
+        yield* ask({ ...input, patterns: ["pwd"], ruleset: [{ permission: "bash", pattern: "*", action: "allow" }] }),
+      ).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - resolves with the reply as given: an always the policy refuses resolves once",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_answer"),
+        permission: PermissionPolicy.COMPUTER_SENSITIVE,
+        patterns: [`${calculator}:send`],
+        metadata: {},
+        always: ["*"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      const [pending] = yield* waitForPending(1)
+      yield* reply({ requestID: pending.id, reply: "always" })
+      expect(yield* Fiber.join(fiber)).toBe("once")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - always resolves matching pending requests in the same session with always",
+  () =>
+    Effect.gen(function* () {
+      const a = yield* ask({
+        id: PermissionV1.ID.make("per_answer_a"),
+        sessionID: SessionID.make("session_same"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      const b = yield* ask({
+        id: PermissionV1.ID.make("per_answer_b"),
+        sessionID: SessionID.make("session_same"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionV1.ID.make("per_answer_a"), reply: "always" })
+      expect(yield* Fiber.join(a)).toBe("always")
+      expect(yield* Fiber.join(b)).toBe("always")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - a config allow for a computer permission still prompts",
+  () =>
+    Effect.gen(function* () {
+      for (const [index, permission] of [
+        PermissionPolicy.COMPUTER_INTERACT,
+        PermissionPolicy.COMPUTER_OBSERVE,
+        PermissionPolicy.COMPUTER_APP,
+        PermissionPolicy.COMPUTER_SENSITIVE,
+      ].entries()) {
+        const fiber = yield* ask({
+          id: PermissionV1.ID.make(`per_computer_allow_${index}`),
+          sessionID: SessionID.make("session_computer"),
+          permission,
+          patterns: permission === PermissionPolicy.COMPUTER_SENSITIVE ? [`${calculator}:send`] : [calculator],
+          metadata: {},
+          always: [],
+          // A trusted repository's `computer_interact: allow`, a `"*": "allow"` default and a computer_* allow.
+          ruleset: [
+            { permission: "*", pattern: "*", action: "allow" },
+            { permission: "computer_*", pattern: "*", action: "allow" },
+            { permission, pattern: "*", action: "allow" },
+          ],
+        }).pipe(Effect.forkScoped)
+        const [pending] = yield* waitForPending(1)
+        expect(pending).toMatchObject({ id: PermissionV1.ID.make(`per_computer_allow_${index}`), permission })
+        yield* reply({ requestID: pending.id, reply: "once" })
+        expect(yield* Fiber.join(fiber)).toBe("once")
+      }
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - a computer_* deny rule still throws DeniedError",
+  () =>
+    Effect.gen(function* () {
+      for (const permission of [
+        PermissionPolicy.COMPUTER_APP,
+        PermissionPolicy.COMPUTER_SENSITIVE,
+        PermissionPolicy.COMPUTER_INTERACT,
+        PermissionPolicy.COMPUTER_OBSERVE,
+      ]) {
+        for (const ruleset of [
+          [{ permission: "computer_*", pattern: "*", action: "deny" as const }],
+          [
+            { permission: "*", pattern: "*", action: "allow" as const },
+            { permission: "computer_*", pattern: "*", action: "deny" as const },
+          ],
+        ]) {
+          const err = yield* fail(
+            ask({
+              sessionID: SessionID.make("session_computer"),
+              permission,
+              patterns: [calculator],
+              metadata: {},
+              always: [calculator],
+              ruleset,
+            }),
+          )
+          expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+        }
+      }
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "an always reply to computer_app leaves approved empty",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const replies: unknown[] = []
+      const unsub = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Permission.Event.Replied.type) replies.push(event.data)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsub)
+
+      const input = {
+        sessionID: SessionID.make("session_hands"),
+        permission: PermissionPolicy.COMPUTER_APP,
+        patterns: [calculator],
+        metadata: {},
+        always: [calculator],
+        ruleset: [],
+      }
+      const first = yield* ask({ ...input, id: PermissionV1.ID.make("per_hands_first") }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_hands_first"), reply: "always" })
+      // The tool sees "always", and the reply is published as "always" so the desktop can save the app (INV-S3).
+      expect(yield* Fiber.join(first)).toBe("always")
+      expect(replies).toContainEqual({
+        sessionID: SessionID.make("session_hands"),
+        requestID: PermissionV1.ID.make("per_hands_first"),
+        reply: "always",
+      })
+      // The engine keeps nothing.
+      expect(yield* approved()).toEqual([])
+
+      // So a second ask for the same app prompts again.
+      const second = yield* ask({ ...input, id: PermissionV1.ID.make("per_hands_second") }).pipe(Effect.forkScoped)
+      const [pending] = yield* waitForPending(1)
+      expect(pending.id).toBe(PermissionV1.ID.make("per_hands_second"))
+      yield* reply({ requestID: pending.id, reply: "once" })
+      expect(yield* Fiber.join(second)).toBe("once")
+      expect(yield* approved()).toEqual([])
+
+      // Every other computer id keeps nothing either, whatever it carries.
+      for (const permission of [
+        PermissionPolicy.COMPUTER_SENSITIVE,
+        PermissionPolicy.COMPUTER_INTERACT,
+        PermissionPolicy.COMPUTER_OBSERVE,
+      ]) {
+        const fiber = yield* ask({ ...input, permission, always: ["*"] }).pipe(Effect.forkScoped)
+        yield* reply({ requestID: (yield* waitForPending(1))[0].id, reply: "always" })
+        yield* Fiber.join(fiber)
+      }
+      expect(yield* approved()).toEqual([])
+
+      // An ordinary always reply is still remembered.
+      yield* approve("read", ["docs/*"])
+      expect(yield* approved()).toEqual([{ permission: "read", pattern: "docs/*", action: "allow" }])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - an always reply to a computer permission answers only that ask",
+  () =>
+    Effect.gen(function* () {
+      // A request in this session waits; meanwhile another session's "always" adds a rule that would allow it.
+      const waiting = yield* ask({
+        id: PermissionV1.ID.make("per_hands_waiting"),
+        sessionID: SessionID.make("session_hands"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      const other = yield* ask({
+        id: PermissionV1.ID.make("per_hands_other"),
+        sessionID: SessionID.make("session_other"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionV1.ID.make("per_hands_other"), reply: "always" })
+      yield* Fiber.join(other)
+
+      const app = yield* ask({
+        id: PermissionV1.ID.make("per_hands_app"),
+        sessionID: SessionID.make("session_hands"),
+        permission: PermissionPolicy.COMPUTER_APP,
+        patterns: [calculator],
+        metadata: {},
+        always: [calculator],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionV1.ID.make("per_hands_app"), reply: "always" })
+      expect(yield* Fiber.join(app)).toBe("always")
+      // The waiting request is still the person's to answer.
+      expect((yield* list()).map((item) => item.id)).toEqual([PermissionV1.ID.make("per_hands_waiting")])
+      yield* reply({ requestID: PermissionV1.ID.make("per_hands_waiting"), reply: "once" })
+      expect(yield* Fiber.join(waiting)).toBe("once")
     }),
   { git: true },
 )

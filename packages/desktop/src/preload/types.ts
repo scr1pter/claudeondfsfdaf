@@ -1,3 +1,4 @@
+import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
 import type { VectorAccountPlatform } from "@vectordevai/app/vector-account"
 import type { DesktopMenuAction } from "@vectordevai/app/desktop-menu"
 import type { WslServersPlatform } from "@vectordevai/app/wsl/types"
@@ -254,6 +255,20 @@ export type ServerReadyData = {
 
 export type { OpenPathApplication } from "../main/open-path"
 
+/**
+ * `window.api.computer` (section 2.9). Settings cross the context bridge in their wire form (company rules as pairs);
+ * the renderer rebuilds `policy.apps` as a Map before handing this to the app as `platform.computer`.
+ */
+export type ComputerDesktopAPI = Omit<
+  import("@vectordevai/schema/computer").Computer.ComputerPlatform,
+  "prefs" | "setPrefs"
+> & {
+  prefs(): Promise<import("../main/computer-wire").ComputerSettingsWire>
+  setPrefs(
+    patch: Partial<import("@vectordevai/schema/computer").Computer.ComputerPrefs>,
+  ): Promise<import("../main/computer-wire").ComputerSettingsWire>
+}
+
 export type WslServersAPI = WslServersPlatform
 export type UpdaterAPI = {
   subscribe: (cb: (state: UpdaterState) => void) => Promise<() => void>
@@ -448,6 +463,20 @@ export type BrowserAgentPageEvent = {
   loading: boolean
 }
 
+/**
+ * What the agent's browser for one task is doing, sent to every main window whether or not a Preview shows it: its
+ * active page, its tab count, whether a command runs, whether a Preview shows it, and `closed` once it is gone.
+ */
+export type BrowserAgentActivity = {
+  contextId: string
+  url: string
+  title: string
+  tabs: number
+  busy: boolean
+  shown: boolean
+  closed: boolean
+}
+
 export type BrowserAgentBounds = { x: number; y: number; width: number; height: number }
 
 export type BrowserAutomationRun = {
@@ -595,6 +624,10 @@ export type BrowserAgentInput = {
   tabId?: string
   /** selectOption: the option values or visible labels to select. */
   values?: string[]
+  /** click and clickRef: 2 for a double click (1 by default). */
+  clickCount?: number
+  /** click and clickRef: which mouse button (left by default). */
+  button?: "left" | "right"
   /** A driving command runs only while the active tab's page still has this origin: the one the engine checked and asked about. */
   expectOrigin?: string
   /** A click runs only while its target still has this name (clickTargetLabel): the one the engine judged. */
@@ -877,6 +910,7 @@ export type BackgroundTaskRecord = {
 }
 
 export type ElectronAPI = {
+  githubAgents: GithubAgentsAPI
   killSidecar: () => Promise<void>
   awaitInitialization: () => Promise<ServerReadyData>
   wslServers: WslServersAPI
@@ -936,6 +970,11 @@ export type ElectronAPI = {
   getWindowID: () => Promise<string>
   onMenuCommand: (cb: (id: string) => void) => () => void
   onDeepLink: (cb: (urls: string[]) => void) => () => void
+  computer: ComputerDesktopAPI
+  /** A Hands notification was clicked: open this conversation (an app-relative path). */
+  onComputerOpen: (cb: (href: string) => void) => () => void
+  /** The built-in engine deleted computer screenshots; the app decodes the selection and refreshes its history (D23). */
+  onComputerScreenshotsRemoved: (cb: (removal: unknown) => void) => () => void
 
   openDirectoryPicker: (opts?: {
     multiple?: boolean
@@ -976,6 +1015,7 @@ export type ElectronAPI = {
   runBrowserAgent: (input: BrowserAgentInput) => Promise<BrowserAutomationRun>
   prepareAgentTask: (root: string, task: string) => Promise<AgentTaskPreparation>
   onBrowserAgentPageEvent: (cb: (event: BrowserAgentPageEvent) => void) => () => void
+  onBrowserAgentActivity: (cb: (event: BrowserAgentActivity) => void) => () => void
   parallelWorkspaces: {
     list: (scope?: { sourcePath?: string; parentSessionId?: string }) => Promise<ParallelWorkspaceRecord[]>
     create: (input: CreateParallelWorkspaceInput) => Promise<ParallelWorkspaceRecord>

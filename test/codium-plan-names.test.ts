@@ -78,15 +78,25 @@ test("nothing in the repository calls a plan or a top-up by its old numbered nam
   const files = listed.filter(
     (file) => /\.(tsx?|jsx?|mjs|cjs|astro|mdx?|json|html|css|ya?ml|txt|sh)$/.test(file) && file !== self,
   )
-  const found = (
-    await Promise.all(
-      files.map(async (file) =>
-        (await Bun.file(path.join(root, file)).text())
-          .split("\n")
-          .flatMap((line, index) => (retiredNameViolation(file, line) ? [`${file}:${index + 1}: ${line.trim()}`] : [])),
-      ),
+  // Bound file handles on Windows while retaining the complete tracked-source scan.
+  const batchSize = 64
+  const found: string[] = []
+  for (const batch of Array.from({ length: Math.ceil(files.length / batchSize) }, (_, index) =>
+    files.slice(index * batchSize, (index + 1) * batchSize),
+  ))
+    found.push(
+      ...(
+        await Promise.all(
+          batch.map(async (file) =>
+            (await Bun.file(path.join(root, file)).text())
+              .split("\n")
+              .flatMap((line, index) =>
+                retiredNameViolation(file, line) ? [`${file}:${index + 1}: ${line.trim()}`] : [],
+              ),
+          ),
+        )
+      ).flat(),
     )
-  ).flat()
   // The scan has to reach the sources it guards, or an empty result would mean nothing.
   expect(files).toContain("packages/web/src/components/marketing/codium/CodiumPricing.tsx")
   expect(files.length).toBeGreaterThan(3000)

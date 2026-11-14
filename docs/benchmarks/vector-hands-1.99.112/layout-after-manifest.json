@@ -1,0 +1,23 @@
+{
+  "commit": "09b2a5715684498c66d841b7a8d66e88b30f95f7",
+  "ref": "refs/heads/hands",
+  "runID": "09b2a5715684498c66d841b7a8d66e88b30f95f7-41933580381-1",
+  "node": "v24.15.0",
+  "bun": "1.3.14",
+  "playwright": "Version 1.59.1",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "cpuCount": 4,
+  "memoryBytes": 16760340480,
+  "workers": 1,
+  "repeats": 3,
+  "channel": "prod",
+  "timeline": {
+    "historyTurns": 80,
+    "deltas": 40,
+    "cpuThrottle": 4,
+    "eventBatch": 1,
+    "detailedProfiling": false
+  }
+}

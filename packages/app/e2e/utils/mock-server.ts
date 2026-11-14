@@ -83,10 +83,14 @@ export interface MockServerConfig {
   fileContent?: (path: string) => unknown | Promise<unknown>
   sessionStatus?: unknown | (() => unknown)
   /**
-   * `GET /experimental/capabilities`: the engine's flags, or a reply for an engine that has none (a 404, an HTML page).
-   * Unset, the mock answers as before: `{}`, every flag off.
+   * `GET /experimental/capabilities`: engine flags (including nested computer capabilities), or a custom reply.
+   * Omitted models an older engine without the capabilities route and answers 404.
    */
-  capabilities?: Record<string, boolean> | MockReply | (() => Record<string, boolean> | MockReply)
+  capabilities?: Record<string, unknown> | MockReply | (() => Record<string, unknown> | MockReply)
+  /** The directory's effective config (`GET /config`); omitted answers an empty object. */
+  directoryConfig?: unknown
+  /** MCP server statuses by name (`GET /mcp`); omitted answers an empty object. */
+  mcpStatus?: unknown
   /** `GET /experimental/session/:sessionID/tasks`: the root's board, or a workflow run's agents (sessionID = runID). */
   taskList?: (input: { sessionID: string; query: URLSearchParams }) => unknown
   /** Every other task route. Undefined answers as an unconfigured mock does (`{}`). */
@@ -189,6 +193,7 @@ export async function mockVectorServer(page: Page, config: MockServerConfig): Pr
     "/permission",
     "/question",
     "/session/status",
+    "/experimental/capabilities",
     "/file",
     "/file/content",
     "/pty",
@@ -249,7 +254,7 @@ export async function mockVectorServer(page: Page, config: MockServerConfig): Pr
         if (result !== undefined) return answer(result)
       } else if (segments[1] === "capabilities" && segments.length === 2) {
         const flags = typeof config.capabilities === "function" ? config.capabilities() : config.capabilities
-        if (flags !== undefined) return answer(flags)
+        return flags === undefined ? json(route, { error: "Not found" }, undefined, 404) : answer(flags)
       } else if (segments[1] === "session" && segments.length >= 4) {
         const sessionID = segments[2]!
         const action = taskAction(method, segments.slice(3))
@@ -284,6 +289,8 @@ export async function mockVectorServer(page: Page, config: MockServerConfig): Pr
       return json(route, await config.fileList(url.searchParams.get("path") ?? ""))
     if (path === "/file/content" && config.fileContent)
       return json(route, await config.fileContent(url.searchParams.get("path") ?? ""))
+    if (path === "/config" && config.directoryConfig !== undefined) return json(route, config.directoryConfig)
+    if (path === "/mcp" && config.mcpStatus !== undefined) return json(route, config.mcpStatus)
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
     if (path in staticRoutes) return json(route, staticRoutes[path])

@@ -9,6 +9,7 @@ import {
 } from "@vectordevai/llm"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "../prompt"
+import { ComputerScreenshots } from "../../util/computer-screenshots"
 
 const media = (file: FileAttachment): ContentPart => ({
   type: "media",
@@ -169,5 +170,11 @@ Continue from where the conversation left off. If the last [User] message in <re
 }
 
 /** Translate projected V2 Session history into canonical @vectordevai/llm context. */
-export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
-  messages.flatMap((message) => toLLMMessage(message, model))
+export const toLLMMessages = (
+  messages: readonly SessionMessage.Message[],
+  model: Model,
+  options?: { computerScreenshots?: boolean },
+) =>
+  messages.flatMap((message) =>
+    toLLMMessage(options?.computerScreenshots === false ? ComputerScreenshots.stripNative(message) : message, model),
+  )

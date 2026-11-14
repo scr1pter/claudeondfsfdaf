@@ -17,6 +17,7 @@ import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
+import { GithubSecrets } from "./cli/cmd/github.secrets"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
 import { ImportCommand } from "./cli/cmd/import"
@@ -30,6 +31,7 @@ import { PrCommand } from "./cli/cmd/pr"
 import { ReviewCommand } from "./cli/cmd/review"
 import { SessionCommand } from "./cli/cmd/session"
 import { TasksCommand } from "./cli/cmd/tasks"
+import { ConnectedCommand } from "./cli/cmd/connected"
 import { WorkflowCommand } from "./cli/cmd/workflow"
 import { PlaybooksCommand } from "./cli/cmd/playbooks"
 import { DbCommand } from "./cli/cmd/db"
@@ -113,6 +115,13 @@ const cli = yargs(args)
   })
   .middleware(async (opts) => {
     assertSecurityEnvironment()
+    if (
+      process.env.GITHUB_ACTIONS === "true" &&
+      opts._?.[0] === "github" &&
+      ["run", "review"].includes(String(opts._?.[1] ?? ""))
+    ) {
+      await GithubSecrets.assertNoDebugger()
+    }
     if (opts.printLogs) process.env.VECTOR_PRINT_LOGS = "1"
     if (opts.logLevel) process.env.VECTOR_LOG_LEVEL = opts.logLevel
     if (opts.pure) {
@@ -125,10 +134,30 @@ const cli = yargs(args)
     process.env.VECTOR = "1"
     process.env.VECTOR_PID = String(process.pid)
 
+    const command = String(opts._?.[0] ?? "")
+    const subcommand = String(opts._?.[1] ?? "")
+    const github = process.env.GITHUB_ACTIONS === "true" && command === "github"
+    const control = github && ["mint", "bind", "sandbox", "publish"].includes(subcommand)
+    if (control) {
+      process.env.VECTOR_PURE = "1"
+      process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
+    }
+    if (
+      !opts.help &&
+      !opts.version &&
+      github &&
+      ["run", "review"].includes(subcommand) &&
+      (process.env.VECTOR_SECRET_CHANNEL !== undefined || process.env.VECTOR_MODE === "codium")
+    ) {
+      process.env.VECTOR_PURE = "1"
+      if (process.env.VECTOR_MODE === "codium") process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
+      await GithubSecrets.credentials.load()
+    }
     await commandGate({
       options: opts,
-      vector: isVectorCli,
-      accountRequired: !openCommands.has(String(opts._?.[0] ?? "")),
+      vector: isVectorCli || GithubSecrets.credentials.loaded(),
+      accountRequired: !openCommands.has(command) && !control,
+      githubActions: process.env.GITHUB_ACTIONS === "true",
       local: runLocal,
       account: async () => {
         const { ensureVectorAccount } = await import("./cli/vector-account")
@@ -163,6 +192,7 @@ const cli = yargs(args)
   .command(ReviewCommand)
   .command(SessionCommand)
   .command(TasksCommand)
+  .command(ConnectedCommand)
   .command(WorkflowCommand)
   .command(PlaybooksCommand)
   .command(PluginCommand)

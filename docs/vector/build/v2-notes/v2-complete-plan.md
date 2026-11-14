@@ -100,7 +100,7 @@ Commit only real drift.
 
 | Commit | What | In build-complete? |
 |---|---|---|
-| `709f81127` | cherry of `3d7283bda`: "agent Codium: 10" (red group 1) | No. build-complete still has "agent Codium 10" at `vector-at-mention-progress.md:1042`. |
+| `709f81127` | cherry of `3d7283bda`: retired numbered plan label (red group 1) | No. build-complete still has the retired label at `vector-at-mention-progress.md:1042`. |
 | `676674c17` | agent-phase test uses `process.getBuiltinModule` (red group 5) | No. build-complete still has `require(...)` at `github.agent-phase.test.ts:442-443`. |
 | `202b18947` | **Fix A**: `ProcessIsolation.FLOOR=false` (`process-isolation.ts:13`), `decide()`, bounded `namespaceProbeFailure` (`github.sandbox.ts:537`), the probe floor fields, and the deviation "V16 bubblewrap floor held" | No. build-complete has no `FLOOR`, so all 7 sandbox jobs stay red (C1 AppArmor userns, C2 nested bwrap under an empty `/proc`). |
 | `6d4af65b8` | Spawn review §4.1: C4, C10 and C2, plus tests | No |

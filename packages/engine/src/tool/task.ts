@@ -1244,6 +1244,7 @@ export const TaskTool = Tool.define(
       const { kind, custom } = subagentKind(next)
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: policyParent.permission ?? [],
+        parentWorktree: instance.worktree === "/" ? instance.directory : instance.worktree,
         subagent: next,
       })
       const childToolDenies = [

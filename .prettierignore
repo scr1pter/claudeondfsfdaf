@@ -3,3 +3,5 @@ packages/desktop/src/bindings.ts
 packages/client/src/generated/
 packages/client/src/generated-effect/
 script/vectorscope-eval/fixtures/
+script/vectorscope-eval/research/
+packages/desktop/native/computer-helper/blocklist.json

@@ -382,6 +382,7 @@ export async function resolveRoute(input: {
   // key stored, and the user's own key serves only the copies listed under OpenRouter.
   const ownKey = input.provider === "openrouter" ? await input.credential("openrouter") : undefined
   if (ownKey) {
+    if (ownKey.startsWith("vrt_")) throw new Error("Codium run credentials cannot authorize shared free models.")
     const models = await input.forKey(ownKey)
     if (!models.some((model) => model.id === input.modelID)) {
       // A may-train model listed by the shared catalog but missing from the user's own account is one the account's
@@ -409,6 +410,7 @@ export async function resolveRoute(input: {
   if (!catalog.enabled || !catalog.models.some((model) => model.id === input.modelID))
     throw new Error("That free model is unavailable. Choose another model in Vector.")
   const token = await input.credential("vector")
+  if (token?.startsWith("vrt_")) throw new Error("Codium run credentials cannot authorize shared free models.")
   if (!token) throw new Error(FREE_MODELS_SIGN_IN)
   return {
     url: SHARED_CHAT_URL,

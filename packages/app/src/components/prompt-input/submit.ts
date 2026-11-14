@@ -45,6 +45,9 @@ import { AGENT as RESEARCH, requireResearch, sizeOf, type Depth } from "@/featur
 import type { Research } from "@vectordevai/schema/research"
 import { requireLocalEngine } from "@/features/local/engine-compatibility"
 import { BrainSchema } from "@vectordevai/core/brain/schema"
+import type { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
+import { ComputerSendGate } from "@/features/computer/send-gate"
 import type { FollowupPreference } from "@/context/settings"
 import { NO_CAPABILITIES, type EngineCapabilities } from "@/features/background-tasks/engine-capabilities"
 import { NO_HELPERS, stopSession, type HelperTargets, type StopScope } from "@/features/background-tasks/stop-helpers"
@@ -160,6 +163,8 @@ type FollowupSendInput = {
   serverSync: ServerSync
   sync: DirectorySync
   draft: FollowupDraft
+  /** The desktop's computer platform, if any. Required, so a caller that forgets it refuses a computer mention. */
+  computer: Computer.ComputerPlatform | undefined
   messageID?: string
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
@@ -178,13 +183,14 @@ export function isCommand(text: string, commands: readonly { name: string }[]) {
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
 
 // What a message carries besides its text, as the engine counts it when it sizes the message: a greeting with a
-// screenshot, a file or a named subagent is never a bare reply.
+// screenshot, a file, a named subagent or a computer pill is never a bare reply.
 const attachments = (prompt: Prompt, context: readonly unknown[]) => {
   const images = draftImages(prompt).filter((part) => part.mime.startsWith("image/")).length
   return {
     images,
     files: prompt.filter((part) => part.type === "file" || part.type === "image").length - images + context.length,
     agents: prompt.flatMap((part) => (part.type === "agent" ? [part.name] : [])),
+    computer: ComputerSendGate.marked(prompt),
   }
 }
 
@@ -198,7 +204,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   const images = draftImages(input.draft.prompt)
   const messages = input.sync.data.message?.[input.draft.sessionID] ?? []
   const difficulty =
-    input.draft.difficulty ??
+    // A cached composer hint can predate computer-aware sizing. The structured draft is authoritative at dispatch.
+    (ComputerSendGate.marked(input.draft.prompt) ? undefined : input.draft.difficulty) ??
     classifyTaskDifficulty(text, {
       open: workOpen(messages, (id) => input.sync.data.part?.[id]),
       plan: planPending(messages),
@@ -229,12 +236,24 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     input.serverSync.session.set("session_status", input.draft.sessionID, { type: "idle" })
   }
 
+  // A computer mention is checked once, on the engine that will receive it.
+  const gate = async () => {
+    const refusal = await ComputerSendGate.check({
+      prompt: input.draft.prompt,
+      computer: input.computer,
+      client: input.client,
+    })
+    if (refusal) throw refusal
+  }
+
   const wait = async () => {
     const ok = await input.before?.()
     if (ok === false) return false
     // A queued draft may wait while the engine or its policy changes. Recheck at dispatch, before any model call.
     requireResearch(input.draft.agent === RESEARCH, input.sync.data.agent)
     await requireLocalEngine(input.client)
+    // A new worktree's checkout must be populated before its engine is probed, so its mention is checked here.
+    if (input.before) await gate()
     return true
   }
 
@@ -263,6 +282,9 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
   if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
+    // A command sends its files only, so it would drop the mention's marker: refuse rather than send without it.
+    if (ComputerSendGate.marked(input.draft.prompt))
+      throw new ComputerSendGate.Refusal("computer.mention.command", "local")
     setBusy()
     try {
       if (!(await wait())) {
@@ -348,6 +370,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       sessionID: input.draft.sessionID,
       messageID,
     })
+
+  // With no worktree to wait for, the mention is checked before the session is marked busy or the message echoed, so a
+  // refusal never overwrites the status of a run still going on the session (a queued item sent from the dock).
+  if (!input.before) await gate()
 
   batch(() => {
     setBusy()
@@ -647,6 +673,36 @@ function merge(spans: readonly [number, number][]) {
     }, [])
 }
 
+type RefusalCopy = ComputerSendGate.RefusalKey | "computer.action.setUp" | "computer.action.switchModel"
+
+/**
+ * Tells the user why a computer-marked message stayed in the composer: the setup toast with [Set up] when onboarding
+ * can fix it, the engine's sentence when the destination cannot carry it, and otherwise the situation's fixed sentence,
+ * with [Switch model] for a model that may train on prompts (section 1.4).
+ */
+export function showComputerRefusal(
+  refusal: ComputerSendGate.Refusal,
+  t: (key: RefusalCopy, params: Record<string, string>) => string,
+  openSetup?: () => void,
+  switchModel?: () => void,
+) {
+  const params = { name: Hands.NAME, mention: Hands.MENTION }
+  if (refusal.kind === "setup")
+    return showToast({
+      title: t("computer.mention.setupFirst", params),
+      ...(refusal.key === "computer.mention.setupFirst" ? {} : { description: t(refusal.key, params) }),
+      ...(openSetup ? { actions: [{ label: t("computer.action.setUp", params), onClick: openSetup }] } : {}),
+    })
+  if (refusal.kind === "engine")
+    return showToast({ title: "This engine cannot run this request", description: t(refusal.key, params) })
+  return showToast({
+    title: t(refusal.key, params),
+    variant: "error",
+    ...(refusal.key === "computer.availability.mayTrain" && switchModel
+      ? { actions: [{ label: t("computer.action.switchModel", params), onClick: switchModel }] }
+      : {}),
+  })
+}
 /**
  * Foreground subagents holding the open session's turn (5.I.1): a steer joins the run only when they finish their step,
  * so the composer says so. `promote` is Move to background for them, when the engine can move them.
@@ -672,6 +728,7 @@ type PromptSubmitInput = {
   onNewSessionWorktreeReset?: () => void
   /** queueEnabled for the open session, given whether Alt+Enter flipped the mode for this message. */
   shouldQueue?: (alternate: boolean) => boolean
+  queueWhileBlocked?: Accessor<boolean>
   onQueue?: (draft: FollowupDraft) => boolean | void
   onAbort?: () => void
   /** What Stop, Esc and Ctrl+G stop when no scope is named (Settings → General → Stop button). */
@@ -697,6 +754,10 @@ type PromptSubmitInput = {
   confirmFreeModelTraining?: (model: FreeModelChoice) => Promise<boolean>
   /** Vector Local is on: the models offered are only those on the servers the user listed. */
   localMode?: Accessor<boolean>
+  /** Opens onboarding from the setup toast; the draft stays in the composer. */
+  openComputerSetup?: () => void
+  /** Opens the model picker from the may-train refusal; the draft stays in the composer. */
+  switchModel?: () => void
 }
 
 export function createPromptSubmit(input: PromptSubmitInput) {
@@ -715,6 +776,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const planMode = usePlanMode()
   const platform = usePlatform()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk().scope, sessionID)
+  // The newest computer-marked submit's check, which runs before anything is cleared. Another Enter on the same draft
+  // while it reads is the same send; an Enter on an edited draft starts a newer check, and only the newest may report
+  // or send.
+  let gate: { prompt: Prompt; settled: boolean } | undefined
 
   const errorMessage = (err: unknown) => {
     if (err && typeof err === "object" && "data" in err) {
@@ -855,6 +920,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
   }
 
+  const isCustomCommand = (text: string) => {
+    const [head] = text.split(" ")
+    return head.startsWith("/") && sync().data.command.some((command) => command.name === head.slice(1))
+  }
+
   /** `alternate`: Alt+Enter, which flips Steer and Queue for this one message. */
   const handleSubmit = async (event: Event, options?: { alternate?: boolean }) => {
     event.preventDefault()
@@ -890,6 +960,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       attachments: images.length + input.commentCount(),
     })
     if (workflow) {
+      if (ComputerSendGate.marked(currentPrompt)) {
+        showComputerRefusal(new ComputerSendGate.Refusal("computer.mention.command", "local"), language.t)
+        return
+      }
       submission.clear()
       input.setPopover(null)
       window.dispatchEvent(new CustomEvent<WorkflowOpenDetail>(WORKFLOW_EVENT, { detail: workflow }))
@@ -898,7 +972,51 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     // Sent while the agent works: it steers the running turn, unless it queues below.
     const busy = input.working()
 
+    // Shell commands and custom commands carry no mention markers, so a pill there would be dropped silently. Deep
+    // research and Quick mode answer with agents that have no computer tool (resolveExecutionAgent), so a pill there
+    // would do nothing; Plan mode keeps its own agent in Quick mode.
+    const marked = ComputerSendGate.marked(currentPrompt)
+    const unsupported = !marked
+      ? undefined
+      : mode === "shell"
+        ? "computer.mention.shell"
+        : isCustomCommand(text)
+          ? "computer.mention.command"
+          : requestedExecutionMode === "research"
+            ? "computer.mention.research"
+            : requestedExecutionMode === "quick" && !isPlanMode
+              ? "computer.mention.quick"
+              : undefined
+    if (unsupported) {
+      showComputerRefusal(new ComputerSendGate.Refusal(unsupported, "local"), language.t)
+      return
+    }
+
     const destination = sdk()
+    // The session route keeps this composer when only the session changes, so a send that outlasts a switch would
+    // otherwise go to the session now open. A draft tab has no session id: its draft id names it instead, and the tab
+    // the send started on is the one promoted to the new session.
+    const sessionID = params.id
+    const draftID = search.draftId
+    if (marked) {
+      if (gate?.prompt === currentPrompt && !gate.settled) return
+      const own = { prompt: currentPrompt, settled: false }
+      gate = own
+      const refusal = await ComputerSendGate.check({
+        prompt: currentPrompt,
+        computer: platform.computer,
+        client: destination.client,
+      }).finally(() => {
+        own.settled = true
+      })
+      if (gate !== own) return
+      if (refusal) {
+        showComputerRefusal(refusal, language.t, input.openComputerSetup)
+        return
+      }
+      // The user kept editing while the gate read: the composer now holds a newer draft than this message.
+      if (target.current() !== currentPrompt) return
+    }
     try {
       requireResearch(mode !== "shell" && requestedExecutionMode === "research", sync().data.agent)
       await requireLocalEngine(destination.client)
@@ -906,7 +1024,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       showToast({ title: "This engine cannot run this request", description: errorMessage(error) })
       return
     }
-    if (sdk().client !== destination.client) return
+    if (sdk().client !== destination.client || params.id !== sessionID || search.draftId !== draftID) return
 
     const currentModel = local.model.current()
     const currentAgent = local.agent.current()
@@ -1022,6 +1140,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const researchSize = agent === RESEARCH ? sizeOf(input.researchDepth?.() ?? "auto") : undefined
     const researchScope = agent === RESEARCH ? input.researchScope?.() : undefined
 
+    // Section 1.4: Hands never sends the screen to a model that may train on prompts, and the engine withholds its tool
+    // there, so the pill would do nothing. Routing picks such a model only when it is the one selected.
+    if (marked && freeModelMayTrain(routed.model)) {
+      showComputerRefusal(
+        new ComputerSendGate.Refusal("computer.availability.mayTrain", "local"),
+        language.t,
+        undefined,
+        input.switchModel,
+      )
+      return
+    }
     if (!(await workspaceAvailable())) return
     // Before anything is created or sent: the draft stays in the editor if the user does not accept.
     if (
@@ -1114,7 +1243,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
         local.session.promote(sessionDirectory, session.id)
         layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
-        const draftID = search.draftId
         if (draftID) tabs.promoteDraft(draftID, { server: tabs.draft(draftID).server, sessionId: session.id })
         else navigate(`/${base64Encode(sessionDirectory)}/session/${session.id}`)
         submission.retarget(prompt.capture({ dir: base64Encode(sessionDirectory), id: session.id }))
@@ -1191,7 +1319,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
 
     const slash = mode === "normal" && isCommand(text, sync().data.command)
-    if (!isPlanMode && !isNewSession && queues(input.shouldQueue, { alternate, command: mode === "shell" || slash })) {
+    const blockedQueue = mode === "normal" && input.queueWhileBlocked?.()
+    if (
+      !isNewSession &&
+      (blockedQueue || (!isPlanMode && queues(input.shouldQueue, { alternate, command: mode === "shell" || slash })))
+    ) {
       if (input.onQueue?.(mode === "shell" ? { ...draft, shell: true } : draft) === false) {
         restorePastes(target, text)
         return
@@ -1352,6 +1484,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       sync: sync(),
       serverSync: serverSync(),
       draft,
+      computer: platform.computer,
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory && !steering,
       before: waitForWorktree,
@@ -1373,10 +1506,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         if (sessionDirectory === projectDirectory && !steering) {
           sync().set("session_status", session.id, { type: "idle" })
         }
-        showToast({
-          title: language.t("prompt.toast.promptSendFailed.title"),
-          description: errorMessage(err),
-        })
+        if (err instanceof ComputerSendGate.Refusal) showComputerRefusal(err, language.t, input.openComputerSetup)
+        else
+          showToast({
+            title: language.t("prompt.toast.promptSendFailed.title"),
+            description: errorMessage(err),
+          })
         removeOptimisticMessage()
         if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
       },

@@ -1,0 +1,341 @@
+{
+  "run": 42105279386,
+  "head": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+  "helperVersion": "1.0.14",
+  "enforcedSourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
+  "matrices": {
+    "macos-15-intel": {
+      "job": 127527880730,
+      "conclusion": "success",
+      "artifact": {
+        "id": 13451419650,
+        "run": 42105279386,
+        "head": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+        "zipBytes": 2252,
+        "zipSha256": "ab86bef93b933d54b48315379a4058ce5e8526961ce96d114121b950716eb00c",
+        "zipDigestMatchesApi": true
+      },
+      "reports": {
+        "computer-darwin-matrix-privileged.json": {
+          "rawBytes": 4368,
+          "rawSha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+          "code": 0,
+          "counts": {
+            "passed": 33,
+            "skipped": 13
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "native-skip"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.capture-overlay-exclusion",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.ax-counter-increment",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.ax-value-set-and-readback",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-ax-without-pointer-or-focus",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-selection-insertion",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.helper-tagged-escape-ignored",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.foreign-escape-stops",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            }
+          ]
+        },
+        "computer-darwin-matrix-privileged.json.unit-diagnostic.json": {
+          "rawBytes": 438,
+          "rawSha256": "d9e61f8580ad08edce622d044bc23e289566f3e0814be03647cb14818e474601",
+          "diagnostic": {
+            "schemaVersion": 1,
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "elapsedMs": 3541,
+            "exitAfterMs": 3541,
+            "closeAfterMs": 3541,
+            "sample": {
+              "status": "target-exited",
+              "suites": [],
+              "waits": []
+            },
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        },
+        "computer-darwin-matrix.json": {
+          "rawBytes": 2611,
+          "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "code": 0,
+          "counts": {
+            "passed": 31,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json.unit-diagnostic.json": {
+          "rawBytes": 438,
+          "rawSha256": "c9de1419ed585a29fa3cbfac4b1494b691afcc99f104ac8bff19ddd4a7614417",
+          "diagnostic": {
+            "schemaVersion": 1,
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "elapsedMs": 2920,
+            "exitAfterMs": 2920,
+            "closeAfterMs": 2920,
+            "sample": {
+              "status": "target-exited",
+              "suites": [],
+              "waits": []
+            },
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      }
+    },
+    "macos-26": {
+      "job": 127527880882,
+      "conclusion": "success",
+      "artifact": {
+        "id": 13453261780,
+        "run": 42105279386,
+        "head": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+        "zipBytes": 2254,
+        "zipSha256": "9a0c3a0906348f0b43f9316e6799390e30cbff738a4ccf83cc78c23650423b0f",
+        "zipDigestMatchesApi": true
+      },
+      "reports": {
+        "computer-darwin-matrix-privileged.json": {
+          "rawBytes": 4368,
+          "rawSha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+          "code": 0,
+          "counts": {
+            "passed": 33,
+            "skipped": 13
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "native-skip"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.capture-overlay-exclusion",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.ax-counter-increment",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.ax-value-set-and-readback",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-ax-without-pointer-or-focus",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-selection-insertion",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.helper-tagged-escape-ignored",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.foreign-escape-stops",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            }
+          ]
+        },
+        "computer-darwin-matrix-privileged.json.unit-diagnostic.json": {
+          "rawBytes": 438,
+          "rawSha256": "a82ad233721621a3b39c9cfce22c80ff13016363eacc18ad5c4eac162e99eea8",
+          "diagnostic": {
+            "schemaVersion": 1,
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "elapsedMs": 1707,
+            "exitAfterMs": 1707,
+            "closeAfterMs": 1707,
+            "sample": {
+              "status": "target-exited",
+              "suites": [],
+              "waits": []
+            },
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        },
+        "computer-darwin-matrix.json": {
+          "rawBytes": 2611,
+          "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "code": 0,
+          "counts": {
+            "passed": 31,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json.unit-diagnostic.json": {
+          "rawBytes": 438,
+          "rawSha256": "606d8da495a4c75c78995bc63f1b94a2f44327996fca22c1a354c6acefbfa541",
+          "diagnostic": {
+            "schemaVersion": 1,
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "elapsedMs": 1680,
+            "exitAfterMs": 1680,
+            "closeAfterMs": 1680,
+            "sample": {
+              "status": "target-exited",
+              "suites": [],
+              "waits": []
+            },
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "stagedNativeOs": {
+    "job": 127518482724,
+    "conclusion": "failure",
+    "nativeOsStop": "native_proof_invalid",
+    "nativeCaptureExclusion": "native_proof_invalid",
+    "scope": "Staged signed runtime launched and all generic properties/controller checks passed; finite native-proof result collapsed to native_proof_invalid and its exact boundary is unresolved. No OS Stop/capture pass or grant skip is inferred."
+  },
+  "releaseReady": false,
+  "scope": "Matching independently measured helper14 Intel/macOS26 required and isolated-auto matrix evidence. Missing Screen Recording/Accessibility scenarios remain explicit skips; native staged OS proof, full native workflow and release approval are not established."
+}

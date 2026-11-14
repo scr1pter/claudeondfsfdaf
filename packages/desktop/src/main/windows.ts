@@ -14,6 +14,7 @@ import { PINCH_ZOOM_ENABLED_KEY, WINDOW_IDS_KEY } from "./store-keys"
 import { createUnresponsiveSampler } from "./unresponsive"
 import { createWindowRegistry } from "./window-registry"
 import { allowsRendererPermission, allowsRendererPermissionRequest } from "./renderer-permissions"
+import { isComputerOverlay, shouldEmitWindowAllClosed } from "./computer-overlay-registry"
 
 const root = dirname(fileURLToPath(import.meta.url))
 const rendererRoot = join(root, "../renderer")
@@ -69,7 +70,9 @@ export function setAppQuitting(quitting = true) {
 
 export function setBackgroundColor(color: string) {
   backgroundColor = color
-  BrowserWindow.getAllWindows().forEach((win) => win.setBackgroundColor(color))
+  BrowserWindow.getAllWindows()
+    .filter((win) => !isComputerOverlay(win))
+    .forEach((win) => win.setBackgroundColor(color))
 }
 
 export function getBackgroundColor(): string | undefined {
@@ -115,6 +118,7 @@ export function updateTitlebar(win: BrowserWindow) {
 export function setPinchZoomEnabled(enabled: boolean) {
   getStore().set(PINCH_ZOOM_ENABLED_KEY, enabled)
   for (const win of BrowserWindow.getAllWindows()) {
+    if (isComputerOverlay(win)) continue
     pinchZoomEnabled.set(win, enabled)
     win.webContents.send("pinch-zoom-enabled-changed", enabled)
     if (!enabled && win.webContents.getZoomFactor() !== 1) win.webContents.setZoomFactor(1)
@@ -132,7 +136,7 @@ export function getWindowID(win: BrowserWindow) {
 
 export function getLastFocusedWindow() {
   const focused = BrowserWindow.getFocusedWindow()
-  if (focused) return focused
+  if (focused && !isComputerOverlay(focused)) return focused
   const win = registry.lastFocused()
   if (!win || win.isDestroyed()) return null
   return win
@@ -143,6 +147,11 @@ export function getMainWindow() {
   const win = registry.pick(BrowserWindow.getFocusedWindow())
   if (!win || win.isDestroyed()) return null
   return win
+}
+
+/** Every open main window: never a helper window, such as the research browsers' hidden host. */
+export function getMainWindows() {
+  return registry.all().filter((win) => !win.isDestroyed())
 }
 
 /** How many main windows are open: helper windows, such as the research browsers' hidden host, do not count. */
@@ -265,9 +274,8 @@ function registerWindow(win: BrowserWindow, id: string) {
     // Electron sends window-all-closed only once no window at all is left. A hidden helper window (the research
     // browsers' host, a cloud browser check) must not keep Vector open behind the user's back, so the last main window
     // closing with only hidden windows left counts as every window closed.
-    const left = BrowserWindow.getAllWindows().filter((item) => item !== win && !item.isDestroyed())
-    if (registry.count() === 0 && left.length > 0 && left.every((item) => !item.isVisible()))
-      app.emit("window-all-closed")
+    const other = BrowserWindow.getAllWindows().filter((item) => item !== win && !item.isDestroyed())
+    if (shouldEmitWindowAllClosed(registry.count(), other)) app.emit("window-all-closed")
   })
 }
 

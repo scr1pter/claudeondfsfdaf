@@ -88,6 +88,7 @@ describe("tui sync", () => {
           taskIsolation: true,
           workflows: false,
           backgroundShells: true,
+          connections: false,
         })
       } finally {
         app.renderer.destroy()

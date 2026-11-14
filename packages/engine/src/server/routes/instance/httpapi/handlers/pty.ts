@@ -7,6 +7,7 @@ import { PtyProtocol } from "@vectordevai/core/pty/protocol"
 import { PtyID } from "@vectordevai/core/pty/schema"
 import { PtyTicket } from "@vectordevai/core/pty/ticket"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
+import { PtyHold } from "@vectordevai/core/pty/hold"
 import { Location } from "@vectordevai/core/location"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { Shell } from "@vectordevai/core/shell"
@@ -66,16 +67,19 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
       const cwd = ctx.payload.cwd || (yield* InstanceState.context).directory
       const shell = yield* plugin.trigger("shell.env", { cwd }, { env: {} as Record<string, string> })
-      return yield* pty(
-        Pty.Service.use((service) =>
-          service.create({
-            ...ctx.payload,
-            args: ctx.payload.args ? [...ctx.payload.args] : undefined,
-            cwd,
-            env: { ...ctx.payload.env, ...shell.env },
-          }),
-        ),
-      )
+      const ref = Location.Ref.make({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })
+      return yield* Effect.gen(function* () {
+        const service = yield* Pty.Service
+        const info = yield* service.create({
+          ...ctx.payload,
+          args: ctx.payload.args ? [...ctx.payload.args] : undefined,
+          cwd,
+          env: { ...ctx.payload.env, ...shell.env },
+        })
+        // The user's terminal keeps its location's services, and so itself, alive while it runs (PtyHold).
+        yield* PtyHold.whileRunning(locations, ref, info.id)
+        return info
+      }).pipe(Effect.provide(locations.get(ref)))
     })
 
     const get = Effect.fn("PtyHttpApi.get")(function* (ctx: { params: { ptyID: PtyID } }) {

@@ -5,6 +5,11 @@ import { join, relative } from "node:path"
 import { afterAll, describe, expect, test } from "bun:test"
 
 import { runExternalCodingAgent } from "./external-agents"
+import {
+  registerComputerOverlayIpc,
+  setComputerOverlayControls,
+  type ComputerOverlayControls,
+} from "./computer-overlay-ipc"
 
 /*
  * Guards for what the vendors' terms ask of Vector when it runs a user's own Claude Code or Codex: the run keeps every
@@ -215,8 +220,12 @@ describe("where these agents can run", () => {
 
   test("every desktop command that starts, prompts, resumes or opens one answers only Vector's own window", async () => {
     const ipc = await Bun.file(join(import.meta.dir, "ipc.ts")).text()
-    // The one raw registration is inside handle(), which checks the window first (assertTrustedRenderer).
-    expect(ipc.match(/ipcMain\.handle\(/g)).toHaveLength(1)
+    // The only separate adapter is the banner's fixed, independently authenticated control surface.
+    const bannerAdapter =
+      /registerComputerOverlayIpc\(\{\s*handle: \(channel, callback\) => ipcMain\.handle\(channel, callback\),\s*on: \(channel, callback\) => ipcMain\.on\(channel, callback\),\s*\}\)/g
+    expect([...ipc.matchAll(bannerAdapter)]).toHaveLength(1)
+    // Every remaining raw invocation registration stays inside the ordinary trusted-renderer wrapper.
+    expect(ipc.replace(bannerAdapter, "").match(/ipcMain\.handle\(/g)).toHaveLength(1)
     expect(ipc).toMatch(
       /function handle<[^]*?ipcMain\.handle\(channel, \(event, \.\.\.args\) => \{\s*assertTrustedRenderer\(event\)/,
     )
@@ -229,5 +238,82 @@ describe("where these agents can run", () => {
       "external-agents-commands",
     ])
       expect(ipc).toContain(`handle("${channel}"`)
+  })
+
+  test("the separate banner adapter exposes only fixed controls to its exact current owner and main frame", async () => {
+    const handlers = new Map<string, Parameters<Parameters<typeof registerComputerOverlayIpc>[0]["handle"]>[1]>()
+    const listeners = new Map<string, Parameters<Parameters<typeof registerComputerOverlayIpc>[0]["on"]>[1]>()
+    registerComputerOverlayIpc({
+      handle: (channel, callback) => {
+        handlers.set(channel, callback)
+      },
+      on: (channel, callback) => {
+        listeners.set(channel, callback)
+      },
+    })
+    expect([...handlers.keys()]).toEqual(["computer-overlay-act"])
+    expect([...listeners.keys()]).toEqual(["computer-overlay-hover"])
+    const mainFrame = {}
+    let senderClosed = false
+    let bannerClosed = false
+    const contents = { id: 42, mainFrame, isDestroyed: () => senderClosed }
+    const owned = { sender: contents, senderFrame: mainFrame }
+    const calls: string[] = []
+    const hovers: boolean[] = []
+    const control: ComputerOverlayControls = {
+      banner: () => ({ isDestroyed: () => bannerClosed, webContents: contents }),
+      state: () => ({
+        phase: "working",
+        backend: "local-macos",
+        mode: "foreground",
+        apps: [],
+        queue: [],
+        escStops: false,
+        stopChord: "Command+Shift+Escape",
+        lease: 1,
+        reduceMotion: false,
+      }),
+      armed: () => false,
+      act: async (action) => {
+        calls.push(action)
+        return true
+      },
+      hover: (on) => {
+        hovers.push(on)
+      },
+    }
+    const invoke = handlers.get("computer-overlay-act")!
+    const hover = listeners.get("computer-overlay-hover")!
+    const detach = setComputerOverlayControls(control)
+    try {
+      for (const event of [
+        { ...owned, sender: { ...contents } }, // Same ID and frame cannot impersonate the banner object.
+        { ...owned, senderFrame: {} },
+        { sender: contents },
+      ]) {
+        expect(await invoke(event, "stop")).toBe(false)
+        hover(event, true)
+      }
+      expect(await invoke(owned, "external-agents-launch-terminal")).toBe(false)
+      senderClosed = true
+      expect(await invoke(owned, "stop")).toBe(false)
+      senderClosed = false
+      bannerClosed = true
+      expect(await invoke(owned, "stop")).toBe(false)
+      bannerClosed = false
+      expect(calls).toEqual([])
+      expect(hovers).toEqual([])
+      expect(await invoke(owned, "stop")).toBe(true)
+      hover(owned, true)
+      expect(calls).toEqual(["stop"])
+      expect(hovers).toEqual([true])
+      detach()
+      expect(await invoke(owned, "stop")).toBe(false)
+      hover(owned, false)
+      expect(calls).toEqual(["stop"])
+      expect(hovers).toEqual([true])
+    } finally {
+      detach()
+    }
   })
 })

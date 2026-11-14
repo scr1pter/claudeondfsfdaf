@@ -1,4 +1,4 @@
-import type { JsonSchema, LLMRequest, ProviderMetadata } from "@vectordevai/llm"
+import type { JsonSchema, LLMRequest, ProviderMetadata, ToolContent } from "@vectordevai/llm"
 import { CacheHint, LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@vectordevai/llm"
 import {
   AmazonBedrock,
@@ -70,14 +70,42 @@ const mediaPart = (part: Record<string, unknown>) => {
 
 const toolResult = (part: Record<string, unknown>) => {
   const output = isRecord(part.output) ? part.output : { type: "json", value: part.output }
-  const type = output.type === "text" ? "text" : output.type === "error-text" ? "error" : "json"
+  const type =
+    output.type === "text"
+      ? "text"
+      : output.type === "error-text" || output.type === "error-json"
+        ? "error"
+        : output.type === "content"
+          ? "content"
+          : "json"
   return ToolResultPart.make({
     id: typeof part.toolCallId === "string" ? part.toolCallId : "",
     name: typeof part.toolName === "string" ? part.toolName : "",
-    result: "value" in output ? output.value : output,
+    result: type === "content" ? toolContent(output.value) : "value" in output ? output.value : output,
     resultType: type,
     providerExecuted: typeof part.providerExecuted === "boolean" ? part.providerExecuted : undefined,
     providerMetadata: partProviderMetadata(part),
+  })
+}
+
+function toolContent(value: unknown): ToolContent[] {
+  if (!Array.isArray(value)) throw new Error("Native tool output content must be an array")
+  return value.map((part): ToolContent => {
+    if (!isRecord(part)) throw new Error("Native tool output contains an invalid content part")
+    if (part.type === "text" && typeof part.text === "string") return { type: "text", text: part.text }
+    if (
+      (part.type === "media" || part.type === "image-data" || part.type === "file-data") &&
+      typeof part.data === "string" &&
+      typeof part.mediaType === "string"
+    )
+      return {
+        type: "file",
+        mime: part.mediaType,
+        uri: part.data.startsWith("data:") ? part.data : `data:${part.mediaType};base64,${part.data}`,
+      }
+    if (part.type === "image-url" && typeof part.url === "string")
+      return { type: "file", mime: "image/png", uri: part.url }
+    throw new Error("Native tool output contains an unsupported content part")
   })
 }
 
@@ -143,6 +171,15 @@ const tools = (input: Record<string, ToolInput> | undefined): ToolDefinition[] =
       description: item.description ?? "",
       inputSchema: schema(item.inputSchema),
     }),
+  )
+
+/** Only the selected conversation's computer tool takes a native provider shape. */
+export const definitions = (
+  tools: ReadonlyArray<ToolDefinition>,
+  computer: "openai" | "anthropic" | undefined,
+): ReadonlyArray<ToolDefinition> =>
+  tools.map((tool) =>
+    computer && tool.name === "computer" ? ToolDefinition.make({ ...tool, native: "computer" }) : tool,
   )
 
 const generation = (input: RequestInput) => {

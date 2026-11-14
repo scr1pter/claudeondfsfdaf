@@ -87,6 +87,8 @@ const WITHOUT_SOURCE: Readonly<Record<string, string>> = {
 // Call sites of the registry that consult Vector Local through another file, and how. Every other call site of an
 // engine source consults it itself.
 const DECIDED_ELSEWHERE: Readonly<Record<string, string>> = {
+  "packages/engine/src/tool/browser-bridge.ts":
+    "The authenticated desktop IPC shared by browser commands and session cleanup. BrowserTool approves each page through webAccess before sending; the desktop's egress filter decides page requests. Closing an owned context opens no destination.",
   "packages/engine/src/tool/research-search.ts":
     "Decides each results page a search loads with ResearchSearch.reachable (core research/search.ts) before it asks the desktop's research browser.",
   "packages/core/src/tool/research-search.ts":
@@ -126,6 +128,8 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/brain/embed-manifest.ts":
     "The embedding model's download addresses, which brain/embed.ts fetches as embedding-model.",
   "packages/core/src/config/migration.ts": SHOWN,
+  "packages/core/src/github-agents.ts":
+    "OIDC audience identifiers and the GitHub App installation URL validator; nothing here connects to them.",
   "packages/core/src/github-copilot/copilot-provider.ts": MODEL_API,
   "packages/core/src/model-plan-status.ts":
     "Codium's addresses; it sends with the transport its caller hands it, model-plans.ts's plans-catalog in the engine.",
@@ -149,10 +153,22 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/repository.ts": GIT,
   "packages/core/src/research/export.ts":
     "The Office Open XML namespace names a .docx export writes into the file; nothing connects to them.",
+  "packages/core/src/review/fix-proposal.ts":
+    "The canonical GitHub remote accepted by the proposal validator; it connects to nothing and grants no execution.",
   "packages/core/src/review/format.ts": SHOWN,
+  "packages/core/src/review/workflow.ts":
+    "The GitHub App installation address used to validate a configured handle; nothing here connects to it.",
   "packages/core/src/session/runner/model.ts": MODEL_API,
+  "packages/engine/src/cli/cmd/github.agent.ts":
+    "A displayed run link and the API default for read-only clients; their requests pass through readOnlyFetch and github.shared.ts's labelled githubFetch.",
+  "packages/engine/src/cli/cmd/github.cloud.ts":
+    "Vector account endpoints sent through the supplied request transport; production uses github.shared.ts's githubFetch, which labels each request as github.",
   "packages/engine/src/cli/cmd/github.git.ts": GIT,
   "packages/engine/src/cli/cmd/github.review.ts": GIT,
+  "packages/engine/src/cli/cmd/github.run-helpers.ts":
+    "A compare link shown when GitHub refuses pull-request creation; nothing here connects to that address.",
+  "packages/engine/src/cli/cmd/github.session.ts":
+    "The GitHub artifact API's default origin; requests use only the explicit transport supplied by the caller.",
   "packages/engine/src/cli/cmd/pr.ts": GIT,
   "packages/engine/src/config/local-settings.ts":
     "Addresses vector local check asks Vector Local's decision about without connecting: a documentation address no network routes, and vectordev.ai.",
@@ -281,9 +297,9 @@ const UNLABELLED_CALLS: ReadonlyArray<{ readonly file: string; readonly call: st
     why: "Its own helper named fetch, which runs git fetch through Git.run; each fetch is decided there.",
   },
   {
-    file: "packages/engine/src/tool/browser.ts",
+    file: "packages/engine/src/tool/browser-bridge.ts",
     call: "return fetch(`${url}/command`",
-    why: "The desktop app's browser bridge on this computer; the page itself is decided before (webAccess).",
+    why: "The desktop app's authenticated browser IPC on this computer, extracted from browser.ts. BrowserTool decides pages before sending (webAccess), the desktop filters page requests, and session cleanup only closes owned contexts.",
   },
   {
     file: "packages/core/src/tool/research-search.ts",

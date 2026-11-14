@@ -1,0 +1,14 @@
+{
+  "comparison": "retrospective navigation-only baseline before PR20",
+  "productionCommit": "4299d7432aaac8b1937c5986729360e6b9f176f5",
+  "harnessSourceCommit": "00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a",
+  "harness": "packages/app/e2e/utils/mock-server.ts",
+  "harnessSha256": "403317ac1d19e6b2418f09d0b01f182e1e5b17d60f2bd28502f49c78937ed8ff",
+  "limitations": [
+    "Recorded after implementation; does not establish a measurement before coding.",
+    "Mock navigation only; no engine/provider execution or permission/queue cost claim."
+  ],
+  "scenarios": 3,
+  "repeats": 3,
+  "workers": 1
+}

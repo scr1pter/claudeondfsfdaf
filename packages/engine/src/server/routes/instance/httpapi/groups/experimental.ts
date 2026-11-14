@@ -121,6 +121,13 @@ export const TaskWaitInput = Schema.Struct({
 // limit values.
 const CapabilitiesResponse = Schema.Struct({
   backgroundSubagents: Schema.Boolean,
+  computer: Schema.optional(
+    Schema.Struct({
+      available: Schema.Boolean,
+      protocol: Schema.optional(NonNegativeInt),
+      reason: Schema.optional(Schema.String),
+    }),
+  ),
   workDelegation: Schema.optional(Schema.Boolean),
   subagentLimits: Schema.optional(Schema.Boolean),
   sessionStop: Schema.optional(Schema.Boolean),
@@ -130,6 +137,10 @@ const CapabilitiesResponse = Schema.Struct({
   taskIsolation: Schema.optional(Schema.Boolean),
   workflows: Schema.optional(Schema.Boolean),
   backgroundShells: Schema.optional(Schema.Boolean),
+  vectorscopeSettings: Schema.optional(Schema.Boolean),
+  vectorscopeRuns: Schema.optional(Schema.Boolean),
+  vectorscopeReviewMemoryControls: Schema.optional(Schema.Boolean),
+  connections: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "ExperimentalCapabilities" })
 
 const ToolIDs = Schema.Array(Schema.String).annotate({ identifier: "ToolIDs" })

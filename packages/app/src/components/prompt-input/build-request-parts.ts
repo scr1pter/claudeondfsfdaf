@@ -3,6 +3,7 @@ import { type AgentPartInput, type FilePartInput, type Part, type TextPartInput 
 import type { FileSelection } from "@/context/file"
 import { encodeFilePath } from "@/context/file/path"
 import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
+import { ComputerMention } from "@/features/computer/mention"
 import { Identifier } from "@/utils/id"
 import { createCommentMetadata, formatCommentNote } from "@/utils/comment-note"
 import { marker, modeFor } from "./remember"
@@ -99,8 +100,22 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
       text: input.text,
     },
   ]
-  // Minted now, so the instructions sort between the typed text and the attachments.
+  // Minted now, so later instructions sort between the typed text and the markers or attachments.
   const syntheticIDs = Array.from({ length: input.syntheticSlots ?? 0 }, () => Identifier.ascending("part"))
+
+  const computer = input.prompt.flatMap((pill) =>
+    pill.type === "computer"
+      ? [
+          {
+            id: Identifier.ascending("part"),
+            type: "text",
+            text: "",
+            synthetic: true,
+            metadata: ComputerMention.marker(pill),
+          } satisfies PromptRequestPart,
+        ]
+      : [],
+  )
 
   const files = input.prompt.filter(isFileAttachment).map((attachment) => {
     const path = absolute(input.sessionDirectory, attachment.path)
@@ -210,7 +225,7 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
     return mode ? [file, marker(Identifier.ascending("part"), file.id, mode) satisfies PromptRequestPart] : [file]
   })
 
-  requestParts.push(...files, ...context, ...agents, ...images)
+  requestParts.push(...computer, ...files, ...context, ...agents, ...images)
 
   return {
     requestParts,

@@ -1,6 +1,7 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from "bun:test"
 import { Effect, ManagedRuntime } from "effect"
 import type { Brain } from "@vectordevai/core/brain/brain"
+import { BrainCredit } from "@vectordevai/core/brain/credit"
 import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Flag } from "@vectordevai/core/flag/flag"
@@ -145,49 +146,70 @@ describe("memory workflow routes", () => {
   }, 60_000)
 
   test("Codium workflow summaries omit inclusive figures from rows and advice without changing internal learning", async () => {
-    await using tmp = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
-    const where = await place(tmp.path)
-    await record(where, [
-      ...runs("thorough", "default", 0).map((row) => ({
-        ...row,
-        costUsd: undefined,
-        costKinds: { priced: 1, codium: 2 },
-        unpricedSteps: 2,
-        tokens: { input: 500, output: 0, reasoning: 0, cacheRead: 0 },
-      })),
-      ...runs("thorough", "high", 0, 8, 2).map((row) => ({
-        ...row,
-        costUsd: undefined,
-        costKinds: { codium: 3 },
-        unpricedSteps: 3,
-      })),
-      { ...run(0, "light", "default", 0), providerID: "vector-plan", costKinds: { codium: 3 }, unpricedSteps: 3 },
-      run(0, "standard", "default", 0.2),
-    ])
-    const internal = await runtime.runPromise(
-      Effect.gen(function* () {
-        const workflow = yield* BrainWorkflow.Service
-        return yield* workflow.insights(where)
-      }),
-    )
-    const insights = (await json(await call(tmp.path, "GET", "/memory/workflow"))) as BrainWorkflow.Insights
-    for (const tier of insights.tiers.filter((tier) => tier.tier !== "standard")) {
-      for (const arm of tier.arms) {
-        expect(arm.codium).toBeDefined()
-        expect(arm).not.toHaveProperty("tokens")
-        expect(arm).not.toHaveProperty("costUsd")
+    // The internal and HTTP reads must use the same decay instant. One half-life also gives the ordinary row a
+    // meaningful, exactly representable weight instead of a scheduler-dependent (weight * 1200) / weight roundoff.
+    const now = Date.UTC(2026, 10, 14)
+    setSystemTime(now)
+    try {
+      await using tmp = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
+      const where = await place(tmp.path)
+      await record(where, [
+        ...runs("thorough", "default", 0).map((row) => ({
+          ...row,
+          costUsd: undefined,
+          costKinds: { priced: 1, codium: 2 },
+          unpricedSteps: 2,
+          tokens: { input: 500, output: 0, reasoning: 0, cacheRead: 0 },
+        })),
+        ...runs("thorough", "high", 0, 8, 2).map((row) => ({
+          ...row,
+          costUsd: undefined,
+          costKinds: { codium: 3 },
+          unpricedSteps: 3,
+        })),
+        { ...run(0, "light", "default", 0), providerID: "vector-plan", costKinds: { codium: 3 }, unpricedSteps: 3 },
+        { ...run(0, "standard", "default", 0.2), at: now - BrainCredit.HALF_LIFE },
+      ])
+      const internal = await runtime.runPromise(
+        Effect.gen(function* () {
+          const workflow = yield* BrainWorkflow.Service
+          return yield* workflow.insights(where)
+        }),
+      )
+      const insights = (await json(await call(tmp.path, "GET", "/memory/workflow"))) as BrainWorkflow.Insights
+      expect(
+        await runtime.runPromise(
+          Effect.gen(function* () {
+            const workflow = yield* BrainWorkflow.Service
+            return yield* workflow.insights(where)
+          }),
+        ),
+      ).toEqual(internal)
+      for (const tier of insights.tiers.filter((tier) => tier.tier !== "standard")) {
+        for (const arm of tier.arms) {
+          expect(arm.codium).toBeDefined()
+          expect(arm).not.toHaveProperty("tokens")
+          expect(arm).not.toHaveProperty("costUsd")
+        }
       }
+      const advice = insights.tiers.find((tier) => tier.tier === "thorough")!.advice!
+      expect(advice.effort).toBe("default")
+      expect(advice.reason).toContain("(unknown + Codium)")
+      expect(advice.reason).not.toContain("tokens")
+      expect(advice.basis.chosen).not.toHaveProperty("tokens")
+      expect(advice.basis.instead).not.toHaveProperty("tokens")
+      expect(internal.tiers.find((tier) => tier.tier === "thorough")!.advice!.basis.chosen.tokens).toBeCloseTo(500)
+      expect(insights.tiers.find((tier) => tier.tier === "standard")!.arms[0]).toMatchObject({
+        tokens: 1200,
+        costUsd: 0.2,
+        weight: 0.5,
+        pricedWeight: 0.5,
+      })
+      expect(insights.tiers.find((tier) => tier.tier === "standard")!.arms).toEqual(
+        internal.tiers.find((tier) => tier.tier === "standard")!.arms,
+      )
+    } finally {
+      setSystemTime()
     }
-    const advice = insights.tiers.find((tier) => tier.tier === "thorough")!.advice!
-    expect(advice.effort).toBe("default")
-    expect(advice.reason).toContain("(unknown + Codium)")
-    expect(advice.reason).not.toContain("tokens")
-    expect(advice.basis.chosen).not.toHaveProperty("tokens")
-    expect(advice.basis.instead).not.toHaveProperty("tokens")
-    expect(internal.tiers.find((tier) => tier.tier === "thorough")!.advice!.basis.chosen.tokens).toBeCloseTo(500)
-    expect(insights.tiers.find((tier) => tier.tier === "standard")!.arms[0]).toMatchObject({
-      tokens: 1200,
-      costUsd: 0.2,
-    })
   }, 30_000)
 })

@@ -300,8 +300,12 @@ beforeEach(() => {
 const { MCP } = await import("../../src/mcp/index")
 const { Config } = await import("../../src/config/config")
 const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
+const { McpAuth } = await import("../../src/mcp/auth")
+const { McpComputerPolicy } = await import("../../src/mcp/computer-policy")
 
 const it = testEffect(LayerNode.compile(MCP.node))
+// The same graph with the credential store in reach of the test.
+const withAuth = testEffect(LayerNode.compile(LayerNode.group([MCP.node, McpAuth.node])))
 
 function statusName(status: Record<string, MCPNS.Status> | MCPNS.Status, server: string) {
   if ("status" in status) return status.status
@@ -875,6 +879,31 @@ it.instance("vault placeholders resolve only in the child process and removal cl
       expect(getOrCreateClientState("vault-local").closed).toBe(true)
     }),
   ),
+)
+
+withAuth.instance("a refused server named computer can still be removed, with its stored credentials", () =>
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const mcp = yield* MCP.Service
+    const auth = yield* McpAuth.Service
+    lastCreatedClientName = "computer"
+    const reason = McpComputerPolicy.reservedName("computer")
+    if (!reason) throw new Error("Expected computer to be reserved")
+
+    yield* mcp.add("computer", { type: "local", command: ["echo", "{vault:token}"] }, { token: "secret" })
+    expect((yield* mcp.status()).computer).toEqual({ status: "failed", error: reason })
+    expect(clientCreateCount).toBe(0)
+    // Like any other refused add, the entry and its credentials are kept, so every client can say why it failed.
+    const file = Config.integrationStore(directory)
+    expect(JSON.parse(yield* Effect.promise(() => Bun.file(file).text())).mcp.computer).toBeDefined()
+    expect((yield* auth.get("computer"))?.secrets).toEqual({ token: "secret" })
+
+    yield* mcp.remove("computer")
+    expect((yield* mcp.status()).computer).toBeUndefined()
+    expect(JSON.parse(yield* Effect.promise(() => Bun.file(file).text())).mcp?.computer).toBeUndefined()
+    expect(yield* auth.get("computer")).toBeUndefined()
+    expect(clientCreateCount).toBe(0)
+  }),
 )
 
 it.instance("replacing an MCP server cannot inherit a stale vault credential", () =>

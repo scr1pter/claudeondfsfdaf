@@ -56,6 +56,46 @@ test("public reader rejects malformed, private, mismatched and oversized snapsho
   ).rejects.toThrow("size")
 })
 
+test("opted-in computer screenshots pass the viewer boundary only as exact, bounded embedded images", async () => {
+  const png =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+  const computer = (screenshots: unknown[]) => ({
+    ...snapshot,
+    archive: {
+      ...snapshot.archive,
+      messages: [
+        {
+          id: "message-2",
+          role: "assistant",
+          createdAt: 2,
+          parts: [
+            {
+              type: "tool",
+              name: "computer",
+              callID: "call",
+              status: "completed",
+              input: "{}",
+              output: "Notes is open",
+              screenshots,
+            },
+          ],
+        },
+      ],
+    },
+  })
+  const shot = { name: "screen.png", mediaType: "image/png", url: png }
+  expect<unknown>(await readSnapshot(id, signal(), async () => Response.json(computer([shot])))).toEqual(
+    computer([shot]),
+  )
+  // The viewer refuses fields the public schema does not define, such as a local path beside the image.
+  await expect(
+    readSnapshot(id, signal(), async () => Response.json(computer([{ ...shot, path: "/Users/me/screen.png" }]))),
+  ).rejects.toThrow()
+  // Each image fits the schema, but together they pass the response limit, which still applies before decoding.
+  const half = { ...shot, url: `data:image/png;base64,${"A".repeat(PublicSession.MAX_RESPONSE_BYTES / 2)}` }
+  await expect(readSnapshot(id, signal(), async () => Response.json(computer([half, half])))).rejects.toThrow("size")
+})
+
 test("expired and removed copies expose no transcript; temporary failures remain errors", async () => {
   for (const status of [404, 410])
     expect(await readSnapshot(id, signal(), async () => new Response(null, { status }))).toBeUndefined()

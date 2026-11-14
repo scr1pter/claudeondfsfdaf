@@ -15,6 +15,11 @@ export interface FilteredListProps<T> {
   skipFilter?: (item: T) => boolean
   onSelect?: (value: T | undefined, index: number) => void
   noInitialSelection?: boolean
+  /**
+   * When items change while the filter stays the same (rows arriving later from a slower source), keep a row the user
+   * moved to while it is still listed, instead of selecting the first row again.
+   */
+  keepActive?: boolean
 }
 
 export function useFilteredList<T>(props: FilteredListProps<T>) {
@@ -77,14 +82,25 @@ export function useFilteredList<T>(props: FilteredListProps<T>) {
     loop: true,
   })
 
+  // The filter and row of the last automatic selection; a different active row under the same filter is the user's.
+  let selected: { filter: string; key: string } | undefined
+
   const reset = () => {
     if (props.noInitialSelection) {
+      selected = { filter: store.filter, key: "" }
       list.setActive("")
       return
     }
     const all = flat()
     if (all.length === 0) return
-    list.setActive(props.key(all[0]))
+    selected = { filter: store.filter, key: props.key(all[0]) }
+    list.setActive(selected.key)
+  }
+
+  const userChoiceListed = () => {
+    const active = list.active()
+    if (!active || !selected || selected.filter !== store.filter || selected.key === active) return false
+    return flat().some((item) => props.key(item) === active)
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -111,6 +127,7 @@ export function useFilteredList<T>(props: FilteredListProps<T>) {
 
   createEffect(
     on(grouped, () => {
+      if (props.keepActive && userChoiceListed()) return
       reset()
     }),
   )

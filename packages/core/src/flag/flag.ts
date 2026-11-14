@@ -60,6 +60,9 @@ export const Flag = {
   get VECTOR_EXPERIMENTAL_REFERENCES() {
     return enabledByExperimental("VECTOR_EXPERIMENTAL_REFERENCES")
   },
+  get VECTOR_EXPERIMENTAL_CONNECT() {
+    return enabledByExperimental("VECTOR_EXPERIMENTAL_CONNECT")
+  },
   get VECTOR_TUI_CONFIG() {
     return process.env.VECTOR_TUI_CONFIG
   },

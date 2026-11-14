@@ -1,4 +1,6 @@
+import { closeCloudWorkspaces, cloudWorkspacesConfigured } from "./cloud-workspaces.js"
 import { codiumKeyIn, codiumKeyMode, codiumKeyPrefix, codiumKeyRoot } from "./codium-keys.js"
+import { eraseCloudAgentsAccount } from "./cloud-agents-runs.js"
 import { eraseFounding } from "./codium-founding.js"
 import { notifyOwner } from "./codium-owner.js"
 import { forgetAccountOutbox } from "./codium-provision.js"
@@ -16,6 +18,7 @@ import {
 } from "./codium-tombstone.js"
 import { eraseAccountHosted } from "./hosted-crons.js"
 import { eraseAccountHostedJobs } from "./hosted-jobs.js"
+import { EVERYWHERE_ERASE_PART } from "./everywhere/erase.js"
 import { ApiError } from "./http.js"
 import { cancelModelPlanAccount, reconcileModelPlanAccount } from "./model-plan-account.js"
 import { stripeMode, type StripeMode } from "./model-plan-stripe.js"
@@ -33,19 +36,23 @@ import { eraseAccountPushSubscriptions } from "./web-push.js"
  * Account deletion's Codium half (contract WP A57, P5). `api/account/delete.ts` sets the tombstone
  * (codium-tombstone.ts) and then runs `finishAccountDeletion`, in this order:
  *   1. revoke the account's CLI and desktop tokens, first, so they stop working even if the next step cannot run yet;
+ *      right after that attempt, whatever it answered, close the account's cloud workspaces on their host, best effort,
+ *      so their engines stop even while a step below keeps failing (the `workspaces` erase part records the outcome);
  *   2. close: reconcile under the tombstone, so the account's snapshot is `ended`/`closing` and every service that reads
  *      it refuses new work (this is how the start and enqueue paths see the tombstone; see codium-tombstone.ts);
  *   3. cancel billing (`cancelModelPlanAccount`: checkouts expired, subscriptions cancelled, Codium keys disabled);
- *   4. erase, part by part (`eraseParts()`: `ERASE_PARTS` and any part another package registered), and only when every
- *      service part is erased, the account's own Codium records and
- *      then every other store key that still names the account (`eraseAccountKeys`); then the erase marker (`erasedAt`)
- *      is written;
+ *   4. erase, part by part (`eraseParts()`: `ERASE_PARTS` and any part another package registered), first the cloud
+ *      workspaces' part (which takes the close from step 1 instead of asking the host again), and only when every
+ *      service part is erased, the account's own Codium records and then every other store key that still names the
+ *      account (`eraseAccountKeys`); then the erase marker (`erasedAt`) is written;
  *   5. erase the usage counts (as before A57; a failure there is reported, not retried);
  *   6. delete the Vector identity, which waits for the erase marker.
  * Anything that fails leaves the tombstone and files the deletion as due again with a backoff; the cleanup cron
  * (`/api/account/deletions`) continues from where it stopped and alerts the owner after `DELETION_ALERT_AFTER` tries.
  * After the identity is gone, one follow-up pass `DELETION_RECHECK_MS` later erases everything again, catching anything a
- * request that was already past its checks created in the meantime, and then the deletion is finished.
+ * request that was already past its checks created in the meantime, and then the deletion is finished. That pass also
+ * waits for the workspace host to report every workspace of the account erased: the host erases them in the background
+ * after the close, so until it has, the pass fails, the deletion stays due and the owner is alerted like any other.
  *
  * Kept on purpose (P5's "pseudonymous financial ledger lines"): the hosted ledger's lines (named by an HMAC of the
  * account), the pool debits (`debits:<account>:<keyHash>`) and the spend counters keyed by the pool's hash (`held:`,
@@ -73,8 +80,19 @@ export function deletionRetryMs(attempts: number) {
   return Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** Math.max(0, attempts - 1))
 }
 
-/** What every part gets: the fetcher, the deletion's clock, and the real time (ms) by which a long part must stop. */
-export type EraseContext = { readonly fetcher: typeof fetch; readonly now: number; readonly deadline?: number }
+/**
+ * What every part gets: the fetcher, the deletion's clock, the real time (ms) by which a long part must stop, which pass
+ * this is (`erase` before the identity goes, `check` for the follow-up pass after it), and whether this run already
+ * closed the account's cloud workspaces (finishAccountDeletion does that right after revoking tokens; the `workspaces`
+ * part then settles with that outcome instead of asking the host a second time).
+ */
+export type EraseContext = {
+  readonly fetcher: typeof fetch
+  readonly now: number
+  readonly deadline?: number
+  readonly pass?: "erase" | "check"
+  readonly workspacesClosed?: boolean
+}
 
 /**
  * One part of an account's records. `configured` says whether this deployment can reach it at all (a service that was
@@ -201,15 +219,30 @@ export async function eraseAccountKeys(account: string, context: EraseContext) {
   return erased
 }
 
+/** The `workspaces` part: the close this run already made, or a new one; the follow-up pass also needs them erased. */
+function eraseCloudWorkspaces(account: string, context: EraseContext) {
+  if (context.workspacesClosed === true) return Promise.resolve()
+  if (context.workspacesClosed === false)
+    return Promise.reject(new ApiError(503, "WORKSPACE_SERVICE_UNAVAILABLE", "The workspace host did not close."))
+  return closeCloudWorkspaces(account, context.fetcher, {
+    ...(context.deadline === undefined ? {} : { deadline: context.deadline }),
+    ...(context.pass === "check" ? { requireErased: true } : {}),
+  })
+}
+
 /**
- * Every part, in the contract's order: the report index, ballots and nominations, the founders listing, push
+ * Every part. First the cloud workspaces' account fence (`closeCloudWorkspaces`: the host refuses the account from
+ * then on and erases its workspaces itself; finishAccountDeletion already closed it right after revoking tokens, and
+ * the follow-up pass fails this part until the host reports none left); then, in the contract's order: the report index, ballots and nominations, the founders listing, push
  * subscriptions, relay devices, the vault (its wrapped key first, its objects later by the vault cleanup), Done by
  * Morning's queue and recordings (before the cloud computer, whose session list it reads), computers and their saved
  * disks with the sessions and the ledger's store state, the ops records (monitors, domains, incidents, cards and their
- * images) with the ops Worker's data, the account's own Codium records, and last every other key that names the
- * account. The last two wait for every other part, because they delete the indexes those parts find their records by.
+ * images) with the ops Worker's data, GitHub bindings and run records, Everywhere's installations and jobs, the
+ * account's own Codium records, and last every other Codium key that names the account. The last two wait for every
+ * other part, because they delete the indexes those parts find their records by. Feature switches never skip erasure.
  */
 export const ERASE_PARTS: readonly ErasePart[] = [
+  { id: "workspaces", configured: () => cloudWorkspacesConfigured(), erase: eraseCloudWorkspaces },
   { id: "reports", configured: storeConfigured, erase: (account, c) => eraseAccountReports(account, c.fetcher) },
   { id: "roadmap", configured: storeConfigured, erase: (account, c) => eraseAccountBallots(account, c.fetcher, c.now) },
   { id: "founding", configured: storeConfigured, erase: (account, c) => eraseFounding(account, c.fetcher) },
@@ -233,9 +266,33 @@ export const ERASE_PARTS: readonly ErasePart[] = [
   },
   { id: "ops", configured: storeConfigured, erase: (account, c) => eraseAccountOps(account, c.fetcher, c.now) },
   {
+    id: "cloud-agents",
+    configured: storeConfigured,
+    erase: (account, c) =>
+      eraseCloudAgentsAccount(account, async (command) => {
+        if (c.deadline !== undefined && Date.now() >= c.deadline)
+          throw new ApiError(503, "ACCOUNT_ERASE_PENDING", "The run-record cleanup did not finish in time.")
+        return persistentStore(command, c.fetcher)
+      }),
+  },
+  EVERYWHERE_ERASE_PART,
+  {
     id: "codium",
     configured: storeConfigured,
-    requires: ["reports", "roadmap", "founding", "push", "remote", "vault", "overnight", "computer", "ops"],
+    requires: [
+      "workspaces",
+      "reports",
+      "roadmap",
+      "founding",
+      "push",
+      "remote",
+      "vault",
+      "overnight",
+      "computer",
+      "ops",
+      "cloud-agents",
+      "everywhere",
+    ],
     erase: eraseCodiumRecords,
   },
   { id: "keys", configured: storeConfigured, requires: ["codium"], erase: eraseAccountKeys },
@@ -245,8 +302,8 @@ const registeredParts: ErasePart[] = []
 const PART_ID = /^[a-z][a-z-]{0,31}$/
 
 /**
- * Adds a part another package owns, for records this module cannot reach by itself. The intended caller is the Codex
- * integration commit (WP A59), for the repository bindings and run records Codex keeps (contract §4.18). A registered
+ * Adds a part another package owns, for records this module cannot reach by itself. The integrated GitHub and
+ * Everywhere services already have permanent entries in ERASE_PARTS; later packages can extend that list here. A registered
  * part runs after the built-in service parts and before the account's own records, which wait for it, so a failure
  * keeps the identity and the cron retries it. Its id is what the tombstone and the owner's alert show. Returns a
  * function that removes it (for tests).
@@ -283,12 +340,21 @@ export type EraseResult = { erased: boolean; failed: string[]; skipped: string[]
  */
 export async function eraseAccountData(
   account: string,
-  options: { fetcher?: typeof fetch; now?: number; deadline?: number; parts?: readonly ErasePart[] } = {},
+  options: {
+    fetcher?: typeof fetch
+    now?: number
+    deadline?: number
+    parts?: readonly ErasePart[]
+    pass?: EraseContext["pass"]
+    workspacesClosed?: boolean
+  } = {},
 ): Promise<EraseResult> {
   const context: EraseContext = {
     fetcher: options.fetcher ?? fetch,
     now: options.now ?? Date.now(),
     ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
+    ...(options.pass === undefined ? {} : { pass: options.pass }),
+    ...(options.workspacesClosed === undefined ? {} : { workspacesClosed: options.workspacesClosed }),
   }
   const failed: string[] = []
   const skipped: string[] = []
@@ -357,6 +423,7 @@ export type DeletionOptions = {
   /** Each step, replaceable by tests. */
   close?: (account: string) => Promise<unknown>
   revoke?: (account: string) => Promise<boolean>
+  closeWorkspaces?: (account: string) => Promise<unknown>
   cancel?: (account: string) => Promise<unknown>
   forget?: (account: string) => Promise<boolean>
   identity?: (account: string) => Promise<void>
@@ -396,6 +463,17 @@ export async function finishAccountDeletion(account: string, options: DeletionOp
     if (record?.erasedAt === undefined) {
       // Tokens first: they do not depend on the plan, and a deletion stopped at the next step still leaves them dead.
       const revoked = await (options.revoke ?? ((id) => revokeAccountTokens(id, fetcher)))(account).catch(() => false)
+      // Then the cloud workspaces, whatever the revoke answered: from here the host refuses the account and stops its
+      // engines, even while a step below keeps this run from reaching the erase. Best effort here; the `workspaces`
+      // erase part takes this outcome, so it is recorded (and retried) like every other part.
+      const workspacesClosed = await (
+        options.closeWorkspaces ??
+        ((id) =>
+          closeCloudWorkspaces(id, fetcher, options.deadline === undefined ? {} : { deadline: options.deadline }))
+      )(account).then(
+        () => true,
+        () => false,
+      )
       if (revocationConfigured() && !revoked) return await pending("revoke")
       tokens = revoked ? "revoked" : "expire-within-90-days"
       if (store) {
@@ -415,6 +493,8 @@ export async function finishAccountDeletion(account: string, options: DeletionOp
       const result = await eraseAccountData(account, {
         fetcher,
         now: clock(),
+        pass: "erase",
+        workspacesClosed,
         ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
         ...(options.parts ? { parts: options.parts } : {}),
       })
@@ -465,8 +545,9 @@ export async function finishAccountDeletion(account: string, options: DeletionOp
 
 /**
  * The follow-up pass, `DELETION_RECHECK_MS` after the identity went: every part erased again (each is idempotent, and
- * finds nothing unless a request already past its checks created something meanwhile). Then the deletion is finished:
- * off the cron's list, and the tombstone kept `TOMBSTONE_KEEP_MS`.
+ * finds nothing unless a request already past its checks created something meanwhile), and the workspace host must
+ * report every workspace of the account erased. Then the deletion is finished: off the cron's list, and the tombstone
+ * kept `TOMBSTONE_KEEP_MS`.
  */
 export async function checkAccountDeletion(account: string, options: DeletionOptions = {}): Promise<DeletionOutcome> {
   const fetcher = options.fetcher ?? fetch
@@ -482,6 +563,7 @@ export async function checkAccountDeletion(account: string, options: DeletionOpt
     const result = await eraseAccountData(account, {
       fetcher,
       now: clock(),
+      pass: "check",
       ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
       ...(options.parts ? { parts: options.parts } : {}),
     })

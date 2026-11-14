@@ -26,10 +26,38 @@ import workflow from "./migration/20261211000000_workflow"
 import researchClaims from "./migration/20261212000000_research_claims"
 import codiumBrain from "./migration/20261213000000_codium_brain"
 import codiumWorkflow from "./migration/20261214000000_codium_workflow"
+import reviewMemory from "./migration/20261216000000_review_memory"
+import reviewMemoryScope from "./migration/20261217000000_review_memory_scope"
+import reviewMemorySource from "./migration/20261218000000_review_memory_source"
 
 // brain.db, opened once per process and shared by everything that reads or writes the brain: memory entries, and the
 // documents and records Vector reads into it. One connection means one writer per process, which SQLite wants, and
 // another process (the desktop engine beside a CLI run) waits on busy_timeout rather than failing.
+
+/**
+ * Every Brain migration, run in this order. Ids sort the same way: each has its own 14-digit prefix, and a new one takes
+ * a prefix after the last, so branches that each add migrations cannot leave two sharing one or running out of order.
+ */
+export const migrations: readonly DatabaseMigration.Migration[] = [
+  first,
+  knowledge,
+  privateMemory,
+  tombstoneTerms,
+  credit,
+  code,
+  creditedOnce,
+  research,
+  facets,
+  revocation,
+  learnedSkills,
+  workflow,
+  researchClaims,
+  codiumBrain,
+  codiumWorkflow,
+  reviewMemory,
+  reviewMemoryScope,
+  reviewMemorySource,
+]
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 export type Database = Effect.Success<typeof makeDatabase>
@@ -53,23 +81,7 @@ export const layerFor = (file: string) =>
       yield* db.run("PRAGMA foreign_keys = ON")
       // Forgotten memory is overwritten on disk, not just unlinked from the b-tree.
       yield* db.run("PRAGMA secure_delete = ON")
-      yield* DatabaseMigration.applyOnly(db, [
-        first,
-        knowledge,
-        privateMemory,
-        tombstoneTerms,
-        credit,
-        code,
-        creditedOnce,
-        research,
-        facets,
-        revocation,
-        learnedSkills,
-        workflow,
-        researchClaims,
-        codiumBrain,
-        codiumWorkflow,
-      ])
+      yield* DatabaseMigration.applyOnly(db, migrations)
       // SQLite gives the -wal and -shm files the database's own mode, but on the first open they exist before this.
       if (file !== ":memory:" && process.platform !== "win32")
         yield* Effect.forEach(

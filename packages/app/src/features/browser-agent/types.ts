@@ -9,6 +9,20 @@ export type BrowserAgentPageEvent = {
   loading: boolean
 }
 
+/**
+ * What the agent's browser for one task is doing, as the desktop tells every main window whether or not a Preview shows
+ * it (desktop browser-agent.ts emitActivity). `closed` once it is gone.
+ */
+export type BrowserAgentActivity = {
+  contextId: string
+  url: string
+  title: string
+  tabs: number
+  busy: boolean
+  shown: boolean
+  closed: boolean
+}
+
 export type BrowserAgentCommand =
   | "attach"
   | "setBounds"
@@ -64,6 +78,10 @@ export type BrowserAgentInput = {
   tabId?: string
   /** selectOption: the option values or visible labels to select. */
   values?: string[]
+  /** click and clickRef: 2 for a double click (1 by default). */
+  clickCount?: number
+  /** click and clickRef: which mouse button (left by default). */
+  button?: "left" | "right"
   /** A driving command runs only while the active tab's page still has this origin: the one the engine checked and asked about. */
   expectOrigin?: string
   /** A click runs only while its target still has this name (clickTargetLabel): the one the engine judged. */
@@ -163,6 +181,7 @@ export type BrowserAutomationRun = {
 export type BrowserAgentApi = {
   runBrowserAgent: (input: BrowserAgentInput) => Promise<BrowserAutomationRun>
   onBrowserAgentPageEvent?: (cb: (event: BrowserAgentPageEvent) => void) => () => void
+  onBrowserAgentActivity?: (cb: (event: BrowserAgentActivity) => void) => () => void
 }
 
 export function browserAgentApi(): BrowserAgentApi | undefined {

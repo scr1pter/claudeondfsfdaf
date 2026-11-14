@@ -3850,7 +3850,8 @@ html[data-vector-reduce-animations="true"] [data-vector-update-spinner] {
     display: none;
   }
 
-  [data-vector-session-tool] > span:not([data-vector-session-count]) {
+  /* Compact tools keep only their icon, count and the Tasks button's Hands dot. */
+  [data-vector-session-tool] > span:not([data-vector-session-count]):not([data-computer-dot]) {
     display: none;
   }
 

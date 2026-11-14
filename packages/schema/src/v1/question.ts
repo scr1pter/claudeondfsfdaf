@@ -1,9 +1,10 @@
 export * as QuestionV1 from "./question"
 
 import { Schema } from "effect"
+import { Computer } from "../computer"
 import { define, inventory } from "../event"
 import { ascending } from "../identifier"
-import { statics } from "../schema"
+import { optional, statics } from "../schema"
 import { SessionID } from "../session-id"
 import { SessionV1 } from "./session"
 
@@ -37,6 +38,7 @@ export const Request = Schema.Struct({
   sessionID: SessionID,
   questions: Schema.Array(Info).annotate({ description: "Questions to ask" }),
   tool: Schema.optional(Tool),
+  metadata: optional(Schema.Union([Computer.HandoffQuestionMetadata, Computer.CheckInQuestionMetadata])),
 }).annotate({ identifier: "QuestionRequest" })
 export const Answer = Schema.Array(Schema.String).annotate({ identifier: "QuestionAnswer" })
 export const Reply = Schema.Struct({

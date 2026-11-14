@@ -4,6 +4,7 @@
 
 import { Billing } from "@vectordevai/schema/billing"
 import { normalizeTitle } from "./fingerprint"
+import type { RouteRefusal } from "./privacy"
 import { MAX_SUGGESTION_CHARS } from "./schema"
 import { checkedLine } from "./second-lab"
 import {
@@ -29,6 +30,7 @@ import type {
   Selection,
   Severity,
   SkippedFile,
+  StrictResult,
   Trust,
 } from "./types"
 
@@ -524,6 +526,46 @@ export function notePartial(input: {
   return `**Partial review.** ${stop}${after}. Not reviewed: ${shown}${more}. The next run reviews them, or comment \`/vector review\` to continue now.`
 }
 
+// Why a model has no route a review may use while `privacy` is "zdr", for notePrivacyRefused.
+const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
+  "free-model": "it is a free model, and free endpoints may keep or train on what they are sent.",
+  "router-or-preset": "it is a router or preset, which may answer with another model.",
+  "fallback-models": "the request names fallback models, which may answer from other endpoints.",
+  plugins: "the request turns on a plugin, such as web search, which sends the query to another service.",
+  "unattested-provider": "its provider, or the host its requests go to, is not listed in `zdrAttested`.",
+  "unattested-openrouter": "the OpenRouter account it uses is not listed in `zdrAttested`.",
+  "unattested-network-server": "its model server is on your network and is not listed in `zdrAttested`.",
+  "retention-required-model": "its provider requires 30-day data retention for this model.",
+  "codium-unaccepted":
+    "Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes.",
+  batch: "Vector does not send batch requests on zero data retention routes.",
+  "unreadable-body": "Vector could not read the request it would send.",
+  "unattributed-request": "Vector could not tell which review the request belongs to.",
+  "unknown-destination": "Vector cannot tell where its requests go.",
+  "server-tool":
+    "the request uses a tool other than function calling, such as one of OpenRouter's server tools, or a file stored with OpenRouter, which zero data retention may not cover.",
+  "provider-options": "the request sets per-provider options, which may change what a provider keeps.",
+  "extended-cache-unattested":
+    "OpenAI keeps this model's prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`).",
+  "grounding-tool":
+    "the request turns on a Google tool other than function calling, such as Search grounding, which may keep what it is sent.",
+  "durable-cache": "its Google Cloud project may keep cached prompts in durable storage.",
+  "anthropic-non-zdr-feature":
+    "the request uses an Anthropic feature that zero data retention does not cover, or one Vector cannot tell is covered, such as the MCP connector, code execution, the Files API or message threads.",
+}
+
+// A review stopped by the route rules (privacy.ts) before it sent code to `model`. `attempts` counts the requests the
+// review had already sent on allowed routes, so the note says what left the machine. A refusal is never retried on
+// another model (I-3), and the review is never shown as clean (I-7). Nothing shows it before VS-23b.
+export function notePrivacyRefused(input: { model: string; refusal: RouteRefusal; attempts: number }): string {
+  const reason = PRIVACY_REFUSAL[input.refusal]
+  const sent =
+    input.attempts > 0
+      ? `Nothing was sent to ${codeSpan(input.model)}, but this review had already sent ${formatCount(input.attempts)} ${input.attempts === 1 ? "request" : "requests"} on routes Vector may use.`
+      : "Nothing was sent."
+  return `**Not reviewed.** ${codeSpan(input.model)} has no zero data retention route Vector may use while \`privacy\` is \`"zdr"\`: ${reason} ${sent} Vector does not retry the review on another model.`
+}
+
 export function noteSuperseded(newHead: string): string {
   return `A newer commit (\`${short(newHead)}\`) arrived during this review. Vectorscope reviews it next.`
 }
@@ -570,10 +612,35 @@ export function noteVerifySkipped(): string {
   return "Blocking findings were not re-checked: too little budget or time was left for the verify pass."
 }
 
+// The shared verify policy (plan.ts, VS-06): a verify pass that left candidates without a verdict says how many are
+// posted without being re-checked, and why: it did not finish, for one of these reasons, or it finished ("unanswered")
+// without a verdict for them.
+export function noteVerifyUnfinished(count: number, why: "budget" | "time" | "unfinished" | "unanswered"): string {
+  const reason =
+    why === "budget"
+      ? "too little of the review's budget was left for the verify pass"
+      : why === "time"
+        ? "too little time was left for the verify pass"
+        : why === "unanswered"
+          ? `the verify pass gave no verdict for ${count === 1 ? "it" : "them"}`
+          : "the verify pass did not finish"
+  return `${formatCount(count)} ${count === 1 ? "finding was" : "findings were"} not re-checked: ${reason}.`
+}
+
 // With a triage model only what the review model confirmed is reported, so a double-check that did not finish leaves
-// the cheaper pass's findings out instead of posting them unchecked.
-export function noteTriageUnchecked(count: number, triage: string, model: string): string {
-  return `The double-check on ${model} did not finish, so ${formatCount(count)} ${count === 1 ? "finding" : "findings"} from the cheaper first pass on ${triage} ${count === 1 ? "was" : "were"} left out: with a triage model, only findings the review model confirmed are reported.`
+// the cheaper pass's findings out instead of posting them unchecked. Under the shared verify policy (plan.ts, VS-06) a
+// double-check that finished without a verdict for some of them says so too ("unanswered").
+export function noteTriageUnchecked(
+  count: number,
+  triage: string,
+  model: string,
+  why: "unfinished" | "unanswered" = "unfinished",
+): string {
+  const findings = `${formatCount(count)} ${count === 1 ? "finding" : "findings"} from the cheaper first pass on ${triage}`
+  const rule = "with a triage model, only findings the review model confirmed are reported."
+  if (why === "unanswered")
+    return `The double-check on ${model} gave no verdict for ${findings}, so ${count === 1 ? "it was" : "they were"} left out: ${rule}`
+  return `The double-check on ${model} did not finish, so ${findings} ${count === 1 ? "was" : "were"} left out: ${rule}`
 }
 
 // With a triage model only the review model can close an earlier finding, so when its check did not finish the
@@ -596,6 +663,9 @@ export interface SummaryInput {
   mode: ReviewOutcome["mode"]
   report?: Pick<ModelReport, "summary" | "files">
   selection?: Selection
+  // The strict guardrail's result (VS-27b's wording), set only under `guardrail: "strict"`; nothing sets it before
+  // VS-27c. With it, an empty result never reads as "No issues found".
+  strict?: Pick<StrictResult, "complete" | "findings" | "dropped">
   files?: { path: string; additions: number; deletions: number }[] // the reviewed files, with their counts
   skipped?: SkippedFile[]
   banners?: string[] // quoted under the heading, such as notePartial
@@ -661,7 +731,7 @@ function render(input: SummaryInput, limits: Limits): string {
   const summary = input.report?.summary.trim()
   if (summary) lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
   if (selection) {
-    lines.push(countLine(selection), "")
+    lines.push(countLine(selection, input.strict), "")
     const since = sinceLine(input, selection)
     if (since) lines.push(since, "")
   }
@@ -686,7 +756,7 @@ function render(input: SummaryInput, limits: Limits): string {
   return lines.join("\n")
 }
 
-function countLine(selection: Selection): string {
+function countLine(selection: Selection, strict?: SummaryInput["strict"]): string {
   const onLines = [
     ...selection.inline,
     ...selection.overflow,
@@ -699,8 +769,25 @@ function countLine(selection: Selection): string {
   const parts: string[] = []
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
+  if (strict) return strictCountLine(strict, parts, below)
   if (!parts.length) return `**No issues found** on the changed lines${below || "."}`
   return `**${parts.join(" · ")}** on the changed lines${below}`
+}
+
+// Under the strict guardrail an empty result says whether the review finished (contract VS-27b): "No verified
+// production-breaking issues" only when it is complete and nothing was cut by the comment limit, the limit when that
+// is all that emptied it, and "Review incomplete" otherwise, never a clean result. It reads the strict result alone, so
+// a selection the runner has not composed with it yet cannot make an empty strict result read otherwise. A non-empty
+// one is counted as the selection counts it, or, when the selection has nothing on lines, as its blocking findings.
+function strictCountLine(strict: NonNullable<SummaryInput["strict"]>, parts: string[], below: string): string {
+  if (strict.findings.length)
+    return `**${parts.length ? parts.join(" · ") : `${strict.findings.length} blocking`}** on the changed lines${below}`
+  if (!strict.complete)
+    return `**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read${below || "."}`
+  const capped = strict.dropped.find((entry) => entry.reason === "cap")?.count ?? 0
+  if (capped)
+    return `**No findings posted** on the changed lines: the comment limit left out ${formatCount(capped)} verified ${capped === 1 ? "finding" : "findings"}${below || "."}`
+  return `**No verified production-breaking issues** on the changed lines${below || "."}`
 }
 
 function sinceLine(input: SummaryInput, selection: Selection): string | undefined {
@@ -1000,7 +1087,7 @@ function where(path: string, line: number | null): string {
 }
 
 // Paths and branch names come from the pull request, so they cannot close the code span or carry a marker.
-function codeSpan(text: string): string {
+export function codeSpan(text: string): string {
   return "`" + escapeVectorMarkers(text.replace(/[\r\n]+/g, " ").replace(/`/g, "'")) + "`"
 }
 

@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import type { ConfigV1 } from "@vectordevai/core/v1/config/config"
-import { effectCmd } from "../effect-cmd"
+import { effectCmd, fail } from "../effect-cmd"
 import { Cause } from "effect"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
@@ -457,6 +457,10 @@ export const McpAddCommand = effectCmd({
     const maybeCtx = yield* InstanceRef
     if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
     const ctx = maybeCtx
+    const { McpComputerPolicy } = yield* Effect.promise(() => import("@/mcp/computer-policy"))
+    // The engine refuses this name whenever it loads the config, so do not write it.
+    const reserved = args.name ? McpComputerPolicy.reservedName(args.name) : undefined
+    if (reserved) return yield* fail(reserved)
     yield* Effect.promise(async () => {
       const command = args["--"] ?? []
       if (!args.name && (args.url || args.env?.length || args.header?.length || command.length)) {
@@ -539,7 +543,7 @@ export const McpAddCommand = effectCmd({
 
       const name = await prompts.text({
         message: "Enter MCP server name",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+        validate: (x) => (x && x.length > 0 ? McpComputerPolicy.reservedName(x) : "Required"),
       })
       if (prompts.isCancel(name)) throw new UI.CancelledError()
 

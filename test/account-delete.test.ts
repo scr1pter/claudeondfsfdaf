@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test"
 import { RedisClient } from "bun"
 import { createHash, randomUUID } from "node:crypto"
+import { createServer } from "node:http"
 import { Readable } from "node:stream"
 import { __test, handleAccountDelete } from "../api/account/delete"
 import { handleAccountDeletions } from "../api/account/deletions"
@@ -52,11 +53,13 @@ import { incidentIndexKey, incidentKey } from "../api/_lib/ops-incidents"
 import { opsAccountsKey } from "../api/_lib/ops-accounts"
 import { opsHealthKey } from "../api/_lib/ops-health"
 import { runTokensRevokedKey } from "../api/_lib/codium-provisioners"
+import { everywhereKeys } from "../api/_lib/everywhere/keys"
 import { OPS_SETTINGS_SCRIPTS, opsSettingsKey } from "../api/_lib/ops-settings"
 import { accountTokensRevoked, revocationConfigured, revokeAccountTokens } from "../api/_lib/revocation"
 import { ballotsKey, nominationsKey, quartersKey, voterField } from "../api/_lib/roadmap"
 import { accountReportsKey, reportKey } from "../api/_lib/support-reports"
 import { setupVault, vaultAccount } from "../api/_lib/vault-store"
+import { verifyWorkspaceRequest } from "../packages/cloud-workspaces/src/signing"
 import {
   codiumFakes,
   codiumTestEnvironment,
@@ -200,6 +203,13 @@ const MINUTE = 60_000
 const DAY = 86_400_000
 const RELAY_HOST = "relay.deletion-fixture.invalid"
 const WORKER_HOST = "ops-worker.deletion-fixture.invalid"
+const WORKSPACES_HOST = "workspaces.deletion-fixture.invalid"
+const WORKSPACES_SECRET = "deletion-fixture-workspaces-secret-".padEnd(48, "w")
+/** A deployment that was given a cloud workspace host (cloud-workspaces.ts `cloudWorkspacesConfigured`). */
+const WORKSPACES_ENVIRONMENT = {
+  VECTOR_WORKSPACES_ORIGIN: `https://${WORKSPACES_HOST}`,
+  VECTOR_WORKSPACES_SECRET: WORKSPACES_SECRET,
+}
 const CRON = "deletion-fixture-cron-secret"
 const VAULT = "d".repeat(32)
 const RID = `r_${"a".repeat(26)}`
@@ -222,6 +232,8 @@ function deletionEnvironment(overrides: Record<string, string | undefined> = {})
     VECTOR_OPS_SHARED_SECRET: "deletion-fixture-ops-secret-".padEnd(48, "o"),
     // The Worker is still asked to erase with the ops services turned off (ops-worker.ts `opsErasable`).
     VECTOR_OPS_ENABLED: undefined,
+    VECTOR_EVERYWHERE_ENABLED: "false",
+    VECTOR_GITHUB_BRAIN_ENABLED: "false",
     VECTOR_HOSTED_PROVIDER: undefined,
     VECTOR_HOSTED_ACCOUNT_SALT: "deletion-fixture-hosted-salt-".padEnd(48, "s"),
     CRON_SECRET: CRON,
@@ -229,6 +241,11 @@ function deletionEnvironment(overrides: Record<string, string | undefined> = {})
     RESEND_API_KEY: undefined,
     CODIUM_OWNER_EMAIL: undefined,
     VECTOR_BUG_REPORT_TO: undefined,
+    // Cloud workspaces are off by default: a deployment that was never given a host skips their part.
+    VECTOR_WORKSPACES_ORIGIN: undefined,
+    VECTOR_WORKSPACES_SECRET: undefined,
+    VECTOR_WORKSPACES_ENABLED: undefined,
+    VECTOR_WORKSPACES_ACCOUNTS: undefined,
     ...overrides,
   })
 }
@@ -237,9 +254,16 @@ type Services = {
   relayDown: boolean
   workerDown: boolean
   identityDown: boolean
+  workspacesDown: boolean
   relay: string[]
   worker: string[]
   identities: string[]
+  /** The account each close request to the workspace host was signed for, in order (failed ones too). */
+  workspaces: string[]
+  /** The accounts the workspace host has fenced, as its `closed_account` table holds them. */
+  closedWorkspaces: Set<string>
+  /** How many of the account's workspaces the host has not erased yet (its close answers this as `remaining`). */
+  workspacesLeft: number
 }
 type World = {
   fakes: CodiumFakes
@@ -278,12 +302,36 @@ function deletionWorld(): World {
     relayDown: false,
     workerDown: false,
     identityDown: false,
+    workspacesDown: false,
     relay: [],
     worker: [],
     identities: [],
+    workspaces: [],
+    closedWorkspaces: new Set(),
+    workspacesLeft: 0,
   }
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
+    if (url.href.replace(/\/$/, "") === process.env.KV_REST_API_URL && init?.method === "POST") {
+      const command = (JSON.parse(String(init.body)) as (string | number)[]).map(String)
+      // This billing fixture has no GitHub bindings or Brain uploads. Their real Lua suites use disposable Redis;
+      // require the empty indexes here rather than silently accepting a populated service this fixture cannot erase.
+      if (command[0] === "EVAL" && command[3] === `vector:cloud-agents:brain:account:${ACCOUNT}`) {
+        expect(command[2]).toBe("2")
+        expect(command.slice(3)).toEqual([`vector:cloud-agents:brain:account:${ACCOUNT}`, `vector:cli-revoked:${ACCOUNT}`, ACCOUNT])
+        expect(fakes.store.members(command[3]!).size).toBe(0)
+        expect(fakes.store.get(command[4]!)).toBe("1")
+        fakes.store.remove(command[3]!)
+        fakes.store.commands.push(command.map(String))
+        return Response.json({ result: "OK" })
+      }
+      if (command[0] === "EVAL" && command[3] === `vector:cloud-agents:bindings:${ACCOUNT}`) {
+        expect(command[1]).toBe("return redis.call('SMEMBERS', KEYS[1])")
+        expect(fakes.store.members(command[3]!).size).toBe(0)
+        fakes.store.commands.push(command.map(String))
+        return Response.json({ result: [] })
+      }
+    }
     if (url.host === RELAY_HOST) {
       services.relay.push(url.pathname)
       return services.relayDown ? new Response("unavailable", { status: 503 }) : Response.json({ erased: true })
@@ -291,6 +339,24 @@ function deletionWorld(): World {
     if (url.host === WORKER_HOST) {
       services.worker.push(url.pathname)
       return services.workerDown ? new Response("unavailable", { status: 503 }) : Response.json({ erased: true })
+    }
+    if (url.host === WORKSPACES_HOST) {
+      // The workspace host's account close (packages/cloud-workspaces service.ts): signed for one account, `{}` only,
+      // answered `closed` again for an account it already closed, with how many workspaces it has not erased yet.
+      const body = String(init?.body ?? "")
+      const { accountId } = verifyWorkspaceRequest({
+        secret: WORKSPACES_SECRET,
+        headers: new Headers(init?.headers),
+        method: init?.method ?? "GET",
+        path: url.pathname,
+        body,
+      })
+      services.workspaces.push(accountId)
+      if (url.pathname !== "/accounts/close" || init?.method !== "POST" || body !== "{}")
+        return new Response(null, { status: 400 })
+      if (services.workspacesDown) return new Response("unavailable", { status: 503 })
+      services.closedWorkspaces.add(accountId)
+      return Response.json({ closed: true, remaining: services.workspacesLeft }, { status: 202 })
     }
     if (url.origin === R2_ORIGIN) return bucket.handle(url, init)
     if (url.origin === SUPABASE_ORIGIN) {
@@ -421,6 +487,8 @@ function leftovers(w: World) {
       if (rest.startsWith(`debits:${ACCOUNT}:`)) return { key: rest, kept: "ledger", ttl }
       // The run-token revocation mark, a security record that expires (35 days).
       if (rest === `runs:revoked-before:${ACCOUNT}`) return { key: rest, kept: "revocation mark", ttl }
+      if (rest === `vector:cli-revoked:${ACCOUNT}`) return { key: rest, kept: "account revocation", ttl }
+      if (rest === everywhereKeys.accountClosed(ACCOUNT)) return { key: rest, kept: "connector closure", ttl }
       return { key: rest, kept: undefined, ttl }
     })
 }
@@ -464,7 +532,7 @@ function deleteRoute(w: World, confirm = EMAIL, overrides: Parameters<typeof han
         clock: w.clock,
         // The revocation mark goes through Upstash's path-style REST call, which the fake store does not speak; its
         // own tests are above. Usage counts live in the usage database (api/_lib/usage.ts).
-        revoke: async () => true,
+        revoke: async () => markRevoked(w),
         forget: async () => true,
         verifyUser: async () => ({ id: ACCOUNT, email: EMAIL }),
         ...overrides,
@@ -479,11 +547,18 @@ function cronRoute(w: World, secret = CRON) {
       handleAccountDeletions(request, response, {
         fetcher: w.fetcher,
         clock: w.clock,
-        revoke: async () => true,
+        revoke: async () => markRevoked(w),
         forget: async () => true,
       }),
     { method: "GET", authorization: `Bearer ${secret}` },
   )
+}
+
+function markRevoked(w: World) {
+  const key = `vector:cli-revoked:${ACCOUNT}`
+  w.fakes.store.set(key, "1")
+  w.fakes.store.expires.set(key, w.clock() + 100 * DAY)
+  return true
 }
 
 describe("the tombstone (WP A57)", () => {
@@ -616,6 +691,7 @@ describe("running a deletion (WP A57)", () => {
       parts: recordingParts(log, failing),
       close: async () => void log.push("close"),
       revoke: async () => (log.push("revoke"), !failing.has("revoke")),
+      closeWorkspaces: async () => void log.push("workspaces-close"),
       cancel: async () => {
         log.push("billing")
         if (failing.has("billing")) throw new Error("stripe down")
@@ -628,7 +704,7 @@ describe("running a deletion (WP A57)", () => {
     }
   }
 
-  test("goes tombstone, revoke, close, billing, the contract's erase order, the marker, usage, then the identity", async () => {
+  test("goes tombstone, revoke, the workspaces' close, close, billing, the contract's erase order, the marker, usage, then the identity", async () => {
     const w = deletionWorld()
     const log: string[] = []
     await markAccountDeleting(ACCOUNT, w.clock(), w.clock() + 5 * MINUTE, w.fetcher)
@@ -636,8 +712,10 @@ describe("running a deletion (WP A57)", () => {
     expect(outcome).toEqual({ state: "deleted", tokens: "revoked", usage: "deleted" })
     expect(log).toEqual([
       "revoke",
+      "workspaces-close",
       "close",
       "billing",
+      "workspaces",
       "reports",
       "roadmap",
       "founding",
@@ -647,6 +725,8 @@ describe("running a deletion (WP A57)", () => {
       "overnight",
       "computer",
       "ops",
+      "cloud-agents",
+      "everywhere",
       "codium",
       "keys",
       "usage",
@@ -672,8 +752,10 @@ describe("running a deletion (WP A57)", () => {
     // account's own records and the last sweep wait for every part; the identity waits for the erase marker.
     expect(log).toEqual([
       "revoke",
+      "workspaces-close",
       "close",
       "billing",
+      "workspaces",
       "reports",
       "roadmap",
       "founding",
@@ -682,6 +764,8 @@ describe("running a deletion (WP A57)", () => {
       "vault",
       "overnight",
       "ops",
+      "cloud-agents",
+      "everywhere",
     ])
     expect(await readTombstone(ACCOUNT, w.fetcher)).toEqual({
       v: 1,
@@ -787,7 +871,7 @@ describe("running a deletion (WP A57)", () => {
     let fail = true
     const seen: string[] = []
     const unregister = registerErasePart({
-      id: "cloud-agents",
+      id: "extension",
       configured: () => true,
       erase: async (account) => {
         seen.push(account)
@@ -798,12 +882,12 @@ describe("running a deletion (WP A57)", () => {
       expect(() => registerErasePart({ id: "codium", configured: () => true, erase: async () => {} })).toThrow()
       expect(() => registerErasePart({ id: "Not An Id", configured: () => true, erase: async () => {} })).toThrow()
       const ids = eraseParts().map((part) => part.id)
-      expect(ids.slice(-3)).toEqual(["cloud-agents", "codium", "keys"])
-      expect(eraseParts().find((part) => part.id === "codium")?.requires).toContain("cloud-agents")
+      expect(ids.slice(-3)).toEqual(["extension", "codium", "keys"])
+      expect(eraseParts().find((part) => part.id === "codium")?.requires).toContain("extension")
       await markAccountDeleting(ACCOUNT, w.clock(), w.clock() + 5 * MINUTE, w.fetcher)
-      const step = { fetcher: w.fetcher, clock: w.clock, revoke: async () => true, forget: async () => true }
+      const step = { fetcher: w.fetcher, clock: w.clock, revoke: async () => markRevoked(w), forget: async () => true }
       const failed = await finishAccountDeletion(ACCOUNT, step)
-      expect(failed).toEqual({ state: "pending", stage: "erase", failed: ["cloud-agents", "codium", "keys"] })
+      expect(failed).toEqual({ state: "pending", stage: "erase", failed: ["extension", "codium", "keys"] })
       expect(w.services.identities).toEqual([])
       fail = false
       expect((await finishAccountDeletion(ACCOUNT, step)).state).toBe("deleted")
@@ -813,6 +897,129 @@ describe("running a deletion (WP A57)", () => {
       unregister()
     }
     expect(eraseParts()).toBe(ERASE_PARTS)
+  })
+
+  test("cloud workspaces: a deployment never given a host skips their part; a partial setting fails it unsent", async () => {
+    const w = deletionWorld()
+    const workspaces = ERASE_PARTS.filter((part) => part.id === "workspaces")
+    expect(workspaces).toHaveLength(1)
+    // The account's own records and the last sweep wait for it, as they wait for every service part.
+    expect(ERASE_PARTS.find((part) => part.id === "codium")?.requires).toContain("workspaces")
+    expect(await eraseAccountData(ACCOUNT, { fetcher: w.fetcher, now: w.clock(), parts: workspaces })).toEqual({
+      erased: true,
+      failed: [],
+      skipped: ["workspaces"],
+    })
+    process.env.VECTOR_WORKSPACES_ORIGIN = WORKSPACES_ENVIRONMENT.VECTOR_WORKSPACES_ORIGIN
+    expect(await eraseAccountData(ACCOUNT, { fetcher: w.fetcher, now: w.clock(), parts: workspaces })).toEqual({
+      erased: false,
+      failed: ["workspaces"],
+      skipped: [],
+    })
+    expect(w.services.workspaces).toEqual([])
+  })
+
+  test("cloud workspaces: a host that never answers stops their part by the deletion's deadline", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    // This case measures AbortSignal's real timer, not billing's fixed fixture date. Restore the real clock before
+    // creating the signal/deadline; the surrounding afterEach still restores it on every exit.
+    setSystemTime()
+    let requests = 0
+    // A real held HTTP request gives the native abort timer an I/O handle. An otherwise-unreferenced promise that
+    // only listens to AbortSignal.timeout can keep Bun's test runner spinning without advancing its timeout.
+    const host = createServer(() => { requests++ })
+    await new Promise<void>((resolve, reject) => {
+      host.once("error", reject)
+      host.listen(0, "127.0.0.1", () => { host.off("error", reject); resolve() })
+    })
+    try {
+      const address = host.address()
+      if (!address || typeof address === "string") throw new Error("Missing hanging-host fixture address")
+      const hanging = ((input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe(`https://${WORKSPACES_HOST}/accounts/close`)
+        return fetch(`http://127.0.0.1:${address.port}/accounts/close`, init)
+      }) as typeof fetch
+      const started = performance.now()
+      const result = await eraseAccountData(ACCOUNT, {
+        fetcher: hanging,
+        now: w.clock(),
+        deadline: Date.now() + 1_000,
+        parts: ERASE_PARTS.filter((part) => part.id === "workspaces"),
+      })
+      expect(requests).toBe(1)
+      expect(result).toEqual({ erased: false, failed: ["workspaces"], skipped: [] })
+      expect(w.services.identities).toEqual([])
+      expect(w.fakes.mail.sent).toEqual([])
+      // Its own limit is 10 seconds; inside a deletion it waits only until the deadline (at least a second).
+      expect(performance.now() - started).toBeLessThan(5_000)
+    } finally {
+      host.closeAllConnections()
+      await new Promise<void>((resolve) => host.close(() => resolve()))
+    }
+  })
+
+  test("cloud workspaces: closed right after the revoke, so a deletion that billing stops has already fenced them", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    await markAccountDeleting(ACCOUNT, w.clock(), w.clock() + 5 * MINUTE, w.fetcher)
+    const stripeDown = async () => {
+      throw new Error("stripe down")
+    }
+    const quiet = {
+      fetcher: w.fetcher,
+      clock: w.clock,
+      // A successful revoke must persist its fence: the integrated cloud-agent eraser checks the real mark.
+      revoke: async () => markRevoked(w),
+      close: async () => undefined,
+    }
+    // The revoke store being down stops the deletion too, after the host was asked.
+    expect(
+      await finishAccountDeletion(ACCOUNT, { ...quiet, revoke: async () => false, cancel: stripeDown }),
+    ).toMatchObject({ state: "pending" })
+    expect(await finishAccountDeletion(ACCOUNT, { ...quiet, cancel: stripeDown })).toEqual({
+      state: "pending",
+      stage: "billing",
+      failed: [],
+    })
+    expect(w.fakes.store.get(`vector:cli-revoked:${ACCOUNT}`)).toBe("1")
+    expect(w.services.workspaces).toEqual([ACCOUNT, ACCOUNT])
+    expect([...w.services.closedWorkspaces]).toEqual([ACCOUNT])
+    // Once billing goes through, the erase part takes this run's close: the host is asked once per run.
+    const outcome = await finishAccountDeletion(ACCOUNT, {
+      ...quiet,
+      cancel: async () => undefined,
+      identity: async () => undefined,
+    })
+    expect(outcome).toMatchObject({ state: "deleted" })
+    expect(w.services.workspaces).toEqual([ACCOUNT, ACCOUNT, ACCOUNT])
+  })
+
+  test("cloud workspaces: a close this run already failed fails their part without asking the host again", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    const workspaces = ERASE_PARTS.filter((part) => part.id === "workspaces")
+    const erase = (workspacesClosed?: boolean, pass?: "erase" | "check") =>
+      eraseAccountData(ACCOUNT, {
+        fetcher: w.fetcher,
+        now: w.clock(),
+        parts: workspaces,
+        ...(workspacesClosed === undefined ? {} : { workspacesClosed }),
+        ...(pass === undefined ? {} : { pass }),
+      })
+    expect((await erase(false, "erase")).failed).toEqual(["workspaces"])
+    expect((await erase(true, "erase")).erased).toBe(true)
+    expect(w.services.workspaces).toEqual([])
+    // Without this run's close, the part asks the host; only the follow-up pass needs every workspace erased.
+    w.services.workspacesLeft = 1
+    expect((await erase(undefined, "erase")).erased).toBe(true)
+    expect((await erase(undefined, "check")).failed).toEqual(["workspaces"])
+    w.services.workspacesLeft = 0
+    expect((await erase(undefined, "check")).erased).toBe(true)
+    expect(w.services.workspaces).toEqual([ACCOUNT, ACCOUNT, ACCOUNT])
   })
 
   test("parts not started by the deadline are left for the cron", async () => {
@@ -872,6 +1079,55 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     setSystemTime()
   })
 
+  test.each(["cloud-agents", "everywhere"])("%s cleanup is required with the feature off and retries before identity deletion", async (service) => {
+    const base = deletionWorld()
+    await seedEverything(base)
+    const part = ERASE_PARTS.find((value) => value.id === service)
+    expect(part?.configured()).toBe(true)
+    expect(ERASE_PARTS.find((value) => value.id === "codium")?.requires).toContain(service)
+    let unavailable = true
+    let attempts = 0
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.href.replace(/\/$/, "") === process.env.KV_REST_API_URL && init?.method === "POST") {
+        const command = (JSON.parse(String(init.body)) as (string | number)[]).map(String)
+        const keys = command[0] === "EVAL" ? command.slice(3, 3 + Number(command[2])) : command.slice(1, 2)
+        if (keys.some((key) => key.startsWith(`vector:${service}:`))) {
+          attempts++
+          if (unavailable) return new Response(null, { status: 503 })
+        }
+      }
+      return base.fetcher(input, init)
+    }) as typeof fetch
+    const w: World = { ...base, fetcher }
+    const answer = await deleteRoute(w)
+    expect(answer.status).toBe(503)
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      stage: "erase", failed: [service, "codium", "keys"],
+    })
+    expect(w.services.identities).toEqual([])
+    expect(w.fakes.store.get(snapshotKey(ACCOUNT))).toBeDefined()
+    expect(attempts).toBeGreaterThan(0)
+    unavailable = false
+    advance(w, deletionRetryMs(1))
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, deleted: 1, pending: 0 })
+    expect(w.services.identities).toEqual([ACCOUNT])
+    expect(w.fakes.store.get(snapshotKey(ACCOUNT))).toBeUndefined()
+    expect(w.fakes.store.get(everywhereKeys.accountClosed(ACCOUNT))).toBe("closed")
+    expect(w.fakes.store.get(`vector:cli-revoked:${ACCOUNT}`)).toBe("1")
+  })
+
+  test("both indexed erasers honor the deletion deadline before sending another store request", async () => {
+    const w = deletionWorld()
+    for (const id of ["cloud-agents", "everywhere"]) {
+      const part = ERASE_PARTS.find((value) => value.id === id)
+      if (!part) throw new Error("Missing required account eraser")
+      const calls = w.fakes.store.commands.length
+      await expect(part.erase(ACCOUNT, { fetcher: w.fetcher, now: w.clock(), deadline: Date.now() - 1 })).rejects.toThrow()
+      expect(w.fakes.store.commands).toHaveLength(calls)
+    }
+  })
+
   test("the request erases everything, deletes the identity after the marker, and the follow-up pass finishes", async () => {
     const w = deletionWorld()
     await seedEverything(w)
@@ -886,6 +1142,8 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     // The relay and the Worker were asked to erase what they hold.
     expect(w.services.relay.filter((path) => path.endsWith("/erase"))).toHaveLength(1)
     expect(w.services.worker.filter((path) => path.endsWith("/erase"))).toHaveLength(1)
+    // Cloud workspaces are off by default: a deployment never given a workspace host has nothing to close.
+    expect(w.services.workspaces).toEqual([])
     // Billing was cancelled and the key switched off.
     expect(w.fakes.stripe.subscription("sub_active")?.status).toBe("canceled")
     expect([...w.fakes.openRouter.keys.values()].every((key) => key.disabled === true)).toBe(true)
@@ -918,7 +1176,7 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(left.some((entry) => /^(meter|estimate|run|hosted:(pages|egress|jobs:night)):/.test(entry.key))).toBe(false)
     expect(left.find((entry) => entry.kept === "deletion due")).toBeUndefined()
     // Each of them lapses by itself.
-    expect(left.every((entry) => entry.ttl > 0)).toBe(true)
+    expect(left.every((entry) => entry.ttl > 0 || (entry.kept === "connector closure" && entry.ttl === -1))).toBe(true)
     // A late notification about the old subscription writes nothing back.
     await reconcileModelPlanAccount(ACCOUNT, w.fetcher, w.clock(), { source: "webhook" })
     expect(leftovers(w).filter((entry) => !entry.kept)).toEqual([])
@@ -1018,6 +1276,102 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
     expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
     expect(w.fakes.store.pttl(tombstoneKey(ACCOUNT))).toBe(TOMBSTONE_KEEP_MS)
+  })
+
+  test("cloud workspaces: closed first, a host outage keeps the identity and the cron retries, every later pass closes again", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    await seedEverything(w)
+    w.services.workspacesDown = true
+
+    const answer = await deleteRoute(w)
+    expect(answer.status).toBe(503)
+    expect(answer.body.error).toMatchObject({ code: "ACCOUNT_ERASE_PENDING", pending: true, stage: "erase" })
+    // The close request was signed for the account being deleted, and the host refused it.
+    expect(w.services.workspaces).toEqual([ACCOUNT])
+    expect(w.services.closedWorkspaces.size).toBe(0)
+    // Recorded like every other part: the tombstone names it, the account's own records and the last sweep wait for
+    // it, the identity stays, and the deletion is filed as due again after the first backoff.
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      attempts: 1,
+      stage: "erase",
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.fakes.store.zset(tombstonesDueKey()).get(ACCOUNT)).toBe(w.clock() + deletionRetryMs(1))
+    expect(w.services.identities).toEqual([])
+    // The parts that do not wait for it still ran.
+    expect(w.services.relay.filter((path) => path.endsWith("/erase"))).toHaveLength(1)
+    expect(w.services.worker.filter((path) => path.endsWith("/erase"))).toHaveLength(1)
+
+    // Not due yet: the cron leaves it alone. Due, with the host still down: tried again and still pending.
+    expect((await cronRoute(w)).body).toEqual({ due: 0, deleted: 0, checked: 0, pending: 0, busy: 0 })
+    advance(w, deletionRetryMs(1))
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 0, pending: 1, busy: 0 })
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      attempts: 2,
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.services.workspaces).toEqual([ACCOUNT, ACCOUNT])
+    expect(w.services.identities).toEqual([])
+
+    // The host is back: the next due run closes the account there, erases the rest and deletes the identity.
+    w.services.workspacesDown = false
+    advance(w, deletionRetryMs(2))
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 1, checked: 0, pending: 0, busy: 0 })
+    expect([...w.services.closedWorkspaces]).toEqual([ACCOUNT])
+    expect(w.services.identities).toEqual([ACCOUNT])
+    expect(leftovers(w).filter((left) => !left.kept)).toEqual([])
+
+    // The follow-up pass closes it once more; the host answers closed for an account it already closed, so the
+    // deletion finishes and the host still holds one fence.
+    advance(w, DELETION_RECHECK_MS)
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.services.workspaces).toEqual([ACCOUNT, ACCOUNT, ACCOUNT, ACCOUNT])
+    expect([...w.services.closedWorkspaces]).toEqual([ACCOUNT])
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
+  })
+
+  test("cloud workspaces: the follow-up pass waits for the host to erase them, retrying and alerting the owner until it has", async () => {
+    restore()
+    restore = deletionEnvironment({
+      ...WORKSPACES_ENVIRONMENT,
+      RESEND_API_KEY: "re_fixture",
+      VECTOR_PURCHASE_EMAIL_FROM: "Vector <alerts@example.invalid>",
+      CODIUM_OWNER_EMAIL: "owner@example.invalid",
+    })
+    const w = deletionWorld()
+    await seedEverything(w)
+    // The host fenced the account at once but keeps failing to erase one workspace's volume.
+    w.services.workspacesLeft = 1
+
+    // Access is closed, so the identity still goes: the close answered, and the host erases in the background.
+    expect((await deleteRoute(w)).status).toBe(200)
+    expect(w.services.identities).toEqual([ACCOUNT])
+    expect([...w.services.closedWorkspaces]).toEqual([ACCOUNT])
+
+    // The follow-up pass does not finish the deletion while the host still holds a workspace of the account.
+    advance(w, DELETION_RECHECK_MS)
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 0, pending: 1, busy: 0 })
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      attempts: 1,
+      stage: "check",
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.fakes.store.zset(tombstonesDueKey()).get(ACCOUNT)).toBe(w.clock() + deletionRetryMs(1))
+    for (let attempt = 2; attempt <= DELETION_ALERT_AFTER; attempt++) {
+      advance(w, deletionRetryMs(attempt - 1))
+      expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    }
+    expect(w.fakes.mail.sent).toHaveLength(1)
+    expect(w.fakes.mail.sent[0]!.text).toContain("Parts not erased: workspaces, codium, keys.")
+    expect(w.fakes.mail.sent[0]!.text).not.toContain(EMAIL)
+
+    // Once the host reports none left, the next due pass finishes the deletion.
+    w.services.workspacesLeft = 0
+    advance(w, deletionRetryMs(DELETION_ALERT_AFTER))
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })
 
   test("the follow-up pass erases what a request already past its checks created after the erase", async () => {

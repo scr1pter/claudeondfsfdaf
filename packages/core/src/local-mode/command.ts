@@ -84,6 +84,10 @@ const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"])
 const KEYWORDS = new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "esac", "!", "{", "}"])
 // A loop's or a case's header (`for url in https://…`, `case $1 in`) is a list of words, not a command.
 const HEADERS = new Set(["for", "select", "case"])
+// Variables bash or zsh read as commands to run later (prompt hooks, prompts with command substitution, startup files).
+const HOOK =
+  /^(?:PROMPT_COMMAND|PS[0-4]|PROMPT[234]?|RPROMPT2?|RPS[12]|BASH_ENV|ENV|ZDOTDIR|precmd_functions|preexec_functions|chpwd_functions)(?:\[[^\]]*\])?\+?=/
+const DECLARATIONS = new Set(["export", "declare", "typeset", "local", "readonly"])
 // A redirection may come before the command it applies to (`> out.txt echo`, `done < urls.txt`). An operator on its own
 // takes the next word as its file.
 const REDIRECT = /^(?:\d*(?:>&|<&|<>|>\||>>|<<<|<<-?|>|<)|&>>?)/
@@ -120,6 +124,12 @@ const TAR_RUNS =
 function runsLocally(words: readonly string[]): boolean {
   const [first, ...rest] = words
   if (first === undefined) return true
+  // A shell hook runs later, at every prompt or in every new shell, as trap's command does when its signal comes: a
+  // prompt command, a prompt the shell expands (`PS1='$(curl …)'`), or a startup file. Set to anything, it is no
+  // command known to stay on this computer.
+  if (HOOK.test(first)) return first.slice(first.indexOf("=") + 1) === "" && runsLocally(rest)
+  if (DECLARATIONS.has(first) && rest.some((word) => HOOK.test(word) && word.slice(word.indexOf("=") + 1) !== ""))
+    return false
   // `FOO=1 cmd`: the assignment, then the command.
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return runsLocally(rest)
   if (KEYWORDS.has(first)) return runsLocally(rest)

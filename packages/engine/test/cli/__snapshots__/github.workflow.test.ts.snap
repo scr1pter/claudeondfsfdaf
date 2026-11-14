@@ -1,0 +1,1139 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
+{
+  "jobs": {
+    "agent": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "\${{ github.event_name == 'schedule' && format('vector-schedule-{0}', needs.route.outputs.thread) || format('vector-{0}-{1}', needs.route.outputs.thread, github.event.comment.id || github.run_id) }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'task'",
+      "name": "Vector agent",
+      "needs": "route",
+      "outputs": {
+        "rid": "\${{ steps.mint.outputs.rid }}",
+        "status": "\${{ steps.mint.outputs.status }}",
+      },
+      "permissions": {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
+        "issues": "read",
+        "pull-requests": "read",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "uses": "actions/cache/restore@v4",
+          "with": {
+            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "path": "~/.npm",
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "VECTOR_COMMENT_ID": "\${{ github.event.comment.id }}",
+            "VECTOR_MODE": "codium",
+            "VECTOR_PR": "\${{ needs.route.outputs.pr }}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_TICKET": "\${{ inputs.ticket }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "mint",
+          "run": "vector github mint --purpose task",
+        },
+        {
+          "if": "steps.mint.outputs.status == 'ok'",
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "if": "runner.environment == 'github-hosted' && steps.mint.outputs.status == 'ok'",
+          "name": "Install tool process isolation",
+          "run": "sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap",
+        },
+        {
+          "env": {
+            "VECTOR_MODE": "codium",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "sandbox",
+          "if": "runner.environment == 'github-hosted' && steps.mint.outputs.status == 'ok'",
+          "run": "vector github sandbox prepare",
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "MODEL": "\${{ vars.VECTOR_MODEL || 'vector-plan' }}",
+            "SHARE": "false",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_MODE": "codium",
+            "VECTOR_PROMPT": "\${{ inputs.prompt }}",
+            "VECTOR_PURE": "1",
+            "VECTOR_SCHEDULE_PROMPTS": "{}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "agent",
+          "if": "steps.mint.outputs.status == 'ok'",
+          "run": "vector github sandbox run -- vector github run --phase agent",
+          "shell": "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}",
+        },
+        {
+          "env": {
+            "VECTOR_MODE": "codium",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "sandbox_finish",
+          "if": "always()",
+          "run": "vector github sandbox finish",
+        },
+        {
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "path": "\${{ runner.temp }}/vector-out/",
+            "retention-days": 1,
+          },
+        },
+        {
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "if-no-files-found": "ignore",
+            "name": "vector-session-\${{ needs.route.outputs.thread }}",
+            "path": "\${{ runner.temp }}/vector-session/",
+            "retention-days": 7,
+          },
+        },
+      ],
+      "timeout-minutes": 135,
+    },
+    "bind": {
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'bind'",
+      "name": "Vector bind",
+      "needs": "route",
+      "permissions": {
+        "id-token": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "VECTOR_BIND_CODE": "\${{ inputs.code }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "run": "vector github bind",
+        },
+      ],
+      "timeout-minutes": 5,
+    },
+    "publish": {
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "always() && needs.route.outputs.kind == 'task'",
+      "name": "Vector publish",
+      "needs": [
+        "route",
+        "agent",
+      ],
+      "permissions": {
+        "contents": "write",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "continue-on-error": true,
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "path": "\${{ runner.temp }}/vector-bundle",
+          },
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "VECTOR_AGENT_STATUS": "\${{ needs.agent.outputs.status }}",
+            "VECTOR_BUNDLE_DIR": "\${{ runner.temp }}/vector-bundle",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_GITHUB_AUTH": "github",
+            "VECTOR_MODE": "codium",
+            "VECTOR_PURE": "1",
+            "VECTOR_REPO_DIR": "\${{ github.workspace }}",
+            "VECTOR_ROUTE_KIND": "\${{ needs.route.outputs.kind }}",
+            "VECTOR_ROUTE_PR": "\${{ needs.route.outputs.pr }}",
+            "VECTOR_ROUTE_REF": "\${{ needs.route.outputs.ref }}",
+            "VECTOR_RUN_ID": "\${{ needs.agent.outputs.rid }}",
+            "VECTOR_SCHEDULE_PROMPTS": "{}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "run": "vector github publish",
+          "working-directory": "\${{ runner.temp }}",
+        },
+      ],
+      "timeout-minutes": 15,
+    },
+    "review": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "vector-review-\${{ needs.route.outputs.pr }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'review' || needs.route.outputs.kind == 'review-full'",
+      "name": "Vector review",
+      "needs": "route",
+      "permissions": {
+        "contents": "read",
+        "id-token": "write",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "uses": "actions/cache/restore@v4",
+          "with": {
+            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "path": "~/.npm",
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "VECTOR_COMMENT_ID": "\${{ github.event.comment.id }}",
+            "VECTOR_MODE": "codium",
+            "VECTOR_PR": "\${{ needs.route.outputs.pr }}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_TICKET": "\${{ inputs.ticket }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "mint",
+          "run": "vector github mint --purpose review",
+        },
+        {
+          "if": "steps.mint.outputs.status == 'ok'",
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 1,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "MODEL": "\${{ vars.VECTOR_MODEL || 'vector-plan' }}",
+            "VECTOR_CONFIG_CONTENT": "{"lsp":false,"formatter":false,"snapshot":false}",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_MODE": "codium",
+            "VECTOR_PURE": "1",
+            "VECTOR_REVIEW_PR": "\${{ needs.route.outputs.pr }}",
+            "VECTOR_REVIEW_REF": "\${{ needs.route.outputs.ref }}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "if": "steps.mint.outputs.status == 'ok'",
+          "run": "vector github review",
+          "shell": "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}",
+        },
+      ],
+      "timeout-minutes": 20,
+    },
+    "route": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "vector-route-\${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id) }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'issues' && github.event.issue.user.type != 'Bot' && (contains(github.event.issue.body, '/vector') || contains(github.event.issue.body, '/vs') || contains(github.event.issue.body, '/vectorscope') || contains(github.event.issue.body, '/vx') || contains(github.event.issue.title, '/vector') || contains(github.event.issue.title, '/vs') || contains(github.event.issue.title, '/vectorscope') || contains(github.event.issue.title, '/vx'))) || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && github.event.comment.user.type != 'Bot' && (contains(github.event.comment.body, '/vector') || contains(github.event.comment.body, '/vs') || contains(github.event.comment.body, '/vectorscope') || contains(github.event.comment.body, '/vx')))",
+      "outputs": {
+        "app": "\${{ steps.route.outputs.app }}",
+        "kind": "\${{ steps.route.outputs.kind }}",
+        "pr": "\${{ steps.route.outputs.pr }}",
+        "ref": "\${{ steps.route.outputs.ref }}",
+        "thread": "\${{ steps.route.outputs.thread }}",
+      },
+      "permissions": {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "id": "route",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "script": "<route script: exercised separately>",
+          },
+        },
+      ],
+      "timeout-minutes": 3,
+    },
+  },
+  "name": "vector",
+  "on": {
+    "issue_comment": {
+      "types": [
+        "created",
+      ],
+    },
+    "issues": {
+      "types": [
+        "opened",
+      ],
+    },
+    "pull_request_review_comment": {
+      "types": [
+        "created",
+      ],
+    },
+    "workflow_dispatch": {
+      "inputs": {
+        "code": {
+          "required": false,
+          "type": "string",
+        },
+        "mode": {
+          "default": "task",
+          "options": [
+            "task",
+            "review",
+            "bind",
+          ],
+          "type": "choice",
+        },
+        "pr": {
+          "required": false,
+          "type": "string",
+        },
+        "prompt": {
+          "required": false,
+          "type": "string",
+        },
+        "ticket": {
+          "required": false,
+          "type": "string",
+        },
+      },
+    },
+  },
+  "permissions": {},
+}
+`;
+
+exports[`workflow v3 own key auto-review golden, header, and explicit permissions 1`] = `
+{
+  "jobs": {
+    "agent": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "\${{ github.event_name == 'schedule' && format('vector-schedule-{0}', needs.route.outputs.thread) || format('vector-{0}-{1}', needs.route.outputs.thread, github.event.comment.id || github.run_id) }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'task'",
+      "name": "Vector agent",
+      "needs": "route",
+      "outputs": {
+        "status": "ok",
+      },
+      "permissions": {
+        "actions": "read",
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "uses": "actions/cache/restore@v4",
+          "with": {
+            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "path": "~/.npm",
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "if": "runner.environment == 'github-hosted'",
+          "name": "Install tool process isolation",
+          "run": "sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap",
+        },
+        {
+          "env": {
+            "VECTOR_AGENT_SUDO": "\${{ vars.VECTOR_AGENT_SUDO }}",
+            "VECTOR_MODE": "own-key",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "sandbox",
+          "if": "runner.environment == 'github-hosted'",
+          "run": "vector github sandbox prepare",
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "MODEL": "openai/gpt-4.1",
+            "OPENAI_API_KEY": "\${{ secrets.OPENAI_API_KEY }}",
+            "SHARE": "false",
+            "VECTOR_CLI_TOKEN": "\${{ secrets.VECTOR_CLI_TOKEN }}",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_MODE": "own-key",
+            "VECTOR_PROMPT": "\${{ inputs.prompt }}",
+            "VECTOR_PURE": "1",
+            "VECTOR_SCHEDULE_PROMPTS": "{}",
+            "VECTOR_SECRET_ENV_NAMES": "OPENAI_API_KEY",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "agent",
+          "run": "vector github sandbox run -- vector github run --phase agent",
+          "shell": "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}",
+        },
+        {
+          "env": {
+            "VECTOR_MODE": "own-key",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "sandbox_finish",
+          "if": "always()",
+          "run": "vector github sandbox finish",
+        },
+        {
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "path": "\${{ runner.temp }}/vector-out/",
+            "retention-days": 1,
+          },
+        },
+      ],
+      "timeout-minutes": 60,
+    },
+    "bind": {
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'bind'",
+      "name": "Vector bind",
+      "needs": "route",
+      "permissions": {
+        "id-token": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "VECTOR_BIND_CODE": "\${{ inputs.code }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "run": "vector github bind",
+        },
+      ],
+      "timeout-minutes": 5,
+    },
+    "publish": {
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "always() && needs.route.outputs.kind == 'task'",
+      "name": "Vector publish",
+      "needs": [
+        "route",
+        "agent",
+      ],
+      "permissions": {
+        "actions": "write",
+        "contents": "write",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "continue-on-error": true,
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "path": "\${{ runner.temp }}/vector-bundle",
+          },
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "VECTOR_AGENT_STATUS": "ok",
+            "VECTOR_BUNDLE_DIR": "\${{ runner.temp }}/vector-bundle",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_GITHUB_AUTH": "github",
+            "VECTOR_MODE": "own-key",
+            "VECTOR_PURE": "1",
+            "VECTOR_REPO_DIR": "\${{ github.workspace }}",
+            "VECTOR_REVIEW_AUTO": "1",
+            "VECTOR_ROUTE_KIND": "\${{ needs.route.outputs.kind }}",
+            "VECTOR_ROUTE_PR": "\${{ needs.route.outputs.pr }}",
+            "VECTOR_ROUTE_REF": "\${{ needs.route.outputs.ref }}",
+            "VECTOR_RUN_ID": "",
+            "VECTOR_SCHEDULE_PROMPTS": "{}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "run": "vector github publish",
+          "working-directory": "\${{ runner.temp }}",
+        },
+      ],
+      "timeout-minutes": 15,
+    },
+    "review": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "vector-review-\${{ github.event.pull_request.number || needs.route.outputs.pr }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": 
+"!cancelled() && (
+  (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository &&
+    github.event.pull_request.draft == false &&
+    !contains(github.event.pull_request.labels.*.name, 'vector:skip') &&
+    !contains(github.event.pull_request.labels.*.name, 'vector:paused') &&
+    github.event.pull_request.user.login != 'dependabot[bot]' &&
+    github.event.pull_request.user.login != 'renovate[bot]') ||
+  needs.route.outputs.kind == 'review' || needs.route.outputs.kind == 'review-full')"
+,
+      "name": "Vector review",
+      "needs": "route",
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 1,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref || github.event.pull_request.head.sha }}",
+          },
+        },
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "uses": "actions/cache@v4",
+          "with": {
+            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "path": "~/.npm",
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "/vector,/vs,/vectorscope,/vx",
+            "MODEL": "openai/gpt-4.1",
+            "OPENAI_API_KEY": "\${{ secrets.OPENAI_API_KEY }}",
+            "VECTOR_CLI_TOKEN": "\${{ secrets.VECTOR_CLI_TOKEN }}",
+            "VECTOR_CONFIG_CONTENT": "{"lsp":false,"formatter":false,"snapshot":false}",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_PURE": "1",
+            "VECTOR_REVIEW_PR": "\${{ github.event.pull_request.number || needs.route.outputs.pr }}",
+            "VECTOR_REVIEW_REF": "\${{ needs.route.outputs.ref || github.event.pull_request.head.sha }}",
+            "VECTOR_SECRET_ENV_NAMES": "OPENAI_API_KEY",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "name": "Review",
+          "run": "vector github review",
+        },
+      ],
+      "timeout-minutes": 20,
+    },
+    "route": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "vector-route-\${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id) }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'issues' && github.event.issue.user.type != 'Bot' && (contains(github.event.issue.body, '/vector') || contains(github.event.issue.body, '/vs') || contains(github.event.issue.body, '/vectorscope') || contains(github.event.issue.body, '/vx') || contains(github.event.issue.title, '/vector') || contains(github.event.issue.title, '/vs') || contains(github.event.issue.title, '/vectorscope') || contains(github.event.issue.title, '/vx'))) || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && github.event.comment.user.type != 'Bot' && (contains(github.event.comment.body, '/vector') || contains(github.event.comment.body, '/vs') || contains(github.event.comment.body, '/vectorscope') || contains(github.event.comment.body, '/vx')))",
+      "outputs": {
+        "app": "\${{ steps.route.outputs.app }}",
+        "kind": "\${{ steps.route.outputs.kind }}",
+        "pr": "\${{ steps.route.outputs.pr }}",
+        "ref": "\${{ steps.route.outputs.ref }}",
+        "thread": "\${{ steps.route.outputs.thread }}",
+      },
+      "permissions": {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "id": "route",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "script": "<route script: exercised separately>",
+          },
+        },
+      ],
+      "timeout-minutes": 3,
+    },
+  },
+  "name": "vector",
+  "on": {
+    "issue_comment": {
+      "types": [
+        "created",
+      ],
+    },
+    "issues": {
+      "types": [
+        "opened",
+      ],
+    },
+    "pull_request": {
+      "types": [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+      ],
+    },
+    "pull_request_review_comment": {
+      "types": [
+        "created",
+      ],
+    },
+    "workflow_dispatch": {
+      "inputs": {
+        "code": {
+          "required": false,
+          "type": "string",
+        },
+        "mode": {
+          "default": "task",
+          "options": [
+            "task",
+            "review",
+            "bind",
+          ],
+          "type": "choice",
+        },
+        "pr": {
+          "required": false,
+          "type": "string",
+        },
+        "prompt": {
+          "required": false,
+          "type": "string",
+        },
+        "ticket": {
+          "required": false,
+          "type": "string",
+        },
+      },
+    },
+  },
+  "permissions": {},
+}
+`;
+
+exports[`workflow v3 scheduled App publishing golden, header, and explicit permissions 1`] = `
+{
+  "jobs": {
+    "agent": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "\${{ github.event_name == 'schedule' && format('vector-schedule-{0}', needs.route.outputs.thread) || format('vector-{0}-{1}', needs.route.outputs.thread, github.event.comment.id || github.run_id) }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'task'",
+      "name": "Vector agent",
+      "needs": "route",
+      "outputs": {
+        "status": "ok",
+      },
+      "permissions": {
+        "actions": "read",
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "uses": "actions/cache/restore@v4",
+          "with": {
+            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "path": "~/.npm",
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "if": "runner.environment == 'github-hosted'",
+          "name": "Install tool process isolation",
+          "run": "sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap",
+        },
+        {
+          "env": {
+            "VECTOR_AGENT_SUDO": "\${{ vars.VECTOR_AGENT_SUDO }}",
+            "VECTOR_MODE": "own-key",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "sandbox",
+          "if": "runner.environment == 'github-hosted'",
+          "run": "vector github sandbox prepare",
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "@vector-dev,/vector,/vs,/vectorscope,/vx",
+            "MODEL": "openai/gpt-4.1",
+            "OPENAI_API_KEY": "\${{ secrets.OPENAI_API_KEY }}",
+            "SHARE": "false",
+            "VECTOR_CLI_TOKEN": "\${{ secrets.VECTOR_CLI_TOKEN }}",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_MODE": "own-key",
+            "VECTOR_PROMPT": "\${{ inputs.prompt }}",
+            "VECTOR_PURE": "1",
+            "VECTOR_SCHEDULE_PROMPTS": "{"17 9 * * 1-5":{"id":"daily","prompt":"Fix \\"bugs\\": \\u0024{{ secrets.GITHUB_TOKEN }}\\n\\u0024HOME\\nquote' and \\\\u0024"}}",
+            "VECTOR_SECRET_ENV_NAMES": "OPENAI_API_KEY",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "agent",
+          "run": "vector github sandbox run -- vector github run --phase agent",
+          "shell": "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}",
+        },
+        {
+          "env": {
+            "VECTOR_MODE": "own-key",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "id": "sandbox_finish",
+          "if": "always()",
+          "run": "vector github sandbox finish",
+        },
+        {
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "path": "\${{ runner.temp }}/vector-out/",
+            "retention-days": 1,
+          },
+        },
+      ],
+      "timeout-minutes": 60,
+    },
+    "bind": {
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "needs.route.outputs.kind == 'bind'",
+      "name": "Vector bind",
+      "needs": "route",
+      "permissions": {
+        "id-token": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "VECTOR_BIND_CODE": "\${{ inputs.code }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "run": "vector github bind",
+        },
+      ],
+      "timeout-minutes": 5,
+    },
+    "publish": {
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "always() && needs.route.outputs.kind == 'task'",
+      "name": "Vector publish",
+      "needs": [
+        "route",
+        "agent",
+      ],
+      "permissions": {
+        "contents": "write",
+        "id-token": "write",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref }}",
+          },
+        },
+        {
+          "continue-on-error": true,
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
+            "path": "\${{ runner.temp }}/vector-bundle",
+          },
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "@vector-dev,/vector,/vs,/vectorscope,/vx",
+            "VECTOR_AGENT_STATUS": "ok",
+            "VECTOR_BUNDLE_DIR": "\${{ runner.temp }}/vector-bundle",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_GITHUB_AUTH": "app",
+            "VECTOR_MODE": "own-key",
+            "VECTOR_PURE": "1",
+            "VECTOR_REPO_DIR": "\${{ github.workspace }}",
+            "VECTOR_ROUTE_KIND": "\${{ needs.route.outputs.kind }}",
+            "VECTOR_ROUTE_PR": "\${{ needs.route.outputs.pr }}",
+            "VECTOR_ROUTE_REF": "\${{ needs.route.outputs.ref }}",
+            "VECTOR_RUN_ID": "",
+            "VECTOR_SCHEDULE_PROMPTS": "{"17 9 * * 1-5":{"id":"daily","prompt":"Fix \\"bugs\\": \\u0024{{ secrets.GITHUB_TOKEN }}\\n\\u0024HOME\\nquote' and \\\\u0024"}}",
+            "VECTOR_THREAD": "\${{ needs.route.outputs.thread }}",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "run": "vector github publish",
+          "working-directory": "\${{ runner.temp }}",
+        },
+      ],
+      "timeout-minutes": 15,
+    },
+    "review": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "vector-review-\${{ github.event.pull_request.number || needs.route.outputs.pr }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": 
+"!cancelled() && (
+  needs.route.outputs.kind == 'review' || needs.route.outputs.kind == 'review-full')"
+,
+      "name": "Vector review",
+      "needs": "route",
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 1,
+            "persist-credentials": false,
+            "ref": "\${{ needs.route.outputs.ref || github.event.pull_request.head.sha }}",
+          },
+        },
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": 20,
+          },
+        },
+        {
+          "uses": "actions/cache@v4",
+          "with": {
+            "key": "vector-cli-1.99.113-\${{ runner.os }}",
+            "path": "~/.npm",
+          },
+        },
+        {
+          "name": "Install Vector",
+          "run": "npm install -g @vectordevai/cli@1.99.113 --prefer-offline --no-audit --no-fund",
+        },
+        {
+          "env": {
+            "GITHUB_TOKEN": "\${{ secrets.GITHUB_TOKEN }}",
+            "MENTIONS": "@vector-dev,/vector,/vs,/vectorscope,/vx",
+            "MODEL": "openai/gpt-4.1",
+            "OPENAI_API_KEY": "\${{ secrets.OPENAI_API_KEY }}",
+            "VECTOR_CLI_TOKEN": "\${{ secrets.VECTOR_CLI_TOKEN }}",
+            "VECTOR_CONFIG_CONTENT": "{"lsp":false,"formatter":false,"snapshot":false}",
+            "VECTOR_DISABLE_PROJECT_CONFIG": "1",
+            "VECTOR_DISABLE_USAGE": "1",
+            "VECTOR_PURE": "1",
+            "VECTOR_REVIEW_PR": "\${{ github.event.pull_request.number || needs.route.outputs.pr }}",
+            "VECTOR_REVIEW_REF": "\${{ needs.route.outputs.ref || github.event.pull_request.head.sha }}",
+            "VECTOR_SECRET_ENV_NAMES": "OPENAI_API_KEY",
+            "VECTOR_WORKFLOW_VERSION": "3",
+          },
+          "name": "Review",
+          "run": "vector github review",
+        },
+      ],
+      "timeout-minutes": 20,
+    },
+    "route": {
+      "concurrency": {
+        "cancel-in-progress": false,
+        "group": "vector-route-\${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id) }}",
+      },
+      "env": {
+        "VECTOR_WORKFLOW_VERSION": "3",
+      },
+      "if": "github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'issues' && github.event.issue.user.type != 'Bot' && (contains(github.event.issue.body, '@vector-dev') || contains(github.event.issue.body, '/vector') || contains(github.event.issue.body, '/vs') || contains(github.event.issue.body, '/vectorscope') || contains(github.event.issue.body, '/vx') || contains(github.event.issue.title, '@vector-dev') || contains(github.event.issue.title, '/vector') || contains(github.event.issue.title, '/vs') || contains(github.event.issue.title, '/vectorscope') || contains(github.event.issue.title, '/vx'))) || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && github.event.comment.user.type != 'Bot' && (contains(github.event.comment.body, '@vector-dev') || contains(github.event.comment.body, '/vector') || contains(github.event.comment.body, '/vs') || contains(github.event.comment.body, '/vectorscope') || contains(github.event.comment.body, '/vx')))",
+      "outputs": {
+        "app": "\${{ steps.route.outputs.app }}",
+        "kind": "\${{ steps.route.outputs.kind }}",
+        "pr": "\${{ steps.route.outputs.pr }}",
+        "ref": "\${{ steps.route.outputs.ref }}",
+        "thread": "\${{ steps.route.outputs.thread }}",
+      },
+      "permissions": {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "write",
+      },
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "id": "route",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "script": "<route script: exercised separately>",
+          },
+        },
+      ],
+      "timeout-minutes": 3,
+    },
+  },
+  "name": "vector",
+  "on": {
+    "issue_comment": {
+      "types": [
+        "created",
+      ],
+    },
+    "issues": {
+      "types": [
+        "opened",
+      ],
+    },
+    "pull_request_review_comment": {
+      "types": [
+        "created",
+      ],
+    },
+    "schedule": [
+      {
+        "cron": "17 9 * * 1-5",
+      },
+    ],
+    "workflow_dispatch": {
+      "inputs": {
+        "code": {
+          "required": false,
+          "type": "string",
+        },
+        "mode": {
+          "default": "task",
+          "options": [
+            "task",
+            "review",
+            "bind",
+          ],
+          "type": "choice",
+        },
+        "pr": {
+          "required": false,
+          "type": "string",
+        },
+        "prompt": {
+          "required": false,
+          "type": "string",
+        },
+        "ticket": {
+          "required": false,
+          "type": "string",
+        },
+      },
+    },
+  },
+  "permissions": {},
+}
+`;

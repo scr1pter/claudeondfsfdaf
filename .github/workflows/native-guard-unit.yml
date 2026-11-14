@@ -1,0 +1,29 @@
+name: Native guard unit checks
+
+on:
+  push:
+    branches: [build-native-shell]
+    paths:
+      - .github/workflows/native-guard-unit.yml
+      - packages/core/src/process-isolation/linux/entry.py
+      - packages/core/test/fixture/native-mask-origins.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  guard:
+    name: Production guard predicates (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Check production predicates without starting a native sandbox
+        run: python3 -I -S -B packages/core/test/fixture/native-mask-origins.py

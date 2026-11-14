@@ -24,6 +24,7 @@ import { createVectorAccount } from "../../desktop/src/main/vector-account"
 
 const records = new Map<string, string>()
 const counts = new Map<string, number>()
+const erasureSteps: string[] = []
 const state = { unavailable: false, revoked: false, origin: "", identityDeletions: 0 }
 const user = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -37,9 +38,21 @@ const upstream = Bun.serve({
   async fetch(request) {
     const path = new URL(request.url).pathname
     // Account deletion: revoking the account's tokens, erasing usage and deleting the identity.
-    if (path.startsWith("/set/")) return Response.json({ result: "OK" })
+    if (path.startsWith("/set/")) {
+      const [key, value] = path.slice(5).split("/").map(decodeURIComponent)
+      expect(key).toBe(`vector:cli-revoked:${user.id}`)
+      expect(value).toBe("1")
+      expect(new URL(request.url).searchParams.get("ex")).toBe(String(100 * 24 * 60 * 60))
+      records.set(key!, value!)
+      erasureSteps.push("revoked")
+      return Response.json({ result: "OK" })
+    }
     if (path.startsWith("/rest/v1/rpc/")) return Response.json(null)
     if (path.startsWith("/auth/v1/admin/users/") && request.method === "DELETE") {
+      expect(erasureSteps).toContain("cloud-brain")
+      expect(erasureSteps).toContain("cloud-bindings")
+      expect(records.get(`vector:everywhere:closed:${user.id}`)).toBe("closed")
+      erasureSteps.push("identity")
       state.identityDeletions++
       return Response.json({})
     }
@@ -49,8 +62,25 @@ const upstream = Bun.serve({
         ? Response.json(user)
         : new Response(null, { status: 401 })
     if (state.unavailable) return new Response(null, { status: 503 })
-    const parts = (await request.json()) as string[]
+    const parts = ((await request.json()) as (string | number)[]).map(String)
     const grantKey = parts[1]?.startsWith("vector:deletion-grant:")
+    // This sign-in fixture has no connected jobs, repository bindings or Brain uploads. Model only their empty
+    // indexes, plus the permanent connector closure mark; keep expiring sign-in/grant assertions below unchanged.
+    if (parts[1]?.startsWith("vector:everywhere:") || parts[1]?.startsWith("vector:cloud-agents:")) {
+      if (parts[0] === "SET") {
+        expect(parts).toEqual(["SET", `vector:everywhere:closed:${user.id}`, "closed"])
+        records.set(parts[1], parts[2])
+        erasureSteps.push("everywhere")
+        return Response.json({ result: "OK" })
+      }
+      if (parts[0] === "GET") return Response.json({ result: records.get(parts[1]) ?? null })
+      if (parts[0] === "SMEMBERS" || parts[0] === "ZRANGE") {
+        expect(records.has(parts[1])).toBe(false)
+        return Response.json({ result: [] })
+      }
+      if (parts[0] === "DEL")
+        return Response.json({ result: parts.slice(1).reduce((count, key) => count + Number(records.delete(key)), 0) })
+    }
     // Account deletion's Codium records (WP A57): the tombstone, its lease and the cleanup cron's list. This store holds
     // no other Codium record, so its scans find nothing.
     if (parts[1]?.startsWith("vector:codium:")) {
@@ -74,8 +104,23 @@ const upstream = Bun.serve({
       if (records.get(parts[3]) === parts[4]) records.delete(parts[3])
       return Response.json({ result: 1 })
     }
+    if (parts[0] === "EVAL" && parts[3] === `vector:cloud-agents:brain:account:${user.id}`) {
+      expect(parts[2]).toBe("2")
+      expect(parts.slice(3)).toEqual([`vector:cloud-agents:brain:account:${user.id}`, `vector:cli-revoked:${user.id}`, user.id])
+      expect(records.has(parts[3])).toBe(false)
+      expect(records.get(parts[4])).toBe("1")
+      erasureSteps.push("cloud-brain")
+      return Response.json({ result: "OK" })
+    }
+    if (parts[0] === "EVAL" && parts[3] === `vector:cloud-agents:bindings:${user.id}`) {
+      expect(parts[1]).toBe("return redis.call('SMEMBERS', KEYS[1])")
+      expect(parts[2]).toBe("1")
+      expect(records.has(parts[3])).toBe(false)
+      erasureSteps.push("cloud-bindings")
+      return Response.json({ result: [] })
+    }
     if (parts[0] === "GET")
-      return Response.json({ result: grantKey ? (records.get(parts[1]) ?? null) : state.revoked ? "1" : null })
+      return Response.json({ result: !grantKey && state.revoked ? "1" : (records.get(parts[1]) ?? null) })
     if (parts[0] === "SET") {
       records.set(parts[1], parts[2])
       // A used deletion grant is kept a little longer than it lasts; a sign-in code for its five minutes.
@@ -531,6 +576,8 @@ test("deleting from the desktop runs through the browser's fresh sign-in and end
 
   expect(await account.deleteAccount(user.email)).toEqual({ deleted: true })
   expect(state.identityDeletions).toBe(1)
+  expect(erasureSteps.indexOf("revoked")).toBeLessThan(erasureSteps.indexOf("cloud-brain"))
+  expect(erasureSteps.indexOf("everywhere")).toBeLessThan(erasureSteps.indexOf("identity"))
   // vectordev.ai recorded the grant as used, so it cannot delete again.
   expect([...records.keys()].filter((key) => key.startsWith("vector:deletion-grant:"))).toHaveLength(1)
   expect(account.status()).toEqual({ authenticated: false, pending: false })

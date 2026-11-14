@@ -1,4 +1,5 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
@@ -7,6 +8,7 @@ import { WorkflowTool } from "./workflow"
 import { WorkflowRuns } from "@/orchestration/runs"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { McpCatalog } from "@/mcp/catalog"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { TerminalTool } from "./terminal"
@@ -39,6 +41,7 @@ import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Git } from "@/git"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { ConfigDependencies } from "@/config/dependencies"
 import { InstallationLocal } from "@vectordevai/core/installation/version"
 import { PluginLoader } from "@/plugin/loader"
@@ -76,6 +79,12 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { BrowserTool } from "./browser"
+import { ComputerTool } from "./computer"
+import { ComputerSession } from "@/computer/session"
+import { ComputerLog } from "@/computer/log"
+import { ComputerTransport } from "@/computer/transport"
+import { Image } from "@/image/image"
+import { ComputerAvailability } from "@/computer/availability"
 import { VectorCloudTool } from "./vector-cloud"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { ResearchRun } from "./research-run"
@@ -86,6 +95,8 @@ import { ResearchNoteTool } from "./research-note"
 import { ResearchReportTool } from "./research-report"
 import { ResearchBrowserTool } from "./research-browser"
 import { ResearchTool } from "./research"
+import { ConnectTool, beforeCommitDescription } from "./connect"
+import { ConnectHub } from "@/connect/hub"
 
 // Which research tool each research agent is offered (section 5.3). The agents' permissions say the same; offering
 // them only here keeps every other agent's tool list, and its provider cache, as it was.
@@ -113,6 +124,48 @@ export function isBuiltinTask(tool: Tool.Def) {
 
 export function isBuiltinPatch(tool: Tool.Def) {
   return builtinPatches.has(tool)
+}
+
+/**
+ * On GitHub Actions no tool that drives the user's browser, the Vector Cloud bridge or a computer is offered, whatever
+ * bridge variables are set (INV-S13). Read on every call, so a registry built before the variable was set is filtered
+ * too. MCP tools never pass through the registry: SessionTools.resolve asks `actionsWithheldMcpTool` of each one.
+ */
+export function actionsWithheld(id: string) {
+  return GithubAgents.onActionsRunner(process.env) && GithubAgents.withheldOnActions(id)
+}
+
+/**
+ * Of the connected MCP `servers`, those a run on GitHub Actions withholds whole, with their tools, resources and
+ * instructions (INV-S13): each whose own name, or the name of a tool it lists, is computer use. Such a server's
+ * resources (a screenshot, say) and instructions reach the model too, and its other tools act on the same computer. A
+ * server that only shares a bridged tool's name (a `browser` server) is not computer use, so its tools, resources and
+ * instructions stay together. `keys` are tool keys (`McpCatalog.toolName`) of any of the servers. Read on every call, as
+ * `actionsWithheld` is. SessionTools.resolve leaves these servers' tools out and keeps them from the resource tools, and
+ * SystemPrompt.mcp leaves out their instructions.
+ */
+export function actionsWithheldServers(servers: readonly string[], keys: readonly string[]) {
+  if (!GithubAgents.onActionsRunner(process.env)) return []
+  return servers.filter((name) => {
+    const server = McpCatalog.sanitize(name)
+    // A key does not say where the server's name ends, so a server `a` beside an `a_computer` that lists a tool is
+    // withheld too.
+    return (
+      GithubAgents.computerUse(server) ||
+      keys.some((key) => key.startsWith(`${server}_`) && GithubAgents.computerUse(key.slice(server.length + 1)))
+    )
+  })
+}
+
+/**
+ * Whether a run on GitHub Actions withholds the MCP tool `key`: an id `actionsWithheld` withholds, or a tool of one of
+ * the `withheld` servers (`actionsWithheldServers`), found by its prefix.
+ */
+export function actionsWithheldMcpTool(key: string, withheld: readonly string[]) {
+  return (
+    GithubAgents.onActionsRunner(process.env) &&
+    (GithubAgents.withheldOnActions(key) || withheld.some((name) => key.startsWith(`${McpCatalog.sanitize(name)}_`)))
+  )
 }
 
 type State = {
@@ -147,6 +200,7 @@ const layer = Layer.effect(
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
     const fsutil = yield* FSUtil.Service
+    const computerAvailability = yield* ComputerAvailability.Service
 
     const invalid = yield* InvalidTool
     const escalate = yield* EscalateTool
@@ -170,6 +224,7 @@ const layer = Layer.effect(
     const skilltool = yield* SkillTool
     const memorytool = yield* MemoryTool
     const browsertool = yield* BrowserTool
+    const computertool = yield* ComputerTool
     const vectorcloudtool = yield* VectorCloudTool
     const researchplan = yield* ResearchPlanTool
     const researchsearch = yield* ResearchSearchTool
@@ -178,6 +233,7 @@ const layer = Layer.effect(
     const researchreport = yield* ResearchReportTool
     const researchbrowser = yield* ResearchBrowserTool
     const researchtool = yield* ResearchTool
+    const connecttool = yield* ConnectTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -185,6 +241,7 @@ const layer = Layer.effect(
         const custom: Tool.Def[] = []
 
         function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
+          ProcessIsolation.assertExternalCodeAllowed()
           // Plugin tools still expose Zod args publicly; keep that compatibility
           // boxed at the registry boundary and give the LLM the original JSON Schema.
           // Normalize missing args to `{}` once — pre-1.14.49 the code was
@@ -195,7 +252,10 @@ const layer = Layer.effect(
           const zodParams = allZod ? z.object(args) : undefined
           const jsonSchema = zodParams ? zodJsonSchema(zodParams) : legacyJsonSchema(entries)
           const parameters = zodParams
-            ? Schema.declare<unknown>((u): u is unknown => zodParams.safeParse(u).success)
+            ? Schema.declare<unknown>((u): u is unknown => {
+                ProcessIsolation.assertExternalCodeAllowed()
+                return zodParams.safeParse(u).success
+              })
             : Schema.Unknown
           return {
             id,
@@ -204,23 +264,38 @@ const layer = Layer.effect(
             description: def.description,
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
+                ProcessIsolation.assertExternalCodeAllowed()
                 // Bridge the host's Effect-based `ask` into a Promise-returning
                 // function for the plugin to make sure context persists
                 const bridge = yield* EffectBridge.make()
                 const pluginCtx: PluginToolContext = {
                   ...toolCtx,
-                  ask: (req) => bridge.promise(toolCtx.ask(req)),
+                  // A plugin's ask resolves with nothing: its API does not report how the person answered.
+                  ask: (req) => bridge.promise(toolCtx.ask(req).pipe(Effect.asVoid)),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
                 }
-                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
+                const value = yield* Effect.promise(() => {
+                  ProcessIsolation.assertExternalCodeAllowed()
+                  return def.execute(args as any, pluginCtx)
+                })
+                ProcessIsolation.assertExternalCodeAllowed()
+                // The real output screen awaits audience policy before JSON.stringify. Keep its later traversal
+                // behind the same authority, including toJSON/then/ownKeys and nested metadata entry points.
+                const result =
+                  typeof value === "string"
+                    ? value
+                    : ProcessIsolation.guardExternalObject(ProcessIsolation.markExternalCode(value))
                 const output = typeof result === "string" ? result : result.output
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 // Private raw output is refused before truncation can save it to a file the model may read later.
                 if (toolCtx.assertOutput) yield* toolCtx.assertOutput(result)
+                ProcessIsolation.assertExternalCodeAllowed()
                 const info = yield* agent.get(toolCtx.agent)
+                ProcessIsolation.assertExternalCodeAllowed()
                 const out = yield* truncate.output(output, {}, info)
+                ProcessIsolation.assertExternalCodeAllowed()
                 return {
                   title: typeof result === "string" ? "" : (result.title ?? ""),
                   output: out.truncated ? out.content : output,
@@ -244,7 +319,8 @@ const layer = Layer.effect(
           }
         }
 
-        const dirs = yield* config.directories()
+        const dirs = ProcessIsolation.required() ? [] : yield* config.directories()
+        if (dirs.length) ProcessIsolation.assertExternalCodeAllowed()
         const matches = dirs.flatMap((dir) =>
           Glob.scanSync("{tool,tools}/*.{js,ts}", { cwd: dir, absolute: true, dot: true, symlink: true }),
         )
@@ -267,14 +343,16 @@ const layer = Layer.effect(
             yield* Effect.logWarning("Custom tool could not load", { path: match, error: String(loaded.error) })
             continue
           }
+          ProcessIsolation.assertExternalCodeAllowed()
           for (const [id, def] of Object.entries(loaded.value.mod)) {
             if (!isPluginTool(def)) continue
             custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
           }
         }
 
-        const plugins = yield* plugin.list()
+        const plugins = ProcessIsolation.required() ? [] : yield* plugin.list()
         for (const p of plugins) {
+          ProcessIsolation.assertExternalCodeAllowed()
           for (const [id, def] of Object.entries(p.tool ?? {})) {
             custom.push(fromPlugin(id, def))
           }
@@ -309,6 +387,7 @@ const layer = Layer.effect(
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
           browser: Tool.init(browsertool),
+          computer: Tool.init(computertool),
           vectorcloud: Tool.init(vectorcloudtool),
           researchplan: Tool.init(researchplan),
           researchsearch: Tool.init(researchsearch),
@@ -317,6 +396,7 @@ const layer = Layer.effect(
           researchreport: Tool.init(researchreport),
           researchbrowser: Tool.init(researchbrowser),
           research: Tool.init(researchtool),
+          connect: Tool.init(connecttool),
         })
 
         return {
@@ -344,6 +424,9 @@ const layer = Layer.effect(
             // Offered only to a sized request below Thorough; the session runtime removes it everywhere else.
             tool.escalate,
             ...(process.env.VECTOR_BROWSER_BRIDGE_URL && process.env.VECTOR_BROWSER_BRIDGE_TOKEN ? [tool.browser] : []),
+            ...(process.env.VECTOR_COMPUTER_BRIDGE_URL && process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+              ? [tool.computer]
+              : []),
             ...(process.env.VECTOR_CLOUD_BRIDGE_URL && process.env.VECTOR_CLOUD_BRIDGE_TOKEN ? [tool.vectorcloud] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
@@ -357,6 +440,7 @@ const layer = Layer.effect(
             // needs the desktop browser.
             tool.researchbrowser,
             tool.research,
+            ...(flags.experimentalConnect ? [tool.connect] : []),
           ],
           task: tool.task,
           taskSchema: JSON.stringify(tool.task.jsonSchema),
@@ -368,7 +452,9 @@ const layer = Layer.effect(
 
     const all: Interface["all"] = Effect.fn("ToolRegistry.all")(function* () {
       const s = yield* InstanceState.get(state)
-      return [...s.builtin, ...s.custom] as Tool.Def[]
+      return [...s.builtin, ...(ProcessIsolation.required() ? [] : s.custom)].filter(
+        (tool) => !actionsWithheld(tool.id),
+      ) as Tool.Def[]
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
@@ -395,11 +481,20 @@ const layer = Layer.effect(
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const builtin = yield* InstanceState.get(state)
-      const researchSetting = (yield* config.get()).research?.tool
+      const settings = yield* config.get()
+      const researchSetting = settings.research?.tool
+      const computerUnavailable = yield* computerAvailability.unavailable()
+      const computerDenied = Permission.disabled([ComputerTool.id], input.agent.permission).has(ComputerTool.id)
+      const connectSetting = settings.connect
       // A research agent is offered its own tools and nothing else, whatever a session's or the user's rules allow:
       // no edit, shell, plugin or custom tool reaches Deep research (RC1).
       const own = Agent.researchTools(input.agent.name)
       const filtered = (yield* all()).filter((tool) => {
+        if (
+          tool.id === ComputerTool.id &&
+          (computerUnavailable || computerDenied || settings.tools?.computer === false)
+        )
+          return false
         if (own && tool.id !== InvalidTool.id && !own.includes(tool.id)) return false
         // With Vector Local's Web access None, research is offered no tool that reaches the web (section 5.9).
         if (ResearchRun.withheld(tool.id)) return false
@@ -407,6 +502,9 @@ const layer = Layer.effect(
         // The build agent researches as a tool on its own requests unless the user turned that off; the session
         // runtime's size decides the rest when the tool runs.
         if (tool.id === ResearchTool.id) return input.agent.name === "build" && researchSetting !== "off"
+        // Connected tools on: the built-in to build alone, and a custom or plugin tool named connect to nobody.
+        if (tool.id === ConnectTool.id && flags.experimentalConnect)
+          return input.agent.name === "build" && !builtin.custom.includes(tool)
 
         const usePatch =
           input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
@@ -418,12 +516,18 @@ const layer = Layer.effect(
 
       return yield* Effect.forEach(
         filtered,
-        Effect.fnUntraced(function* (tool: Tool.Def) {
+        Effect.fnUntraced(function* (listed: Tool.Def) {
+          // A failed initial probe may recover after the capability cache expires. Refresh its decoder together
+          // with its advertised schema before offering it, so both use the currently supported action list.
+          const tool = listed.id === ComputerTool.id ? yield* Tool.init(computertool) : listed
           // Task's compatibility validator must distinguish untouched definitions
           // from in-place plugin edits without mutating the cached builtin schema.
           const initialSchema = tool === builtin.task ? structuredClone(tool.jsonSchema) : tool.jsonSchema
           const output = {
-            description: tool.description,
+            description:
+              tool.id === ConnectTool.id && flags.experimentalConnect
+                ? beforeCommitDescription(tool.description, connectSetting)
+                : tool.description,
             parameters: tool.parameters,
             jsonSchema: initialSchema,
           }
@@ -552,6 +656,11 @@ export const node = LayerNode.make({
   layer,
   deps: [
     Config.node,
+    ComputerAvailability.node,
+    ComputerSession.node,
+    ComputerLog.node,
+    ComputerTransport.node,
+    Image.node,
     ConfigDependencies.node,
     Plugin.node,
     Question.node,
@@ -592,6 +701,7 @@ export const node = LayerNode.make({
     SessionFork.node,
     // The task tool isolates through it (Effect.serviceOption); without it every isolation request is refused.
     TaskIsolation.node,
+    ConnectHub.node,
     locationServiceMapNode,
   ],
 })

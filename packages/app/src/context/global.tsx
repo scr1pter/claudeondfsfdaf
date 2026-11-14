@@ -1,6 +1,8 @@
 import { createSimpleContext } from "@vectordevai/ui/context"
-import { createEffect, createMemo, createRoot } from "solid-js"
+import { createEffect, createMemo, createRoot, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
+import { ComputerScreenshotHistory } from "@/features/computer/screenshot-history"
+import { usePlatform } from "./platform"
 import { createServerProjects, ServerConnection, useServer } from "./server"
 import { useServerHealth } from "@/utils/server-health"
 import { createServerSdkContext } from "./server-sdk"
@@ -14,6 +16,7 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
   name: "Global",
   init: () => {
     const server = useServer()
+    const platform = usePlatform()
     const serverHealth = useServerHealth(
       () => server.list,
       () => true,
@@ -59,6 +62,15 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
         ensureServerCtx(conn)
       }
     })
+
+    // Hands deletes screenshots in the built-in engine only, so only that server's history changes (D23).
+    const stopScreenshots = platform.onComputerScreenshotsRemoved?.((value) => {
+      const removal = ComputerScreenshotHistory.decode(value)
+      if (!removal) return
+      for (const { serverCtx } of serverCtxs.values())
+        if (ServerConnection.builtin(serverCtx.sdk.server)) serverCtx.sync.session.removeComputerScreenshots(removal)
+    })
+    if (stopScreenshots) onCleanup(stopScreenshots)
 
     createEffect(() => {
       for (const [key] of serverCtxs) {

@@ -1,8 +1,171 @@
 import { describe, expect, test } from "bun:test"
+import { Hands } from "@vectordevai/schema/hands"
 import type { Prompt } from "@/context/prompt"
 import { buildRequestParts, withSyntheticText } from "./build-request-parts"
 
 describe("buildRequestParts", () => {
+  test("plain text mentions do not create computer markers without a pill", () => {
+    const text = `Use @${Hands.MENTION} and @Numbers`
+    const built = buildRequestParts({
+      prompt: [{ type: "text", content: text, start: 0, end: text.length }],
+      context: [],
+      images: [],
+      text,
+      messageID: "msg_plain_computer",
+      sessionID: "ses_computer",
+      sessionDirectory: "/repo",
+    })
+    expect(built.requestParts).toEqual([{ id: built.requestParts[0].id, type: "text", text }])
+    expect(built.optimisticParts).toHaveLength(1)
+  })
+
+  test("a feature pill adds exactly one empty synthetic marker after the typed text", () => {
+    const content = `@${Hands.MENTION}`
+    const built = buildRequestParts({
+      prompt: [{ type: "computer", content, start: 0, end: content.length }],
+      context: [],
+      images: [],
+      text: content,
+      messageID: "msg_feature_computer",
+      sessionID: "ses_computer",
+      sessionDirectory: "/repo",
+    })
+    expect(built.requestParts).toEqual([
+      { id: built.requestParts[0].id, type: "text", text: content },
+      {
+        id: built.requestParts[1].id,
+        type: "text",
+        text: "",
+        synthetic: true,
+        metadata: { [Hands.MARKER]: { kind: "feature" } },
+      },
+    ])
+    expect(built.optimisticParts[1]).toMatchObject({
+      ...built.requestParts[1],
+      sessionID: "ses_computer",
+      messageID: "msg_feature_computer",
+    })
+  })
+
+  test("an app pill preserves its opaque identity and only hint metadata in the optimistic marker", () => {
+    const app = { key: "app:windows:exe:microsoft|excel|excel.exe", name: "Excel" }
+    const built = buildRequestParts({
+      prompt: [{ type: "computer", content: "@Excel", start: 0, end: 6, app }],
+      context: [],
+      images: [],
+      text: "@Excel",
+      messageID: "msg_app_computer",
+      sessionID: "ses_computer",
+      sessionDirectory: "/repo",
+    })
+    expect(built.requestParts).toHaveLength(2)
+    expect(built.requestParts[1]).toEqual({
+      id: built.requestParts[1].id,
+      type: "text",
+      text: "",
+      synthetic: true,
+      metadata: { [Hands.MARKER]: { kind: "app", key: app.key, name: "Excel" } },
+    })
+    const marker = built.optimisticParts[1]
+    expect(marker.type).toBe("text")
+    if (marker.type !== "text") throw new Error("Expected an optimistic computer marker")
+    expect(marker.metadata).toEqual({ [Hands.MARKER]: { kind: "app", key: app.key, name: "Excel" } })
+    expect(marker).toMatchObject({
+      id: built.requestParts[1].id,
+      sessionID: "ses_computer",
+      messageID: "msg_app_computer",
+    })
+    app.name = "Changed after building"
+    expect(marker.metadata).toEqual({ [Hands.MARKER]: { kind: "app", key: app.key, name: "Excel" } })
+  })
+
+  test("multiple computer pills keep their order and one marker each before other attachments", () => {
+    const built = buildRequestParts({
+      prompt: [
+        { type: "computer", content: `@${Hands.MENTION}`, start: 0, end: 6 },
+        { type: "file", path: "notes.txt", content: "@notes.txt", start: 7, end: 17 },
+        {
+          type: "computer",
+          content: "@Numbers",
+          start: 18,
+          end: 26,
+          app: { key: "app:macos:com.apple.numbers", name: "Numbers" },
+        },
+        { type: "agent", name: "planner", content: "@planner", start: 27, end: 35 },
+        { type: "computer", content: `@${Hands.MENTION}`, start: 36, end: 42 },
+      ],
+      context: [],
+      images: [
+        { type: "image", id: "shot", filename: "shot.png", mime: "image/png", dataUrl: "data:image/png;base64,AAA" },
+      ],
+      text: `@${Hands.MENTION} @notes.txt @Numbers @planner @${Hands.MENTION}`,
+      messageID: "msg_many_computer",
+      sessionID: "ses_computer",
+      sessionDirectory: "/repo",
+    })
+    expect(built.requestParts.map((part) => part.type)).toEqual([
+      "text",
+      "text",
+      "text",
+      "text",
+      "file",
+      "agent",
+      "file",
+    ])
+    const metadata = built.requestParts.slice(1, 4).map((part) => part.type === "text" && part.metadata)
+    expect(metadata).toEqual([
+      { [Hands.MARKER]: { kind: "feature" } },
+      { [Hands.MARKER]: { kind: "app", key: "app:macos:com.apple.numbers", name: "Numbers" } },
+      { [Hands.MARKER]: { kind: "feature" } },
+    ])
+    expect(new Set(built.requestParts.map((part) => part.id)).size).toBe(built.requestParts.length)
+    expect(built.optimisticParts.slice(1, 4).map((part) => part.type === "text" && part.metadata)).toEqual(metadata)
+  })
+
+  test("held synthetic IDs remain between typed text and computer markers without replacing optimistic IDs", () => {
+    const built = buildRequestParts({
+      prompt: [
+        { type: "text", content: "Use ", start: 0, end: 4 },
+        { type: "computer", content: `@${Hands.MENTION}`, start: 4, end: 10 },
+        {
+          type: "computer",
+          content: "@Numbers",
+          start: 11,
+          end: 19,
+          app: { key: "app:macos:com.apple.numbers", name: "Numbers" },
+        },
+      ],
+      context: [],
+      images: [
+        { type: "image", id: "shot", filename: "shot.png", mime: "image/png", dataUrl: "data:image/png;base64,AAA" },
+      ],
+      text: `Use @${Hands.MENTION} @Numbers`,
+      messageID: "msg_synthetic_computer",
+      sessionID: "ses_computer",
+      sessionDirectory: "/repo",
+      syntheticSlots: 2,
+    })
+    const request = withSyntheticText(built, ["Hidden policy", " ", "Desktop context"])
+    expect(built.syntheticIDs).toHaveLength(2)
+    expect(request.map((part) => part.id)).toEqual([
+      built.requestParts[0].id,
+      ...built.syntheticIDs,
+      ...built.requestParts.slice(1).map((part) => part.id),
+    ])
+    expect(request.map((part) => part.id)).toEqual(request.map((part) => part.id).sort())
+    expect(request.slice(1, 3).map((part) => part.type === "text" && part.text)).toEqual([
+      "Hidden policy",
+      "Desktop context",
+    ])
+    expect(request.slice(3)).toEqual(built.requestParts.slice(1))
+    expect(request.filter((part) => !built.syntheticIDs.includes(part.id)).map((part) => part.id)).toEqual(
+      built.optimisticParts.map((part) => part.id),
+    )
+    expect(built.optimisticParts.slice(1, 3).map((part) => part.type === "text" && part.metadata)).toEqual(
+      request.slice(3, 5).map((part) => part.type === "text" && part.metadata),
+    )
+  })
+
   test("builds typed request and optimistic parts without cast path", () => {
     const prompt: Prompt = [
       { type: "text", content: "hello", start: 0, end: 5 },

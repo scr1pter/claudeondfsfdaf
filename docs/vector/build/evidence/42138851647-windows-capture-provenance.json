@@ -1,0 +1,170 @@
+{
+  "repository": "scr1pter/claudeondfsfdaf",
+  "runId": 42138851647,
+  "jobId": 127633764774,
+  "sourceHead": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a",
+  "artifactApiSourceMatched": true,
+  "zipSizeAndApiDigestVerified": true,
+  "zipSingleBoundedEntryVerified": true,
+  "releaseEvidence": false,
+  "artifacts": [
+    {
+      "artifactId": 13467356383,
+      "zipPath": "/tmp/vector-hands/artifacts/dl/a13467356383.zip",
+      "zipBytes": 554,
+      "zipSha256": "609b66ef89030ad23238f223b2e88f947d7d6a078e0513dd133dbd432cadf124",
+      "expiresAt": "2026-11-13T00:50:39Z",
+      "reportName": "computer-win32-core.json",
+      "reportPath": "/tmp/vector-hands/artifacts/x13467356383/computer-win32-core.json",
+      "reportBytes": 2466,
+      "reportSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+      "mode": "off",
+      "code": 0,
+      "totals": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "artifactId": 13467231643,
+      "zipPath": "/tmp/vector-hands/artifacts/dl/a13467231643.zip",
+      "zipBytes": 864,
+      "zipSha256": "200244be918c59d1e49bd0cb54a4ff69799628e78ed88d65406f7efe47241810",
+      "expiresAt": "2026-11-13T00:50:40Z",
+      "reportName": "computer-win32-privileged.json",
+      "reportPath": "/tmp/vector-hands/artifacts/x13467231643/computer-win32-privileged.json",
+      "reportBytes": 4427,
+      "reportSha256": "2ff6f251868d290ecaa1dab3a5d7bc558871c7b36302b200ea1b4124342e3a87",
+      "mode": "auto",
+      "code": 1,
+      "totals": {
+        "passed": 34,
+        "failed": 2,
+        "skipped": 10
+      }
+    }
+  ],
+  "logTotals": [
+    {
+      "at": "2026-11-06T00:50:24.2342697Z",
+      "line": "Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-core.json"
+    },
+    {
+      "at": "2026-11-06T00:50:39.1334670Z",
+      "line": "Computer helper checks: 34 passed, 10 skipped, 2 failed. Report: D:\\a\\_temp\\computer-win32-privileged.json"
+    }
+  ],
+  "isolatedStepOutcome": [
+    {
+      "at": "2026-11-06T00:50:39.3464462Z",
+      "line": "     | The isolated Windows scenarios failed or were required but skipped."
+    },
+    {
+      "at": "2026-11-06T00:50:39.3716425Z",
+      "line": "##[error]Process completed with exit code 1."
+    }
+  ],
+  "failedRows": [
+    {
+      "name": "privileged",
+      "status": "failed",
+      "reason": "native-check-failed"
+    },
+    {
+      "name": "privileged.capture-color-patch",
+      "status": "failed",
+      "reason": "native_operation_failed",
+      "stage": "capture-window-item-full-ticket-expired",
+      "nativeCode": "capture_unavailable"
+    }
+  ],
+  "skippedRows": [
+    {
+      "name": "privileged.apps-installed-target",
+      "status": "skipped",
+      "reason": "target_not_installed"
+    },
+    {
+      "name": "privileged.uia-counter-increment",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.uia-value-set-and-readback",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.secure-field-refusal",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.tagged-click-increments",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.unicode-type-readback",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.stale-capture-refusal",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.owned-input-release",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.input-detection-probe",
+      "status": "skipped",
+      "reason": "input_detection_unavailable"
+    },
+    {
+      "name": "privileged.hardware-user-input-pauses",
+      "status": "skipped",
+      "reason": "hardware_input_required"
+    }
+  ],
+  "passedPrivilegedScenarios": [
+    {
+      "name": "privileged.privileged-isolated-target",
+      "status": "passed"
+    },
+    {
+      "name": "privileged.apps-running-target",
+      "status": "passed"
+    },
+    {
+      "name": "privileged.capture-affinity-exclusion",
+      "status": "passed"
+    },
+    {
+      "name": "privileged.isolated-target-cleanup",
+      "status": "passed"
+    }
+  ],
+  "readOnlySourceAudit": {
+    "windowBitmap": "packages/desktop/native/computer-helper/windows/src/capture_native.cpp:181",
+    "acquisitionDeadline": "packages/desktop/native/computer-helper/windows/src/capture_native.cpp:206",
+    "createForWindow": "packages/desktop/native/computer-helper/windows/src/capture_native.cpp:234",
+    "fullTicketExpiredBranch": "packages/desktop/native/computer-helper/windows/src/capture_native.cpp:249",
+    "branchCondition": "reached only after check_hresult(created) succeeded, with Clock::now() < deadline still true, call.current() false and item_budget == 50"
+  },
+  "interpretation": {
+    "onlyOneScenarioFailed": true,
+    "failingScenario": "privileged.capture-color-patch",
+    "secondFailure": "aggregate privileged row native-check-failed, not a scenario",
+    "affinityExclusion": "passed",
+    "stageMeaning": "CreateForWindow returned success after its full 50 ms item ticket had expired while the 750 ms acquisition deadline was still current (capture_native.cpp window_bitmap, the line 249 branch with item_budget == 50)",
+    "skipMeaning": "10 named prerequisite skips: 1 target_not_installed, 8 input_detection_unavailable, 1 hardware_input_required; no skip is a pass",
+    "captureCredit": false,
+    "nativeOsStopCredit": false,
+    "releaseReadinessCredit": false
+  }
+}

@@ -1,0 +1,94 @@
+name: Review memory history primitives
+on:
+  push:
+    branches: [build-scope-wire, build-scope-joined, v2-scope, build-candidate, release-finish, v2, main]
+    paths:
+      - .github/workflows/review-memory-fence.yml
+      - packages/core/src/review/model-attempt.ts
+      - packages/core/src/review/memory-fence*
+      - packages/core/test/review/model-attempt.test.ts
+      - packages/core/test/review/memory-fence.test.ts
+      - packages/core/src/share/archive.ts
+      - packages/core/test/share/archive-memory-fence.test.ts
+      - packages/core/src/session/execution/local.ts
+      - packages/core/src/session/history.ts
+      - packages/core/src/session/store.ts
+      - packages/core/src/session/runner/index.ts
+      - packages/core/test/session/memory-fence*.test.ts
+      - packages/engine/src/session/llm.ts
+      - packages/engine/test/session/llm-memory-fence.test.ts
+      - packages/engine/src/review/run.ts
+      - packages/engine/src/review/model.ts
+      - packages/engine/test/review/codium-scope-integration.test.ts
+      - packages/engine/test/session/llm.test.ts
+      - packages/core/src/database/migration/**
+      - packages/core/src/database/migration.gen.ts
+      - packages/core/src/database/schema.gen.ts
+      - packages/core/schema.json
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+jobs:
+  primitives:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15"
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+      - name: Check guarded HTTP attempts with local fakes
+        working-directory: packages/core
+        run: bun test test/review/model-attempt.test.ts
+      - name: Check permanent history fences with real SQLite
+        working-directory: packages/core
+        run: bun test test/review/memory-fence.test.ts
+      - name: Check permanent lineage compatibility
+        working-directory: packages/core
+        run: bun test test/session/audience.test.ts --timeout 60000
+      - name: Check database migration compatibility
+        working-directory: packages/core
+        run: bun test test/database-migration.test.ts --timeout 60000
+      - name: Check archive compatibility without activating memory
+        working-directory: packages/core
+        run: bun test test/share/archive-learned.test.ts --timeout 60000
+      - name: Check fenced archive snapshots and captured selection
+        working-directory: packages/core
+        run: bun test test/share/archive-memory-fence.test.ts --timeout 60000
+      - name: Check refusal before local execution and continuation
+        working-directory: packages/core
+        run: bun test test/session/memory-fence-execution.test.ts --timeout 60000
+      - name: Check actual runner history snapshots
+        working-directory: packages/core
+        run: bun test test/session/memory-fence-history.test.ts --timeout 60000
+      - name: Check ordinary local execution compatibility
+        working-directory: packages/core
+        run: bun test test/session-execution-local.test.ts --timeout 60000
+      - name: Check owner history inspection compatibility
+        working-directory: packages/core
+        run: bun test test/session-history.test.ts --timeout 60000
+      - name: Check normal migration generation
+        working-directory: packages/core
+        run: bun script/migration.ts --check
+      - name: Check Core types
+        working-directory: packages/core
+        run: bun typecheck
+      - name: Check Engine consumers
+        working-directory: packages/engine
+        run: bun typecheck
+      - name: Check deferred model history refusal with loopback vendors
+        working-directory: packages/engine
+        run: bun test test/session/llm-memory-fence.test.ts --timeout 60000
+      - name: Check ordinary model wire and usage compatibility
+        working-directory: packages/engine
+        run: bun test test/session/llm.test.ts --timeout 60000
+      - name: Check Codium and VectorScope admission/history integration
+        working-directory: packages/engine
+        run: bun test test/review/codium-scope-integration.test.ts --timeout 60000

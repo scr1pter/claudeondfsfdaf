@@ -40,12 +40,21 @@ import { TaskSquares } from "./task-squares"
 import { ownerOnlyRefusal, type BackgroundTasks } from "./background-tasks"
 import { useBackgroundTasks } from "./use-background-tasks"
 import type { Task } from "@vectordevai/schema/task"
+import { renderable } from "@vectordevai/session-ui/message-part"
+import { useDialog } from "@vectordevai/ui/context/dialog"
+import { useNavigate, useParams } from "@solidjs/router"
+import { useSDK } from "@/context/sdk"
+import { useSettings } from "@/context/settings"
+import { useSync } from "@/context/sync"
+import { useComputerState } from "@/features/computer/use-computer-state"
+import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { taskCost, taskSpend } from "./task-board-model"
+import { ComputerCard } from "./computer-card"
+import { cardModel, holderRun } from "./computer-card-model"
+import { ComputerWatch } from "./computer-watch"
 import { limitsLine, type TaskTranslate } from "./task-limits"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { useLanguage } from "@/context/language"
-import { useSDK } from "@/context/sdk"
-import { useDialog } from "@vectordevai/ui/context/dialog"
 
 const MAX_ROWS = 12
 /** How long a first click on Merge or Discard stays armed, as the workspace controls' confirmTwice. */
@@ -131,7 +140,9 @@ function Pane(props: { tasks: BackgroundTasks }) {
     const sessionID = tasks.rootID()
     if (!sessionID || !tasks.capabilities().workflows) return
     const client = sdk().client
-    void import("@/features/race/dialog").then((module) => dialog.show(() => <module.DialogRace client={client} sessionID={sessionID} />))
+    void import("@/features/race/dialog").then((module) =>
+      dialog.show(() => <module.DialogRace client={client} sessionID={sessionID} />),
+    )
   }
   const pane = backgroundTasksPane
   const language = useLanguage()
@@ -142,6 +153,52 @@ function Pane(props: { tasks: BackgroundTasks }) {
   let aside: HTMLElement | undefined
 
   const total = () => tasks.live().length + tasks.finished().length
+
+  // The pinned Hands card, while this conversation holds or waits for the computer.
+  const computer = useComputerState()
+  const sync = useSync()
+  const settings = useSettings()
+  const navigate = useNavigate()
+  const params = useParams<{ serverKey?: string; id?: string }>()
+  const computerCard = createMemo(() => cardModel(computer?.state(), tasks.rootID()))
+  const run = createMemo(() => {
+    const root = tasks.rootID()
+    if (!root || computerCard()?.kind !== "holder") return
+    const data = sync().data
+    return holderRun({
+      messages: data.message[root] ?? [],
+      parts: (messageID) => data.part[messageID] ?? [],
+      keep: (part) => renderable(part, settings.general.showReasoningSummaries()),
+      working: data.session_working(root),
+    })
+  })
+  const openHolder = (holder: { sessionID: string; directory: string }) =>
+    navigate(
+      params.serverKey
+        ? sessionHref(requireServerKey(params.serverKey), holder.sessionID)
+        : legacySessionHref(holder.directory || sdk().directory, holder.sessionID),
+    )
+  // The ask itself is answered in the holder's own dock; bring it into view without taking focus.
+  const reviewAsk = (holder: { sessionID: string; directory: string }) => {
+    if (params.id !== holder.sessionID) return openHolder(holder)
+    document.querySelector('[data-component="session-prompt-dock"]')?.scrollIntoView({ block: "end" })
+  }
+  const watch = () =>
+    dialog.show(() => (
+      <ComputerWatch
+        rootID={tasks.rootID()!}
+        run={run}
+        busy={() => sync().data.session_working(tasks.rootID()!)}
+        onOpen={(holder) => {
+          dialog.close()
+          openHolder(holder)
+        }}
+        onReview={(holder) => {
+          dialog.close()
+          reviewAsk(holder)
+        }}
+      />
+    ))
 
   // Cards already listed when the pane opens are simply there; one that
   // arrives later eases in. For maps a new card before this effect records
@@ -366,7 +423,15 @@ function Pane(props: { tasks: BackgroundTasks }) {
           Background tasks
         </h2>
         <Show when={tasks.capabilities().workflows}>
-          <button type="button" class="vector-bg-tasks-icon-btn" onClick={race} aria-label="Race models" title="Race models">Race</button>
+          <button
+            type="button"
+            class="vector-bg-tasks-icon-btn"
+            onClick={race}
+            aria-label="Race models"
+            title="Race models"
+          >
+            Race
+          </button>
         </Show>
         <button
           type="button"
@@ -407,6 +472,9 @@ function Pane(props: { tasks: BackgroundTasks }) {
           {tasks.error()}
         </p>
       </Show>
+      <Show when={computerCard()}>
+        <ComputerCard rootID={tasks.rootID()!} run={run} onWatch={watch} onOpen={openHolder} onReview={reviewAsk} />
+      </Show>
       {/* The conversation's limits and this request's delegated spend; only the owner's engine sends them. */}
       <Show when={tasks.limits()}>
         {(limits) => (
@@ -422,10 +490,12 @@ function Pane(props: { tasks: BackgroundTasks }) {
       <Show
         when={total() > 0 || tasks.shells().length > 0 || tasks.interrupted().length > 0}
         fallback={
-          <div class="vector-bg-tasks-empty">
-            <p class="vector-bg-tasks-empty-title">No background tasks</p>
-            <p class="vector-bg-tasks-empty-body">Subagents and subagent specialists show up here while they work.</p>
-          </div>
+          <Show when={!computerCard()}>
+            <div class="vector-bg-tasks-empty">
+              <p class="vector-bg-tasks-empty-title">No background tasks</p>
+              <p class="vector-bg-tasks-empty-body">Subagents and subagent specialists show up here while they work.</p>
+            </div>
+          </Show>
         }
       >
         {/* Two sections under quiet labels, as in the reference: Running, then

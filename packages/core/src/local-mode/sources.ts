@@ -1,6 +1,7 @@
 export * as LocalSources from "./sources"
 
 import type { LocalMode } from "@vectordevai/schema/local-mode"
+import { Hands } from "@vectordevai/schema/hands"
 import { sha256 } from "../util/sha256"
 import { LocalPolicy } from "./policy"
 
@@ -436,7 +437,8 @@ export const SOURCES: readonly Source[] = [
     id: "cloud-computer",
     purpose: "account",
     hosts: VECTOR,
-    sends: "Your Vector sign-in, the job you send to your cloud computer, and the take-over, stop and live view actions you choose",
+    sends:
+      "Your Vector sign-in, the job you send to your cloud computer, and the take-over, stop and live view actions you choose",
     why: "The cloud computer Vector runs for you: starting jobs, the pre-start estimate, take-over and the live view",
     local: "blocked",
     where: ["desktop"],
@@ -658,6 +660,17 @@ export const SOURCES: readonly Source[] = [
     note: "Follows Web access",
   },
   {
+    id: "computer-bridge",
+    purpose: "integration",
+    hosts: ["127.0.0.1"],
+    sends: "Capability checks and authenticated computer commands, including requested input",
+    why: `Connects to the desktop bridge for ${Hands.NAME} on this computer`,
+    local: "allowed",
+    where: ["engine"],
+    callSites: ["packages/engine/src/computer/availability.ts", "packages/engine/src/computer/transport.ts"],
+    note: `${Hands.SHORT} is off when Web access is None. These requests stay on this computer; cancellation and lease cleanup remain available.`,
+  },
+  {
     id: "agent-browser",
     purpose: "browser",
     hosts: [],
@@ -669,6 +682,7 @@ export const SOURCES: readonly Source[] = [
       "packages/desktop/src/main/browser-agent.ts",
       "packages/desktop/src/main/egress-filter.ts",
       "packages/engine/src/tool/browser.ts",
+      "packages/engine/src/tool/browser-bridge.ts",
     ],
     note: "Follows Web access",
   },

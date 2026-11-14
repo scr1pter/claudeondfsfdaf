@@ -4,6 +4,32 @@ import { WorkflowSpec } from "../../src/orchestration/spec"
 import { examples } from "./examples"
 
 const base = { version: 1, title: "Review", stages: [{ id: "review", prompt: "Review the change" }] }
+
+test("connected stages are a separate literal action, never an agent prompt or an authority field", () => {
+  const connect: WorkflowSpec.ConnectStage["connect"] = {
+    to: "vectorscope",
+    action: "review",
+    input: { target: { kind: "branch", base: "main" } },
+  }
+  const stage = { id: "review", connect, after: ["implement"], if: { path: "stages.implement.done", gt: 0 } }
+  const spec = { ...base, stages: [{ id: "implement", prompt: "Implement" }, stage] }
+  const parsed = WorkflowSpec.parse(spec)
+  expect(parsed.ok).toBe(true)
+  if (parsed.ok) expect(parsed.spec.stages[1]).toEqual(stage)
+  for (const extra of [
+    { prompt: "Run anyway" },
+    { agent: "general" },
+    { owned_paths: ["src/a.ts"] },
+    { workflow: "other" },
+  ])
+    expect(WorkflowSpec.parse({ ...base, stages: [{ ...stage, ...extra }] }).ok).toBe(false)
+  for (const input of [
+    { guardParent: "ses_fake" },
+    { model: "provider/model" },
+    { target: { kind: "branch", base: "{{inputs.base}}" } },
+  ])
+    expect(WorkflowSpec.parse({ ...base, stages: [{ id: "review", connect: { ...connect, input } }] }).ok).toBe(false)
+})
 const issues = (value: unknown, source: "model" | "saved" | "owner" = "owner") => {
   const result = WorkflowSpec.parse(value, { source })
   expect(result.ok).toBe(false)

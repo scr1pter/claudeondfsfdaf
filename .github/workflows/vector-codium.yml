@@ -10,6 +10,7 @@ name: Vector Codium
 on:
   push:
     branches:
+      - main
       - codium
       - codium/**
       - codium-legal
