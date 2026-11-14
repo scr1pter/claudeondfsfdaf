@@ -1,7 +1,7 @@
 name: Review memory history primitives
 on:
   push:
-    branches: [build-scope-wire, build-scope-joined]
+    branches: [build-scope-wire, build-scope-joined, v2-scope]
     paths:
       - .github/workflows/review-memory-fence.yml
       - packages/core/src/review/model-attempt.ts

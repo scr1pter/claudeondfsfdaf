@@ -2,7 +2,7 @@ name: VectorScope repository identity
 
 on:
   push:
-    branches: [build-scope, build-scope-witness, build-scope-owner, build-scope-joined]
+    branches: [build-scope, build-scope-witness, build-scope-owner, build-scope-joined, v2-scope]
     paths:
       - .github/workflows/scope-directory-identity.yml
       - packages/core/src/directory-identity.ts

@@ -3,6 +3,8 @@ name: VectorScope settings validation
   push:
     branches:
       - build-scope-ui
+      - v2-scope
+  workflow_dispatch:
 permissions:
   contents: read
 env:
