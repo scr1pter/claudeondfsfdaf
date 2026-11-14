@@ -56,6 +56,9 @@ The current exact-head GitHub checks remain the merge gate.
 | Final client/schema generation and CLI help | Client, legacy SDK, config and workflow generation passed; CLI help 2 passed / 58 assertions | Real drift only: held repair description and hidden experimental command description. |
 | Workflow policy fixtures | 51 passed, 930 assertions | Real local Bash and its utilities, isolated synthetic CLI functions; no live service calls. |
 | Codium/Scope admission integration | 2 passed, 20 assertions | Loopback transport plus real SQLite parent fence, retry/finalizer admission and verify/judge token-stop order; no paid gateway claim. |
+| Actions tool restrictions | 10 passed, 63 assertions | Actual registry/session restrictions, synthetic ready computer outside Actions, and fake browser/model transports. The smoke child's desktop identity is isolated to its fixture helper. |
+| Shared ask/phone notifications | 10 passed, 37 assertions | One paired-phone send; toast replacement preserves the five-second cooldown. Actual controller, fake destinations; App types pass. |
+| Plan-name scan and memory HTTP fixture | 6 / 3 passed; 54 / 38 assertions | Bounded complete file scan; fixed decay clock retains strict privacy/internal-learning equality. Engine types pass. |
 | First shared candidate `fbf1eb1b3` | Vercel preview build, cloud-workspace lane, public-sharing lane and standalone-installer lane passed | Browser fixture callback and task fixture owner-model failures were diagnosed and fixed afterward; this head does not qualify later changes. |
 
 Initial full task-provider Linux CI selected no owner VectorScope model and refused before consent. The test fixture now
@@ -91,11 +94,23 @@ Candidate `f2988d6ad` passed the actual browser lanes: Connect `43629597338` (22
 plaintext approval), Scope settings `43629597469` (9 browser tests plus 3 picker cases), GitHub desktop `43629597501`
 (31 tests), and Scope memory UI `43629547468` (50 tests). Its production navigation comparison is still pending.
 These are historical receipts for that source, not final-head qualification or a performance improvement claim.
+Later candidate `f830e3fdf` passed all four browser lanes again (112 Chromium cases plus 3 picker cases), Windows
+background containment `43631068610`, review history primitives `43631061345`, and all five workspace typecheck jobs.
+Its source-pinned production navigation run `43631084450` passed all nine measurements with no blank/unknown samples.
+`evidence/ui-navigation-candidate-f830-2026-11-14.json` preserves full metrics, source provenance and all nine raw-trace
+hashes. Artifact `14128686065` matches authenticated SHA-256
+`9164cda9cb6cacfdedad06352863750a85e8a0d9e0858c52d12ab79d24c5a2a7`. Three unpaired repeats per scenario are not a
+latency guarantee; the observed new-session medians were slower, so no general speed improvement is claimed.
 
 Linux repository-identity run `43629547399` caught a real missed equal-size content edit with restored mtime. The
 subsequent conservative repair removes private index stat refreshes while preserving the semantic staged-tree/ref proof
-and every test. Review pipeline revision is now 3, source digest `475f1f0fb5539472`; the named evidence test passed
-30 cases / 393 assertions locally. Certificates remain empty. Linux qualification must pass on the repaired head.
+and every test. Repaired run `43631057799` passed the actual restored-mtime negative; its read-only Git file passed
+70 cases / 320 assertions with one explicit unsupported-host skip. Owner controls (30), real HTTP/lost-response recovery
+(13) and genuine connected worktree providers (14) also passed; their platform skips remain explicit.
+
+After the verified-alias privacy repairs, review pipeline revision is 4, source digest `643ad6c25830b2b7`; its 59 pinned
+files now include the connected hub, Scope adapter and shared Connect policy. The named evidence test passed
+30 cases / 393 assertions locally. Certificates remain empty. New source still requires fresh exact-head qualification.
 
 The Node smoke fixture now seeds both its merged desktop config and its actual isolated owner-global config, and
 checks `GET /global/config` before testing consent. The real Node execution remains a CI gate; the fixture repair does

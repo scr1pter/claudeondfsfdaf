@@ -54,7 +54,66 @@ The helper is now in the workflow's pull-request paths, the same list consumed b
 
 The named Windows check `bun test --timeout 30000 ./test/everywhere-lane.test.ts --test-name-pattern "the lane's shape"`, run from `packages/web`, passed eight cases and 57 assertions. Five Unix Bash scope/picker cases were filtered out and are not local passes; hosted Linux must run them, including the new tombstone-only case. The first Windows attempt also exposed a fixture scanner issue: `Bun.Glob` yields native separators, while `path.posix.dirname` requires forward slashes. Normalizing only those relative paths corrected the fabricated import names without allowing any additional source or dropping any actual-import check.
 
+## Subsequent full-suite integration repairs
+
+The original main checks were inspected: `43620662183` (types) and `43620664452` (Verify) passed; `43620659749`
+failed on a retired numbered plan label quoted in the integration plan and on a scheduler-dependent exact token mean
+in the memory HTTP fixture. The plan now describes the retired label without repeating it. The name scan also exhausted
+Windows file handles locally because it opened all tracked files concurrently; batches of 64 preserve every scanned
+file, strict matcher and coverage assertion. Its complete named file passed 6 cases / 54 assertions after the repair.
+
+The memory fixture freezes and always restores its wall clock, ages an ordinary row by exactly one half-life, and
+keeps the strict 1200-token / 0.20-cost expectations. It now also proves the exact 0.5 weight and equality between the
+ordinary public arm and internal insight, including an unchanged second internal read after HTTP projection. The named
+HTTP file passed 3 cases / 38 assertions. No production learning, tokenomics or privacy projection code changed.
+
+Exact `f830e3fdf` full unit jobs `132557600940` (Linux) and `132557600965` (Windows) exposed duplicate paired-phone
+alerts from the joined layout controller. The extra call is removed. Replacing an unviewed toast now dismisses only
+the old toast, preserving the new alert's five-second cooldown; replies and close retain full dismissal. The unchanged
+strict notification cases and new replacement-boundary case passed together: 10 cases / 37 assertions. App types pass.
+
+The same source's six Node sandbox cells passed, but its Bun cell failed before executing the probe because Bun 1.3.14
+misbundled the installed Undici ESM re-export. The CI-only assembler now preserves that installed wrapper byte-for-byte
+as an immutable asset for the Bun artifact. A focused actual-import fixture checks both named and default exports.
+Production runtime code and all containment, cleanup and deadline assertions remain unchanged. Engine types pass;
+the new build/import test and real Bun cell still need fresh hosted execution.
+
+These repairs are not final-head CI receipts. All affected shared lanes must qualify the next pushed candidate.
+
+The broader Engine shards also exposed stale integration fixtures: the Engine manifest expected only 101 live events
+despite retaining both Hands and Connect (the canonical Schema defines 102); the browser IPC inventory still named its
+old inlined file; and a fix-worktree graph omitted explicit Connect opt-in, leaving its hidden fix agent undefined.
+The manifest now checks the combined count; the inventory moves the same single IPC attribution to the extracted
+helper; the graph opts in explicitly. Local named checks passed 2 / 5 / 13 cases with 25 / 12 / 175 assertions.
+The five-review cap scenario omits an unrelated preceding-request review while retaining all five actual reviews,
+the intervening fix and the refused sixth review. That actual private-Git path still requires Linux CI.
+
+Two POSIX terminal cases now create real parent/helper Session rows instead of only populating a display-lineage map.
+The terminal named file passed 16 cases / 63 assertions on Windows, with 39 POSIX cases explicitly skipped; the new
+lineage cases therefore remain Linux-CI requirements. The terminal-admission fixture also distinguishes the mandatory
+`unsandboxed_terminal` opening ask from typed commands' separate `unsandboxed_shell` ask. It registers no tests on
+Windows, so a zero exit from that local file is recorded as not run, not a pass.
+
+The connected authority fixes preserve verified lexical root and subtree mappings. Real Windows junction tests first
+reproduced lost ASK/DENY and nonsecret preflight restrictions; they now pass without granting an unrelated parent or
+sibling prefix authority. An observed alias retarget permanently retires its capability even if the old target is
+restored. Full hub validation passed 48 cases / 378 assertions with independent review and Engine types.
+
+HTTP instance middleware now verifies that the final workspace-routed path exists and is a directory before discovery
+or bootstrap can create anything. Its actual named HTTP file passed 10 cases / 26 assertions, including literal percent
+paths, missing paths remaining absent, ordinary-file refusal and workspace precedence. The consent/auth/cancel fixture
+uses actual registered groups and handlers with an explicitly inert test member, retaining a separate actual production
+assembly refusal check; 12 Windows cases / 125 assertions passed. No production member or injection backdoor is added.
+
 ## Validation
+
+The remaining Connect review fixtures now select their model through the real owner-global configuration, restore
+its exact previous bytes, and invalidate configuration after setup/cleanup. The headless child uses its own pinned XDG
+configuration. CLI/Connect equivalence compares matching pinned HEAD and policy snapshots, including rules provenance;
+the size-limit case retains an incomplete/partial result rather than claiming a clean review. These five test-only files
+do not add a production fallback or alter protected review execution. Named Windows results: loop 2 cases / 26 assertions,
+after-run 21 / 101, affected Scope guards 2 / 24, and Engine types. Heavy headless execution and Linux private-Git positive
+paths remain CI-required; Windows guard returns are not evidence that those paths passed.
 
 Windows; Bun 1.3.14. Frozen installation with scripts disabled completed in 35.23 seconds; the lockfile did not change. The coordinated local Bun slot was released after these checks:
 
