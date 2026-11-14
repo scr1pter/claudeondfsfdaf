@@ -68,16 +68,14 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 - The docs: `v2-integration.md` (merge log, plus the list of deleted branches with their SHAs), `v2-spawn-review.md`, `v2-finish-plan.md`, and this file.
 - The design folder.
 
-**Pending first step:** fast-forward `main` to `v2`.
-- Check first that `v2`'s `test` run is green. Run 43567384542 failed only on a Linux Bun segfault and was re-run.
-- Then retarget open PRs to `main` and delete `v2`.
+**Done 2026-11-14:** `main` was fast-forwarded to `v2` at `983fe7025` (#26, #27, Codium and the docs; `v2` test run 43567384542 green on its re-run). Open PRs were retargeted to `main` (#21, #29, #30, #31). `v2` now equals `main`. Delete it once no running lane still references it, and target `main` for everything.
 
 **Lanes that were in progress.** Each may have pushed commits and a draft PR into `v2`. Check `gh pr list`, re-fetch, and continue from the branch head.
 
 | Branch | What it is | Left to do |
 |---|---|---|
 | `v2-hands` | Hands (computer use) integration, from `hands`. Hands is done: last code commit `a0e5ce8e8` all green; unsigned package handoff `4eb9f52fd` | Merge `main` in and resolve 10 conflicts per `v2-spawn-review.md`:<br>• `task/shells.ts`: Hands' `beforeSpawn` recheck runs before #26's `background.start` writes a job row.<br>• `pages/layout.tsx`: Codium's `sendPhoneAlert` moves into Hands' `ask-notifications.ts`.<br>• Eight mechanical files.<br>Then review, CI and merge. Close #22 |
-| `v2-complete` | One combined branch for @vector, VectorScope, connected workspace and Vector everywhere, built from `build-complete` (`00b87034f`) | Fold in `v2`/`main`, plus the stopped lanes `v2-vector`, `v2-scope`, `v2-connect` and `v2-everywhere` (all on origin), and the review findings for connect and everywhere.<br>Resolve process spawn per `v2-spawn-review.md`: one signaler per spawn, the owner is the outermost layer, and the Windows background path keeps the isolation floor.<br>Renumber VectorScope's Brain migrations after Codium's `20261213`/`20261214` and add an ordering test.<br>After Hands lands, merge `main` again and resolve the Hands × @vector/scope/connect conflicts.<br>Full CI, three-lens review, merge. Close #25 |
+| `v2-complete` (**not created yet**: the build step stopped before pushing; follow `docs/vector/build/v2-notes/v2-complete-plan.md`, which gives the exact merge order, all 14 conflict resolutions and the Tier A / B / C fix lists) | One combined branch for @vector, VectorScope, connected workspace and Vector everywhere, built from `build-complete` (`00b87034f`). Estimate: 1–1.5 days for a reviewed, green branch with Tier A fixed; 2–3 days with Tier B | Fold in `v2`/`main`, plus the stopped lanes `v2-vector`, `v2-scope`, `v2-connect` and `v2-everywhere` (all on origin), and the review findings for connect and everywhere.<br>Resolve process spawn per `v2-spawn-review.md`: one signaler per spawn, the owner is the outermost layer, and the Windows background path keeps the isolation floor.<br>Renumber VectorScope's Brain migrations after Codium's `20261213`/`20261214` and add an ordering test.<br>After Hands lands, merge `main` again and resolve the Hands × @vector/scope/connect conflicts.<br>Full CI, three-lens review, merge. Close #25 |
 | `cloud-workspaces` (#21, base `v2`) | Persistent cloud sessions | Merge `main` in. Move `closeCloudWorkspaces` into Codium's staged `finishAccountDeletion`. Change "credits" to percentages-only copy. CI, review, merge |
 | `agent-environment` | The agent's own terminals and browser (original commit `0806bafd7`) | Bug review, finish on top of `main`'s newer process and browser pieces, tests, CI, review, merge |
 | `v2-codium-acceptance` | Codium B09, B10 and B11 acceptance runs | Finish, CI, merge. B08 waits until @vector is in |
@@ -150,6 +148,8 @@ These block shipping, not merging.
   - A trademark search for "Vector Hands".
 
 ## Key documents
+
+- `docs/vector/build/v2-notes/`: the combined-branch plan (`v2-complete-plan.md`), the @vector and VectorScope plan notes, and the review findings for connect and everywhere.
 
 - `docs/vector/build/v2-finish-plan.md`: the full assessment, conflicts and merge simulation, and owner decisions A0–A21. It was written before the owner's later answers, which this file supersedes.
 - `docs/vector/build/v2-spawn-review.md`: how process spawn, ownership and isolation must combine.
