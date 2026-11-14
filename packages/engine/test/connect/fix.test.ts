@@ -654,7 +654,8 @@ describe("re-reviews", () => {
     () =>
       Effect.gen(function* () {
         if (process.platform !== "linux") return yield* unsupportedGit
-        const { directory, hub, session } = yield* setup
+        // This case needs one request and five reviews; it does not need setup's extra prior-request review.
+        const { directory, hub, session } = yield* fixture
         let round = 0
         const words = ["Off by one", "Unchecked null", "Leaked handle", "Wrong unit", "Race on write", "Stale cache"]
         script.outcome = () => {
@@ -885,6 +886,7 @@ const merging = testEffect(
     [
       [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
       [Npm.node, NpmTest.noop],
+      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true })],
     ],
   ),
 )
@@ -941,6 +943,7 @@ describe("merging a fix worktree", () => {
           }).pipe(Effect.orDie),
         )
         const fixer = yield* agents.get(ConnectPolicy.FIX_AGENT)
+        expect(fixer?.name).toBe(ConnectPolicy.FIX_AGENT)
         const title = "Fix 1 finding from cr_test"
         yield* isolation.reserve({ taskID: child.id, parentSessionID: parent.id, title, agent: fixer })
         expect((yield* isolation.start(child.id)).record.mode).toBe("worktree")
