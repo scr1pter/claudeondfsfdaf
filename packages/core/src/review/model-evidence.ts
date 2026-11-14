@@ -54,12 +54,12 @@ import {
 // promptsDigest catches a change to the text of the core prompts and output schemas without a bump, since it renders
 // every section a prompt can have; it cannot see a runner filling those inputs differently or a change to the prompts'
 // length limits.
-export const REVIEW_PIPELINE_REVISION = 2
+export const REVIEW_PIPELINE_REVISION = 3
 
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "8695033d81ee1b36"
+export const REVIEW_PIPELINE_SOURCES = "475f1f0fb5539472"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.

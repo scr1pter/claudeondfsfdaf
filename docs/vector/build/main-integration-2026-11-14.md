@@ -14,7 +14,7 @@ histories. This record concerns source integration, not release publication or p
 | Cloud workspaces | `cloud-workspaces` at `d0300404e` | Preserved pilot admission and confirmed remote erasure before account removal. |
 | Agent environment | `agent-environment` at `fa938a090` | Terminal input serialization, lifecycle and notification work, browser controls and cleanup; late Hands authority checks remain before every typed byte. |
 | Locks | `v2-locks` at `06814f1df` | Included cleanup error reporting and competing directory-creation repairs. |
-| Native isolation | `build-native-shell` through `19aabf9ee`, stat-refresh repair `c3ce00d12` | Inactive build; owned/native combinations and fixed helper bypasses refuse before launch. |
+| Native isolation | `build-native-shell` through `19aabf9ee`, semantic snapshot proof from `c3ce00d12`, conservative cache removal from `3c88193f3` | Inactive build; owned/native combinations and fixed helper bypasses refuse before launch. The failed private stat-cache optimization is removed. |
 | Owner setup / build coordination | `6f4a7c5bb`, `41dac6f72` | Retained as clearly labelled historical proposals and receipts. |
 
 ## Repairs made while joining the work
@@ -87,8 +87,19 @@ The production UI baseline completed successfully in run `43623921815`, job `132
 `2f88021845bd5fc74ea001d96729b4fcfb2524fa` and Node 24.15.0. All nine navigation measurements (three scenarios, three
 repeats) are preserved in `evidence/ui-navigation-baseline-2026-11-14.json`. Raw traces are in GitHub artifact
 `14125262951`, SHA-256 `00892816ee1ef3e8f64b8ac2ba5e5b1bf4d990dedccadab28bc56afb5025ec12`.
-The candidate comparison and actual C7 browser assertion are still pending at this record's preparation; no performance
-improvement or final-head CI result is inferred from the baseline.
+Candidate `f2988d6ad` passed the actual browser lanes: Connect `43629597338` (22 tests, including the C7 full-patch
+plaintext approval), Scope settings `43629597469` (9 browser tests plus 3 picker cases), GitHub desktop `43629597501`
+(31 tests), and Scope memory UI `43629547468` (50 tests). Its production navigation comparison is still pending.
+These are historical receipts for that source, not final-head qualification or a performance improvement claim.
+
+Linux repository-identity run `43629547399` caught a real missed equal-size content edit with restored mtime. The
+subsequent conservative repair removes private index stat refreshes while preserving the semantic staged-tree/ref proof
+and every test. Review pipeline revision is now 3, source digest `475f1f0fb5539472`; the named evidence test passed
+30 cases / 393 assertions locally. Certificates remain empty. Linux qualification must pass on the repaired head.
+
+The Node smoke fixture now seeds both its merged desktop config and its actual isolated owner-global config, and
+checks `GET /global/config` before testing consent. The real Node execution remains a CI gate; the fixture repair does
+not introduce a product fallback, alter consent assertions, or extend its deadline.
 
 The no-content merges for `hands-diagnostics` and `codium-legal` retain original history without reverting current code.
 The former is backed by the explicit supersession map; the latter follows the owner's archive-only decision and an
