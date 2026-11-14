@@ -296,7 +296,7 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
   const validator = record(all["validate-dispatch"])
   expect(validator.if).toBeUndefined()
   expect(validator.needs).toBeUndefined()
-  expect(validator["runs-on"]).toBe("ubuntu-24.04")
+  expect(mainExpression(String(validator["runs-on"]), {}, "pull_request")).toBe("ubuntu-24.04")
   expect(validator["timeout-minutes"]).toBe(2)
   expect(validator.permissions).toEqual({ contents: "read" })
   expect(validator["continue-on-error"]).toBeUndefined()
@@ -315,6 +315,24 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
     expect(typeof needs === "string" ? [needs] : needs, name).toContain("validate-dispatch")
     expect(String(record(value).if), name).not.toMatch(/always\(\)|failure\(\)/)
   }
+})
+
+test("Windows diagnostic validation uses its native runner without changing other modes", () => {
+  const host = String(record(record(main.document.jobs)["validate-dispatch"])["runs-on"])
+  for (const target of targets)
+    expect(mainExpression(host, { computer_helper: true, computer_helper_target: target }), target).toBe(
+      target === "windows-units" ? "windows-2025" : "ubuntu-24.04",
+    )
+  for (const event of ["pull_request", "push"])
+    expect(mainExpression(host, { computer_helper: true, computer_helper_target: "windows-units" }, event)).toBe(
+      "ubuntu-24.04",
+    )
+  for (const mode of [
+    {},
+    { computer_helper_target: "windows-units" },
+    { computer_helper: false, computer_helper_target: "windows-units" },
+  ])
+    expect(mainExpression(host, mode)).toBe("ubuntu-24.04")
 })
 
 test("valid native choices, Node, Hands and study modes run only their named jobs", () => {
