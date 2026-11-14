@@ -528,21 +528,41 @@ it.instance("native Subagents include the configurable coding specialists and de
       .map((agent) => agent.name)
       .toSorted()
     // The hidden workflow coordinator (WP31, G.4) is native too: an engine-reserved name, not a specialist to turn off.
-    // So is connected tools' hidden fix agent (CW-07), which only connect launches.
+    // Connected tools' hidden fix agent (CW-07) is absent while connected tools are off (the default).
     expect(specialists).toEqual(
-      [
-        ...NATIVE_SPECIALISTS,
-        RESEARCHER,
-        RESEARCH_JUDGE,
-        WorkflowMarkers.WORKFLOW_AGENT,
-        ConnectPolicy.FIX_AGENT,
-      ].toSorted(),
+      [...NATIVE_SPECIALISTS, RESEARCHER, RESEARCH_JUDGE, WorkflowMarkers.WORKFLOW_AGENT].toSorted(),
     )
     expect(NATIVE_SPECIALISTS).not.toContain(RESEARCHER)
     expect(NATIVE_SPECIALISTS).not.toContain(RESEARCH_JUDGE)
     expect(NATIVE_SPECIALISTS).not.toContain(WorkflowMarkers.WORKFLOW_AGENT)
     expect(yield* load((svc) => svc.get(WorkflowMarkers.WORKFLOW_AGENT))).toMatchObject({ hidden: true })
   }),
+)
+
+// CW-08 gap: `vector agent list` printed connect_fix with the flag off. It exists only while connected tools are on,
+// and with them off a config agent of that name is dropped rather than created.
+const connected = testEffect(agentLayer({ experimentalConnect: true }))
+
+connected.instance("connected tools on registers the hidden fix agent and keeps task from launching it", () =>
+  Effect.gen(function* () {
+    const fix = yield* load((svc) => svc.get(ConnectPolicy.FIX_AGENT))
+    expect(fix).toMatchObject({ name: ConnectPolicy.FIX_AGENT, mode: "subagent", native: true, hidden: true })
+    expect((yield* load((svc) => svc.list())).map((agent) => agent.name)).toContain(ConnectPolicy.FIX_AGENT)
+    const build = yield* load((svc) => svc.get("build"))
+    expect(Permission.evaluate("task", ConnectPolicy.FIX_AGENT, build!.permission).action).toBe("deny")
+  }),
+)
+
+it.instance(
+  "connected tools off registers no fix agent, even one named in config",
+  () =>
+    Effect.gen(function* () {
+      expect(yield* load((svc) => svc.get(ConnectPolicy.FIX_AGENT))).toBeUndefined()
+      expect((yield* load((svc) => svc.list())).map((agent) => agent.name)).not.toContain(ConnectPolicy.FIX_AGENT)
+      const build = yield* load((svc) => svc.get("build"))
+      expect(JSON.stringify(build!.permission)).not.toContain(ConnectPolicy.FIX_AGENT)
+    }),
+  { trusted: true, config: { agent: { [ConnectPolicy.FIX_AGENT]: { description: "Mine", mode: "subagent" } } } },
 )
 
 it.instance(
