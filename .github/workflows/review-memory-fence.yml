@@ -17,6 +17,9 @@ on:
       - packages/core/test/session/memory-fence*.test.ts
       - packages/engine/src/session/llm.ts
       - packages/engine/test/session/llm-memory-fence.test.ts
+      - packages/engine/src/review/run.ts
+      - packages/engine/src/review/model.ts
+      - packages/engine/test/review/codium-scope-integration.test.ts
       - packages/engine/test/session/llm.test.ts
       - packages/core/src/database/migration/**
       - packages/core/src/database/migration.gen.ts
@@ -86,3 +89,6 @@ jobs:
       - name: Check ordinary model wire and usage compatibility
         working-directory: packages/engine
         run: bun test test/session/llm.test.ts --timeout 60000
+      - name: Check Codium and VectorScope admission/history integration
+        working-directory: packages/engine
+        run: bun test test/review/codium-scope-integration.test.ts --timeout 60000
