@@ -222,11 +222,12 @@ const count = (file: string) =>
   )
 
 // A program that counts into a file in its folder every 50 ms, the second one deaf to the close's hangup and terminate.
-const LOOP = 'i=0; while :; do i=$((i+1)); echo "$i" > %s; sleep 0.05; done'
+// Replace each sample atomically: a reader must not mistake echo's truncate-before-write window for a stopped counter.
+const LOOP = 'i=0; while :; do i=$((i+1)); echo "$i" > %s.next; mv %s.next %s; sleep 0.05; done'
 const counter = (file: string, deaf = false) => ({
   action: "open",
   command: "/bin/sh",
-  args: ["-c", `${deaf ? "trap '' HUP TERM; " : ""}${LOOP.replace("%s", file)}`],
+  args: ["-c", `${deaf ? "trap '' HUP TERM; " : ""}${LOOP.replaceAll("%s", file)}`],
 })
 
 if (process.platform !== "win32")

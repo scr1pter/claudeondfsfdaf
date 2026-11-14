@@ -3894,6 +3894,644 @@
         ]
       }
     },
+    "/experimental/brain/run-bundle/preview": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.brain.preview",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "enum": ["brain/bundle.json"]
+                    },
+                    "base64url": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "entries": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "skills": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": ["path", "base64url", "sha256", "bytes", "entries", "skills"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AccountWorkApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AccountWorkApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Preview explicitly selected repository Brain bytes without uploading",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "includeBrain": {
+                    "type": "boolean",
+                    "enum": [true]
+                  },
+                  "publicRepository": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["includeBrain", "publicRepository"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.brain.preview({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/brain/run-proposals/import": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.brain.importProposals",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "proposed": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "known": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "refused": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "over": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": ["proposed", "known", "refused", "over"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AccountWorkApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AccountWorkApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stage owner-selected returned Brain drafts for review",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "enum": ["brain/proposals.json"]
+                  },
+                  "base64url": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "maxLength": 699051
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "publicRepository": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["path", "base64url", "sha256", "publicRepository"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.brain.importProposals({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workflow/playbooks": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.playbooks.list",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "type": "string"
+                      },
+                      "sha256": {
+                        "type": "string"
+                      },
+                      "installed": {
+                        "type": "boolean"
+                      },
+                      "current": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["name", "version", "sha256", "installed", "current"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AccountWorkApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AccountWorkApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List owner Playbooks for personal installation",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.playbooks.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workflow/playbooks/install": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.playbooks.install",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "version"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AccountWorkApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AccountWorkApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Install a selected Playbook in owner configuration",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^vector-[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "maxLength": 64
+                  },
+                  "version": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "replace": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["name", "version", "sha256"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.playbooks.install({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/hosted-jobs": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.hosted.jobs",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "delivered": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["id", "delivered"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AccountWorkApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AccountWorkApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Reconnect hosted jobs to their original owner conversation",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.hosted.jobs({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.hosted.attach",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "delivered": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["id", "delivered"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AccountWorkApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AccountWorkApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Return a current-account hosted job report to this owner conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jobID": {
+                    "type": "string",
+                    "pattern": "^(?:jb|jr)_[a-z2-7]{26}$"
+                  }
+                },
+                "required": ["jobID"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.hosted.attach({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/workflow/saved": {
       "get": {
         "tags": ["experimental"],
@@ -9489,6 +10127,167 @@
         ]
       }
     },
+    "/memory/backup": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.backup",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This computer's memory as Brain Vault backup files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryBackup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.",
+        "summary": "Memory for a Brain Vault backup",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.backup({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/restore": {
+      "post": {
+        "tags": ["memory"],
+        "operationId": "memory.restore",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the restore brought back",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryRestoreResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.",
+        "summary": "Restore memory from your Brain Vault",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "section": {
+                    "type": "string",
+                    "enum": ["memory", "skills", "insights"]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "worktree": {
+                    "type": "string"
+                  }
+                },
+                "required": ["text", "repository"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.restore({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/memory/tidy": {
       "post": {
         "tags": ["memory"],
@@ -9718,6 +10517,12 @@
                   },
                   "skillDrafter": {
                     "$ref": "#/components/schemas/MemorySkillDrafter"
+                  },
+                  "codiumHelpers": {
+                    "$ref": "#/components/schemas/MemoryCodiumHelpers"
+                  },
+                  "distillation": {
+                    "type": "boolean"
                   },
                   "workflow": {
                     "$ref": "#/components/schemas/MemoryWorkflowLearning"
@@ -11477,6 +12282,92 @@
         ]
       }
     },
+    "/memory/bootstrap": {
+      "post": {
+        "tags": ["memory"],
+        "operationId": "memory.bootstrap.prepare",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A local scan and bounded document suggestions preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryBootstrap"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.",
+        "summary": "Prepare a repository Brain bootstrap",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.bootstrap.prepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/memory/documents/{documentID}/distill": {
       "get": {
         "tags": ["memory"],
@@ -11641,7 +12532,7 @@
             }
           }
         },
-        "description": "Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.",
+        "description": "Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.",
         "summary": "Find more with a model",
         "requestBody": {
           "content": {
@@ -16375,6 +17266,9 @@
                   "judge": {
                     "$ref": "#/components/schemas/TaskJudgeMode"
                   },
+                  "secondOpinion": {
+                    "type": "boolean"
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -17694,6 +18588,9 @@
                   "judge": {
                     "$ref": "#/components/schemas/TaskJudgeMode"
                   },
+                  "secondOpinion": {
+                    "type": "boolean"
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -17875,6 +18772,9 @@
                   },
                   "judge": {
                     "$ref": "#/components/schemas/TaskJudgeMode"
+                  },
+                  "secondOpinion": {
+                    "type": "boolean"
                   },
                   "parts": {
                     "type": "array",
@@ -28316,6 +29216,9 @@
           },
           "judge": {
             "$ref": "#/components/schemas/TaskJudgeMode"
+          },
+          "secondOpinion": {
+            "type": "boolean"
           }
         },
         "required": ["id", "sessionID", "role", "time", "agent", "model"],
@@ -36845,6 +37748,16 @@
         "required": ["code", "message"],
         "additionalProperties": false
       },
+      "AccountWorkApiError": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["message"],
+        "additionalProperties": false
+      },
       "WorkflowApiError": {
         "type": "object",
         "properties": {
@@ -39430,6 +40343,70 @@
         "required": ["entries", "known", "refused", "over"],
         "additionalProperties": false
       },
+      "MemoryBackupFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string",
+            "enum": ["memory", "skills", "insights"]
+          },
+          "text": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "section", "text", "repository"],
+        "additionalProperties": false
+      },
+      "MemoryBackup": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryBackupFile"
+            }
+          }
+        },
+        "required": ["files"],
+        "additionalProperties": false
+      },
+      "MemoryRestoreResult": {
+        "type": "object",
+        "properties": {
+          "restored": {
+            "type": "number"
+          },
+          "active": {
+            "type": "number"
+          },
+          "pinned": {
+            "type": "number"
+          },
+          "waiting": {
+            "type": "number"
+          },
+          "known": {
+            "type": "number"
+          },
+          "refused": {
+            "type": "number"
+          },
+          "documents": {
+            "type": "number"
+          }
+        },
+        "required": ["restored", "active", "pinned", "waiting", "known", "refused", "documents"],
+        "additionalProperties": false
+      },
       "MemoryTidy": {
         "type": "object",
         "properties": {
@@ -39489,6 +40466,10 @@
         "type": "string",
         "enum": ["off", "local-only", "always"]
       },
+      "MemoryCodiumHelpers": {
+        "type": "string",
+        "enum": ["ask", "on", "off"]
+      },
       "MemoryWorkflowLearning": {
         "type": "string",
         "enum": ["apply", "observe", "off"]
@@ -39516,6 +40497,12 @@
           },
           "skillDrafter": {
             "$ref": "#/components/schemas/MemorySkillDrafter"
+          },
+          "codiumHelpers": {
+            "$ref": "#/components/schemas/MemoryCodiumHelpers"
+          },
+          "distillation": {
+            "type": "boolean"
           },
           "workflow": {
             "$ref": "#/components/schemas/MemoryWorkflowLearning"
@@ -39753,6 +40740,14 @@
           },
           "pricedWeight": {
             "type": "number"
+          },
+          "codium": {
+            "type": "string",
+            "enum": ["only", "mixed"]
+          },
+          "ownUnpriced": {
+            "type": "boolean",
+            "enum": [true]
           },
           "tokens": {
             "type": "number"
@@ -40724,6 +41719,45 @@
           }
         },
         "required": ["enabled", "sections"],
+        "additionalProperties": false
+      },
+      "MemoryBootstrap": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["ready"]
+          },
+          "queued": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "maxTokens": {
+            "type": "number"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "estimate": {
+                  "$ref": "#/components/schemas/MemoryDistillEstimate"
+                }
+              },
+              "required": ["id", "title", "estimate"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["type", "queued", "pending", "maxTokens", "documents"],
         "additionalProperties": false
       },
       "MemoryDistillResult": {
@@ -48971,6 +50005,16 @@
             },
             "required": ["floor", "default", "ceiling"],
             "additionalProperties": false
+          },
+          "judge": {
+            "type": "string"
+          },
+          "review": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["triage", "confirm", "panelJudge"]
+            }
           }
         },
         "additionalProperties": false

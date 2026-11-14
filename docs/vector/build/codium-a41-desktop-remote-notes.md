@@ -1,0 +1,73 @@
+# A41 Desktop Remote: implementation record
+
+A41 builds on A40 (tickets, devices, kill), A39 (the relay and its wire protocol, `@vectordevai/relay/protocol`), A38
+(the phone app, its alert decoder and the Settings → Notifications choices) and A37 (`POST /api/notify/send`). No
+relay, account service, push service or Cloudflare was called, and nothing was deployed. The tests drive the desktop's
+half against a fake relay socket and a simulated phone that runs the phone's half of the same protocol with a
+software passkey. Readings of the contract are in `codium-deviations.md` under "A41 desktop Remote (4 Nov 2026)".
+
+## What changed
+
+| Area | Change |
+| --- | --- |
+| WebAuthn | `packages/core/src/webauthn/verify.ts` (new, WebCrypto only, runs under Node, Electron, Bun and a browser). `verifyRegistration` reads a `navigator.credentials.create()` answer: client data (`webauthn.create`, the challenge, the origin compared as an exact string, never cross-origin), authenticator data (relying party id hash, user presence, user verification by default, the attested credential) and its COSE key (ES256, EdDSA, RS256), from a small strict CBOR decoder. The attestation statement is not checked (Vector asks for `none`; trust comes from the pairing transcript). `verifyAssertion` checks a `get()` answer the same way, then the signature over `authenticatorData ‖ SHA-256(clientDataJSON)` (DER ECDSA converted to r‖s) and a counter that must go up unless both are 0. Every refusal is a `WebAuthnError` with a code. |
+| Crypto | `packages/desktop/src/main/remote-crypto.ts` (new, WebCrypto only, so the phone app can run the same code). Static X25519 identities; the QR link `<origin>/phone/pair#<offer>` (computer device id, static key, 32-byte secret, expiry, name), with the offer in the fragment only. PAIR messages sealed under HKDF(secret) with both device ids in the additional data; the transcript hash (both devices, both static keys, the expiry; length-prefixed); the passkey challenge (HMAC of the transcript), the phone's and the computer's proofs (HMACs over the transcript and the registration's hash); the six-digit check code (HKDF over the same, 40 bits mod 10^6); PAIR_DONE sealed under a static-static Diffie-Hellman key. Connections: INIT (phone's ephemeral key, nonce, an HMAC only a paired phone can make), ACCEPT (the computer's ephemeral key, nonce, confirmation), keys from all four Diffie-Hellman results and the transcript, one AES-256-GCM key per direction, nonces of direction and sequence number, the channel id and number in the additional data; a frame whose number is not above every earlier one is refused (gaps allowed, since the relay drops frames over its rate). `sealAlert` is A38's desktop-alert format. |
+| Pairing | `remote-pairing.ts` (new). The identity (device id, static key, alert key and id, paired phones) and the pairing ceremony: a five-minute offer, the sealed request checked (seal, proof, passkey on the exact phone origin with user verification, a name), `pair-pending` with the computer's proof, the check code on the desktop, and on the person's confirmation the phone stored and PAIR_DONE sent with the alert key. A second phone answering the same QR stops the pairing; three bad requests end it; five phones at most per computer. Also `PHONE_APP_ORIGIN`, `phoneAppOrigin(packaged)` (a development build may name another origin; a packaged one never), `relayName()` and `computerName()`. |
+| Passkey | `remote-passkey.ts` (new). A challenge per request, per phone, for two minutes, used up on the first try; verification with the stored credential and its counter saved. |
+| Routes | `remote-routes.ts` (new). The allowlist: `GET /project` (ids, names, folders, never the global `/`), session list, status, one session, children, todo, diff, messages, one message, `POST /session` (title only), `POST /session/:id/prompt_async` (text parts only: no tools, agent, model, system, files or permissions), abort, permission list and reply, question list, reply (labels only) and reject. Every request names a directory that must be one of the engine's projects; a query field may not move it. Permission replies are `reject` (with an optional note) or `once` after `POST /remote/approval` (the challenge) and a passkey assertion this computer verifies; `always` is refused. A phone's prompt marks its session (`createRemoteTurns`) before the engine starts the turn, until the engine reports the session idle. Answers over 4 MB are refused. |
+| Link | `remote-link.ts` (new). Tickets from `POST /api/remote/ticket` (role computer, device, static key, a plain kind of computer as the relay's name), the relay's `url` checked (`wss:`, `/v1/connect`), `vector.v1` and the ticket offered, a ping every 25 s, an in-band refresh when a phone arrives (`peers` with `refresh`) and every four minutes while one stays. Connected only while Remote is on and a phone is paired or a pairing is open. Close codes: revoked asks for one new ticket then stops; paused, relay off, device limit, fair use and replaced each say so and retry later. Phones: INIT from a paired phone only, the hello handshake (A38's `negotiate` numbers; an old phone is told to update), requests, watch and unwatch. No data frame is sent while the relay reports no phone attached, and a frame budget of 16 a second (burst 32) stays under the relay's 20. The engine's events are read only while a phone watches (or a phone's turn runs, to see it end), filtered to session, message, permission, question and todo events of the engine's projects, and batched every 250 ms per watching phone (500 ms past three watchers); an event over 16 KB goes as its ids. Answers over 40 KB go in parts. "Disconnect all phones": a new identity, `POST /api/remote/kill`, and `POST /api/remote/devices/<old>/revoke` so the old device's place is freed. Unpairing one phone, Remote on and off, sign-out. |
+| Alerts | `remote-notify.ts` (new). Seals each alert under the alert key and posts `{ciphertext, key, urgency}` to `/api/notify/send` with the desktop sign-in; only while a phone is paired; the same alert from several windows within a minute is sent once; 50 an hour. The app decides which go: `packages/app/src/context/phone-alerts.ts` (new) applies `phoneAlertAllowed` and sends only while the status lists `alerts` for the plan (read at most every five minutes). Triggers: finished (a session went idle and is not open on screen), needs you (a permission or question request auto-accept will not answer), Run Guard (the first `session.spend` warning in a session; no figures) and usage (the Codium usage card's 80% check). |
+| Auto-accept | `permission-auto-respond.ts` (`phoneTurnAllows`, `sessionLineage` exported) and `permission.tsx`: before auto-accept answers, the app asks the desktop whether a phone started the turn of the request's session or any session above it; if so, or if the check fails, the request is held for a person and shown like any other. `layout.tsx` uses the same check before skipping a request's notification. |
+| Keep-awake | `keep-awake.ts`: `watching` and `refresh()`. While a phone watches, every busy session holds the blocker, one waiting on a prompt included, and the stall rule is off. |
+| Tray | `tray.ts`: once a phone is paired, a Remote line (how many paired, connected, or watching) and "Disconnect all phones". |
+| Wiring | `remote-runtime.ts` (new): the identity sealed with `vault-secrets` (the OS credential store's key) in the `vector-remote` store, Egress labels, Electron's `WebSocket`, the engine over loopback, sign-in and sign-out from `vector-account-runtime.ts` (`onVectorAccountChanged`, new). `index.ts` starts it after the engine, gives keep-awake and the tray their hooks, and stops it on quit. `ipc.ts`, `preload/index.ts`, `preload/types.ts` and `renderer/index.tsx` expose `platform.remote` (status, on/off, pairing, confirm, cancel, unpair, Disconnect all, `isPhoneTurn`, changes) and `platform.phoneAlerts` (A38's interface); `app/src/context/platform.tsx` declares `RemotePlatform`. |
+| Vector Local | `packages/core/src/local-mode/sources.ts`: sources `remote` (tickets and the relay) and `phone-alerts`, purpose `account`, blocked. The relay's `wss:` address is decided as its `https:` form. Labels in `app/src/features/local/local-model.ts`. |
+| Docs | `docs/vector/MODEL-PLANS.md` (Desktop Remote bullet), `docs/vector/owner-actions/remote.md` ("The desktop's side"). |
+| Package | `packages/desktop/package.json` gains `@vectordevai/relay` (workspace, dev); `bun.lock` gains that one line. |
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+## The protocol, for A42
+
+Everything a phone needs is in `remote-crypto.ts`'s module comment and functions (the phone's half, `phoneInit`, `phoneFinish`, `openPair`, `openPairDone`, the proofs and the check code, is in the same file) and in `remote-phone.fixture.ts`, which is a working phone. Inside a channel, JSON messages:
+
+- phone → computer: `{t:"hello", protocol, minPeer}` first; then `{t:"req", id, method, path, directory, query?, body?}`, `{t:"watch"}`, `{t:"unwatch"}`, `{t:"bye"}`.
+- computer → phone: `{t:"hello", protocol, minPeer, name}`, `{t:"update", side}`, `{t:"res", id, status, body}` or, when large, `{t:"res", id, status, part, parts, data}` (base64url of the JSON's UTF-8 bytes, joined in order), `{t:"events", events: [{directory, type, properties, truncated?}]}`.
+- Pairing: the phone reads the link, sends `sealPair(secret, phone, computer, {t:"pair-request", v:1, key, name, registration:{clientDataJSON, attestationObject}, proof, hello})` (the passkey made with `passkeyChallenge(secret, transcript)`, `rp.id` the phone origin's host, user verification required), receives `pair-pending` (`proof`, check with `computerProof`, show `checkCode`) or `pair-refused`, then `pair-done` under `pairDoneKey` with `alertKey`, `alertKeyId` (store with A38's `saveAlertKey(alertKeyId, …)`), `hello` and `name`.
+- Approving once: `req POST /remote/approval {requestID}` gives `{challenge, rpId, allowCredentials, userVerification, expiresAt}`; the phone runs `navigator.credentials.get` and sends `req POST /permission/<id>/reply {reply:"once", passkey:{id, clientDataJSON, authenticatorData, signature}}` (base64url). Deny is `{reply:"reject", message?}`.
+- A phone sends data only on its user's action (the relay closes a phone idle for 30 minutes), refreshes its own ticket in-band, and should check the computer's static key in `peers` against the QR's.
+
+## Tests run here (one file at a time, `bun test --timeout 30000`)
+
+| Package | File | Result |
+| --- | --- | --- |
+| core | `test/webauthn/verify.test.ts` (new) | 12 pass |
+| desktop | `src/main/remote-crypto.test.ts` (new) | 15 pass |
+| desktop | `src/main/remote-routes.test.ts` (new; allowlist, passkey, auto-approve marks) | 14 pass |
+| desktop | `src/main/remote-link.test.ts` (new; tickets, relay, pairing end to end, channels, streaming, keep-awake flag, Disconnect all, origins) | 19 pass |
+| desktop | `src/main/remote-notify.test.ts` (new) | 6 pass |
+| desktop | `src/main/keep-awake.test.ts` (one new case) | 30 pass |
+| desktop | `src/main/vault-secrets.sign-ins.test.ts`, `external-agent-guards.test.ts`, `external-agent-credentials.test.ts` (unchanged; read the edited runtime, ipc and preload) | 4, 6, 3 pass |
+| app | `src/context/permission-auto-respond.test.ts` (four new cases: the auto-approve suppression) | 21 pass |
+| app | `src/context/phone-alerts.test.ts` (new) | 5 pass |
+| app | `src/features/local/local-model.test.ts`, `src/components/settings-v2/local-model.test.ts` (unchanged; source labels) | 39, 15 pass |
+| core | `test/local-mode/sources.test.ts` (unchanged; the two new sources) | 15 pass |
+| engine | `test/compliance/egress-inventory.test.ts` (unchanged; core's new module makes no connection) | 5 pass |
+| root | `test/no-project-wording.test.ts`, `test/no-topups.test.ts` (unchanged) | 2, 4 pass |
+
+S6's desktop half: the relay sees only public keys and sealed bytes (`remote-link.test.ts` scans every frame); approvals are verified on the desktop with the origin exactly the phone app's; a phone can allow once or deny, never always; turns started from the phone are never auto-approved (marked before the engine starts them, and the app asks before every auto-accept answer); a revoked computer asks for one new ticket and then stops (the server half, refusing a revoked account's tickets and closing its sockets, is A40's `remote-ticket-api.test.ts`). Four mutations each failed their test: skipping the passkey check (`remote-routes.test.ts`), taking the passkey's origin from its own client data (`remote-link.test.ts`), keep-awake ignoring a watching phone (`keep-awake.test.ts`), and the app's auto-accept answering a `permission.asked` without asking the desktop (`permission-auto-respond.test.ts`; that guard reads `permission.tsx`'s source, since the provider needs a running app).
+
+Also run here: `remote-crypto.ts` and `verify.ts` bundled and run once under Node 24.22 (the Node line Electron 42 ships): a full channel, a pairing seal, an alert, and a passkey registration and assertion.
+
+Typecheck: `packages/desktop` `tsgo -b` (which builds `packages/app` too) and `packages/core` `tsgo --noEmit` clean; `packages/app` `tsgo -b` clean. No API, schema or engine source changed, so no generator ran.
+
+**CI only / never exercised:** the Codium lane picks every new and changed test file; none has run in CI. Never exercised anywhere: the Electron wiring (`remote-runtime.ts`, the IPC handlers, the preload bridge, the tray lines) in a running app, which has typecheck and source review only; a real relay (A39's smoke runs the Worker under `wrangler dev --local` in CI); a real phone and a real platform passkey (A42's CI e2e with a virtual authenticator).
+
+## Not done
+
+- Settings → Remote (the QR, the check code, the paired phones, Disconnect all) and the phone's Remote routes are A42. `platform.remote` is ready for them.
+- `remote`'s readiness check in `perkServices` and the `remote` status meter stay with A42, as A40 recorded.
+- The app setting `remote.enabled` (§4.15) is not added: whether Remote is on lives in the main process (`vector-remote` store), which decides whether to connect; A42's Settings reads and sets it through `platform.remote`.
+- A phone cannot choose a model or an agent for its turn, and the engine's V2 runner routes are not exposed; A42 may widen the allowlist deliberately.
+- The usage alert fires from the Codium usage card's check, which runs while that card is shown, as the desktop's 80% notification already does.
+- Nothing was pushed or deployed.

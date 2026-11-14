@@ -63,6 +63,9 @@ export const load = Effect.fn("WorkflowLibrary.load")(function* (input: Loader) 
         if ((owned && !mapped) || !input.allowed(logical)) continue
         const source = mapped ?? logical
         const name = filename.slice(0, -5)
+        // Vector Playbooks belong to personal configuration. Even differently cased repository files cannot shadow
+        // or poison the reserved name's collision set.
+        if (owned && name.toLowerCase().startsWith("vector-")) continue
         const metadata = { name, title: name, source: owned ? ("repository" as const) : ("user" as const), inputs: [] }
         const parsed = yield* read(input.fs, source).pipe(
           Effect.map((text) => WorkflowSpec.parse(text, { source: "saved" })),

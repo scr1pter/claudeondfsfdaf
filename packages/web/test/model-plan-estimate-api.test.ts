@@ -347,7 +347,8 @@ describe("the route", () => {
       [403, "MODEL_PLAN_UPGRADE_REQUIRED"],
       [400, "MODEL_PLAN_MODEL"],
       [503, "MODEL_PLAN_MODEL_UNAVAILABLE"],
-      [400, "CODIUM_ESTIMATE_KIND"],
+      // The hosted form exists since WP A51; it answers only where the cloud computer can be started (not here).
+      [503, "HOSTED_UNAVAILABLE"],
       [400, "CODIUM_ESTIMATE_KIND"],
       [400, "CODIUM_ESTIMATE_KIND"],
       [400, "MODEL_PLAN_REQUEST"],
@@ -365,6 +366,53 @@ describe("the route", () => {
       expect(numbers).toEqual([])
     }
     expect(estimateKeys(fakes)).toEqual([])
+  })
+
+  test("the hosted form: a job's band on the plan's computer, clamped to its longest job, never an amount", async () => {
+    // WP A51. Max (48 USD of fixture allowance, 40% a day), on the owner's list of accounts that may start one.
+    const { fakes, token, id } = await plus("governing-highest-rank")
+    try {
+      expect(await estimate({ kind: "hosted", minutes: 240, size: "standard" }, token)).toMatchObject({
+        status: 503,
+        body: { error: { code: "HOSTED_UNAVAILABLE" } },
+      })
+      process.env.VECTOR_HOSTED_ALLOW_ACCOUNTS = id
+      // The Max payment is days old, so the trust ramp caps a job at 120 minutes (§4.2): 240 asked is 120, which is 130
+      // on the grid at the standard per-minute charge, so 2–5% of the month and 5–10% of today (every rounding errs
+      // upward, P2).
+      const job = await estimate({ kind: "hosted", minutes: 240, size: "standard" }, token)
+      expect(job).toEqual({ status: 200, body: { share: "2–5%", todayShare: "5–10%" } })
+      expect(await estimate({ kind: "hosted", minutes: 120, size: "standard" }, token)).toEqual(job)
+      expect(await estimate({ kind: "hosted", minutes: 100_000, size: "standard" }, token)).toEqual(job)
+      expect((await estimate({ kind: "hosted", minutes: 1, size: "standard" }, token)).body).toEqual({
+        share: "under 1%",
+        todayShare: "under 1%",
+      })
+      const refused = [
+        await estimate({ kind: "hosted", minutes: 60, size: "large" }, token),
+        await estimate({ kind: "hosted", minutes: 0, size: "standard" }, token),
+        await estimate({ kind: "hosted", minutes: 60, size: "huge" }, token),
+      ]
+      expect(refused.map((answer) => [answer.status, (answer.body.error as { code: string }).code])).toEqual([
+        [403, "HOSTED_NOT_INCLUDED"],
+        [400, "HOSTED_REQUEST"],
+        [400, "HOSTED_REQUEST"],
+      ])
+      expect(refused[0]!.body.error).toMatchObject({ perk: "computer", plan: "vector-200" })
+      for (const answer of [job, ...refused])
+        expect(JSON.stringify(answer.body)).not.toMatch(/\$|usd|credit|cents|:\s*-?\d/i)
+      expect(fakes.stripe.calls).toEqual([])
+      expect(fakes.openRouter.calls).toEqual([])
+      // A plan without a cloud computer.
+      const plain = await plus()
+      process.env.VECTOR_HOSTED_ALLOW_ACCOUNTS = plain.id
+      expect(await estimate({ kind: "hosted", minutes: 60, size: "standard" }, plain.token)).toMatchObject({
+        status: 403,
+        body: { error: { code: "HOSTED_NOT_INCLUDED", perk: "computer", plan: "vector-100" } },
+      })
+    } finally {
+      delete process.env.VECTOR_HOSTED_ALLOW_ACCOUNTS
+    }
   })
 
   test("a paused plan is refused as chat refuses it, before any estimate is stored", async () => {

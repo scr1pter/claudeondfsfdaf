@@ -14,7 +14,7 @@ import type { CallbackResponse, OnBeforeRequestListenerDetails, Session, WebCont
 // What Chromium sends that no webRequest listener sees is listed in the registry (LocalSources, chromium-network).
 
 /** What a Chromium session is for, which says what Vector Local lets it reach. */
-export type Kind = "app" | "agent-browser" | "research-browser" | "updates" | "billing" | "other"
+export type Kind = "app" | "agent-browser" | "research-browser" | "updates" | "billing" | "cloud-computer" | "other"
 
 /** Vector Local's decision for one request, with the registry source it is logged as. */
 export type Decision = LocalPolicy.Verdict & { readonly source: string; readonly purpose: LocalMode.Purpose }
@@ -324,6 +324,8 @@ function label(kind: Kind, input: string): { source: string; purpose: LocalMode.
   if (kind === "agent-browser") return { source: "agent-browser", purpose: "browser" }
   if (kind === "research-browser") return { source: "research-browser", purpose: "research-browser" }
   if (kind === "updates") return { source: "updates", purpose: "updates" }
+  // The cloud computer's live view window (WP A56) shows only the computer's own viewer page.
+  if (kind === "cloud-computer") return { source: "cloud-computer", purpose: "account" }
   const url = URL.canParse(input) ? webAddress(new URL(input)) : undefined
   if (kind === "app" && url) {
     const host = url.hostname

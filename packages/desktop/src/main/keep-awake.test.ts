@@ -350,6 +350,44 @@ describe("startKeepAwake", () => {
     keepAwake.stop()
   })
 
+  test("while a paired phone watches, a session waiting on a prompt holds the blocker, stalled or not", async () => {
+    const fake = engine()
+    const blocker = power()
+    const phone = { watching: false }
+    const keepAwake = startKeepAwake({
+      source: fake.source,
+      blocker: blocker.blocker,
+      stalledMs: 100,
+      watching: () => phone.watching,
+    })
+    await until(() => fake.streams.length === 1)
+    fake.current().push(fake.status("ses_a", "busy"))
+    await until(() => blocker.active.size === 1)
+    fake.current().push(fake.event("permission.asked", { id: "per_1", sessionID: "ses_a", permission: "bash" }))
+    await until(() => blocker.active.size === 0)
+
+    // A phone attaches and watches: the person can answer from it, so the computer stays awake.
+    phone.watching = true
+    keepAwake.refresh()
+    expect(blocker.active.size).toBe(1)
+    await pause(250)
+    expect(blocker.active.size).toBe(1)
+
+    // The phone leaves: the waiting session no longer counts.
+    phone.watching = false
+    keepAwake.refresh()
+    expect(blocker.active.size).toBe(0)
+
+    // Watching never holds the blocker with nothing busy.
+    phone.watching = true
+    fake.current().push(fake.status("ses_a", "idle"))
+    await until(() => blocker.active.size === 0)
+    await pause(50)
+    expect(blocker.active.size).toBe(0)
+    keepAwake.stop()
+    expect(blocker.active.size).toBe(0)
+  })
+
   test("forgets a disposed directory and does not ask it for statuses again", async () => {
     const fake = engine()
     const blocker = power()

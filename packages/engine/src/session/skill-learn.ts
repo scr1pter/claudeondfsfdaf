@@ -22,6 +22,8 @@ import { Provider } from "@/provider/provider"
 import { Instruction } from "./instruction"
 import { LLM } from "./llm"
 import { SessionMemory } from "./memory"
+import { SessionBrainHelper } from "./brain-helper"
+import { Billing } from "@vectordevai/schema/billing"
 import type { MessageID } from "./schema"
 import { Session } from "./session"
 import { TitleUsage } from "./title-usage"
@@ -70,9 +72,11 @@ export function drafts(input: {
   readonly held: boolean
   readonly run?: SpendGuard.Run
   readonly mayTrain: boolean
+  readonly codium?: boolean
+  readonly consent?: BrainSchema.CodiumHelpers
 }) {
   if (input.held || input.mayTrain || input.run?.stopped || input.run?.warned) return false
-  return input.setting === "always" || (input.setting === "local-only" && input.local)
+  return SessionBrainHelper.allowed(input)
 }
 
 // A run that did work rather than a lookup: this many completed tool calls at least, and a changed file.
@@ -92,6 +96,7 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const llm = yield* LLM.Service
     const events = yield* EventV2Bridge.Service
+    const brainHelper = SessionBrainHelper.bind({ brain, provider, guests, instruction, sessions })
 
     const run = Effect.fn("SessionSkillLearn.run")(function* (
       session: Session.Info,
@@ -197,9 +202,20 @@ const layer = Layer.effect(
       if (user.role !== "user") return undefined
       const primary = yield* provider.getModel(user.model.providerID, user.model.modelID).pipe(Effect.option)
       if (Option.isNone(primary)) return undefined
-      const model = (yield* provider.getSmallModel(user.model.providerID, user.model.modelID)) ?? primary.value
+      const model = yield* brainHelper.choose({ setting: "skillDrafter", primary: primary.value })
+      if (!model) return undefined
+      const settings = yield* brain.learnSettings()
       const mayTrain = freeModelMayTrain(primary.value) || freeModelMayTrain(model)
-      return drafts({ ...input, local: Egress.policy().enabled, mayTrain }) ? model : undefined
+      return drafts({
+        ...input,
+        setting: settings.skillDrafter,
+        local: Egress.policy().enabled,
+        codium: Billing.isCodium(model.providerID),
+        consent: settings.codiumHelpers,
+        mayTrain,
+      })
+        ? model
+        : undefined
     })
 
     // One request on the title helper's settings: no tools, no repository context, the run's trace wrapped as data. Its
@@ -215,6 +231,7 @@ const layer = Layer.effect(
       const title = yield* agents.get("title")
       if (!title || user.role !== "user") return undefined
       if (yield* spend.captured.stopped) return undefined
+      if (yield* guests.marked(session.id)) return undefined
       const usage = TitleUsage.create({
         sessionID: session.id,
         model,
@@ -223,6 +240,8 @@ const layer = Layer.effect(
         spend: spend.captured,
         costKind: yield* spend.costKind(model),
       })
+      if (!(yield* brainHelper.permitted(model, "skillDrafter"))) return undefined
+      if (Billing.isCodium(model.providerID) && !(yield* brainHelper.privateInput(session.id))) return undefined
       const reply = yield* llm
         .stream({
           agent: { ...title, name: "brain.skill", prompt: BrainSkill.PROMPT, temperature: 0 },
@@ -232,6 +251,7 @@ const layer = Layer.effect(
           tools: {},
           model,
           sessionID: session.id,
+          purpose: "brain",
           retries: 1,
           started: usage.started,
           messages: [{ role: "user", content: BrainSkill.request(trace) }],

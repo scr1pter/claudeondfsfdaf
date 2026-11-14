@@ -31,6 +31,7 @@ import { ReviewCommand } from "./cli/cmd/review"
 import { SessionCommand } from "./cli/cmd/session"
 import { TasksCommand } from "./cli/cmd/tasks"
 import { WorkflowCommand } from "./cli/cmd/workflow"
+import { PlaybooksCommand } from "./cli/cmd/playbooks"
 import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
@@ -38,6 +39,8 @@ import { VectorLoginCommand, VectorLogoutCommand, VectorWhoamiCommand } from "./
 import { OrgCommand } from "./cli/cmd/org"
 import { TrustCommand } from "./cli/cmd/trust"
 import { MemoryCommand } from "./cli/cmd/memory"
+import { VaultCommand } from "./cli/cmd/vault"
+import { ShipCommand } from "./cli/cmd/ship"
 import { LocalCommand } from "./cli/cmd/local"
 import { Heap } from "./cli/heap"
 import { disposeRuntimes } from "./effect/runtime-cleanup"
@@ -74,7 +77,18 @@ function show(out: string) {
 
 // Commands that must stay reachable without an account. `vector local` sets Vector Local up on a computer that may
 // reach no vectordev.ai at all, so every `vector local` command is open; `vector run --local` is not.
-const openCommands = new Set(["login", "logout", "whoami", "org", "completion", "uninstall", "upgrade", "local"])
+// `vector ship` runs in a GitHub Actions job that holds only a Ship Desk capture ticket, never an account.
+const openCommands = new Set([
+  "login",
+  "logout",
+  "whoami",
+  "org",
+  "completion",
+  "uninstall",
+  "upgrade",
+  "local",
+  "ship",
+])
 
 const cli = yargs(args)
   .parserConfiguration({ "populate--": true })
@@ -150,10 +164,13 @@ const cli = yargs(args)
   .command(SessionCommand)
   .command(TasksCommand)
   .command(WorkflowCommand)
+  .command(PlaybooksCommand)
   .command(PluginCommand)
   .command(DbCommand)
   .command(TrustCommand)
   .command(MemoryCommand)
+  .command(VaultCommand)
+  .command(ShipCommand)
   .command(LocalCommand)
   .fail((msg, err) => {
     if (msg) UI.error(msg)

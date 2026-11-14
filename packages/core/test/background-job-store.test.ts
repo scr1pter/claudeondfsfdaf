@@ -5,8 +5,9 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { sql } from "drizzle-orm"
-import { Context, Effect, Layer, Scope } from "effect"
-import type { BackgroundJob } from "@vectordevai/core/background-job"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { adjust } from "effect/testing/TestClock"
+import { BackgroundJob } from "@vectordevai/core/background-job"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Database } from "@vectordevai/core/database/database"
 import { it } from "./lib/effect"
@@ -66,6 +67,132 @@ const row = (input: Partial<BackgroundJob.Started> & { owner: BackgroundJobStore
 })
 
 describe("BackgroundJobStore", () => {
+  it.effect("a timed-out acknowledgement after real SQL commit preserves both accepted metadata snapshots", () =>
+    withStore((store) =>
+      Effect.gen(function* () {
+        const owner = BackgroundJobStore.open()
+        const scope = yield* Scope.make()
+        const committed = yield* Deferred.make<void>()
+        const jobs = yield* BackgroundJob.makeWith({
+          owner,
+          store: {
+            ...store,
+            metadataUpdated: (id, p, publish) =>
+              store.metadataUpdated(id, p, publish).pipe(
+                Effect.tap((accepted) => (accepted ? Deferred.succeed(committed, undefined) : Effect.void)),
+                Effect.andThen(Effect.never),
+              ),
+          },
+        }).pipe(Scope.provide(scope))
+        const job = yield* jobs.start({
+          type: "shell",
+          metadata: { memoryOnly: true },
+          durable: { parentSessionID: "ses_parent", directory, attempt: 1, metadata: { durableOnly: true } },
+          run: Effect.never,
+        })
+        const writing = yield* jobs
+          .updateMetadata(job.id, { owner: owner.runtime, attempt: 1, patch: { pid: 123 } })
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Deferred.await(committed)
+        expect((yield* store.forParent("ses_parent"))[0].metadata).toEqual({ durableOnly: true, pid: 123 })
+        expect((yield* jobs.get(job.id))?.metadata).toEqual({ memoryOnly: true, pid: 123 })
+        const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* adjust("2 seconds")
+        expect(yield* Fiber.join(writing)).toBe(true)
+        yield* Fiber.join(closing)
+        expect((yield* jobs.wait({ id: job.id })).info?.metadata).toEqual({ memoryOnly: true, pid: 123 })
+        expect((yield* store.forParent("ses_parent"))[0].metadata).toEqual({ durableOnly: true, pid: 123 })
+        BackgroundJobStore.close(owner)
+      }),
+    ),
+  )
+
+  it.effect("timing out before connection admission changes neither the real row nor memory", () =>
+    withStore((store) =>
+      Effect.gen(function* () {
+        const owner = BackgroundJobStore.open()
+        const scope = yield* Scope.make()
+        const connectionScope = yield* Scope.make()
+        const jobs = yield* BackgroundJob.makeWith({ store, owner }).pipe(Scope.provide(scope))
+        const job = yield* jobs.start({
+          type: "shell",
+          metadata: { memoryOnly: true },
+          durable: { parentSessionID: "ses_parent", directory, attempt: 1, metadata: { durableOnly: true } },
+          run: Effect.never,
+        })
+        expect((yield* store.forParent("ses_parent"))[0].id).toBe(job.id)
+        const { db } = yield* Database.Service
+        yield* db.$client.reserve.pipe(Scope.provide(connectionScope))
+        const writing = yield* jobs
+          .updateMetadata(job.id, { owner: owner.runtime, attempt: 1, patch: { pid: 123 } })
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        yield* adjust("2 seconds")
+        expect(yield* Fiber.join(writing)).toBe(false)
+        expect((yield* jobs.get(job.id))?.metadata).toEqual({ memoryOnly: true })
+        yield* Scope.close(connectionScope, Exit.void)
+        expect((yield* store.forParent("ses_parent"))[0].metadata).toEqual({ durableOnly: true })
+        yield* Scope.close(scope, Exit.void)
+        BackgroundJobStore.close(owner)
+      }),
+    ),
+  )
+
+  it.live("metadata writes require the exact durable holder, including a missing attempt, after settlement", () =>
+    withStore((store) =>
+      Effect.gen(function* () {
+        const owner = BackgroundJobStore.open()
+        const next = BackgroundJobStore.open()
+        const started = row({ owner, metadata: { original: true } })
+        yield* store.started(started)
+        const patch = { metadata: { pid: 123 }, owner: owner.runtime, attempt: 1 }
+        expect(yield* store.metadataUpdated(started.id, { ...patch, owner: next.runtime })).toBe(false)
+        expect(yield* store.metadataUpdated(started.id, { ...patch, attempt: 2 })).toBe(false)
+        expect(yield* store.metadataUpdated(started.id, { ...patch, attempt: undefined })).toBe(false)
+        expect(yield* store.metadataUpdated("missing", patch)).toBe(false)
+        expect((yield* store.forParent("ses_parent"))[0].metadata).toEqual({ original: true })
+        yield* store.settled(started.id, { owner: owner.runtime, attempt: 1, status: "cancelled", completedAt: 2000 })
+        expect(yield* store.metadataUpdated(started.id, patch)).toBe(true)
+        expect((yield* store.forParent("ses_parent"))[0]).toMatchObject({ status: "cancelled", metadata: { pid: 123 } })
+        yield* store.started({ ...started, owner: next, attempt: undefined, metadata: { resumed: true } })
+        expect(yield* store.metadataUpdated(started.id, patch)).toBe(false)
+        expect(yield* store.metadataUpdated(started.id, { ...patch, owner: next.runtime })).toBe(false)
+        expect(yield* store.metadataUpdated(started.id, { ...patch, owner: next.runtime, attempt: undefined })).toBe(
+          true,
+        )
+        expect((yield* store.forParent("ses_parent"))[0].metadata).toEqual({ pid: 123 })
+        BackgroundJobStore.close(owner)
+        BackgroundJobStore.close(next)
+      }),
+    ),
+  )
+
+  it.live("metadata writes refuse invalid or oversized JSON without truncating the prior row", () =>
+    withStore((store) =>
+      Effect.gen(function* () {
+        const owner = BackgroundJobStore.open()
+        const started = row({ owner })
+        yield* store.started(started)
+        const holder = { owner: owner.runtime, attempt: 1 }
+        const exact = { value: "é".repeat(2042) }
+        expect(new TextEncoder().encode(JSON.stringify(exact)).length).toBe(4096)
+        expect(yield* store.metadataUpdated(started.id, { ...holder, metadata: exact })).toBe(true)
+        const cyclic: Record<string, unknown> = {}
+        cyclic.self = cyclic
+        for (const metadata of [
+          { value: exact.value + "x" },
+          { ["k".repeat(4097)]: 1 },
+          { value: undefined },
+          { value: Infinity },
+          cyclic,
+        ]) {
+          expect(yield* store.metadataUpdated(started.id, { ...holder, metadata })).toBe(false)
+          expect((yield* store.forParent("ses_parent"))[0].metadata).toEqual(exact)
+        }
+        BackgroundJobStore.close(owner)
+      }),
+    ),
+  )
+
   it.live("the store's write and read paths round-trip", () =>
     withStore((store) =>
       Effect.gen(function* () {

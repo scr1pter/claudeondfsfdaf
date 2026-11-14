@@ -10,18 +10,25 @@ import { CodiumBillingStatus, createCodiumBilling, useCodiumPurchase } from "./c
 import {
   codiumUsageRows,
   createUsageRefresh,
+  renewalCard,
   usageForecast,
   usageFreshness,
+  usageHistoryStrip,
   usageShare,
 } from "./settings-v2/codium-usage-model"
+import type { DisplayUsageSummary } from "@/utils/usage-summary"
+import { sendPhoneAlert } from "@/context/phone-alerts"
 
 // Reopening Settings does not repeat a notification for this account and billing period.
 import "./settings-v2/settings-account.css"
 
 const alertedPeriods = new Set<string>()
 
-/** Plan status is read by the desktop main process; account tokens never reach this component. */
-export function SettingsVectorCodium() {
+/**
+ * Plan status is read by the desktop main process; account tokens never reach this component. `summary` is this
+ * computer's local usage, for the renewal card's counts.
+ */
+export function SettingsVectorCodium(props: { summary?: DisplayUsageSummary }) {
   const platform = usePlatform()
   const settings = useSettings()
   const [state, setState] = createStore<{
@@ -60,8 +67,11 @@ export function SettingsVectorCodium() {
   createEffect(() => {
     const status = state.status
     const share = usageShare(status?.plan?.left)
+    const desktop = settings.codium.alert80()
+    // The paired phones' own switch (Settings → Notifications, WP A41), apart from this computer's.
+    const phone = settings.notifications.event("usage")
     if (
-      !settings.codium.alert80() ||
+      (!desktop && !phone) ||
       !state.identity ||
       !status?.signedIn ||
       status.error ||
@@ -73,6 +83,12 @@ export function SettingsVectorCodium() {
     const key = `${state.identity}:${status.plan.id}:${status.plan.renewsAt}`
     if (alertedPeriods.has(key)) return
     alertedPeriods.add(key)
+    if (phone)
+      void sendPhoneAlert(platform, settings.notifications, {
+        event: "usage",
+        title: "You've used 80% of this month's Codium usage",
+      })
+    if (!desktop) return
     void platform
       .notify(
         "Vector Codium usage",
@@ -196,11 +212,50 @@ export function SettingsVectorCodium() {
                 <Show when={current().velocity === "coming"}>
                   <p class="text-12-regular">Vector Velocity: Coming. Max and Ultra get access when it launches.</p>
                 </Show>
+                <Show when={usageHistoryStrip(current(), state.now)}>
+                  {(strip) => (
+                    <figure class="settings-codium-history" data-slot="codium-history">
+                      <ol class="settings-codium-strip" aria-label="Codium usage by day, last 31 days">
+                        <For each={strip().days}>
+                          {(day) => (
+                            <li
+                              data-period={day.period ? "current" : "before"}
+                              data-today={day.today ? "" : undefined}
+                              aria-label={day.label}
+                              title={day.label}
+                            >
+                              <span style={{ height: `${day.height}%` }} />
+                            </li>
+                          )}
+                        </For>
+                      </ol>
+                      <figcaption class="text-12-regular text-text-weak">{strip().caption}</figcaption>
+                    </figure>
+                  )}
+                </Show>
                 <Show when={usageForecast(current())}>
                   {(forecast) => (
                     <p class="text-12-regular" data-slot="codium-forecast">
                       {forecast()}
                     </p>
+                  )}
+                </Show>
+                <Show when={renewalCard(current(), props.summary)}>
+                  {(card) => (
+                    <section class="settings-codium-renewal" data-slot="codium-renewal" aria-label={card().title}>
+                      <h4 class="text-12-medium text-text-strong">{card().title}</h4>
+                      <dl>
+                        <For each={card().rows}>
+                          {(row) => (
+                            <div>
+                              <dt>{row.label}</dt>
+                              <dd>{row.value}</dd>
+                            </div>
+                          )}
+                        </For>
+                      </dl>
+                      <p class="text-12-regular text-text-weak">{card().note}</p>
+                    </section>
                   )}
                 </Show>
                 <Show when={notice()}>

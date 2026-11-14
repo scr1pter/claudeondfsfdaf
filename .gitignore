@@ -12,6 +12,7 @@ node_modules
 playground
 tmp
 dist
+dist-phone
 ts-dist
 .turbo
 **/.serena

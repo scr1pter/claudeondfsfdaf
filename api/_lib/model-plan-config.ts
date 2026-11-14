@@ -4,6 +4,7 @@ import { CodiumPlan } from "../../packages/schema/src/codium-plan.js"
 import { ApiError } from "./http.js"
 import { CODIUM_RUNTIME_CATALOG_UPDATED, CODIUM_MODELS, CODIUM_TIER_MODELS } from "./codium-catalog.js"
 import { capturedReservationMicro } from "./codium-reservations.js"
+import { foundingCredits } from "./codium-founding.js"
 import { codiumLimitProblems, testCreditCapUsd } from "./codium-limits.js"
 import { stripeMode, stripeModeProblems, requireStripeMode, type StripeMode } from "./model-plan-stripe.js"
 
@@ -135,8 +136,23 @@ export function modelPlans() {
  * metadata, beside the plan it sold them for, so a later change to a plan's allowance leaves a running subscription as
  * sold. Stripe's customer portal changes the plan without touching that metadata, so the recorded credits count only
  * while the subscription is still on the plan they were sold for; after a change, the new plan's own credits apply.
+ * A founding subscription (its `vector_founding` token, WP A31) gets the plan's founding boost on top: +10% on Plus and
+ * Pro, nothing on Max and Ultra.
  */
 export function subscriptionPlanCredits(
+  metadata: Record<string, unknown> | undefined,
+  plan: { id: string; credits: number } | undefined,
+) {
+  const credits = subscriptionSoldCredits(metadata, plan)
+  return credits === undefined || !plan ? credits : foundingCredits(credits, plan.id, metadata?.vector_founding)
+}
+
+/**
+ * The credits a subscription on `plan` was sold, before any founding boost: what `subscriptionPlanCredits` builds on.
+ * Checks that the credits sold fit the plan's price (at most the price, as `modelPlans()` allows) read this figure, so
+ * a founding subscription's +10% never makes a correctly configured plan look oversold.
+ */
+export function subscriptionSoldCredits(
   metadata: Record<string, unknown> | undefined,
   plan: { id: string; credits: number } | undefined,
 ) {
@@ -145,6 +161,71 @@ export function subscriptionPlanCredits(
       ? metadata?.vector_model_credits_usd
       : undefined
   return sold === undefined ? plan?.credits : Number(sold)
+}
+
+/** A price a plan used to have, still accepted at exactly its old amount for the subscriptions already on it. */
+export type LegacyPrice = { readonly priceID: string; readonly cents: number }
+const LEGACY_ENTRY = /^(price_[a-zA-Z0-9]+):([1-9][0-9]{0,6})$/
+
+/**
+ * Each plan's legacy prices, from `STRIPE_MODEL_PLAN_LEGACY_PRICES_<price>` (`price_id:cents,…`; keyed by the plan's
+ * price like every other Stripe setting). They keep the founding lock, "your price won't go up while you stay
+ * subscribed": when a plan's price rises, the subscriptions on the old price keep paying it and keep their plan. A
+ * malformed entry is left out here and named by `modelPlanLegacyPriceProblems()`, which turns Codium off.
+ */
+export function modelPlanLegacyPrices(): Record<CodiumPlan.PlanId, LegacyPrice[]> {
+  return Object.fromEntries(
+    CodiumPlan.PLANS.map((plan) => [
+      plan.id,
+      legacyEntries(plan.price).flatMap((entry) => {
+        const match = LEGACY_ENTRY.exec(entry)
+        return match ? [{ priceID: match[1]!, cents: Number(match[2]) }] : []
+      }),
+    ]),
+  ) as Record<CodiumPlan.PlanId, LegacyPrice[]>
+}
+
+function legacyEntries(price: number) {
+  return (process.env[`STRIPE_MODEL_PLAN_LEGACY_PRICES_${price}`] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+/** What is wrong with the legacy prices, by env name only: malformed entries, and a price id listed twice anywhere. */
+export function modelPlanLegacyPriceProblems() {
+  const problems: string[] = []
+  const seen = new Set(modelPlans().flatMap((plan) => (plan.priceID ? [plan.priceID] : [])))
+  for (const plan of CodiumPlan.PLANS) {
+    const name = `STRIPE_MODEL_PLAN_LEGACY_PRICES_${plan.price}`
+    const entries = legacyEntries(plan.price)
+    if (entries.some((entry) => !LEGACY_ENTRY.test(entry))) problems.push(`${name} is not a list of price_id:cents`)
+    for (const entry of entries) {
+      const priceID = LEGACY_ENTRY.exec(entry)?.[1]
+      if (!priceID) continue
+      if (seen.has(priceID)) problems.push(`${name} repeats a price id that is already configured`)
+      seen.add(priceID)
+    }
+  }
+  return problems
+}
+
+/**
+ * The plan a Stripe price belongs to, with the amount in cents that price charges: the plan's current price
+ * (`STRIPE_MODEL_PLAN_<price>_PRICE_ID`, at the plan's price), or one of its legacy prices at its own old amount.
+ * Undefined for any other price.
+ */
+export function modelPlanForPrice(priceID: unknown) {
+  if (typeof priceID !== "string" || !priceID) return undefined
+  const plans = modelPlans()
+  const current = plans.find((plan) => plan.priceID === priceID)
+  if (current) return { ...current, cents: current.price * 100, legacy: false }
+  const legacy = modelPlanLegacyPrices()
+  for (const plan of plans) {
+    const match = legacy[plan.id].find((entry) => entry.priceID === priceID)
+    if (match) return { ...plan, cents: match.cents, legacy: true }
+  }
+  return undefined
 }
 
 export function modelCreditMarkup() {
@@ -354,6 +435,9 @@ export function codiumBillingConfigProblems(): string[] {
     }
   if (process.env.MODEL_PLANS_MIN_CLIENT?.trim() && !CLIENT_VERSION.test(process.env.MODEL_PLANS_MIN_CLIENT.trim()))
     problems.push("MODEL_PLANS_MIN_CLIENT is not a version like 1.99.113")
+  // The founding settings are not here: an invalid one closes only the founding window (codium-founding.ts) and is
+  // named on the owner page, so it never turns Codium off for the people already paying for it.
+  problems.push(...modelPlanLegacyPriceProblems())
   problems.push(...codiumLimitProblems())
   return problems
 }

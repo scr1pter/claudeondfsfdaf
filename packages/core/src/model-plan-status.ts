@@ -125,7 +125,10 @@ export type Status = {
   /** What the plan includes, for the perks listed (publicEntitlements); shares, counts and flags only. */
   entitlements?: Readonly<Record<string, unknown>>
   meters?: Meters
-  /** This period's usage by day, as shares. */
+  /**
+   * This period's usage by UTC date, every date from the period's first through today, each a whole-percent share of
+   * the month (a share that rounds to 0 reads "<1%"). It counts every Codium request, including @vector runs.
+   */
   history?: { day: string; used: number }[]
   founding?: { number: number }
   velocity?: "coming"
@@ -326,6 +329,24 @@ export function formatDate(time: number) {
   return new Date(time).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
 }
 
+/** A day's share of the month on the usage strip: a whole percent, or "<1%" when it rounds to 0 (A32). */
+export function formatDayShare(used: number) {
+  return used < 0.005 ? "<1%" : formatShare(used)
+}
+
+/**
+ * The forecast line, "At this pace, this month's usage may run out around Nov 22.", when the server sent a forecast
+ * date (a UTC date, shown as that date in every time zone). The server hides it early in the month, under 5% used and
+ * when the month lasts to its end.
+ */
+export function forecastText(date: string | undefined, locale = "en-US") {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined
+  const time = Date.parse(`${date}T00:00:00Z`)
+  if (Number.isNaN(time)) return undefined
+  const day = new Date(time).toLocaleDateString(locale, { month: "short", day: "numeric", timeZone: "UTC" })
+  return `At this pace, this month's usage may run out around ${day}.`
+}
+
 /** Plain-language lines for the CLI and other text surfaces: whole percentages, never an amount (P1, H5). */
 export function describe(status: Status) {
   if (!status.signedIn) return [status.error ?? 'Not signed in. Run "vector login" to use Vector Codium.']
@@ -337,10 +358,12 @@ export function describe(status: Status) {
   const last = current && current.kind !== "unavailable" ? [current.text] : []
   if (!plan)
     return [...first, `Plan: ${CodiumPlan.FREE}`, ...last, ...(status.enabled ? [`See plans: ${PURCHASE_URL}`] : [])]
+  const forecast = forecastText(plan.forecastDate)
   return [
     ...first,
     `Plan: ${plan.name}, ${plan.left === undefined ? "usage unavailable" : `${formatShare(plan.left)} left this month`}, ${plan.cancelAtPeriodEnd ? "ends" : "renews"} ${formatDate(plan.renewsAt)}`,
     ...(plan.today ? [`Today: ${formatShare(plan.today.used)} of today's limit used`] : []),
+    ...(forecast ? [forecast] : []),
     ...(plan.scheduled ? [`Changes to ${plan.scheduled.name} on ${formatDate(plan.scheduled.at)}`] : []),
     ...last,
     `Change plan: ${MANAGE_URL}`,
@@ -624,6 +647,10 @@ export type Listing = {
   locked?: { plan: string; name: string; previewUntil?: number }
   preview?: { until: number }
   auto?: unknown
+  /** WP A35: the Second opinion judge for this worker, from another lab. */
+  judge?: string
+  /** WP A35: the parts this entry plays in the plan's review pair. */
+  review?: readonly string[]
 }
 
 /** Whether an entry is Codium Auto, which picks a model for each message and is never a model itself. */

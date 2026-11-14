@@ -59,11 +59,22 @@ export type Started = Durable & {
 
 export type Settled = Holder & { status: Exclude<Status, "running">; completedAt: number; error?: string }
 
+export type MetadataUpdated = Holder & { metadata: Record<string, unknown> }
+
+/** `background` belongs to promote(), and cannot be changed by a metadata patch. */
+export type MetadataUpdate = Holder & { patch: Record<string, unknown> }
+
 /** Where durable jobs keep their rows (BackgroundJobStore). */
 export interface Store {
   readonly started: (row: Started) => Effect.Effect<void, unknown>
   readonly settled: (id: string, p: Settled) => Effect.Effect<void, unknown>
   readonly promoted: (id: string, p: Holder) => Effect.Effect<void, unknown>
+  /** Run the bounded, database-free publication at commit, before acknowledgement can be interrupted or delayed. */
+  readonly metadataUpdated: (
+    id: string,
+    p: MetadataUpdated,
+    publish?: Effect.Effect<void>,
+  ) => Effect.Effect<boolean, unknown>
   /** Marks the lease's running rows as still held at `at` (a heartbeat). */
   readonly heartbeat?: (owner: string, at: number) => Effect.Effect<void, unknown>
 }
@@ -72,9 +83,15 @@ export interface Store {
 export const HEARTBEAT = 60_000
 
 // A durable job's row writes, in order: each waits for the one before it, so a settlement never lands before the row.
-type Writes = { holder: Holder; tail?: Deferred.Deferred<void> }
+type Writes = {
+  holder: Holder
+  tail?: Deferred.Deferred<void>
+  started: boolean
+  metadata: Record<string, unknown>
+}
 
-// How long one row write, with its wait for the write before it, may take before it is given up and logged.
+// Cooperative deadline including the earlier-write/connection wait. A synchronous SQLite busy wait can still take
+// its configured 5 seconds; native commit and short in-memory publication cannot be interrupted halfway through.
 const STORE_TIMEOUT = "2 seconds"
 
 type Active = {
@@ -98,6 +115,7 @@ type Active = {
   onComplete?: (info: Info) => Effect.Effect<void, unknown>
   promotable: boolean
   durable?: Writes
+  metadataWrites: { closed: boolean; pending: Set<Deferred.Deferred<void>> }
 }
 
 type State = {
@@ -184,6 +202,12 @@ export interface Interface {
   readonly waitForPromotion: (id: string) => Effect.Effect<Info>
   readonly promote: (id: string) => Effect.Effect<Info | undefined>
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
+  /**
+   * Patches a live durable incarnation, including its cancellation finalizers, before it drains. Both metadata
+   * snapshots must be JSON objects within 4 KiB; a promotable job also reserves room for background:true in memory.
+   * Admission commits the bounded write independently of caller interruption. False leaves both snapshots unchanged.
+   */
+  readonly updateMetadata: (id: string, input: MetadataUpdate) => Effect.Effect<boolean>
   /** The instance lease this registry's durable jobs run under, if it has one. */
   readonly lease: () => Effect.Effect<BackgroundJobStore.Owner | undefined>
 }
@@ -193,8 +217,56 @@ export class Service extends Context.Service<Service, Interface>()("@vector/Back
 function snapshot(job: Active): Info {
   return {
     ...job.info,
-    ...(job.info.metadata ? { metadata: { ...job.info.metadata } } : {}),
+    ...(job.info.metadata ? { metadata: metadataSnapshot(job.info.metadata) ?? { ...job.info.metadata } } : {}),
     ...(job.info.outputs ? { outputs: [...job.info.outputs] } : {}),
+  }
+}
+
+/** @internal A detached, bounded JSON object. Invalid fields are refused, never silently dropped or truncated. */
+export function metadataSnapshot(input: unknown): Record<string, unknown> | undefined {
+  const active = new Set<object>()
+  let remaining = 4096
+  const copy = (value: unknown): unknown => {
+    if (--remaining < 0) return
+    if (value === null || typeof value === "boolean") return value
+    if (typeof value === "number") return Number.isFinite(value) ? value : undefined
+    if (typeof value === "string") return value.length <= 4096 ? value : undefined
+    if (typeof value !== "object" || active.has(value)) return
+    const array = Array.isArray(value)
+    if (
+      array
+        ? Object.getPrototypeOf(value) !== Array.prototype
+        : ![null, Object.prototype].includes(Object.getPrototypeOf(value))
+    )
+      return
+    const length: unknown = array ? Object.getOwnPropertyDescriptor(value, "length")?.value : 0
+    if (typeof length !== "number" || !Number.isInteger(length) || length < 0 || length > 4096) return
+    const keys = Reflect.ownKeys(value)
+    if (keys.length > 4096 || (array && keys.length !== length + 1)) return
+    const output: object = array ? [] : Object.create(null)
+    active.add(value)
+    for (const key of keys) {
+      if (array && key === "length") continue
+      if (typeof key !== "string" || key.length > 4096) return
+      const property = Object.getOwnPropertyDescriptor(value, key)
+      if (!property?.enumerable || !("value" in property)) return
+      if (array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= length)) return
+      const copied = copy(property.value)
+      if (copied === undefined) return
+      Object.defineProperty(output, key, { value: copied, enumerable: true })
+    }
+    active.delete(value)
+    return output
+  }
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) return
+    const detached = copy(input)
+    if (detached === undefined) return
+    const text = JSON.stringify(detached)
+    if (new TextEncoder().encode(text).length > 4096) return
+    return JSON.parse(text)
+  } catch {
+    return
   }
 }
 
@@ -262,6 +334,138 @@ export const makeWith = Effect.fnUntraced(function* (o: {
       }),
     )
   const detach = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.forkDetach({ startImmediately: true }))
+
+  const updateMetadata: Interface["updateMetadata"] = Effect.fn("BackgroundJob.updateMetadata")(function* (id, input) {
+    const patch = metadataSnapshot(input.patch)
+    if (!patch || Object.hasOwn(patch, "background")) return false
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const done = yield* Deferred.make<void>()
+        const result = yield* Deferred.make<boolean>()
+        const admitted = yield* SynchronizedRef.modify(state.jobs, (jobs) => {
+          const job = jobs.get(id)
+          const writes = job?.durable
+          if (
+            !job ||
+            !writes ||
+            job.metadataWrites.closed ||
+            writes.holder.owner !== input.owner ||
+            writes.holder.attempt !== input.attempt
+          )
+            return [undefined, jobs] as const
+          const previous = writes.tail
+          writes.tail = done
+          job.metadataWrites.pending.add(done)
+          return [{ token: job.token, writes, previous }, jobs] as const
+        })
+        if (!admitted) return false
+        let committed = false
+        const operation = Effect.uninterruptibleMask((resume) =>
+          Effect.gen(function* () {
+            if (admitted.previous) yield* resume(Deferred.await(admitted.previous))
+            // Build from the last accepted snapshots, not from a failed patch or an earlier queued caller's view.
+            const job = (yield* SynchronizedRef.get(state.jobs)).get(id)
+            if (!job || job.token !== admitted.token || !admitted.writes.started || !o.store) return false
+            const base = metadataSnapshot(job.info.metadata ?? {})
+            if (!base) return false
+            const memory = metadataSnapshot({ ...base, ...patch })
+            const durable = metadataSnapshot({ ...admitted.writes.metadata, ...patch })
+            if (!memory || !durable) return false
+            if (job.promotable && job.info.status === "running" && !metadataSnapshot({ ...memory, background: true }))
+              return false
+            // The store invokes this at commit, before acknowledgement. The pending barrier prevents drain and id
+            // reuse; only promote() can have changed metadata meanwhile, and its registry-owned flag wins.
+            const publish = SynchronizedRef.modify(state.jobs, (jobs) => {
+              const current = jobs.get(id)
+              if (!current || current.token !== admitted.token) return [false, jobs] as const
+              admitted.writes.metadata = durable
+              committed = true
+              return [
+                true,
+                new Map(jobs).set(id, {
+                  ...current,
+                  info: {
+                    ...current.info,
+                    metadata: {
+                      ...memory,
+                      ...(current.info.metadata?.background === true ? { background: true } : {}),
+                    },
+                  },
+                }),
+              ] as const
+            }).pipe(Effect.asVoid)
+            yield* resume(
+              o.store.metadataUpdated(
+                id,
+                {
+                  ...admitted.writes.holder,
+                  metadata: durable,
+                },
+                publish,
+              ),
+            )
+            return committed
+          }),
+        ).pipe(
+          Effect.interruptible,
+          Effect.timeout(STORE_TIMEOUT),
+          Effect.catchCause((cause) =>
+            committed
+              ? Effect.succeed(true)
+              : Effect.logWarning("background job metadata was not written", { id, cause }).pipe(Effect.as(false)),
+          ),
+          Effect.tap((accepted) => Deferred.succeed(result, accepted)),
+          Effect.ensuring(
+            Effect.gen(function* () {
+              yield* SynchronizedRef.modify(state.jobs, (jobs) => {
+                const job = jobs.get(id)
+                if (job?.token === admitted.token) job.metadataWrites.pending.delete(done)
+                return [undefined, jobs] as const
+              })
+              yield* Deferred.succeed(done, undefined)
+            }),
+          ),
+        )
+        // A caller can stop waiting, but cannot strand an admitted write or interrupt between commit/publication.
+        yield* detach(operation)
+        return yield* restore(Deferred.await(result))
+      }),
+    )
+  })
+
+  const metadataBarrier = Effect.fn("BackgroundJob.metadataBarrier")(function* (
+    id: string,
+    token: object,
+    close: boolean,
+  ) {
+    while (true) {
+      const result = yield* SynchronizedRef.modifyEffect(
+        state.jobs,
+        Effect.fnUntraced(function* (jobs): Effect.fn.Return<
+          readonly [{ info: Info | undefined; pending: Deferred.Deferred<void>[] }, Map<string, Active>]
+        > {
+          const job = jobs.get(id)
+          if (!job || job.token !== token) return [{ info: undefined, pending: [] }, jobs] as const
+          // Run and completion finalizers have returned. Seal admission before joining their remaining writes.
+          if (close) job.metadataWrites.closed = true
+          const pending = [...job.metadataWrites.pending]
+          if (pending.length) return [{ info: undefined, pending }, jobs] as const
+          const info = snapshot(job)
+          if (close) {
+            yield* Deferred.succeed(job.done, info)
+            yield* Deferred.succeed(job.drained, undefined)
+          }
+          return [{ info, pending }, jobs] as const
+        }),
+      )
+      if (!result.pending.length) return result.info
+      yield* Effect.forEach(result.pending, (done) => Deferred.await(done), { concurrency: "unbounded", discard: true })
+      if (!close) {
+        const job = (yield* SynchronizedRef.get(state.jobs)).get(id)
+        return job?.token === token ? snapshot(job) : undefined
+      }
+    }
+  })
 
   // While a durable job runs, its rows' heartbeat is refreshed every minute: a pid that answers may belong to another
   // process by now (Windows reuses them quickly), and a heartbeat that stopped tells other engines the lease is gone.
@@ -359,24 +563,14 @@ export const makeWith = Effect.fnUntraced(function* (o: {
     })
     if (result.ran) yield* Deferred.succeed(result.ran, undefined)
     const complete = result.onComplete
-    const info = result.info
+    const info = result.info ? yield* metadataBarrier(id, token, false) : undefined
     yield* (
       info && complete
         ? Effect.suspend(() => complete(info)).pipe(
             Effect.catchCause((cause) => Effect.logWarning("background job completion callback failed", { id, cause })),
           )
         : Effect.void
-    ).pipe(
-      Effect.ensuring(
-        Effect.all(
-          [
-            result.info && result.done ? Deferred.succeed(result.done, result.info) : Effect.void,
-            result.drained ? Deferred.succeed(result.drained, undefined) : Effect.void,
-          ],
-          { discard: true },
-        ),
-      ),
-    )
+    ).pipe(Effect.ensuring(result.info ? metadataBarrier(id, token, true).pipe(Effect.asVoid) : Effect.void))
   })
 
   const fork = Effect.fn("BackgroundJob.fork")(function* (
@@ -422,6 +616,7 @@ export const makeWith = Effect.fnUntraced(function* (o: {
           input.durable && o.store && o.owner
             ? {
                 ...input.durable,
+                metadata: input.durable.metadata === undefined ? undefined : metadataSnapshot(input.durable.metadata),
                 id,
                 type: input.type,
                 ...(input.title === undefined ? {} : { title: input.title }),
@@ -452,7 +647,7 @@ export const makeWith = Effect.fnUntraced(function* (o: {
                 title: input.title,
                 status: "running" as const,
                 started_at,
-                metadata: input.metadata,
+                metadata: metadataSnapshot(input.metadata) ?? input.metadata,
                 ...(row ? { owner: row.owner.runtime, durable: true } : {}),
               },
               done,
@@ -469,9 +664,15 @@ export const makeWith = Effect.fnUntraced(function* (o: {
               onPromote: input.onPromote,
               onComplete: input.onComplete,
               promotable: input.promotable !== false,
+              metadataWrites: { closed: false, pending: new Set<Deferred.Deferred<void>>() },
               // A job started again under its id writes after the writes its previous run left queued.
               durable: row
-                ? { holder: { owner: row.owner.runtime, attempt: row.attempt }, tail: existing?.durable?.tail }
+                ? {
+                    holder: { owner: row.owner.runtime, attempt: row.attempt },
+                    tail: existing?.durable?.tail,
+                    started: false,
+                    metadata: row.metadata ?? {},
+                  }
                 : undefined,
             }
             return [
@@ -485,8 +686,20 @@ export const makeWith = Effect.fnUntraced(function* (o: {
           return yield* start(input)
         }
         // Queued before the run starts, so the row exists before any settlement of it is written.
-        if ("scope" in result && row && result.durable)
-          yield* detach(write(result.durable, id, (store) => store.started(row)))
+        if ("scope" in result && row && result.durable) {
+          const writes = result.durable
+          yield* detach(
+            write(writes, id, (store) =>
+              store.started(row).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    writes.started = true
+                  }),
+                ),
+              ),
+            ),
+          )
+        }
         if ("scope" in result)
           yield* fork(
             result.scope,
@@ -639,7 +852,7 @@ export const makeWith = Effect.fnUntraced(function* (o: {
 
   const lease: Interface["lease"] = () => Effect.succeed(o.owner)
 
-  return Service.of({ list, get, start, extend, wait, waitForPromotion, promote, cancel, lease })
+  return Service.of({ list, get, start, extend, wait, waitForPromotion, promote, cancel, updateMetadata, lease })
 })
 
 /** A registry that keeps no rows. */

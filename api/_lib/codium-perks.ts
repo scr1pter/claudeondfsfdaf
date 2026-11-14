@@ -1,8 +1,20 @@
 import { PERK_IDS, type PerkId } from "../../packages/schema/src/codium-entitlements.js"
 import { CodiumCopy } from "../../packages/schema/src/codium-copy.js"
+import { foundingWindowOpen } from "./codium-founding.js"
 import { githubAppConfiguration } from "./github-app.js"
+import { githubServerConfigured } from "./github-app-server.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
+import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { hostedSessionsConfigured } from "./hosted-sessions.js"
+import { opsConfigured } from "./ops-worker.js"
+import { playbooksReady } from "./playbooks.js"
+import { r2Configured } from "./r2-presign.js"
+import { remoteConfigured } from "./remote-config.js"
+import { roadmapConfigured } from "./roadmap.js"
+import { reportEmailConfigured } from "./support-reports.js"
+import { vaultConfigured } from "./vault-store.js"
+import { phoneAppOrigin, pushConfigured } from "./web-push.js"
 
 export type PerkServices = Readonly<Partial<Record<PerkId, (fetcher: typeof fetch) => boolean | Promise<boolean>>>>
 export type ListedPerksOptions = { services?: PerkServices; runtime?: boolean }
@@ -25,6 +37,53 @@ export const perkServices: PerkServices = {
       reserve < 1
     )
   },
+  // WP A31: founding is listed only while its window is open (the limit and the days after sales opened), read at
+  // runtime; a prerender never sees it, and a closed window takes it off every page on the next config read.
+  founding: (fetcher) => foundingWindowOpen(fetcher),
+  // WP A33: reports are read first only where they reach the owner, so the report email must be configured.
+  "reports-first": () => reportEmailConfigured(),
+  // WP A34: the roadmap vote keeps its ballots in the store, its only service.
+  vote: () => roadmapConfigured(),
+  // WP A35: Second opinion runs in Vector's engine on the plan's judges, so it is ready once every plan that includes
+  // it has a judge it can use among the models the gateway serves now.
+  "second-opinion": (fetcher) => secondOpinionServed(fetcher),
+  // WP A35: the panel runs in Vector's review on the plan's review pair and panel judge, so it is ready once every
+  // plan's three are served and come from three labs.
+  "review-panel": (fetcher) => reviewPanelServed(fetcher),
+  // WP A38: phone alerts reach a phone through the phone app at VECTOR_PHONE_APP_ORIGIN, which subscribes with the
+  // server's VAPID key (A37). Both must be configured; the `push` switch is checked with the other switches below.
+  alerts: () => pushConfigured() && phoneAppOrigin() !== undefined,
+  // WP A42: Remote needs both halves and the relay between them: tickets can be minted (VECTOR_REMOTE_ENABLED, the
+  // relay's address and internal secret, the signing key) and phones have their app's origin to sign in from. The
+  // `remote` switch is checked with the other switches below. Listing it stays the owner's call after the outside
+  // security review (contract §1.2).
+  remote: () => remoteConfigured() && phoneAppOrigin() !== undefined,
+  // WP A36: Playbooks are downloaded from the media bucket by the Track B client, so they are ready once Track B is
+  // live, the bucket can be signed and at least two playbooks are published. Which two are proven stays the owner's
+  // call (contract §1.2).
+  playbooks: (fetcher) => playbooksReady(fetcher),
+  // WP A44: Brain Vault on Vector needs VECTOR_VAULT_ENABLED=true, its store (Supabase's service role, the account
+  // salt and the vault bucket) and the read-only notice's email, since a lapsed vault is deleted only after it. The
+  // `vault` switch is checked with the other switches below. Listing it waits on the legal read (contract §1.2).
+  vault: () => vaultConfigured(),
+  // WP A50: the ops perks have their screens (desktop Settings → Production and the phone's Production page), their
+  // guard and their cleanup. On Call needs the ops Worker (VECTOR_OPS_ENABLED, its address and the shared secret);
+  // Release Guard also needs the App's own tokens for its revert pull requests; Ship Desk also needs them to read check
+  // runs and the media bucket for its screenshots. The `ops` switch, the GitHub App and phone alerts (On Call, Ship
+  // Desk) are checked below and in CodiumCopy.requires. Listing them stays the owner's call after the App is
+  // registered and the outside review of the revert path (contract §1.2, §8.2 step 16).
+  "on-call": () => opsConfigured(),
+  "release-guard": () => opsConfigured() && githubServerConfigured(),
+  "ship-desk": () => opsConfigured() && githubServerConfigured() && r2Configured("media"),
+  // WP A53: the cloud computer needs its provider (VECTOR_HOSTED_PROVIDER, set only after the provider's written OK,
+  // with the hosted team's settings and the base snapshot), the ledger (Supabase and the account salt) and both
+  // signing keys (run tokens and viewer tokens). The `hosted` switch is checked with the other switches below. Listing
+  // it stays the owner's call after the computer-use build, the brand name and the security review (contract §1.2).
+  computer: () => hostedSessionsConfigured(),
+  // WP A55: Done by Morning runs each job as a cloud computer session, so it needs everything `computer` needs, plus the
+  // media bucket its reports' recordings go to. It also requires `computer` listed (CodiumCopy.requires), so it lists
+  // with the computer and never before it (contract §1.2).
+  overnight: () => hostedSessionsConfigured() && r2Configured("media"),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

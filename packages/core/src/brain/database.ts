@@ -24,6 +24,8 @@ import revocation from "./migration/20261203000000_revocation"
 import learnedSkills from "./migration/20261210000000_learned_skills"
 import workflow from "./migration/20261211000000_workflow"
 import researchClaims from "./migration/20261212000000_research_claims"
+import codiumBrain from "./migration/20261213000000_codium_brain"
+import codiumWorkflow from "./migration/20261214000000_codium_workflow"
 
 // brain.db, opened once per process and shared by everything that reads or writes the brain: memory entries, and the
 // documents and records Vector reads into it. One connection means one writer per process, which SQLite wants, and
@@ -65,6 +67,8 @@ export const layerFor = (file: string) =>
         learnedSkills,
         workflow,
         researchClaims,
+        codiumBrain,
+        codiumWorkflow,
       ])
       // SQLite gives the -wal and -shm files the database's own mode, but on the first open they exist before this.
       if (file !== ":memory:" && process.platform !== "win32")

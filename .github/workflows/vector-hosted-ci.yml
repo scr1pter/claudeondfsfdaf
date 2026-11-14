@@ -1,0 +1,281 @@
+name: Vector hosted CI
+
+# CI for the services Vector hosts (contract WP A58, §6.2): the hosted API in api/, the Remote relay and ops Workers,
+# the cloud computer's image, the shared schema, Vault, WebAuthn and the desktop's Remote, Vault and hosted modules. It
+# typechecks them, runs their tests against Valkey and Postgres, dry-runs both Workers' deploys (wrangler bundles each
+# Worker and checks its configuration without signing in or uploading) and smoke-tests them on Cloudflare's local
+# runtime, and builds and boots the cloud computer's image in Docker. It holds no secret and can only read the
+# repository: deploys run only in vector-hosted-deploy.yml and vector-hosted-image.yml, by dispatch, in the protected
+# hosted-production environment.
+#
+# The Codium CI lane (vector-codium.yml) calls this workflow with services_only, so the Worker and image jobs live in one
+# place; that lane runs its own typechecks and tests.
+on:
+  pull_request:
+    paths:
+      - "api/**"
+      - "test/**"
+      - "packages/relay/**"
+      - "packages/ops-worker/**"
+      - "packages/hosted-computer/**"
+      - "packages/schema/**"
+      - "packages/core/src/vault/**"
+      - "packages/core/test/vault/**"
+      - "packages/core/src/webauthn/**"
+      - "packages/core/test/webauthn/**"
+      - "packages/core/src/remote/**"
+      - "packages/core/test/remote/**"
+      - "packages/desktop/src/main/remote-*"
+      - "packages/desktop/src/main/vault-*"
+      - "packages/desktop/src/main/hosted-*"
+      - "packages/cloud/src/hosted-*"
+      - "packages/cloud/src/codium-ci-tests.ts"
+      - "docs/vector/owner-actions/sql/**"
+      - "bun.lock"
+      - ".github/workflows/vector-hosted-*.yml"
+  workflow_call:
+    inputs:
+      services_only:
+        description: Run only the Worker and image jobs (the Codium CI lane runs its own typechecks and tests)
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+
+concurrency:
+  group: vector-hosted-ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  typecheck:
+    name: typecheck (${{ matrix.name }})
+    if: ${{ !inputs.services_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The hosted API in api/ is checked against the root tsconfig.json, which includes only api/**.
+          - name: api
+            directory: packages/engine
+            command: bun typecheck --project ../../tsconfig.json
+          - name: schema
+            directory: packages/schema
+            command: bun typecheck
+          # Vault, WebAuthn and Remote's shared crypto.
+          - name: core
+            directory: packages/core
+            command: bun typecheck
+          # The desktop's Remote, Vault and hosted modules.
+          - name: desktop
+            directory: packages/desktop
+            command: bun typecheck
+          - name: relay
+            directory: packages/relay
+            command: bun typecheck
+          - name: ops-worker
+            directory: packages/ops-worker
+            command: bun typecheck
+          - name: hosted-computer
+            directory: packages/hosted-computer
+            command: bun typecheck
+          # The hosted workflows' own scripts and this lane's test picker.
+          - name: cloud
+            directory: packages/cloud
+            command: bun typecheck
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Typecheck ${{ matrix.name }}
+        working-directory: ${{ matrix.directory }}
+        run: ${{ matrix.command }}
+
+  tests:
+    name: Hosted tests
+    if: ${{ !inputs.services_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_DB: vector_shares_test
+          POSTGRES_USER: vector_fixture
+          POSTGRES_PASSWORD: fixture-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vector_fixture -d vector_shares_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:7.2.14-alpine@sha256:c6c2f0020be34bbf684a53a0ef716ab16ff70295186d4d9f2518435beb7afbff
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      # The cloud computer's git tests and the workflow checks make commits in scratch repositories.
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      - name: Prepare isolated SQL fixtures
+        env:
+          VECTOR_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: docker exec "$VECTOR_TEST_PG_CONTAINER" createdb --username=vector_fixture --maintenance-db=postgres vector_teams_test
+
+      - name: Build test dependencies
+        timeout-minutes: 20
+        run: >-
+          GITHUB_ACTIONS=false bun turbo run build --log-order=stream
+          --filter='@vectordevai/engine^...' --filter='@vectordevai/core^...' --filter='@vectordevai/app^...'
+
+      # The hosted API suite in test/ and the tests of the hosted parts, one Bun process per file
+      # (packages/cloud/src/codium-ci-tests.ts --hosted). Cases that need Valkey or Postgres run here, against the
+      # services above.
+      - name: Run the hosted test files
+        timeout-minutes: 40
+        env:
+          VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
+          VECTOR_TEST_POSTGRES_URL: postgres://vector_fixture:fixture-only@127.0.0.1:5432/vector_shares_test
+          VECTOR_TEST_TEAMS_POSTGRES_URL: postgres://vector_fixture:fixture-only@127.0.0.1:5432/vector_teams_test
+          VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+        run: GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts --hosted
+
+  # WP A39: the relay Worker's deploy dry run, then its smoke test on Cloudflare's local runtime under
+  # `wrangler dev --local` with throwaway keys. Neither needs a Cloudflare account or a secret.
+  relay:
+    name: Remote relay (dry run and local smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Dry-run the relay deploy
+        working-directory: packages/relay
+        run: bun run dry-run
+
+      - name: Smoke-test the relay under wrangler dev --local
+        working-directory: packages/relay
+        run: bun run smoke
+
+  # WP A46: the ops Worker's deploy dry run, then a smoke test of that same bundle on Cloudflare's local runtime
+  # through miniflare (wrangler's own dependency), answering every outbound request itself: no Cloudflare account, no
+  # secret and no internet. Alarms run in real time: about three minutes.
+  ops-worker:
+    name: Ops Worker (dry run and miniflare smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Dry-run the ops Worker deploy
+        working-directory: packages/ops-worker
+        run: bun run dry-run
+
+      - name: Smoke-test the ops Worker bundle under miniflare
+        working-directory: packages/ops-worker
+        run: bun run smoke
+
+  # WP A54: the cloud computer's image, built with a stand-in for the Vector CLI (vector-hosted-image.yml builds it with
+  # a published release), booted in a privileged container and checked from inside: ports, sudo, the VNC bind, viewer
+  # tokens, the credential guard, the profile wipe, and that boot fails closed without the right to load its firewall.
+  # Nothing is pushed anywhere; no secret is used.
+  hosted-image:
+    name: Cloud computer image (Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Build hostd and the viewer proxy for Node
+        working-directory: packages/hosted-computer
+        run: bun run build
+
+      - name: Build the image with a stand-in CLI
+        working-directory: packages/hosted-computer
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          printf '#!/bin/sh\necho "vector (image check stand-in)"\n' > bin/vector
+          docker build --platform linux/amd64 --file image/Dockerfile --build-arg VECTOR_IMAGE_GENERATION=1 --tag vector-hosted-computer:ci .
+
+      - name: Boot the image and check it from inside
+        working-directory: packages/hosted-computer
+        env:
+          VECTOR_TEST_HOSTED_IMAGE: vector-hosted-computer:ci
+        run: bun test --timeout 600000 ./test/image.test.ts

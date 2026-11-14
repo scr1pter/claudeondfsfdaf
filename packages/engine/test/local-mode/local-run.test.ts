@@ -315,7 +315,10 @@ describe("the provider under Vector Local", () => {
         Effect.promise(() => LocalServers.serve("vllm")),
         (fake) => Effect.promise(() => fake.close()),
       )
-      const added = yield* Effect.promise(() => LocalProbe.probe(server.origin))
+      // This case checks a changed identity, not the production discovery deadline. Leave room for real sockets on
+      // a loaded runner; core's probe tests separately verify that an expired identity read refuses every prompt.
+      const options = { timeout: 5_000 }
+      const added = yield* Effect.promise(() => LocalProbe.probe(server.origin, options))
       expect(added).toBeDefined()
       const holds = yield* LocalProbe.HoldsService
       yield* provideTmpdirInstance(
@@ -331,7 +334,7 @@ describe("the provider under Vector Local", () => {
                 Response.json({ object: "list", data: [{ id: "other/model", max_model_len: 8192 }] }),
               )
               const verified = yield* Effect.promise(() =>
-                LocalProbe.verify({ origin: server.origin, pin: added!.pin, holds }),
+                LocalProbe.verify({ origin: server.origin, pin: added!.pin, holds, options }),
               )
               expect(verified.status).toBe("changed")
               const refused = yield* Effect.promise(() =>
@@ -1350,7 +1353,8 @@ describe("a Vector Local run", () => {
     "asks before an address a background subagent's report relays",
     () =>
       Effect.gen(function* () {
-        // The child stream waits for the parent to finish; the fake needs both permits to avoid a fixture deadlock.
+        // The fake child keeps its stream open until the parent finishes. It needs its own permit alongside the
+        // parent's final request; one local-model permit would make those two fixture waits depend on each other.
         const harness = yield* setup(2)
         const start = pages.direct("docs", "/start")
         const exfil = `${pages.direct("docs", "/guide")}?q=SECRET-BACKGROUND`

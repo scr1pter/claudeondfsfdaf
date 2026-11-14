@@ -1327,8 +1327,10 @@ describe("A51 obligation: nonmodel producers", () => {
   // window. This tripwire fails when a production module calls holdPool, or reaches the same HOLD through placeHold
   // or the script itself, so that obligation is reviewed, not lost.
   test("no production module places a pool hold until its producer is reviewed against the shared caps", async () => {
-    // The only reviewed call is holdPool's own HOLD. Adding a producer here is that producer's review.
-    const reviewed = ["_lib/model-plan-account.ts: placeHold("]
+    // The reviewed calls are holdPool's own HOLD and the cloud computer's blocks (WP A51, reviewed against the shared
+    // caps in hosted-ledger.ts's header: worst-case holds of 20 minutes that lapse after 30, nothing settled above a
+    // hold on it, no run binding, the daily share checked before each hold). Adding a producer here is its review.
+    const reviewed = ["_lib/hosted-ledger.ts: holdPool(", "_lib/model-plan-account.ts: placeHold("]
     const root = new URL("../api/", import.meta.url).pathname
     const calls: string[] = []
     for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: root }))

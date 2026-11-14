@@ -5,6 +5,8 @@ import { codiumKey } from "../../../api/_lib/codium-keys"
 import { ENTITLEMENTS, PERK_IDS } from "@vectordevai/schema/codium-entitlements"
 import { CodiumPlan } from "@vectordevai/schema/codium-plan"
 import type { ModelPlanModel } from "../../../api/_lib/model-plan-config"
+import { CODIUM_TIER_MODELS } from "../../../api/_lib/codium-catalog"
+import { reviewPanelServed, secondOpinionServed } from "../../../api/_lib/model-plan-models"
 import { codiumFakes, codiumTestEnvironment } from "./fixture/codium-fakes"
 
 const all: PerkServices = Object.fromEntries(PERK_IDS.map((perk) => [perk, () => true]))
@@ -15,6 +17,7 @@ beforeEach(() => {
     CODIUM_TRACK_B_LIVE: undefined,
     MODEL_PLAN_GLOBAL_INFLIGHT: undefined,
     MODEL_PLAN_PRIORITY_RESERVE: undefined,
+    CODIUM_FOUNDING_LIMIT: undefined,
     STRIPE_MODEL_PLAN_WEBHOOK_SECRET: "fixture-webhook",
     STRIPE_MODEL_PLAN_PORTAL_CONFIG_ID: "fixture-portal",
     VECTOR_GITHUB_APP_ENABLED: undefined,
@@ -31,6 +34,12 @@ describe("A27 public perk listing", () => {
     const fakes = codiumFakes()
     expect(await listedPerks(fakes.fetcher)).toEqual(new Set())
     process.env.CODIUM_LISTED_PERKS = `unknown, ${PERK_IDS.join(",")}, priority`
+    // WP A31 made founding a real readiness check (its window, read at runtime): open, it is listed too. WP A34 gave
+    // the vote one (the store, which these fakes configure), so it is listed as well.
+    expect(await listedPerks(fakes.fetcher)).toEqual(new Set(["founding", "vote"]))
+    // With founding closed and the vote left out of the list, the rest of this case measures priority's readiness alone.
+    process.env.CODIUM_FOUNDING_LIMIT = "0"
+    process.env.CODIUM_LISTED_PERKS = `unknown, ${PERK_IDS.filter((perk) => perk !== "vote").join(",")}, priority`
     process.env.MODEL_PLAN_GLOBAL_INFLIGHT = "20"
     expect(await listedPerks(fakes.fetcher)).toEqual(new Set(["priority"]))
     delete process.env.MODEL_PLAN_GLOBAL_INFLIGHT
@@ -238,5 +247,59 @@ describe("A27 qualified public catalog", () => {
     const result = await publicCodiumTiers(unavailable, { models: [model], qualify: () => true })
     expect(result.models).toEqual([])
     expect(result.enabled).toBe(false)
+  })
+})
+
+// WP A35: Second opinion and the three-lab review panel get readiness checks of their own: the judges and the review
+// pair they run on must be served for every plan that includes them, so the listing never names a judge nobody can
+// reach. Today no staged route is accepted, so neither is ready until A60 accepts the routes.
+describe("A35 Second opinion and review panel readiness", () => {
+  const tiers = CODIUM_TIER_MODELS as unknown as ModelPlanModel[]
+  const SOL = "openai/gpt-6.1-sol"
+  const ARGON = "google/gemini-4-argon"
+  const HAIKU = "anthropic/claude-haiku-5.5"
+
+  test("ready only while every plan that includes them can reach its judges and its pair", async () => {
+    const fakes = codiumFakes()
+    expect(await secondOpinionServed(fakes.fetcher, { models: tiers, qualify: () => true })).toBe(true)
+    expect(await reviewPanelServed(fakes.fetcher, { models: tiers, qualify: () => true })).toBe(true)
+    // The routes the gateway really serves today: nothing staged is accepted yet.
+    expect(await secondOpinionServed(fakes.fetcher, { models: tiers })).toBe(false)
+    expect(await reviewPanelServed(fakes.fetcher, { models: tiers })).toBe(false)
+
+    // Pro's judges are Sol and Argon: with both switched off, Pro has no judge and Second opinion is not ready.
+    const judgesOff = codiumFakes()
+    await judgesOff.fetcher(process.env.KV_REST_API_URL!, {
+      method: "POST",
+      body: JSON.stringify(["SADD", codiumKey("models-off"), SOL, ARGON]),
+    })
+    expect(await secondOpinionServed(judgesOff.fetcher, { models: tiers, qualify: () => true })).toBe(false)
+    // Plus's panel judge is Haiku: without it Plus has no three-lab panel.
+    const haikuOff = codiumFakes()
+    await haikuOff.fetcher(process.env.KV_REST_API_URL!, {
+      method: "POST",
+      body: JSON.stringify(["SADD", codiumKey("models-off"), HAIKU]),
+    })
+    expect(await reviewPanelServed(haikuOff.fetcher, { models: tiers, qualify: () => true })).toBe(false)
+  })
+
+  test("listing them needs their readiness, and an unreadable store lists nothing", async () => {
+    process.env.CODIUM_LISTED_PERKS = "second-opinion,review-panel"
+    const fakes = codiumFakes()
+    expect(await listedPerks(fakes.fetcher)).toEqual(new Set())
+    expect(
+      await listedPerks(fakes.fetcher, {
+        services: {
+          "second-opinion": (fetcher) => secondOpinionServed(fetcher, { models: tiers, qualify: () => true }),
+          "review-panel": (fetcher) => reviewPanelServed(fetcher, { models: tiers, qualify: () => true }),
+        },
+      }),
+    ).toEqual(new Set(["second-opinion", "review-panel"]))
+    const unavailable = (async (_input: RequestInfo | URL) => new Response(null, { status: 503 })) as typeof fetch
+    expect(
+      await listedPerks(unavailable, {
+        services: { "second-opinion": (fetcher) => secondOpinionServed(fetcher, { models: tiers, qualify: () => true }) },
+      }),
+    ).toEqual(new Set())
   })
 })

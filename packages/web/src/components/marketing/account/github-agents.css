@@ -1,0 +1,11 @@
+.github-agents-form { display: grid; gap: 8px; margin-top: 20px; }
+.github-agents-form label { color: #e8ddf4; font-size: 14px; }
+.github-agents-form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.github-agents-form-row input { flex: 1 1 230px; min-width: 0; padding: 11px 12px; border: 1px solid rgba(230, 219, 255, .2); border-radius: 8px; background: rgba(5, 4, 8, .6); color: #f4effb; font: inherit; }
+.github-agents-form-row input:focus-visible { outline: 2px solid #bd9aff; outline-offset: 2px; }
+.github-agents-form-row .acct-button, .github-agents-list-heading .acct-button { margin-top: 0; }
+.github-agents-code { margin-top: 20px; }
+.github-agents-list-heading { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-top: 28px; }
+.github-agents-list { list-style: none; margin: 0; padding: 0; }
+.github-agents-list > li { min-width: 0; padding: 18px 0; border-bottom: 1px solid rgba(230, 219, 255, .12); overflow-wrap: anywhere; }
+.github-agents-list .acct-fine { margin: 7px 0; }

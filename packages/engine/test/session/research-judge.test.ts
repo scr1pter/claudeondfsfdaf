@@ -7,6 +7,7 @@ import { Config } from "@/config/config"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { ResearchReport } from "@vectordevai/core/research/report"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Session } from "@/session/session"
 import { Instruction } from "../../src/session/instruction"
@@ -262,6 +263,49 @@ it.instance(
         ),
       ).toBe(false)
       expect(yield* calls(many.id, "research_report")).toHaveLength(1)
+    }),
+  120_000,
+)
+
+// Label plan §3.2: a mixed run's report reads "$0.12 at list prices + Codium", and the copy the judge saves again with
+// its verdicts keeps that line. Codium's destination is fixed, so this server cannot stand in for it: the run begins
+// here with a priced step and a Codium step the guard counted, and the lead's own steps on the free local test model
+// add no dollars.
+it.instance(
+  "a judged report keeps a mixed run's Spend line, own dollars + Codium",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* Session.Service
+      const spend = yield* SpendGuard.Service
+      const article = web.url("article", "/")
+      const session = yield* sessions.create({ title: "Mixed", permission: allow })
+      yield* test.llm.toolMatch(leading, "research_plan", plan())
+      yield* test.llm.toolMatch(leading, "research_read", { url: article })
+      for (const quote of QUOTES) yield* test.llm.toolMatch(leading, "research_note", note(quote))
+      yield* test.llm.toolMatch(leading, "research_report", {
+        title: "Heat pumps",
+        answer: "Field data [N1] [N2] [N3] [N4] [N5] [N6] [N7] [N8].",
+        sections: [],
+        open_questions: [],
+      })
+      yield* test.llm.textMatch(leading, "Done.")
+      yield* test.llm.textMatch(
+        judging,
+        Array.from({ length: 8 }, (_, index) => `N${index + 1}: supported: it says so`).join("\n"),
+      )
+      const counted = { contextTokens: 1_000, cachedTokens: 0, continues: true, tools: [], patched: false }
+      yield* spend.begin(session.id)
+      yield* spend.record(session.id, { ...counted, costKind: "priced", costUsd: 0.12 })
+      yield* spend.record(session.id, { ...counted, costKind: "codium" })
+      yield* send({ sessionID: session.id, agent: "research", text: `Research heat pumps: ${article}` })
+
+      expect(judgeParts(yield* sessions.messages({ sessionID: session.id }))).toHaveLength(1)
+      const detail = yield* detailOf(session.id)
+      expect(detail?.notes.find((item) => item.id === "N1")?.verdict).toBe("supported")
+      const method = detail?.report?.slice(detail.report.indexOf("## Method")) ?? ""
+      expect(method).toContain("- Spend: $0.12 at list prices + Codium\n")
+      expect(guard.outside()).toEqual([])
     }),
   120_000,
 )

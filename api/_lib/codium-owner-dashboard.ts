@@ -2,6 +2,7 @@ import { Option, Schema } from "effect"
 import { CodiumOwner } from "../../packages/schema/src/codium-owner.js"
 import { isPlanId } from "../../packages/schema/src/codium-plan.js"
 import { CODIUM_FUNDING_MAX_AGE_MS, readCodiumFunding, readCodiumFundingHistory } from "./codium-funding.js"
+import { foundingConfigProblems } from "./codium-founding.js"
 import { codiumKey } from "./codium-keys.js"
 import { notifyOwner } from "./codium-owner.js"
 import { decodeSnapshot } from "./codium-snapshot.js"
@@ -239,8 +240,25 @@ export async function readOwnerCodiumDashboard(
         status: "owner-check",
         detail: "Review Radar defaults; the optional card block list needs its configured list ID.",
       },
+      foundingChecklistItem(),
     ],
     audit: store?.audit ?? [],
+  }
+}
+
+/**
+ * The founding window's settings (WP A31), by env name only. An invalid one closes the founding window and nothing
+ * else, so it is named here rather than among the problems that turn Codium off.
+ */
+function foundingChecklistItem(): CodiumOwner.Dashboard["stripeChecklist"][number] {
+  const problems = foundingConfigProblems()
+  return {
+    id: "founding",
+    title: "Founding window settings",
+    status: problems.length ? "unconfigured" : "confirmed",
+    detail: problems.length
+      ? `${problems.join("; ")}. The founding window stays closed until this is fixed; Codium keeps running.`
+      : "CODIUM_FOUNDING_LIMIT, CODIUM_FOUNDING_DAYS and MODEL_PLANS_SALES_OPENED_AT are valid or unset.",
   }
 }
 

@@ -75,6 +75,9 @@ test("the brain page keeps rules the owner's and says a learned skill is never o
 
 test("the pages carry the privacy statements in the app's own words", () => {
   const brain = text(pages.brain!)
+  expect(brain).not.toContain("Vector sends them nowhere")
+  expect(brain).toContain("Codium Brain helpers require a separate opt-in; a subscription alone grants no permission.")
+  expect(brain).toContain("encrypted Brain Vault backup are separate opt-in transfers")
   // A statement may follow the release label, which lowers its first letter.
   for (const name of ["privacy", "draft", "guests", "shares", "team"]) {
     const statement = constant(skills, name)
