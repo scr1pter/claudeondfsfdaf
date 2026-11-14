@@ -15,6 +15,7 @@ import { BackgroundJob } from "@/background/job"
 import { ConnectDirectory } from "@/connect/directory"
 import { ConnectHub } from "@/connect/hub"
 import { ConnectOwner } from "@/connect/owner"
+import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -97,6 +98,7 @@ const live = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectOwner.node,
+      Config.node,
       ConnectHub.node,
       SessionPrompt.node,
       Session.node,
@@ -135,6 +137,22 @@ const fixture = (read?: Record<string, "allow" | "deny" | "ask">) =>
   Effect.gen(function* () {
     const current = yield* InstanceState.context
     const llm = yield* TestLLMServer
+    const config = yield* Config.Service
+    const globalFile = path.join(Global.Path.config, "vector.json")
+    const original = yield* Effect.promise(() => fs.readFile(globalFile, "utf8").catch(() => undefined))
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        if (original === undefined) await fs.rm(globalFile, { force: true })
+        else await fs.writeFile(globalFile, original)
+      }).pipe(Effect.andThen(config.invalidate())),
+    )
+    // The real service selects its model from owner settings, never the reviewed project's default model.
+    yield* write(
+      Global.Path.config,
+      "vector.json",
+      JSON.stringify({ agent: { vectorscope: { model: "lmstudio/test-model" } } }),
+    )
+    yield* config.invalidate()
     const provider = testProviderConfig(llm.url)
     provider.provider.lmstudio.models["test-model"].cost = { input: 1, output: 1 }
     yield* git(current.directory, ["config", "core.autocrlf", "false"])

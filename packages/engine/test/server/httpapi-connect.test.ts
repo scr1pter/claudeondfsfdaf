@@ -12,7 +12,9 @@ import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { httpApiLayer } from "./httpapi-layer"
+import { routes, consentHttpApiLayer } from "./httpapi-connect-fixture"
 import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
+import { Session } from "@/session/session"
 
 const sessionID = SessionID.make("ses_connect_http_owner")
 const basic = (username: string, password: string) =>
@@ -31,10 +33,11 @@ const provider = ConfigProvider.layer(
     VECTOR_DISABLE_DEFAULT_PLUGINS: true,
   }),
 )
-const it = testEffect(Layer.mergeAll(httpApiLayer.pipe(Layer.provide(provider)), TestLLMServer.layer))
+const it = testEffect(Layer.mergeAll(consentHttpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
+const production = testEffect(Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
 const call = <A>(run: () => Promise<A>) => Effect.promise(run)
 
-const fixture = (ask = false, transport: "node" | "web" = "node", conversation = true) =>
+const fixture = (ask = false, transport: "node" | "web" = "node", conversation = true, actual = false) =>
   Effect.gen(function* () {
     const llm = yield* TestLLMServer
     const directory = yield* tmpdirScoped({
@@ -51,7 +54,9 @@ const fixture = (ask = false, transport: "node" | "web" = "node", conversation =
       transport === "web"
         ? yield* Effect.acquireRelease(
             Effect.sync(() =>
-              HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(Layer.provide(provider)), { disableLogger: true }),
+              HttpRouter.toWebHandler((actual ? HttpApiApp.createRoutes() : routes).pipe(Layer.provide(provider)), {
+                disableLogger: true,
+              }),
             ),
             (web) => Effect.promise(() => web.dispose()),
           )
@@ -68,25 +73,38 @@ const fixture = (ask = false, transport: "node" | "web" = "node", conversation =
           }),
         ),
       )
-    if (conversation) {
-      const created = yield* call(() =>
-        fetchRequest(
-          new Request(new URL("/api/session", baseUrl), {
-            method: "POST",
-            headers: { ...owner, "content-type": "application/json" },
-            body: JSON.stringify({ id: sessionID, title: "Connected review fixture", location: { directory } }),
-          }),
-        ),
-      )
-      expect(created.status).toBe(200)
-    }
-    return { raw, client, directory, llm, baseUrl, fetchRequest }
+    const created = conversation
+      ? yield* Effect.gen(function* () {
+          const response = yield* raw("/fixture/session", owner, {})
+          expect(response.status).toBe(200)
+          return Schema.decodeUnknownSync(Session.Info)(yield* call(() => response.json()))
+        })
+      : undefined
+    return { raw, client, directory, llm, baseUrl, fetchRequest, sessionID: created?.id ?? sessionID }
   })
 
 afterEach(async () => {
   await disposeAllInstances()
   await resetDatabase()
 })
+
+production.live("the production assembly does not qualify Windows Git or a project-only VectorScope model", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(false, "web", false, true)
+    const response = yield* f.raw("/experimental/connect")
+    expect(response.status).toBe(200)
+    const members = Schema.decodeUnknownSync(Schema.Array(Connect.Member))(yield* call(() => response.json()))
+    const scope = members.find((member) => member.id === "vectorscope")
+    expect(scope?.state).toBe("unavailable")
+    expect(scope?.reason).toContain(
+      process.platform === "linux"
+        ? "No VectorScope model is set"
+        : "Connected VectorScope reviews currently require Linux",
+    )
+    expect((yield* call(() => f.client.permission.list())).data).toEqual([])
+    expect(yield* f.llm.inputs).toHaveLength(0)
+  }),
+)
 
 it.live("connect routes refuse scoped guests and forwarded owner credentials before any work", () =>
   Effect.gen(function* () {
@@ -95,7 +113,7 @@ it.live("connect routes refuse scoped guests and forwarded owner credentials bef
       ["/experimental/connect"],
       ["/experimental/connect/runs"],
       ["/experimental/connect/runs/cr_fixture"],
-      [`/experimental/session/${sessionID}/connect`, {}],
+      [`/experimental/session/${f.sessionID}/connect`, {}],
       ["/experimental/connect/review", {}],
       ["/experimental/connect/runs/cr_fixture/cancel", {}],
       ["/experimental/connect/findings", {}],
@@ -130,7 +148,9 @@ it.live("registered desktop findings persist as unverified data and survive the 
       },
     ]
     const registered = yield* call(() =>
-      f.client.connect.register({ connectRegisterInput: { sessionID, target: { kind: "uncommitted" }, findings } }),
+      f.client.connect.register({
+        connectRegisterInput: { sessionID: f.sessionID, target: { kind: "uncommitted" }, findings },
+      }),
     )
     expect(registered.data?.result).toMatchObject({
       state: "partial",
@@ -139,21 +159,25 @@ it.live("registered desktop findings persist as unverified data and survive the 
       findings: [{ id: "finding_parser", verified: false }],
     })
     // Registration stores only the actual assistant tool row: get must read it from the session, not a ledger entry.
-    const loaded = yield* call(() => f.client.connect.get({ runID: registered.data!.id, sessionID }))
+    const loaded = yield* call(() => f.client.connect.get({ runID: registered.data!.id, sessionID: f.sessionID }))
     expect(loaded.data?.id).toBe(registered.data!.id)
     expect(loaded.data?.result?.findings[0]?.body).toBe(findings[0]!.body)
     const dismissed = yield* call(() =>
       f.client.connect.dismiss({
         runID: registered.data!.id,
-        connectDismissInput: { sessionID, findings: ["finding_parser"], reason: "The guard is intentional." },
+        connectDismissInput: {
+          sessionID: f.sessionID,
+          findings: ["finding_parser"],
+          reason: "The guard is intentional.",
+        },
       }),
     )
     expect(dismissed.data?.result?.findings[0]?.status).toBe("dismissed")
     expect(dismissed.data?.request).toEqual(registered.data?.request)
     expect(dismissed.data?.time).toEqual(registered.data?.time)
-    const after = yield* call(() => f.client.connect.get({ runID: registered.data!.id, sessionID }))
+    const after = yield* call(() => f.client.connect.get({ runID: registered.data!.id, sessionID: f.sessionID }))
     expect(after.data?.result?.findings[0]?.status).toBe("dismissed")
-    const messages = (yield* call(() => f.client.session.messages({ sessionID }))).data ?? []
+    const messages = (yield* call(() => f.client.session.messages({ sessionID: f.sessionID }))).data ?? []
     expect(
       messages
         .flatMap((message) => message.parts)
@@ -321,7 +345,7 @@ it.live("a directory header cannot attach a hand-off to another directory's conv
     const response = yield* f.raw(
       "/experimental/connect/findings",
       owner,
-      { sessionID, target: { kind: "uncommitted" }, findings: [] },
+      { sessionID: f.sessionID, target: { kind: "uncommitted" }, findings: [] },
       other,
     )
     expect(response.status).toBe(400)
@@ -334,16 +358,16 @@ it.live("owner review keeps the session's placement and rejects a zero cap befor
   Effect.gen(function* () {
     const f = yield* fixture(false, "web")
     const other = yield* tmpdirScoped()
-    const invalid = yield* f.raw(`/experimental/session/${sessionID}/connect`, owner, { budget: { maxCostUsd: 0 } })
+    const invalid = yield* f.raw(`/experimental/session/${f.sessionID}/connect`, owner, { budget: { maxCostUsd: 0 } })
     expect(invalid.status).toBe(400)
-    const started = yield* f.raw(`/experimental/session/${sessionID}/connect`, owner, { background: false }, other)
-    expect(started.status).toBe(200)
+    const started = yield* f.raw(`/experimental/session/${f.sessionID}/connect`, owner, { background: false }, other)
+    expect(started.status, yield* call(() => started.clone().text())).toBe(200)
     const run = Schema.decodeUnknownSync(Connect.Run)(yield* call(() => started.json()))
     expect(run).toMatchObject({
-      request: { directory: f.directory, requester: { kind: "user", sessionID } },
+      request: { directory: f.directory, requester: { kind: "user", sessionID: f.sessionID } },
       status: "done",
     })
-    // This fixture is not a Git repository. A real refusal must be surfaced, never called a clean review.
+    // The explicitly synthetic member returns a non-review after real consent, never a fabricated clean verdict.
     expect(run.result?.verdict).toBe("not-reviewed")
     expect(yield* f.llm.pending).toBe(0)
   }),
@@ -355,7 +379,7 @@ it.live("aborting an owner Web Request withdraws its ask and settles its transcr
     const abort = new AbortController()
     const request = yield* call(() =>
       f.fetchRequest(
-        new Request(new URL(`/experimental/session/${sessionID}/connect`, f.baseUrl), {
+        new Request(new URL(`/experimental/session/${f.sessionID}/connect`, f.baseUrl), {
           method: "POST",
           headers: { ...owner, "x-vector-directory": f.directory, "content-type": "application/json" },
           body: JSON.stringify({ background: false }),
@@ -373,7 +397,7 @@ it.live("aborting an owner Web Request withdraws its ask and settles its transcr
     abort.abort()
     yield* Fiber.await(request)
     yield* pollWithTimeout(
-      call(() => f.client.session.messages({ sessionID })).pipe(
+      call(() => f.client.session.messages({ sessionID: f.sessionID })).pipe(
         Effect.map((response) =>
           response.data
             ?.flatMap((message) => message.parts)
@@ -403,7 +427,7 @@ it.live("a foreground Web Request approval stays live after its POST body is con
   Effect.gen(function* () {
     const f = yield* fixture(true, "web")
     const request = yield* call(() =>
-      f.client.connect.review({ sessionID, connectReviewInput: { background: false } }),
+      f.client.connect.review({ sessionID: f.sessionID, connectReviewInput: { background: false } }),
     ).pipe(Effect.forkChild)
     const pending = yield* pollWithTimeout(
       call(() => f.client.permission.list()).pipe(
@@ -412,15 +436,15 @@ it.live("a foreground Web Request approval stays live after its POST body is con
       "The foreground review did not wait for approval.",
       "10 seconds",
     )
-    expect((yield* call(() => f.client.session.status())).data?.[sessionID]?.type).toBe("busy")
-    const before = (yield* call(() => f.client.session.messages({ sessionID }))).data?.length
-    const concurrent = yield* f.raw(`/experimental/session/${sessionID}/connect`, owner, { background: false })
+    expect((yield* call(() => f.client.session.status())).data?.[f.sessionID]?.type).toBe("busy")
+    const before = (yield* call(() => f.client.session.messages({ sessionID: f.sessionID }))).data?.length
+    const concurrent = yield* f.raw(`/experimental/session/${f.sessionID}/connect`, owner, { background: false })
     expect(concurrent.status).toBe(400)
     expect(yield* call(() => concurrent.json())).toMatchObject({
       code: "invalid",
       message: "This conversation is busy. Start the review after its turn finishes.",
     })
-    expect((yield* call(() => f.client.session.messages({ sessionID }))).data?.length).toBe(before)
+    expect((yield* call(() => f.client.session.messages({ sessionID: f.sessionID }))).data?.length).toBe(before)
     // A second request observes the still-pending ask, after decoding and consuming the original POST body.
     expect((yield* call(() => f.client.permission.list())).data?.some((entry) => entry.id === pending.id)).toBe(true)
     yield* call(() => f.client.permission.reply({ requestID: pending.id, reply: "once" }))
@@ -428,7 +452,7 @@ it.live("a foreground Web Request approval stays live after its POST body is con
     expect(result.data?.status).toBe("done")
     expect(result.data?.result?.state).not.toBe("cancelled")
     expect(result.data?.result?.verdict).toBe("not-reviewed")
-    expect((yield* call(() => f.client.session.status())).data?.[sessionID]).toBeUndefined()
+    expect((yield* call(() => f.client.session.status())).data?.[f.sessionID]).toBeUndefined()
     expect(yield* f.llm.pending).toBe(0)
   }),
 )
@@ -437,14 +461,14 @@ it.live("Bun node:http owner starts refuse before any transcript or pending appr
   Effect.gen(function* () {
     const f = yield* fixture(true)
     for (const background of [false, true]) {
-      const response = yield* f.raw(`/experimental/session/${sessionID}/connect`, owner, { background })
+      const response = yield* f.raw(`/experimental/session/${f.sessionID}/connect`, owner, { background })
       expect(response.status).toBe(400)
       expect(yield* call(() => response.json())).toMatchObject({
         code: "disabled",
         message: "Connected reviews over this server's HTTP listener require the Node engine.",
       })
     }
-    expect((yield* call(() => f.client.session.messages({ sessionID }))).data).toEqual([])
+    expect((yield* call(() => f.client.session.messages({ sessionID: f.sessionID }))).data).toEqual([])
     expect((yield* call(() => f.client.permission.list())).data).toEqual([])
     expect(yield* f.llm.pending).toBe(0)
   }),

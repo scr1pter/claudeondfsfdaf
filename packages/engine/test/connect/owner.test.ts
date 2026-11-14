@@ -6,6 +6,7 @@ import { Npm } from "@vectordevai/core/npm"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Auth } from "@/auth"
 import { ConnectOwner } from "@/connect/owner"
+import { ConnectHub } from "@/connect/hub"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { WorkflowMarkers } from "@/orchestration/constants"
@@ -20,6 +21,7 @@ import { NpmTest } from "../fake/npm"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
+import { connectConsentMember } from "../fixture/connect-consent-member"
 
 interface Probe {
   entered: Deferred.Deferred<void>
@@ -33,6 +35,8 @@ const replacements: LayerNode.Replacements = [
   [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true })],
   [Auth.node, Layer.mock(Auth.Service)({ all: () => Effect.succeed({}), get: () => Effect.succeed(undefined) })],
   [Npm.node, NpmTest.noop],
+  // This regression owns model-resolution/runner arbitration, not Linux-only VectorScope execution.
+  [ConnectHub.node, ConnectHub.nodeWith([connectConsentMember])],
 ]
 
 // Decorate the real runner to observe the human waiter; its production state machine and work are unchanged.
