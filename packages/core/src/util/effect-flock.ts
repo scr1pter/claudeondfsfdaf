@@ -8,6 +8,7 @@ import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { makeGlobalNode } from "../effect/app-node"
 import { Hash } from "./hash"
+import { LockFs } from "./lock-fs"
 
 export namespace EffectFlock {
   // ---------------------------------------------------------------------------
@@ -19,8 +20,15 @@ export namespace EffectFlock {
   }) {}
 
   export class LockCompromisedError extends Schema.TaggedErrorClass<LockCompromisedError>()("LockCompromisedError", {
+    /** The lock dir. */
+    path: Schema.String,
     detail: Schema.String,
-  }) {}
+    cause: Schema.optional(Schema.Defect()),
+  }) {
+    override get message() {
+      return LockFs.compromised(this.path, this.detail)
+    }
+  }
 
   class ReleaseError extends Schema.TaggedErrorClass<ReleaseError>()("ReleaseError", {
     detail: Schema.String,
@@ -50,6 +58,16 @@ export namespace EffectFlock {
     Schedule.either(Schedule.spaced(MAX_DELAY_MS)),
     Schedule.jittered,
   )
+
+  // For one file operation that failed with an error that clears by itself (LockFs.isTransient), the same delays and
+  // window as flock.ts.
+  const transientSchedule = Schedule.exponential(LockFs.TRANSIENT_BASE_DELAY_MS, 2).pipe(
+    Schedule.either(Schedule.spaced(LockFs.TRANSIENT_MAX_DELAY_MS)),
+    Schedule.while((meta) => meta.elapsed < LockFs.TRANSIENT_WINDOW_MS),
+  )
+
+  const retryTransient = <A, R>(effect: Effect.Effect<A, PlatformError, R>) =>
+    effect.pipe(Effect.retry({ while: LockFs.isTransient, schedule: transientSchedule }))
 
   // ---------------------------------------------------------------------------
   // Lock metadata schema
@@ -144,33 +162,50 @@ export namespace EffectFlock {
           Effect.orDie,
         )
 
-      const forceRemove = (target: string) => fs.remove(target, { recursive: true }).pipe(Effect.ignore)
-
-      /** Atomic mkdir — returns true if created, false if already exists, dies on other errors. */
-      const atomicMkdir = (dir: string) =>
-        fs.makeDirectory(dir, { mode: 0o700 }).pipe(
-          Effect.as(true),
-          Effect.catchIf(
-            (e) => e.reason._tag === "AlreadyExists",
-            () => Effect.succeed(false),
-          ),
-          Effect.orDie,
+      /**
+       * Recursive delete. A path that is already gone counts as removed, and an error that clears by itself is retried
+       * for a short window. Any other error, or one that does not clear, fails: a lock dir left behind makes every
+       * other process wait until it turns stale.
+       */
+      const removeDir = (target: string) =>
+        retryTransient(fs.remove(target, { recursive: true, force: true })).pipe(
+          Effect.catchIf(LockFs.isGone, () => Effect.void),
         )
 
-      /** Write with exclusive create — compromised error if file already exists. */
-      const exclusiveWrite = (filePath: string, content: string, lockDir: string, detail: string) =>
+      /**
+       * Atomic mkdir — returns true if created, false if already exists. An error that clears by itself is retried for
+       * a short window; any other error, or one that does not clear, fails.
+       */
+      const exclusiveMkdir = (dir: string) =>
+        retryTransient(fs.makeDirectory(dir, { mode: 0o700 })).pipe(
+          Effect.as(true),
+          Effect.catchIf(LockFs.isExists, () => Effect.succeed(false)),
+        )
+
+      /** Atomic mkdir of the lock dir — dies on errors other than "already exists" (above). */
+      const atomicMkdir = (dir: string) => exclusiveMkdir(dir).pipe(Effect.orDie)
+
+      /** Write with exclusive create — compromised error, naming the lock dir and the failure, if it fails. */
+      const exclusiveWrite = (filePath: string, content: string, lockDir: string, name: string) =>
         fs.writeFileString(filePath, content, { flag: "wx" }).pipe(
-          Effect.catch(() =>
+          Effect.catch((cause) =>
             Effect.gen(function* () {
-              yield* forceRemove(lockDir)
-              return yield* new LockCompromisedError({ detail })
+              const removal = yield* removeDir(lockDir).pipe(
+                Effect.as(undefined),
+                Effect.catch((error) => Effect.succeed({ error })),
+              )
+              return yield* new LockCompromisedError({
+                path: lockDir,
+                detail: LockFs.writeFailed(name, cause, removal),
+                cause,
+              })
             }),
           ),
         )
 
       const cleanStaleBreaker = Effect.fnUntraced(function* (breakerPath: string) {
         const bs = yield* safeStat(breakerPath)
-        if (bs && wall() - mtimeMs(bs) > STALE_MS) yield* forceRemove(breakerPath)
+        if (bs && wall() - mtimeMs(bs) > STALE_MS) yield* removeDir(breakerPath).pipe(Effect.orDie)
         return false
       })
 
@@ -214,13 +249,9 @@ export namespace EffectFlock {
             // Stale — race for breaker ownership
             const breakerPath = lockDir + ".breaker"
 
-            const claimed = yield* fs.makeDirectory(breakerPath, { mode: 0o700 }).pipe(
-              Effect.as(true),
-              Effect.catchIf(
-                (e) => e.reason._tag === "AlreadyExists",
-                () => cleanStaleBreaker(breakerPath),
-              ),
-              Effect.catchIf(isPathGone, () => Effect.succeed(false)),
+            const claimed = yield* exclusiveMkdir(breakerPath).pipe(
+              Effect.flatMap((created) => (created ? Effect.succeed(true) : cleanStaleBreaker(breakerPath))),
+              Effect.catchIf(LockFs.isGone, () => Effect.succeed(false)),
               Effect.orDie,
             )
 
@@ -229,18 +260,18 @@ export namespace EffectFlock {
             // We own the breaker — double-check staleness, nuke, recreate
             const recreated = yield* Effect.gen(function* () {
               if (!(yield* isStale(lockDir, heartbeatPath, metaPath))) return false
-              yield* forceRemove(lockDir)
+              yield* removeDir(lockDir).pipe(Effect.orDie)
               return yield* atomicMkdir(lockDir)
-            }).pipe(Effect.ensuring(forceRemove(breakerPath)))
+            }).pipe(Effect.ensuring(removeDir(breakerPath).pipe(Effect.orDie)))
 
             if (!recreated) return yield* new NotAcquired()
           }
 
           // We own the lock dir — write heartbeat + meta with exclusive create
-          yield* exclusiveWrite(heartbeatPath, "", lockDir, "heartbeat already existed")
+          yield* exclusiveWrite(heartbeatPath, "", lockDir, "heartbeat")
 
           const metaJson = encodeMeta({ token, pid: process.pid, hostname, createdAt: new Date().toISOString() })
-          yield* exclusiveWrite(metaPath, metaJson, lockDir, "meta.json already existed")
+          yield* exclusiveWrite(metaPath, metaJson, lockDir, "meta.json")
 
           return { token, metaPath, heartbeatPath, lockDir } satisfies Handle
         }).pipe(
@@ -278,7 +309,11 @@ export namespace EffectFlock {
 
           if (parsed.token !== handle.token) return yield* Effect.die(new ReleaseError({ detail: "token mismatch" }))
 
-          yield* forceRemove(handle.lockDir)
+          yield* removeDir(handle.lockDir).pipe(
+            Effect.catch((cause) =>
+              Effect.die(new ReleaseError({ detail: LockFs.notRemoved(handle.lockDir, cause), cause })),
+            ),
+          )
         })
 
       // -- build service --

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import { spawn } from "child_process"
 import path from "path"
@@ -111,6 +111,102 @@ async function stopWorker(proc: ReturnType<typeof spawnWorker>) {
 
 async function readJson<T>(p: string): Promise<T> {
   return JSON.parse(await fs.readFile(p, "utf8"))
+}
+
+// ---------------------------------------------------------------------------
+// File system faults
+// ---------------------------------------------------------------------------
+
+type FaultMethod = "mkdir" | "rm" | "writeFile"
+
+type Fault = {
+  readonly method: FaultMethod
+  readonly path: string
+  readonly code: string
+  /** How many calls fail. */
+  readonly times: number
+  /** How many calls failed. */
+  hits: number
+}
+
+function fault(method: FaultMethod, file: string, code: string, times = Infinity): Fault {
+  return { method, path: file, code, times, hits: 0 }
+}
+
+/** Until disposed, each fault fails its fs/promises method on its path, as Node reports a system error. */
+function inject(...faults: Fault[]) {
+  const spies = (["mkdir", "rm", "writeFile"] as const).map((method) => {
+    const original = fs[method]
+    const replacement = (file: unknown, ...rest: unknown[]) => {
+      const found = faults.find(
+        (item) => item.method === method && item.path === String(file) && item.hits < item.times,
+      )
+      if (!found) return Reflect.apply(original, fs, [file, ...rest])
+      found.hits++
+      const err = Object.assign(new Error(`${found.code}: injected, ${method} '${found.path}'`), {
+        code: found.code,
+        syscall: method,
+        path: found.path,
+      })
+      return Promise.reject(err)
+    }
+    // One replacement stands in for three overloaded fs functions.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    return spyOn(fs, method).mockImplementation(replacement as never)
+  })
+  return {
+    [Symbol.dispose]() {
+      for (const spy of spies) spy.mockRestore()
+    },
+  }
+}
+
+/** Runs one withLock in a fresh temp dir with the faults injected, and reports how it ended and how long it took. */
+async function withFaults(
+  key: string,
+  faults: (paths: { dir: string; lockDir: string }) => Fault[],
+  setup?: (paths: { dir: string; lockDir: string }) => Promise<void>,
+) {
+  await using tmp = await tmpdir()
+  const dir = path.join(tmp.path, "locks")
+  const lockDir = lock(dir, key)
+  const list = faults({ dir, lockDir })
+  if (setup) await setup({ dir, lockDir })
+  let hit = false
+  const start = Date.now()
+  let error: unknown
+  {
+    using _ = inject(...list)
+    error = await Flock.withLock(
+      key,
+      async () => {
+        hit = true
+      },
+      { dir, staleMs: 1_000, timeoutMs: 20_000 },
+    ).then(
+      () => undefined,
+      (err: unknown) => err,
+    )
+  }
+  return {
+    error: error instanceof Error ? error : undefined,
+    hit,
+    elapsed: Date.now() - start,
+    lockDir,
+    lockDirLeft: await exists(lockDir),
+    breakerLeft: await exists(lockDir + ".breaker"),
+    faults: list,
+  }
+}
+
+function errnoCode(err: unknown) {
+  return typeof err === "object" && err !== null && "code" in err ? err.code : undefined
+}
+
+async function makeStale(lockDir: string) {
+  await fs.mkdir(lockDir, { recursive: true })
+  const old = new Date(Date.now() - 120_000)
+  await fs.utimes(lockDir, old, old)
 }
 
 describe("util.flock", () => {
@@ -398,6 +494,155 @@ describe("util.flock", () => {
       },
     )
     expect(hit).toBe(true)
+  })
+
+  // The errors Windows gives a path whose delete is still pending (EPERM), a file another process holds open (EBUSY)
+  // and a directory that is still being emptied (ENOTEMPTY) are injected, so these run on every platform.
+  // effect-flock.test.ts has the same cases for EffectFlock.
+  describe("file system errors", () => {
+    for (const code of ["EPERM", "EBUSY"]) {
+      test(`retries a transient ${code} from mkdir of the lock dir`, async () => {
+        const result = await withFaults(`flock:mkdir-${code}`, ({ lockDir }) => [fault("mkdir", lockDir, code, 1)])
+        expect(result.error).toBeUndefined()
+        expect(result.hit).toBe(true)
+        expect(result.faults[0].hits).toBe(1)
+        expect(result.lockDirLeft).toBe(false)
+      })
+    }
+
+    test("reports an EPERM from mkdir of the lock dir that does not clear, well before the lock timeout", async () => {
+      const result = await withFaults("flock:mkdir-stuck", ({ lockDir }) => [fault("mkdir", lockDir, "EPERM")])
+      expect(errnoCode(result.error)).toBe("EPERM")
+      expect(result.error?.message).toContain(result.lockDir)
+      expect(result.hit).toBe(false)
+      expect(result.faults[0].hits).toBeGreaterThan(2)
+      expect(result.elapsed).toBeLessThan(10_000)
+    }, 30_000)
+
+    test("reports an EACCES from mkdir of the lock dir at once", async () => {
+      const result = await withFaults("flock:mkdir-denied", ({ lockDir }) => [fault("mkdir", lockDir, "EACCES")])
+      expect(errnoCode(result.error)).toBe("EACCES")
+      expect(result.hit).toBe(false)
+      expect(result.faults[0].hits).toBe(1)
+    })
+
+    for (const code of ["EBUSY", "EPERM", "ENOTEMPTY"]) {
+      test(`retries a transient ${code} when release deletes the lock dir`, async () => {
+        const result = await withFaults(`flock:release-${code}`, ({ lockDir }) => [fault("rm", lockDir, code, 1)])
+        expect(result.error).toBeUndefined()
+        expect(result.hit).toBe(true)
+        expect(result.faults[0].hits).toBe(1)
+        expect(result.lockDirLeft).toBe(false)
+      })
+    }
+
+    test("reports a release that cannot delete the lock dir", async () => {
+      const result = await withFaults("flock:release-stuck", ({ lockDir }) => [fault("rm", lockDir, "EPERM")])
+      expect(result.hit).toBe(true)
+      expect(result.error?.message).toContain(`Lock dir ${result.lockDir} could not be removed on release`)
+      expect(result.error?.message).toContain("EPERM")
+      expect(errnoCode(result.error?.cause)).toBe("EPERM")
+      expect(result.faults[0].hits).toBeGreaterThan(2)
+      expect(result.lockDirLeft).toBe(true)
+      expect(result.elapsed).toBeLessThan(10_000)
+    }, 30_000)
+
+    test("treats a lock dir that is already gone on release as removed", async () => {
+      const result = await withFaults("flock:release-gone", ({ lockDir }) => [fault("rm", lockDir, "ENOENT", 1)])
+      expect(result.error).toBeUndefined()
+      expect(result.hit).toBe(true)
+      expect(result.faults[0].hits).toBe(1)
+    })
+
+    test("retries a transient error deleting a stale lock dir", async () => {
+      const result = await withFaults(
+        "flock:stale-busy",
+        ({ lockDir }) => [fault("rm", lockDir, "EBUSY", 1)],
+        ({ lockDir }) => makeStale(lockDir),
+      )
+      expect(result.error).toBeUndefined()
+      expect(result.hit).toBe(true)
+      expect(result.faults[0].hits).toBe(1)
+      expect(result.breakerLeft).toBe(false)
+    })
+
+    test("reports a stale lock dir it cannot delete instead of waiting for the lock timeout", async () => {
+      const result = await withFaults(
+        "flock:stale-denied",
+        ({ lockDir }) => [fault("rm", lockDir, "EACCES")],
+        ({ lockDir }) => makeStale(lockDir),
+      )
+      expect(result.hit).toBe(false)
+      expect(errnoCode(result.error)).toBe("EACCES")
+      expect(result.breakerLeft).toBe(false)
+      expect(result.elapsed).toBeLessThan(10_000)
+    }, 30_000)
+
+    test("reports a stale breaker it cannot delete instead of waiting for the lock timeout", async () => {
+      const result = await withFaults(
+        "flock:breaker-denied",
+        ({ lockDir }) => [fault("rm", lockDir + ".breaker", "EACCES")],
+        async ({ lockDir }) => {
+          await makeStale(lockDir)
+          await makeStale(lockDir + ".breaker")
+        },
+      )
+      expect(result.hit).toBe(false)
+      expect(errnoCode(result.error)).toBe("EACCES")
+      expect(result.error?.message).toContain(result.lockDir + ".breaker")
+      expect(result.elapsed).toBeLessThan(10_000)
+    }, 30_000)
+
+    test("names the lock dir and the file in a compromised lock error", async () => {
+      const result = await withFaults("flock:compromised-message", ({ lockDir }) => [
+        fault("writeFile", path.join(lockDir, "heartbeat"), "EEXIST", 1),
+      ])
+      expect(result.hit).toBe(false)
+      expect(result.error?.message).toBe(`Lock compromised at ${result.lockDir}: heartbeat already existed`)
+      expect(errnoCode(result.error?.cause)).toBe("EEXIST")
+      expect(result.lockDirLeft).toBe(false)
+    })
+
+    test("names the write error when meta.json cannot be created", async () => {
+      const result = await withFaults("flock:compromised-write", ({ lockDir }) => [
+        fault("writeFile", path.join(lockDir, "meta.json"), "ENOSPC", 1),
+      ])
+      expect(result.error?.message).toContain(`Lock compromised at ${result.lockDir}: meta.json could not be created`)
+      expect(result.error?.message).toContain("ENOSPC")
+      expect(result.lockDirLeft).toBe(false)
+    })
+
+    test("says so when the lock dir cannot be deleted after a compromise", async () => {
+      const result = await withFaults("flock:compromised-left", ({ lockDir }) => [
+        fault("writeFile", path.join(lockDir, "heartbeat"), "EEXIST", 1),
+        fault("rm", lockDir, "EACCES"),
+      ])
+      expect(result.error?.message).toContain("heartbeat already existed; removing the lock dir failed")
+      expect(result.error?.message).toContain("EACCES")
+      expect(result.faults[1].hits).toBe(1)
+      expect(result.lockDirLeft).toBe(true)
+    })
+
+    // Real files, no injection: on Windows the delete can stay pending, or the directory stay non-empty, while another
+    // handle on the heartbeat is open. Elsewhere the delete succeeds at once.
+    test("release deletes the lock dir while another handle on the heartbeat closes", async () => {
+      await using tmp = await tmpdir()
+      const dir = path.join(tmp.path, "locks")
+      const key = "flock:open-heartbeat"
+      const lockDir = lock(dir, key)
+      let closed: Promise<void> | undefined
+
+      await Flock.withLock(
+        key,
+        async () => {
+          const handle = await fs.open(path.join(lockDir, "heartbeat"), "r")
+          closed = sleep(150).then(() => handle.close())
+        },
+        { dir, staleMs: 1_000, timeoutMs: 3_000 },
+      )
+      await closed
+      expect(await exists(lockDir)).toBe(false)
+    })
   })
 
   test("fails clearly on unwritable lock roots", async () => {
