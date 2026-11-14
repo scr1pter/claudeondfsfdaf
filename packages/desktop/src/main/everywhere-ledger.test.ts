@@ -96,3 +96,18 @@ test("the private atomic file survives a fresh ledger instance and refuses corru
     await expect(reopened.inspect()).rejects.toThrow("could not be read")
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
+
+test("receipt growth cannot replace the ledger with a file beyond its read ceiling", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "everywhere-ledger-cap-"))
+  const now = Date.now()
+  const state: RunnerLedger = { day: new Date(now).toISOString().slice(0, 10), count: 0, jobs: [], offers: {} }
+  try {
+    const storage = ledgerFile(path.join(directory, "jobs.json"))
+    await storage.write(state)
+    await expect(storage.write({ ...state,
+      offers: Object.fromEntries(Array.from({ length: 4096 }, () => [randomId(), now + 3_600_000])),
+      pending: Array.from({ length: 32 }, () => ({ jid: createJobId(now), lease: randomId(), outcome: "changes", summary: "€".repeat(1500) })),
+    })).rejects.toThrow("ledger is full")
+    expect(await storage.read()).toEqual(state)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})

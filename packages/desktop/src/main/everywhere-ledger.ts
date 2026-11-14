@@ -89,13 +89,17 @@ export function ledgerFile(file: string) {
       } finally { await handle?.close() }
     },
     async write(state: RunnerLedger) {
+      const encoded = JSON.stringify(state)
+      // Receipts share this file with replay records. Refuse growth before replacing
+      // the last readable file, including multi-byte summaries at the schema ceiling.
+      if (Buffer.byteLength(encoded, "utf8") > 256 * 1024) throw new Error("Everywhere ledger is full")
       const directory = path.dirname(file)
       await mkdir(directory, { recursive: true, mode: 0o700 })
       const temporary = `${file}.${randomBytes(16).toString("hex")}.tmp`
       const handle = await open(temporary, "wx", 0o600)
       try {
         try {
-          await handle.writeFile(JSON.stringify(state), "utf8")
+          await handle.writeFile(encoded, "utf8")
           await handle.sync()
         } finally { await handle.close() }
         await rename(temporary, file)

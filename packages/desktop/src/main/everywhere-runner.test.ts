@@ -1,6 +1,7 @@
 import { installFetchGuard } from "../../../web/test/lib/everywhere-fetch-guard"
 import { expect, test } from "bun:test"
 import { COMPUTER_CAPS, TIMING, createJobId, randomId, type EverywhereJob, type Settle } from "@vectordevai/schema/everywhere"
+import { renderResult } from "@vectordevai/schema/everywhere-policy"
 import { createLedger, type RunnerLedger } from "./everywhere-ledger"
 import { createEverywhereJobsClient, createEverywhereRunner, type RunnerDeps, type RunnerSettings } from "./everywhere-runner"
 import type { RunnerEngine } from "./everywhere-engine"
@@ -156,9 +157,12 @@ test("an ambiguous push failure reports uncertainty and never claims no changes 
   f.git.push = async () => { throw new Error("Fixture remote accepted then disconnected") }
   await createEverywhereRunner(f.deps).offer("fixture-offer")
   expect(f.results).toHaveLength(1)
-  expect(f.results[0]).toMatchObject({ outcome: "held", headSha: "c".repeat(40) })
+  expect(f.results[0]).toMatchObject({ outcome: "failed", headSha: "c".repeat(40) })
   expect(f.results[0]?.summary).toContain("Publication was not confirmed")
   expect(f.results[0]?.summary).not.toContain("without publishing")
+  const rendered = renderResult({ ...f.results[0]!, platform: "slack", route: "laptop", repository: f.job.repository.fullName, shared: false })
+  expect(rendered.text).toContain("Publication was not confirmed")
+  expect(rendered.text).not.toContain("changes were kept on the computer")
   expect(f.calls.some((call) => call.kind === "open-pr")).toBe(false)
 })
 

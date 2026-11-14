@@ -287,7 +287,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         else {
           // Persist before crossing the remote side-effect boundary. A process crash or
           // ambiguous transport failure can then never recover as "nothing published".
-          const uncertain: Settle = { jid, lease: job.lease.id, outcome: "held", summary: "Publication was not confirmed. Check the remote branch before retrying this task.", branch, headSha, files: staged.files, checks: "skipped" }
+          const uncertain: Settle = { jid, lease: job.lease.id, outcome: "failed", summary: "Publication was not confirmed. Check the remote branch before retrying this task.", branch, headSha, files: staged.files, checks: "skipped" }
           await deps.ledger.remember(uncertain)
           publication = uncertain
           if (controller.signal.aborted || now() >= deadline) {
