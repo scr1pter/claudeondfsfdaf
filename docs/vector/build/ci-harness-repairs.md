@@ -26,6 +26,16 @@ The `57f6bf0c1` desktop bundle job [132535486900](https://github.com/scr1pter/cl
 
 `packages/engine/script/smoke-node-bundle.ts` now sets `agent.vectorscope.model` in its synthetic owner-global configuration to its existing loopback-only smoke provider/model. All ordinary model identities, approval/readiness/privacy checks and smoke assertions remain unchanged. This adds no application fallback. Build and native smoke execution remain GitHub-CI-only; the local package typecheck is source evidence, not a native smoke pass.
 
+### Follow-up: actual global configuration provenance
+
+The first explicit-model repair did not fix the hosted smoke: exact `f2988d6ad` Node job [132552984489](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43629550831/job/132552984489) still timed out before owner consent. Static tracing identified a different source boundary: the fixture wrote its configuration only to `<temporary userData>/config/vector/vector.json`, passed as `VECTOR_AGENT_CONFIG_DIR`. Ordinary turns use that merged desktop configuration, but `ReviewModel.resolveReviewModel` intentionally obtains owner identity through `Config.getGlobal`. That loader reads `Global.Path.config`, which is `<XDG_CONFIG_HOME>/<VECTOR_APP_NAMESPACE>`; in this fixture it was the separate, empty `<temporary userData>/xdg-config/vector` directory.
+
+The fixture now derives the real global path from the exact child environment and writes the same synthetic provider/owner-model configuration to both isolated sources before spawning the child and before its global configuration cache can load. The native acceptance also checks the actual `GET /global/config` response for the expected VectorScope model before starting the owner review. An early refused/error result is now reported immediately, rather than being hidden behind the approval-poll timeout. The later real approval, concurrent-start refusal, cancellation and durable-settlement assertions remain in place.
+
+No product config loader, fallback, feature flag, identity requirement or timeout changed. This is not an owner UI/browser/native-input test. A successful local typecheck does not establish that the repaired native smoke passed; GitHub must run it on the new exact source revision.
+
+Follow-up validation from an isolated worktree based on `f2988d6ad`: Bun 1.3.14 frozen installation with scripts disabled completed in 28.07 seconds with no lockfile change; `bun run typecheck` from `packages/engine` exited 0 without diagnostics. No smoke server, native input, browser, model or bundle execution ran locally.
+
 ## Validation
 
 Windows; Bun 1.3.14. Frozen installation with scripts disabled completed in 35.23 seconds; the lockfile did not change. The coordinated local Bun slot was released after these checks:

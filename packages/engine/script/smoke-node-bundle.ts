@@ -89,7 +89,7 @@ async function smokeConnect(bundle: string) {
   try {
     const engine = await startEngine(bundle, root, model.url)
     try {
-      await connectedReviews(engine, project)
+      await connectedReviews(engine, project, `${PROVIDER}/${MODEL}`)
       if (model.requests.length !== 0) throw new Error("a refused or cancelled non-Git review reached the model")
       console.log(
         `connect owner transport smoke passed on node ${process.version}: explicit approval, concurrent-start refusal, peer-disconnect cancellation and durable settlement`,
@@ -131,7 +131,7 @@ async function smoke(bundle: string) {
         ...(await runComputerTurn(engine, project, computer, model.requests)).map((failure) => `computer: ${failure}`),
         ...(await searchModel(engine, project, bundle)).map((failure) => `search model: ${failure}`),
         ...(await localRecommendation(engine, project)).map((failure) => `local recommendation: ${failure}`),
-        ...(await connectedReviews(engine, project)).map((failure) => `connected review: ${failure}`),
+        ...(await connectedReviews(engine, project, `${PROVIDER}/${MODEL}`)).map((failure) => `connected review: ${failure}`),
       ])
       .catch((error) => [`the turn could not run: ${String(error)}`])
       .finally(engine.stop)
@@ -197,16 +197,21 @@ async function startEngine(bundle: string, root: string, modelUrl: string, compu
   const userData = path.join(root, "user-data")
   const configDir = path.join(userData, "config", "vector")
   const password = randomBytes(16).toString("hex")
+  const environment = sidecarEnv({ home, userData, configDir, password })
   await mkdir(home, { recursive: true })
-  await mkdir(configDir, { recursive: true })
-  // The desktop reads the user's global config from VECTOR_AGENT_CONFIG_DIR, so the provider goes there too.
-  await writeFile(path.join(configDir, "vector.json"), JSON.stringify(providerConfig(modelUrl), null, 2))
+  const configuration = JSON.stringify(providerConfig(modelUrl), null, 2)
+  // The desktop's extra config participates in merged settings, while owner-only model identity is read by
+  // Config.getGlobal from XDG_CONFIG_HOME/<namespace>. Seed both isolated sources before either can be cached.
+  for (const directory of new Set([configDir, path.join(environment.XDG_CONFIG_HOME, environment.VECTOR_APP_NAMESPACE)])) {
+    await mkdir(directory, { recursive: true })
+    await writeFile(path.join(directory, "vector.json"), configuration)
+  }
   await seedCachedProvider(path.join(userData, "xdg-cache", "vector", "packages", NPM_PACKAGE))
   // execArgv carries --experimental-strip-types, which Node before 22.18 needs to run this script in the child too.
   const child = spawn(process.execPath, [...process.execArgv, script, "--serve", bundle], {
     cwd: root,
     env: {
-      ...sidecarEnv({ home, userData, configDir, password }),
+      ...environment,
       ...(computer ? { VECTOR_COMPUTER_BRIDGE_URL: computer.url, VECTOR_COMPUTER_BRIDGE_TOKEN: computer.token } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],

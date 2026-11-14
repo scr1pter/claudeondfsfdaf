@@ -6,7 +6,7 @@ import { createConnection } from "node:net"
 import { setTimeout } from "node:timers/promises"
 
 /** Exercises the real bundled owner, runner, hub and HttpApi handler under the desktop's native Node transport. */
-export async function connectedReviews(engine: { url: URL; authorization: string }, directory: string) {
+export async function connectedReviews(engine: { url: URL; authorization: string }, directory: string, ownerModel: string) {
   assert.equal(process.versions.bun, undefined, "connect transport acceptance must run under native Node")
   const headers = {
     authorization: engine.authorization,
@@ -39,12 +39,23 @@ export async function connectedReviews(engine: { url: URL; authorization: string
     )
   }
 
+  // Check the real owner-global loader, not the desktop's merged/project config or this fixture's seed object.
+  const global = await json("/global/config")
+  assert.ok(isRecord(global) && isRecord(global.agent) && isRecord(global.agent.vectorscope), "the native Node owner-global review configuration is missing")
+  assert.equal(global.agent.vectorscope.model, ownerModel, "the native Node owner-global review model was not loaded")
+
   const approvedSession = await session()
+  const early = { done: false, result: undefined as unknown }
   // Catch immediately so an unexpected early response cannot become an unobserved rejection during polling.
   const approved = json(`/experimental/session/${approvedSession}/connect`, { background: false }).catch(
     (error: unknown) => error,
-  )
-  const approval = await wait(() => pending(approvedSession), "the native Node owner review never asked before work")
+  ).then((result) => { early.done = true; early.result = result; return result })
+  const approval = await wait(async () => {
+    const permission = await pending(approvedSession)
+    if (permission) return permission
+    assert.equal(early.done, false, `the native Node owner review returned before consent: ${early.result instanceof Error ? early.result.message : (JSON.stringify(early.result) ?? "no result").slice(0, 2000)}`)
+    return undefined
+  }, "the native Node owner review never asked before work")
   assert.ok(isRecord(approval) && typeof approval.id === "string")
   assert.ok(await pending(approvedSession), "consuming a POST body cancelled a live foreground request")
   const busy = await json("/session/status")
