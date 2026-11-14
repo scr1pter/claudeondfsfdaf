@@ -16,6 +16,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ResearchSearch } from "@vectordevai/core/research/search"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
+import { ComputerAvailability } from "@/computer/availability"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "@/mcp"
@@ -120,7 +121,7 @@ const pluginLayer = Layer.succeed(
   }),
 )
 
-const registryIt = testEffect(
+const registryLayer = (input: { connect?: boolean; computer?: boolean } = {}) =>
   LayerNode.compile(LayerNode.group([ToolRegistry.node, Agent.node]), [
     [
       Config.node,
@@ -129,10 +130,24 @@ const registryIt = testEffect(
         waitForDependencies: () => Effect.die("Local tools must not wait for SDK downloads"),
       }),
     ],
-    [RuntimeFlags.node, RuntimeFlags.layer()],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: input.connect ?? false })],
     [Plugin.node, pluginLayer],
-  ]),
-)
+    ...(input.computer
+      ? [
+          [
+            ComputerAvailability.node,
+            Layer.succeed(ComputerAvailability.Service, {
+              unavailable: () => Effect.succeed(undefined),
+              capabilities: () => Effect.succeed({ available: true, protocol: 1 }),
+              actions: () => Effect.succeed(["read_ui"] as const),
+            }),
+          ] as const,
+        ]
+      : []),
+  ])
+const registryIt = testEffect(registryLayer())
+const computerIt = testEffect(registryLayer({ computer: true }))
+const connectedIt = testEffect(registryLayer({ connect: true }))
 
 // What the registry offers: its ids, and the tools the build agent and the research lead are given.
 const offered = Effect.gen(function* () {
@@ -169,13 +184,54 @@ describe("the registry on GitHub Actions", () => {
     }),
   )
 
-  registryIt.instance("outside Actions the same tools are offered", () =>
+  registryIt.instance(
+    "outside Actions bridged tools stay offered, but unavailable computer and opt-out Connect do not",
+    () =>
+      Effect.gen(function* () {
+        yield* environment({ ...CLOUD_BRIDGE, GITHUB_ACTIONS: "false" })
+        const tools = yield* offered
+        expect(tools.ids).toEqual(expect.arrayContaining([...WITHHELD, ...KEPT]))
+        expect(tools.build).toEqual(expect.arrayContaining(["browser", "vector_cloud", "computer-x"]))
+        expect(tools.build).not.toContain("computer")
+        expect(tools.ids).not.toContain("connect")
+        expect(tools.build).not.toContain("connect")
+        expect(tools.lead).toContain("research_browser")
+      }),
+  )
+
+  computerIt.instance(
+    "a synthetic ready computer is offered outside Actions but its readiness cannot bypass Actions fences",
+    () =>
+      Effect.gen(function* () {
+        yield* environment({ ...CLOUD_BRIDGE, GITHUB_ACTIONS: "false" })
+        expect((yield* offered).build).toEqual(
+          expect.arrayContaining(["browser", "vector_cloud", "computer", "computer-x"]),
+        )
+        const actions = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* environment({ GITHUB_ACTIONS: "true" })
+            return yield* offered
+          }),
+        )
+        expect(withheld(actions.ids)).toEqual([])
+        expect(withheld(actions.build)).toEqual([])
+      }),
+  )
+
+  connectedIt.instance("explicit Connect opt-in offers it to build without changing private GitHub tool fences", () =>
     Effect.gen(function* () {
       yield* environment({ ...CLOUD_BRIDGE, GITHUB_ACTIONS: "false" })
-      const tools = yield* offered
-      expect(tools.ids).toEqual(expect.arrayContaining([...WITHHELD, ...KEPT]))
-      expect(tools.build).toEqual(expect.arrayContaining(["browser", "vector_cloud", "computer", "computer-x"]))
-      expect(tools.lead).toContain("research_browser")
+      const local = yield* offered
+      expect(local.ids).toContain("connect")
+      expect(local.build).toContain("connect")
+      expect(local.lead).not.toContain("connect")
+      const actions = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* environment({ GITHUB_ACTIONS: "true" })
+          return yield* offered
+        }),
+      )
+      expect(withheld(actions.build)).toEqual([])
     }),
   )
 
