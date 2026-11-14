@@ -84,6 +84,85 @@ const scenarios: Scenario[] = [
   ...sessionScenarios,
   ...connectScenarios,
   http.protected
+    .get("/computer/protected-paths", "computer.protectedPaths")
+    .seeded((ctx) => ctx.file("AGENTS.md", "Private computer protection instruction fixture."))
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.paths)
+      array(body.directories)
+      check(
+        [...body.paths, ...body.directories].every(
+          (file) => typeof file === "string" && path.isAbsolute(file) && !file.includes("\0"),
+        ),
+        "protected computer paths must be absolute file names",
+      )
+      check(
+        body.paths.includes(path.join(ctx.directory!, "AGENTS.md")),
+        "protected computer paths should include this project's instruction file",
+      )
+      check(
+        body.directories.includes(exerciseConfigDirectory),
+        "protected computer directories should include the isolated engine config",
+      )
+      check(Buffer.byteLength(JSON.stringify(body)) <= 1024 * 1024, "protected computer metadata must stay bounded")
+      check(
+        !JSON.stringify(body).includes("Private computer protection instruction fixture."),
+        "protected computer metadata must not disclose instruction contents",
+      )
+    }),
+  http.protected
+    .post("/computer/screenshots/prune", "computer.screenshots.prune")
+    .mutating()
+    .probe({ path: "/computer/screenshots/prune", body: { before: 0 } })
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Screenshot retention fixture" })
+        const user = yield* ctx.message(session.id, { text: "Keep the conversation after deleting old screenshots." })
+        const attachmentURL = "data:image/png;base64,aHR0cGFwaS1wcml2YXRlLXNjcmVlbg=="
+        const removed = yield* ctx.toolMessage(user.info, { tool: "computer", attachmentURL, end: 10 })
+        yield* ctx.toolMessage(user.info, { tool: "computer", attachmentURL, end: 30 })
+        yield* ctx.toolMessage(user.info, { tool: "read", attachmentURL, end: 10 })
+        const other = yield* ctx.session({ title: "Unselected screenshot fixture" })
+        const otherUser = yield* ctx.message(other.id)
+        yield* ctx.toolMessage(otherUser.info, { tool: "computer", attachmentURL, end: 10 })
+        return {
+          session,
+          removed,
+          before: yield* ctx.messages(session.id),
+          other,
+          otherBefore: yield* ctx.messages(other.id),
+        }
+      }),
+    )
+    .at((ctx) => ({
+      path: "/computer/screenshots/prune",
+      headers: ctx.headers(),
+      body: { sessionID: ctx.state.session.id, before: 20 },
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body.removed === 1, "pruning should count only the selected old computer screenshot")
+        const after = yield* ctx.messages(ctx.state.session.id)
+        const parts = after.flatMap((message) => message.parts)
+        const removed = parts.find((part) => part.id === ctx.state.removed.id)
+        check(removed?.type === "tool", "pruning must retain the computer tool part")
+        check(removed.state.status === "completed", "pruning must preserve the completed tool status")
+        check(removed.state.metadata.screenshotRemoved === true, "pruning must mark the removed screenshot")
+        check(!removed.state.attachments?.length, "the selected screenshot attachment must be deleted")
+        check(removed.state.output === "Keep this recorded tool output.", "pruning must preserve tool output")
+        check(
+          stable(parts.filter((part) => part.id !== removed.id)) ===
+            stable(ctx.state.before.flatMap((message) => message.parts).filter((part) => part.id !== removed.id)),
+          "pruning must preserve user text, newer screenshots and ordinary tool attachments",
+        )
+        check(
+          stable(yield* ctx.messages(ctx.state.other.id)) === stable(ctx.state.otherBefore),
+          "pruning must not change another session's screenshots",
+        )
+      }),
+    ),
+  http.protected
     .get("/experimental/session/usage", "experimental.session.usage")
     .preserveDatabase()
     .withLlm()
@@ -1341,6 +1420,9 @@ const scenarios: Scenario[] = [
   http.protected.get("/experimental/capabilities", "experimental.capabilities.get").json(200, (body) => {
     check(typeof body === "object" && body !== null, "capabilities should be an object")
     check("backgroundSubagents" in body, "capabilities should report background subagents")
+    check("computer" in body && isRecord(body.computer), "capabilities should report computer availability")
+    check(body.computer.available === false, "computer use needs a desktop bridge")
+    check(body.computer.reason === "no_desktop_bridge", "computer availability should explain the missing bridge")
     check(
       typeof (body as { subagentLimits?: unknown }).subagentLimits === "boolean",
       "capabilities should report whether task lists carry subagent limits",

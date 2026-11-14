@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Hands } from "@vectordevai/schema/hands"
 import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount } from "./settings-registry"
 
 describe("settings registry", () => {
@@ -16,6 +17,7 @@ describe("settings registry", () => {
       "spend",
       "github",
       "subagents",
+      "computer",
       "providers",
       "models",
       "servers",
@@ -25,6 +27,36 @@ describe("settings registry", () => {
       "accessibility",
       "about",
     ])
+  })
+
+  test("finds desktop app control by its name and dedicated vocabulary", () => {
+    const agents = settingsGroups.find((group) => group.title === "Agents & environment")
+    expect(agents?.items.find((item) => item.value === "computer")?.label).toBe(Hands.NAME)
+    for (const query of [
+      Hands.NAME,
+      Hands.SHORT,
+      "computer use",
+      "screen recording",
+      "always allowed apps",
+      "blocked apps",
+    ])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "computer",
+      ])
+    expect(isSettingsTab("computer")).toBe(true)
+  })
+
+  test("gives the desktop app control page its own hands icon and keeps unrelated vocabulary elsewhere", () => {
+    const items = settingsGroups.flatMap((group) => group.items)
+    const computer = items.find((item) => item.value === "computer")!
+    expect(computer.icon).toBe("hands")
+    expect(items.filter((item) => item.icon === "hands").map((item) => item.value)).toEqual(["computer"])
+    for (const query of ["mouse", "screenshots", "use my computer", "accessibility permission"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "computer",
+      ])
+    for (const word of ["keyboard", "terminal", "workflow", "skills", "effort", "web access", "theme", "instructions"])
+      expect(computer.keywords.some((keyword) => keyword.toLocaleLowerCase().includes(word))).toBe(false)
   })
 
   test("puts Keyboard shortcuts in the Workspace group, found by what people call them", () => {

@@ -15,6 +15,8 @@ import { PtyID } from "@vectordevai/core/pty/schema"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Truncate } from "@/tool/truncate"
@@ -48,6 +50,8 @@ const it = testEffect(
         Plugin.node,
         Truncate.node,
         Config.node,
+        ComputerSession.node,
+        Session.node,
         Agent.node,
         RuntimeFlags.node,
         Permission.node,
@@ -119,16 +123,34 @@ const failure = (exit: Exit.Exit<unknown, unknown>) => {
 }
 
 // Replace only PTY I/O: these tests still execute the real tool, permission scan and wait loop on every platform.
-const syntheticPty = (frames: { text: string; exitCode?: number }[], onRead?: (count: number) => void) => {
+const syntheticPty = (
+  frames: { text: string; exitCode?: number }[],
+  onRead?: (count: number) => void,
+  onWrite?: (data: string) => void,
+) => {
   const created: Pty.Info[] = []
   const reads: (Pty.ReadInput | undefined)[] = []
+  const writes: string[] = []
   const state = { text: "", frame: 0 }
   return {
     created,
     reads,
+    writes,
     layer: Layer.mock(Pty.Service, {
-      create: (input, owner) =>
+      get: (id) =>
         Effect.sync(() => {
+          const info = created.find((item) => item.id === id)
+          if (!info) throw new Error("Synthetic terminal was not created")
+          return info
+        }),
+      write: (_id, data) =>
+        Effect.sync(() => {
+          writes.push(data)
+          onWrite?.(data)
+        }),
+      create: (input, owner, beforeSpawn) =>
+        Effect.gen(function* () {
+          if (beforeSpawn) yield* beforeSpawn
           const info: Pty.Info = {
             id: PtyID.ascending(),
             title: input.title ?? "Synthetic terminal",
@@ -1196,4 +1218,221 @@ describe("tool.terminal permissions", () => {
       }),
     ),
   )
+})
+
+describe("terminal computer-use boundaries", () => {
+  it.live("a held computer lease refuses desktop commands before opening a terminal", () => {
+    const pty = syntheticPty([{ text: "ready" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const asked: Ask[] = []
+        const exit = yield* tool
+          .execute({ action: "open", command: "xdotool mousemove 1 1" }, context(asked))
+          .pipe(Effect.exit)
+        expect(failure(exit)).toContain("Use the computer tool")
+        expect(asked).toEqual([])
+        expect(pty.created).toEqual([])
+      }).pipe(
+        Effect.provide(
+          Layer.mock(ComputerSession.Service, {
+            held: () => Effect.succeed(true),
+            completedThisTurn: () => Effect.succeed(false),
+          }),
+        ),
+      ),
+    )
+  })
+
+  it.live("terminal commands after computer use require fresh Allow once rather than a saved or Always answer", () => {
+    const pty = syntheticPty([{ text: "ready" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        for (const answer of [undefined, "always"] as const) {
+          const asked: Ask[] = []
+          const exit = yield* tool
+            .execute(
+              { action: "open", command: "echo ready" },
+              {
+                ...context(),
+                ask: (request) =>
+                  Effect.sync(() => {
+                    asked.push(request)
+                    return answer
+                  }),
+              },
+            )
+            .pipe(Effect.exit)
+          expect(failure(exit)).toContain("fresh Allow once")
+          expect(asked.at(-1)).toMatchObject({
+            permission: "bash",
+            patterns: expect.arrayContaining([PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX + "echo ready"]),
+            always: [],
+          })
+        }
+        expect(pty.created).toEqual([])
+        yield* tool.execute(
+          { action: "open", command: "echo ready" },
+          {
+            ...context(),
+            ask: () => Effect.succeed("once" as const),
+          },
+        )
+        expect(pty.created).toHaveLength(1)
+      }).pipe(
+        Effect.provide(
+          Layer.mock(ComputerSession.Service, {
+            held: () => Effect.succeed(false),
+            completedThisTurn: () => Effect.succeed(true),
+          }),
+        ),
+      ),
+    )
+  })
+
+  it.live("computer use completed during terminal environment setup is rechecked before PTY creation", () => {
+    const state = { completed: false }
+    const pty = syntheticPty([{ text: "ready" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const asked: Ask[] = []
+        const exit = yield* tool.execute({ action: "open", command: "echo ready" }, context(asked)).pipe(Effect.exit)
+        expect(failure(exit)).toContain("fresh Allow once")
+        expect(asked.filter((request) => request.permission === "bash")).toHaveLength(2)
+        expect(asked.at(-1)?.patterns).toContain(PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX + "echo ready")
+        expect(pty.created).toEqual([])
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(ComputerSession.Service, {
+              held: () => Effect.succeed(false),
+              completedThisTurn: () => Effect.sync(() => state.completed),
+            }),
+            Layer.mock(Plugin.Service, {
+              trigger: (_name, _input, output) =>
+                Effect.sync(() => {
+                  state.completed = true
+                  return output
+                }),
+            }),
+          ),
+        ),
+      ),
+    )
+  })
+
+  it.live("computer completion inside PTY setup is rechecked by the native pre-spawn hook", () => {
+    const state = { completed: false }
+    const pty = syntheticPty([{ text: "ready" }])
+    const delayed = Layer.effect(
+      Pty.Service,
+      Effect.gen(function* () {
+        const service = yield* Pty.Service
+        return {
+          ...service,
+          create: (input, owner, beforeSpawn) =>
+            Effect.gen(function* () {
+              state.completed = true
+              return yield* service.create(input, owner, beforeSpawn)
+            }),
+        } satisfies Pty.Interface
+      }),
+    ).pipe(Layer.provide(pty.layer))
+    return withSyntheticPty(
+      delayed,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const asked: Ask[] = []
+        const exit = yield* tool.execute({ action: "open", command: "echo ready" }, context(asked)).pipe(Effect.exit)
+        expect(failure(exit)).toContain("fresh Allow once")
+        expect(asked.at(-1)?.patterns).toContain(PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX + "echo ready")
+        expect(pty.created).toEqual([])
+      }).pipe(
+        Effect.provide(
+          Layer.mock(ComputerSession.Service, {
+            held: () => Effect.succeed(false),
+            completedThisTurn: () => Effect.sync(() => state.completed),
+          }),
+        ),
+      ),
+    )
+  })
+
+  it.live("computer completion during terminal read is rechecked before the first typed byte", () => {
+    const state = { completed: false, arm: false }
+    const pty = syntheticPty([{ text: "ready" }], () => {
+      if (state.arm) state.completed = true
+    })
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open" }, context())
+        state.arm = true
+        const asked: Ask[] = []
+        const exit = yield* tool
+          .execute({ action: "type", id: opened.metadata.id, text: "echo submitted", enter: true }, context(asked))
+          .pipe(Effect.exit)
+        expect(failure(exit)).toContain("fresh Allow once")
+        expect(asked.at(-1)?.patterns).toContain(PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX + "echo submitted")
+        expect(pty.writes).toEqual([])
+      }).pipe(
+        Effect.provide(
+          Layer.mock(ComputerSession.Service, {
+            held: () => Effect.succeed(false),
+            completedThisTurn: () => Effect.sync(() => state.completed),
+          }),
+        ),
+      ),
+    )
+  })
+
+  for (const phase of ["before the first byte", "between keys"] as const) {
+    it.live(`a late desktop-command refusal ${phase} preserves the written prefix for the next scan`, () => {
+      const state = { held: false, arm: false }
+      const pty = syntheticPty(
+        [{ text: "ready" }],
+        () => {
+          if (state.arm && phase === "before the first byte") state.held = true
+        },
+        () => {
+          if (state.arm && phase === "between keys") state.held = true
+        },
+      )
+      return withSyntheticPty(
+        pty.layer,
+        Effect.gen(function* () {
+          const tool = yield* init()
+          const opened = yield* tool.execute({ action: "open" }, context())
+          const prefix = "xdotool mousemove 1 1"
+          yield* tool.execute({ action: "type", id: opened.metadata.id, text: prefix }, context())
+          state.arm = true
+          const refused = yield* tool
+            .execute({ action: "keys", id: opened.metadata.id, keys: ["backspace", "enter"] }, context())
+            .pipe(Effect.exit)
+          expect(failure(refused)).toContain("Use the computer tool")
+          const written = phase === "before the first byte" ? [prefix] : [prefix, "\x7f"]
+          expect(pty.writes).toEqual(written)
+          // Enter would execute the old prefix even though the prior call never submitted its planned line.
+          const retry = yield* tool
+            .execute({ action: "keys", id: opened.metadata.id, keys: ["enter"] }, context())
+            .pipe(Effect.exit)
+          expect(failure(retry)).toContain("Use the computer tool")
+          expect(pty.writes).toEqual(written)
+        }).pipe(
+          Effect.provide(
+            Layer.mock(ComputerSession.Service, {
+              held: () => Effect.sync(() => state.held),
+              completedThisTurn: () => Effect.succeed(false),
+            }),
+          ),
+        ),
+      )
+    })
+  }
 })

@@ -8,6 +8,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { OwnedProcess } from "@vectordevai/core/owned-process"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { TaskSize } from "@vectordevai/core/task-size"
 import { BackgroundJob } from "@/background/job"
@@ -95,6 +96,8 @@ export type StartInput = {
   command: string
   /** The process to spawn, made by the shell tool's foreground helper (its sandbox and environment included). */
   process: ChildProcess.Command
+  /** Rechecks dynamic permissions after asynchronous setup and immediately before process creation. */
+  beforeSpawn?: Effect.Effect<void>
   /** Milliseconds, at most MAX_TIMEOUT. Without it the command runs until it exits or is stopped. */
   timeout?: number
   /** How the exit note reaches the session. */
@@ -453,6 +456,9 @@ const layer = Layer.effect(
       if (refused) return yield* Effect.die(new Error(refused))
       if (input.process._tag !== "StandardCommand")
         return yield* Effect.die(new Error("A background command must be one prepared shell process."))
+      // The Windows holder launches outside the POSIX spawner. It must not bypass a required isolation boundary.
+      if (process.platform === "win32" && ProcessIsolation.required())
+        return yield* Effect.die(new Error(ProcessIsolation.REFUSAL))
       const processCommand = input.process
       const lease = yield* background.lease()
       if (!lease) return yield* Effect.die(new Error("A background command requires a durable owner lease."))
@@ -528,6 +534,8 @@ const layer = Layer.effect(
           },
           catch: (error) => new Error(`Vector could not create the command's output file: ${String(error)}`),
         })
+        // Dynamic authority must settle before a durable row, process owner or child exists.
+        if (input.beforeSpawn) yield* input.beforeSpawn
         const metadata = {
           parentSessionId: session.id,
           background: true,
@@ -593,7 +601,8 @@ const layer = Layer.effect(
               ? yield* Effect.gen(function* () {
                   windows = WindowsProcess.start(processCommand, {
                     signal: controller.signal,
-                    onReady: (pid) => bridge.promise(persist(pid)),
+                    onReady: (pid) =>
+                      bridge.promise(persist(pid).pipe(Effect.andThen(input.beforeSpawn ?? Effect.void))),
                     onOutput: (chunk) => bridge.promise(write(chunk)),
                   })
                   const handle = yield* Effect.tryPromise(() => windows!)
@@ -601,6 +610,7 @@ const layer = Layer.effect(
                   return Effect.tryPromise(() => handle.completion).pipe(Effect.map((result) => result.exitCode))
                 })
               : yield* Effect.gen(function* () {
+                  if (input.beforeSpawn) yield* input.beforeSpawn
                   const spawned = yield* spawner.spawn(OwnedProcess.command(processCommand)).pipe(
                     Scope.provide(scope),
                     Effect.mapError((error) => new Error(`Vector could not start the command: ${error.message}`)),
@@ -661,9 +671,7 @@ const layer = Layer.effect(
           return `Exited with code 0.`
         }).pipe(
           Effect.onExit((exit) =>
-            Exit.isFailure(exit)
-              ? Deferred.fail(ready, new Error("The background command could not start or was stopped during startup."))
-              : Deferred.succeed(ready, undefined),
+            Exit.isFailure(exit) ? Deferred.failCause(ready, exit.cause) : Deferred.succeed(ready, undefined),
           ),
           Effect.ensuring(cleanup()),
         )

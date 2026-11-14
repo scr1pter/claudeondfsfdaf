@@ -17,6 +17,7 @@ import { githubVaultStore } from "./vault-github"
 import { vaultSecrets } from "./vault-secrets"
 import { vectorAccount } from "./vector-account-runtime"
 import { Vault } from "@vectordevai/schema/vault"
+import { broadcastRendererStatus } from "./renderer-status"
 
 // Brain Vault in the running app (WP A45): the backup controller (vault-backup.ts) with Electron's pieces. The vault
 // key is sealed in-process with the key the OS credential store holds (vault-secrets.ts, the app's use of safeStorage)
@@ -28,8 +29,7 @@ const PURPOSE = "vector-vault-key"
 const state: { backup?: VaultBackupController } = {}
 
 function broadcast(status: VaultStatus) {
-  for (const window of BrowserWindow.getAllWindows())
-    if (!window.isDestroyed()) window.webContents.send("vault-changed", status)
+  broadcastRendererStatus(BrowserWindow.getAllWindows(), "vault-changed", status)
 }
 
 /** Starts Brain Vault once the local engine is up. Safe to call once per launch. */

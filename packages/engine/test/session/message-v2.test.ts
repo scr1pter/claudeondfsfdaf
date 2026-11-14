@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { APICallError } from "ai"
+import { Effect, Layer } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
@@ -9,6 +10,9 @@ import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { Question } from "../../src/question"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
+import { testEffect } from "../lib/effect"
+
+const it = testEffect(Layer.empty)
 
 const sessionID = SessionID.make("session")
 const providerID = ProviderV2.ID.make("lmstudio")
@@ -110,6 +114,77 @@ function basePart(messageID: string, id: string) {
     messageID: MessageID.make(messageID.startsWith("msg") ? messageID : `msg_${messageID}`),
   }
 }
+
+describe("computer history screenshots", () => {
+  for (const npm of ["@ai-sdk/openai", "@ai-sdk/anthropic", "@ai-sdk/openai-compatible"]) {
+    it.effect(`drops only selected computer attachments without changing stored history (${npm})`, () =>
+      Effect.gen(function* () {
+        const selectedModel = {
+          ...model,
+          api: { ...model.api, npm },
+          capabilities: { ...model.capabilities, input: { ...model.capabilities.input, image: true } },
+        }
+        const messageID = "msg_computer_history"
+        const tool = (id: string, name: string, data: string): SessionV1.ToolPart => ({
+          ...basePart(messageID, id),
+          type: "tool",
+          tool: name,
+          callID: id,
+          state: {
+            status: "completed",
+            input: { action: "screenshot" },
+            output: `Observed ${id}`,
+            title: "Observe app",
+            metadata: {},
+            time: { start: 0, end: 1 },
+            attachments: [
+              {
+                ...basePart(messageID, `${id}_image`),
+                type: "file",
+                mime: "image/png",
+                url: `data:image/png;base64,${data}`,
+              },
+            ],
+          },
+        })
+        const input: SessionV1.WithParts[] = [
+          {
+            info: assistantInfo(messageID, "msg_user"),
+            parts: [
+              tool("prt_old", "computer", "b2xkLWltYWdl"),
+              tool("prt_recent", "computer", "bmV3LWltYWdl"),
+              tool("prt_browser", "browser", "YnJvd3Nlci1pbWFnZQ=="),
+            ],
+          },
+          {
+            info: userInfo("msg_attachment"),
+            parts: [
+              {
+                ...basePart("msg_attachment", "prt_user_image"),
+                type: "file",
+                mime: "image/png",
+                url: "data:image/png;base64,dXNlci1pbWFnZQ==",
+              },
+            ],
+          },
+        ]
+        const saved = JSON.stringify(input)
+        const result = JSON.stringify(
+          yield* MessageV2.toModelMessagesEffect(input, selectedModel, {
+            dropMedia: new Set(["prt_old", "prt_browser", "prt_user_image"]),
+          }),
+        )
+        expect(result).not.toContain("b2xkLWltYWdl")
+        expect(result).toContain("bmV3LWltYWdl")
+        expect(result).toContain("YnJvd3Nlci1pbWFnZQ==")
+        expect(result).toContain("dXNlci1pbWFnZQ==")
+        expect(result).toContain("Observed prt_old\\n[Earlier screenshot removed]")
+        expect(result.split("[Earlier screenshot removed]")).toHaveLength(2)
+        expect(JSON.stringify(input)).toBe(saved)
+      }),
+    )
+  }
+})
 
 describe("session.message-v2.toModelMessage", () => {
   test("filters out messages with no parts", async () => {

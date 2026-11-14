@@ -63,6 +63,8 @@ export type SelectV2Props<T> = Omit<
   overlayZIndex?: number
   /** Keep a dialog-hosted popup inside that dialog's focus and accessibility boundary. */
   portalMount?: HTMLElement
+  /** Where the listbox is portalled. Inside a dialog, pass its content so the list opens above the dialog's layer. */
+  mount?: HTMLElement
 }
 
 export function SelectV2<T>(props: SelectV2Props<T>) {
@@ -86,6 +88,7 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
     "valueClass",
     "overlayZIndex",
     "portalMount",
+    "mount",
     "placement",
     "gutter",
     "sameWidth",
@@ -204,7 +207,7 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
           <ChevronDown />
         </span>
       </Kobalte.Trigger>
-      <Kobalte.Portal mount={local.portalMount}>
+      <Kobalte.Portal mount={local.portalMount ?? local.mount}>
         <Kobalte.Content
           data-component="menu-v2-content"
           data-slot="select-v2-content"

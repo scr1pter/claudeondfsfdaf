@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { fileURLToPath } from "node:url"
 import { changelog } from "../src/data/docs-content"
-import { publishedDesktopVersion, release199, upcomingRelease } from "../src/data/vector-releases"
+import { handsReleasePreview, publishedDesktopVersion, release199, upcomingRelease } from "../src/data/vector-releases"
 
 // Desktop 1.99.112 was published from main dfc98974 by release run #96 on 2026-10-30 (UTC), so no later edit may
 // present it, or anything before it, as upcoming. 1.99.111 was published by release run #95 on 2026-10-25, 1.99.110 on
@@ -44,6 +44,15 @@ test("the site marks the latest shipped desktop release as published", () => {
   ).toEqual([])
   // The unversioned Upcoming entry leads the docs changelog; a version number there reads as upcoming.
   expect(upcomingRelease.summary).not.toMatch(/\b\d+\.\d+\.\d+\b/)
+})
+
+test("Hands remains unversioned and cannot rewrite the published desktop history", () => {
+  expect(handsReleasePreview.availability).toContain("Unreleased")
+  expect(handsReleasePreview.summary).toContain("macOS may ask you to grant access again after a helper update")
+  expect(handsReleasePreview).not.toHaveProperty("version")
+  const published = release199.find((release) => release.version === "1.99.112")
+  expect(published?.title).toBe("Agent terminals and browser controls, research cleanup, and first-launch help")
+  expect(published?.summary).not.toContain("Vector Hands")
 })
 
 test("the docs changelog lists the current desktop download's notes word for word", () => {
@@ -126,10 +135,15 @@ test("Check for Updates is named only as the macOS menu item", () => {
 
 test("no page or README links to the private source repository or offers installers without an account", async () => {
   // Release notes keep their wording, but none may send readers to the private repository's releases.
-  const notes = [...sources, { file: "public/changelog.json", text: await Bun.file(`${web}public/changelog.json`).text() }]
+  const notes = [
+    ...sources,
+    { file: "public/changelog.json", text: await Bun.file(`${web}public/changelog.json`).text() },
+  ]
   expect(
     notes.flatMap((source) =>
-      (source.text.match(/[^.]*\bGitHub releases?\b[^.]*/gi) ?? []).map((match) => `${source.file}: ${match.trim().slice(0, 120)}`),
+      (source.text.match(/[^.]*\bGitHub releases?\b[^.]*/gi) ?? []).map(
+        (match) => `${source.file}: ${match.trim().slice(0, 120)}`,
+      ),
     ),
   ).toEqual([])
   expect(

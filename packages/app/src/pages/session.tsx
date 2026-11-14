@@ -58,7 +58,9 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
-import { type FollowupDraft, queueEnabled as followupQueues } from "@/components/prompt-input/submit"
+import { type FollowupDraft, queueEnabled, showComputerRefusal } from "@/components/prompt-input/submit"
+import { ComputerSendGate } from "@/features/computer/send-gate"
+import { openComputerSetup } from "@/features/computer/open-setup"
 import { useGlobal } from "@/context/global"
 import { firstSteerNotice, steerSupported } from "@/features/background-tasks/engine-capabilities"
 import { lastRunEnded, previewText } from "@/features/followup/followup-model"
@@ -106,7 +108,7 @@ import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/sessio
 import { isInternalSession } from "@/utils/internal-sessions"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
-import { composerTakes, onComposerPrompt } from "@/utils/composer-handoff"
+import { composerTakes, handoffPrompt, onComposerPrompt } from "@/utils/composer-handoff"
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -617,7 +619,7 @@ export default function Page() {
     onComposerPrompt((request) => {
       const open = !isChildSession() && !composer.blocked()
       if (!composerTakes({ dirty: prompt.dirty(), context: prompt.context.items(), open })) return false
-      prompt.set([{ type: "text", content: request.text, start: 0, end: request.text.length }], request.text.length)
+      prompt.set(handoffPrompt(request), request.text.length)
       if (request.send) setHandoff({ session: params.id, text: request.text })
       return true
     }),
@@ -1838,6 +1840,12 @@ export default function Page() {
   }
 
   const fail = (err: unknown) => {
+    // A queued computer mention refused at dispatch stays queued; [Set up] opens onboarding without touching it.
+    if (err instanceof ComputerSendGate.Refusal) {
+      const computer = platform.computer
+      showComputerRefusal(err, language.t, computer ? () => void openComputerSetup(dialog, computer) : undefined)
+      return
+    }
     showToast({
       variant: "error",
       title: language.t("common.requestFailed"),
@@ -1881,10 +1889,13 @@ export default function Page() {
 
   // Engines before 1.99.100 cannot take a message mid-run, so on them Enter queues (5.I.1); an unknown version steers.
   const steer = createMemo(() => steerSupported(servers.health[ServerConnection.key(serverSDK().server)]?.version))
-  const queueEnabled = (alternate: boolean) => {
+  const shouldQueueFollowup = (alternate: boolean) => {
     const id = params.id
     if (!id) return false
-    return followupQueues({
+    // Hands keeps the composer available during its ask, but a new message waits for that answer. A queued send
+    // checking readiness must also keep later messages behind it before the engine reports busy.
+    if (!isChildSession() && (composer.computerPending() || followups.sending(followupServer(), id))) return true
+    return queueEnabled({
       busy: busy(id),
       blocked: composer.blocked(),
       child: isChildSession(),
@@ -2164,7 +2175,8 @@ export default function Page() {
               comments.clear()
               resumeScroll()
             }}
-            shouldQueue={queueEnabled}
+            shouldQueue={shouldQueueFollowup}
+            queueWhileBlocked={() => !isChildSession() && composer.computerPending()}
             onQueue={queueFollowup}
             autoSubmit={handoff()?.session === params.id ? handoff()?.text : undefined}
             onAutoSubmit={() => setHandoff(undefined)}

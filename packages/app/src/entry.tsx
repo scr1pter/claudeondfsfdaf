@@ -13,6 +13,16 @@ import { consumeInviteCredentials } from "@/utils/server"
 import pkg from "../package.json"
 import { normalizeServerUrl, ServerConnection } from "./context/server"
 import { VECTOR_ICON } from "./pages/layout/helpers"
+import type { createFakeComputer, FakeComputerScript } from "./features/computer/fake-platform"
+
+declare global {
+  interface Window {
+    __vectorE2E?: {
+      computer?: FakeComputerScript
+      computerControl?: ReturnType<typeof createFakeComputer>
+    }
+  }
+}
 
 const DEFAULT_SERVER_URL_KEY = "vector.settings.dat:defaultServerUrl"
 
@@ -200,7 +210,14 @@ const configureCrashDiagnostics = () => {
 configureCrashDiagnostics()
 observeTelemetryPreference(configureCrashDiagnostics)
 
-if (root instanceof HTMLElement) {
+async function bootstrap() {
+  if (import.meta.env.DEV && window.__vectorE2E?.computer) {
+    const { createFakeComputer } = await import("@/features/computer/fake-platform")
+    const fake = createFakeComputer(window.__vectorE2E.computer)
+    platform.computer = fake
+    window.__vectorE2E.computerControl = fake
+  }
+  if (!(root instanceof HTMLElement)) return
   const server: ServerConnection.Http = {
     type: "http",
     http: {
@@ -224,3 +241,5 @@ if (root instanceof HTMLElement) {
     root,
   )
 }
+
+void bootstrap()

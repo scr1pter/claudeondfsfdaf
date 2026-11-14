@@ -24,6 +24,7 @@ import { InstallationVersion } from "../installation/version"
 import { ModelV2 } from "../model"
 import { encodedBody } from "./transport"
 import { BrainSchema } from "../brain/schema"
+import { ComputerScreenshots } from "../util/computer-screenshots"
 import { BrainSkill } from "../brain/skill"
 import { SessionAudience } from "../session/audience"
 import { ReviewMemoryFence } from "../review/memory-fence"
@@ -52,7 +53,7 @@ export const Native = Schema.Struct({
 })
 export type Native = typeof Native.Type
 export type Local = Legacy | Native
-export type Selection = { sessionID: SessionSchema.ID; engine?: "v1" | "v2" }
+export type Selection = { sessionID: SessionSchema.ID; engine?: "v1" | "v2"; includeScreenshots?: boolean }
 
 export interface Interface {
   readonly export: (input: Selection) => Effect.Effect<Local, PublicSession.Error>
@@ -98,7 +99,23 @@ const importedModel = Schema.decodeUnknownSync(ModelV2.Ref)({
   variant: "default",
 })
 
-export function publicArchive(local: Local): PublicSession.Archive {
+function screenshots(files: readonly { name?: string; mime: string; url?: string; uri?: string }[]) {
+  const seen = new Set<string>()
+  return files.flatMap((file) => {
+    const image = Option.getOrUndefined(
+      Schema.decodeUnknownOption(PublicSession.Screenshot)({
+        name: safeName(file.name),
+        mediaType: file.mime,
+        url: file.url ?? file.uri,
+      }),
+    )
+    if (!image || seen.has(image.url)) return []
+    seen.add(image.url)
+    return [image]
+  })
+}
+
+export function publicArchive(local: Local, options: { includeScreenshots?: boolean } = {}): PublicSession.Archive {
   const messages: PublicSession.Message[] =
     "engine" in local
       ? local.messages.flatMap((message): PublicSession.Message[] => {
@@ -128,9 +145,25 @@ export function publicArchive(local: Local): PublicSession.Archive {
                       output:
                         "content" in part.state
                           ? part.state.content
-                              .map((item) => (item.type === "text" ? item.text : "[Tool attachment omitted]"))
+                              .flatMap((item) =>
+                                item.type === "text"
+                                  ? [item.text]
+                                  : part.name === "computer"
+                                    ? []
+                                    : ["[Tool attachment omitted]"],
+                              )
                               .join("\n") + ("error" in part.state ? `\n${part.state.error.message}` : "")
                           : "",
+                      ...(options.includeScreenshots === true &&
+                      part.name === "computer" &&
+                      part.state.status === "completed"
+                        ? {
+                            screenshots: screenshots([
+                              ...(part.state.attachments ?? []),
+                              ...part.state.content.filter((item) => item.type === "file"),
+                            ]),
+                          }
+                        : {}),
                     }
                   })
                 : [
@@ -182,6 +215,19 @@ export function publicArchive(local: Local): PublicSession.Archive {
                       : part.state.status === "error"
                         ? part.state.error
                         : "",
+                  ...(options.includeScreenshots === true &&
+                  part.tool === "computer" &&
+                  part.state.status === "completed"
+                    ? {
+                        screenshots: screenshots(
+                          (part.state.attachments ?? []).map((file) => ({
+                            name: file.filename,
+                            mime: file.mime,
+                            url: file.url,
+                          })),
+                        ),
+                      }
+                    : {}),
                 },
               ]
             if (part.type === "file")
@@ -276,13 +322,18 @@ const layer = Layer.effect(
           version: 1,
           engine: "v2",
           info: fromRow(read.row),
-          messages: read.native.map((message) =>
-            Schema.decodeUnknownSync(SessionMessage.Message)({ ...message.data, id: message.id, type: message.type }),
-          ),
+          messages: read.native.map((message) => {
+            const value = Schema.decodeUnknownSync(SessionMessage.Message)({
+              ...message.data,
+              id: message.id,
+              type: message.type,
+            })
+            return input.includeScreenshots === true ? value : ComputerScreenshots.stripNative(value)
+          }),
           ancillaryUsage,
         })
       const row = read.row
-      return Schema.decodeUnknownSync(Schema.fromJsonString(Legacy))(
+      const local = Schema.decodeUnknownSync(Schema.fromJsonString(Legacy))(
         JSON.stringify({
           privacy: read.privacy,
           guestInput: read.guestInput,
@@ -343,6 +394,9 @@ const layer = Layer.effect(
           })),
         }),
       )
+      return input.includeScreenshots === true
+        ? local
+        : { ...local, messages: ComputerScreenshots.stripHistory(local.messages) }
     })
 
     const importArchive = Effect.fn("SessionArchive.import")(function* (input: {
@@ -639,7 +693,7 @@ const layer = Layer.effect(
       export: exportArchive,
       preview: (input) =>
         exportArchive(input).pipe(
-          Effect.flatMap((value) => Effect.try({ try: () => publicArchive(value), catch: invalid })),
+          Effect.flatMap((value) => Effect.try({ try: () => publicArchive(value, input), catch: invalid })),
         ),
       import: importArchive,
     })

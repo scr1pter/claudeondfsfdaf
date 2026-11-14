@@ -1,0 +1,26 @@
+{
+  "run": 41955942572,
+  "commit": "2878e42843a5d18e7c180f761beb9c900aced976",
+  "job": 127012700813,
+  "platform": "macos-26",
+  "diagnosticCompiler": "Apple Swift6.3.3",
+  "reportsArtifact": 13382843139,
+  "reportsArchiveSha256": "196492eeded1674cd38d3ce1076ecce3720663f4ea8ba9345f0dfb9e22f342cc",
+  "matrixReportSha256": "d4f9a7f7d3cfb7f4c925650dd3f31417ae4699cfc8da21e500cdbf5209e3d718",
+  "requiredCore": {
+    "passed": 27,
+    "failed": 1,
+    "skipped": 2,
+    "failedCheck": "unit"
+  },
+  "diagnostic": {
+    "passedSuitesBeforeFailure": 10,
+    "failedSuite": "runAccessibilityTests",
+    "acceptedInvalidCases": [2],
+    "caseMeaning": "percent-encoded NUL",
+    "originalAssertionRetained": true,
+    "shippingHelperUnchanged": true
+  },
+  "otherLanes": ["mac-build", "macos-15-intel", "windows-build", "windows-arm64"],
+  "otherLanesResult": "passed"
+}

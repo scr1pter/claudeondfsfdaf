@@ -26,6 +26,9 @@ import { TaskAttention } from "@/task/attention"
 import { TaskSignals } from "@/task/signals"
 import { DesktopTasks } from "@/task/desktop"
 import { Command } from "@/command"
+import { ComputerAvailability } from "@/computer/availability"
+import { ComputerPrune } from "@/computer/prune"
+import { ComputerProtection } from "@/computer/protection"
 import { Config } from "@/config/config"
 import { Workspace } from "@/control-plane/workspace"
 import { Env } from "@/env"
@@ -111,6 +114,7 @@ import { EventApi } from "./groups/event"
 import { PtyConnectApi } from "./groups/pty"
 import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
+import { computerHandlers } from "./handlers/computer"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
@@ -193,6 +197,7 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 )
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
+    computerHandlers,
     configHandlers,
     experimentalHandlers,
     reviewHandlers,
@@ -258,6 +263,8 @@ const app = LayerNode.group([
   Npm.node,
   FSUtil.node,
   Database.node,
+  ComputerPrune.node,
+  ComputerProtection.node,
   Auth.node,
   Teams.node,
   Config.node,
@@ -328,6 +335,7 @@ const app = LayerNode.group([
   Command.node,
   Truncate.node,
   ToolRegistry.node,
+  ComputerAvailability.node,
   Format.node,
   Project.node,
   Vcs.node,

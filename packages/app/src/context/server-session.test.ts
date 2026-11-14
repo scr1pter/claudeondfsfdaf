@@ -1241,3 +1241,125 @@ describe("server session", () => {
     expect(ctx.store.data.session_status["session-0"]).toBeUndefined()
   })
 })
+
+describe("computer screenshots deleted by desktop main (D23)", () => {
+  const image = {
+    id: "file",
+    sessionID: "child",
+    messageID: "message",
+    type: "file",
+    mime: "image/jpeg",
+    url: "data:,",
+  }
+  const shot = (id: string, end: number, tool = "computer") =>
+    ({
+      id,
+      sessionID: "child",
+      messageID: "message",
+      type: "tool",
+      tool,
+      callID: `call-${id}`,
+      state: {
+        status: "completed",
+        input: { action: "screenshot" },
+        output: "Looked at Numbers",
+        title: "Looked at Numbers",
+        metadata: { action: "screenshot" },
+        time: { start: end - 1, end },
+        attachments: [image],
+      },
+    }) as unknown as Part
+  // What the engine stored after the deletion: its media gone and the removal marker set.
+  const removed = (part: Part) => {
+    const { attachments: _, ...state } = (part as unknown as { state: Record<string, unknown> }).state
+    return {
+      ...part,
+      state: { ...state, metadata: { ...(state.metadata as object), screenshotRemoved: true } },
+    } as unknown as Part
+  }
+  const flush = async () => {
+    for (let index = 0; index < 20; index++) await Promise.resolve()
+  }
+  const toolState = (part: Part | undefined) => (part as unknown as { state: Record<string, unknown> }).state
+
+  test("the cached copy changes at once, keeping the removal marker, and the conversation is read again", async () => {
+    const message = userMessage("message")
+    const old = shot("part-old", 10)
+    const recent = shot("part-new", 1_000)
+    const other = shot("part-read", 10, "read")
+    const text = textPart(message.id)
+    const client = messageClient(
+      response([{ info: message, parts: [old, recent, other, text] }]),
+      response([{ info: message, parts: [removed(old), recent, other, text] }]),
+    )
+    const store = createServerSession(client)
+    await store.sync("child")
+
+    expect(store.removeComputerScreenshots({ before: 100 })).toEqual(["child"])
+    const parts = store.data.part[message.id]!
+    expect(toolState(parts.find((part) => part.id === old.id))).toEqual(toolState(removed(old)))
+    // A screenshot inside the cutoff's range, another tool's file and plain text keep everything.
+    expect(toolState(parts.find((part) => part.id === recent.id))).toEqual(toolState(recent))
+    expect(toolState(parts.find((part) => part.id === other.id))).toEqual(toolState(other))
+    expect(parts.find((part) => part.id === text.id)).toEqual(text)
+
+    await client.requested(2)
+    await flush()
+    expect(client.requests).toEqual([
+      { sessionID: "child", limit: 2, before: undefined },
+      { sessionID: "child", limit: 1, before: undefined },
+    ])
+    expect(toolState(store.data.part[message.id]!.find((part) => part.id === old.id))).toEqual(toolState(removed(old)))
+  })
+
+  test("a deletion outside the cache changes nothing and reads nothing", async () => {
+    const message = userMessage("message")
+    const client = messageClient(response([{ info: message, parts: [shot("part", 10)] }]))
+    const store = createServerSession(client)
+    await store.sync("child")
+    expect(store.removeComputerScreenshots({ sessionID: "another" })).toEqual([])
+    expect(store.removeComputerScreenshots({ before: 5 })).toEqual([])
+    await flush()
+    expect(client.requests).toHaveLength(1)
+    expect(toolState(store.data.part[message.id]![0]).attachments).toHaveLength(1)
+  })
+
+  test("a page read before the deletion finished cannot bring its screenshots back", async () => {
+    const message = userMessage("message")
+    const part = shot("part", 10)
+    const pending = deferredResponse()
+    const store = createServerSession(messageClient(pending.promise))
+    const loading = store.sync("child")
+    // Nothing is cached yet, so there is nothing to change or read again now.
+    expect(store.removeComputerScreenshots({ all: true })).toEqual([])
+    pending.resolve(response([{ info: message, parts: [part] }]))
+    await loading
+    expect(toolState(store.data.part[message.id]![0])).toEqual(toolState(removed(part)))
+  })
+
+  test("the conversation is read again only after a read already under way has finished", async () => {
+    const message = userMessage("message")
+    const part = shot("part", 10)
+    const stale = deferredResponse()
+    const client = messageClient(
+      response([{ info: message, parts: [part] }]),
+      stale.promise,
+      response([{ info: message, parts: [removed(part)] }]),
+    )
+    const store = createServerSession(client)
+    await store.sync("child")
+    const reading = store.sync("child", { force: true })
+    await client.requested(2)
+
+    expect(store.removeComputerScreenshots({ sessionID: "child" })).toEqual(["child"])
+    await flush()
+    expect(client.requests).toHaveLength(2)
+    // The read under way answers with the screenshot it saw before the deletion; the marker survives it.
+    stale.resolve(response([{ info: message, parts: [part] }]))
+    await reading
+    expect(toolState(store.data.part[message.id]![0])).toEqual(toolState(removed(part)))
+    await client.requested(3)
+    await flush()
+    expect(toolState(store.data.part[message.id]![0])).toEqual(toolState(removed(part)))
+  })
+})

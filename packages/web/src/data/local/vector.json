@@ -25,14 +25,46 @@
       }
     }
   },
+  "computer": {
+    "enabled": true,
+    "default_app_access": "ask",
+    "allow_always": true,
+    "background": true,
+    "keep_awake": true,
+    "away_minutes": 30,
+    "screenshot_retention_days": 7,
+    "max_actions": 300,
+    "max_minutes": 45,
+    "native_tools": "off",
+    "screenshots": {
+      "keep": 3,
+      "max_width": 1440,
+      "max_height": 900
+    },
+    "apps": {
+      "macos": {
+        "com.apple.calculator": "allow",
+        "com.microsoft.Excel@UBF8T346G9": "deny"
+      },
+      "windows": [
+        {
+          "aumid": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+          "access": "allow"
+        },
+        {
+          "publisher": "Microsoft Corporation",
+          "product": "Microsoft Excel",
+          "binary": "EXCEL.EXE",
+          "access": "deny"
+        }
+      ]
+    }
+  },
   "local": {
     "enabled": true,
     "lock": true,
     "web": "network",
-    "endpoints": [
-      "https://llm.corp.example.com",
-      "https://*.ml.corp.example.com"
-    ],
+    "endpoints": ["https://llm.corp.example.com", "https://*.ml.corp.example.com"],
     "user_may": ["endpoints", "web"],
     "endpoint_domains": ["*.corp.example.com"],
     "web_domains": {

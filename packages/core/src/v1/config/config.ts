@@ -9,6 +9,7 @@ import { ConfigReference } from "../../config/reference"
 import { ConfigAgentV1 } from "./agent"
 import { ConfigAttachmentV1 } from "./attachment"
 import { ConfigCommandV1 } from "./command"
+import { ConfigComputerV1 } from "./computer"
 import { ConfigFormatterV1 } from "./formatter"
 import { ConfigLayoutV1 } from "./layout"
 import { ConfigLocalV1 } from "./local"
@@ -290,6 +291,10 @@ export const Info = Schema.Struct({
       }),
     }),
   ).annotate({ description: "Task sizing: how much harness, reasoning and verification each request gets." }),
+  computer: Schema.optional(ConfigComputerV1.Info).annotate({
+    description:
+      "Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent.",
+  }),
   local: Schema.optional(ConfigLocalV1.Info).annotate({
     description:
       "Vector Local: run Vector's AI features only on model servers you or your company host. Read from your user config and your company's managed config, never a repository's.",

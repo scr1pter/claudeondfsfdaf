@@ -96,6 +96,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
+import { ProviderDeadlines } from "./deadlines"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -104,12 +105,12 @@ const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 export const LOCAL_HEADER_TIMEOUT = 600_000
 export const LOCAL_CHUNK_TIMEOUT = 120_000
 
-function timeoutController(ms: number) {
+function timeoutController(ms: number, deadlines: ProviderDeadlines.Interface) {
   const ctl = new AbortController()
-  const id = setTimeout(() => ctl.abort(new ProviderError.HeaderTimeoutError(ms)), ms)
+  const cancel = deadlines.schedule(ms, () => ctl.abort(new ProviderError.HeaderTimeoutError(ms)))
   return {
     signal: ctl.signal,
-    clear: () => clearTimeout(id),
+    clear: cancel,
   }
 }
 
@@ -1836,6 +1837,7 @@ const layer = Layer.effect(
     const guests = yield* FreeModelGuests.Service
     const events = yield* EventV2Bridge.Service
     const slots = yield* ModelSlots.Service
+    const deadlines = yield* ProviderDeadlines.Service
     // Servers whose identity changed since they were added: their model calls are refused until the user confirms them.
     const holds = yield* LocalProbe.HoldsService
     const runtimeBridge = yield* EffectBridge.make()
@@ -2633,7 +2635,8 @@ const layer = Layer.effect(
           }
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
           const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
-          const headerTimeoutCtl = typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs) : undefined
+          const headerTimeoutCtl =
+            typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs, deadlines) : undefined
           const signals: AbortSignal[] = []
 
           if (opts.signal) signals.push(opts.signal)
@@ -2676,7 +2679,7 @@ const layer = Layer.effect(
           )
 
           if (!chunkAbortCtl) return res
-          return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl)
+          return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl, deadlines)
         }
 
         const bundledLoader = BUNDLED_PROVIDERS[model.api.npm]
@@ -3233,6 +3236,7 @@ export const node = LayerNode.make({
     FreeModelGuests.node,
     EventV2Bridge.node,
     ModelSlots.node,
+    ProviderDeadlines.node,
     LocalProbe.holdsNode,
   ],
 })

@@ -122,6 +122,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       }),
       HttpApiEndpoint.get("session.sharePreview", "/api/session/:sessionID/share/preview", {
         params: { sessionID: Session.ID },
+        query: Schema.Struct({ includeScreenshots: Schema.Literals(["true", "false"]).pipe(Schema.optional) }),
         success: Schema.Struct({ data: PublicSession.Archive }),
         error: PublicSession.Error,
       }),

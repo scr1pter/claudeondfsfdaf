@@ -2384,3 +2384,186 @@ html[data-vector-reduce-animations="true"] *::after {
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+
+/* The Hands Settings page: the status pill, its notes, app lists, radio options, the stop shortcut recorder, the
+   Block an app… search and the Delete all confirmation. Cards and rows reuse the shared classes above. */
+[data-component="settings-computer"] [data-slot="computer-status"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-pill"] {
+  margin: 0;
+  padding: 3px 11px;
+  border: 1px solid var(--vx-line);
+  border-radius: 999px;
+  color: var(--vx-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+[data-component="settings-computer"] [data-slot="computer-pill"][data-kind="ready"] {
+  border-color: color-mix(in srgb, var(--vx-green) 45%, transparent);
+  color: var(--vx-green);
+}
+
+[data-component="settings-computer"] [data-slot="computer-pill"][data-kind="setup"],
+[data-component="settings-computer"] [data-slot="computer-pill"][data-kind="preview"] {
+  border-color: color-mix(in srgb, var(--vx-amber) 45%, transparent);
+  color: var(--vx-amber);
+}
+
+[data-component="settings-computer"] [data-slot="computer-pill"][data-kind="failed"] {
+  border-color: color-mix(in srgb, var(--vx-red) 45%, transparent);
+  color: var(--vx-red);
+}
+
+[data-component="settings-computer"] [data-slot="computer-note"],
+[data-component="settings-computer"] [data-slot="computer-muted"],
+[data-component="settings-computer"] [data-slot="computer-locked"] {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+[data-component="settings-computer"] [data-slot="computer-locked"] {
+  margin-top: 4px;
+  color: color-mix(in oklab, var(--vector-accent, #9b6cff) 55%, rgba(255, 255, 255, 0.6));
+}
+
+[data-component="settings-computer"] [data-slot="computer-error"] {
+  margin: 4px 0 0;
+  color: var(--vx-red);
+  font-size: 12px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-subhead"] {
+  margin: 0 0 6px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+[data-component="settings-computer"] [data-slot="computer-actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-badge"] {
+  margin-left: 8px;
+  color: var(--vx-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+[data-component="settings-computer"] [data-slot="computer-badge"][data-status="granted"] {
+  color: var(--vx-green);
+}
+
+[data-component="settings-computer"] [data-slot="computer-list"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-component="settings-computer"] [data-slot="computer-app"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--vx-line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+[data-component="settings-computer"] [data-slot="computer-app-copy"] {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+[data-component="settings-computer"] [data-slot="computer-app-copy"] span {
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 12px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-options"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-option"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-option"] input {
+  margin-top: 3px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-option"] > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-option"] > span > span {
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 12px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-recorder"],
+[data-component="settings-computer"] [data-slot="computer-search-input"] {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--vx-line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: inherit;
+  font-size: 13px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-search"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-search"] [data-slot="computer-search-input"] {
+  margin-top: 0;
+}
+
+[data-component="settings-computer"] [data-slot="computer-confirm"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--vx-red) 40%, var(--vx-line));
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+[data-component="settings-computer"] [data-slot="computer-confirm"] p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 12px;
+}

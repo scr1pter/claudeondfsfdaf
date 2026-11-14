@@ -336,8 +336,7 @@ export const make = Effect.gen(function* () {
           spawned = true
           resume(Effect.succeed([proc, signal, captured, owned]))
         })
-        if (owned)
-          return Effect.promise(owned.stop).pipe(Effect.asVoid, Effect.ensuring(Effect.sync(captured.dispose)))
+        if (owned) return Effect.promise(owned.stop).pipe(Effect.asVoid, Effect.ensuring(Effect.sync(captured.dispose)))
         return Effect.sync(() => {
           proc.kill("SIGTERM")
           captured.dispose()

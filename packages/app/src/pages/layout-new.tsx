@@ -50,6 +50,7 @@ import {
 } from "@/features/pull-requests/ai-review"
 import { parseReviewConfig, REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
 import { setNavigate } from "@/utils/notification-click"
+import { useAskNotificationAlerts } from "./layout/ask-notifications"
 import { setV2Toast, showToast, ToastRegion } from "@/utils/toast"
 import { useProviders } from "@/hooks/use-providers"
 import { useModels } from "@/context/models"
@@ -1152,6 +1153,11 @@ export default function NewLayout(props: ParentProps) {
     activeDraftDirectory() ||
     parallelRecords().find((record) => record.id === parallelWorkspaceIDFromPath(location.pathname))?.isolatedPath ||
     undefined
+  useAskNotificationAlerts({
+    directory: activeSessionDirectory,
+    sessionID: currentSessionID,
+    navigate,
+  })
   const parallelWorkspaceIDFromRoute = () => {
     return parallelWorkspaceIDFromPath(location.pathname)
   }

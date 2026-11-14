@@ -58,13 +58,20 @@ const DIFFICULTY = {
 // Only a social message is trivial, and only when no work is waiting on the user (`open`): then even a "thanks" answers
 // or follows up that work, so it goes to the engine with the history rather than to the quick lane. A bare "ok" is
 // social too, unless a plan from Plan mode waits on it (`plan`): then it carries the plan out. A message with files,
-// images or a named subagent is never trivial, as the engine sizes it: "help" with a screenshot of an error needs the
-// tools.
+// images, a named subagent or an explicit computer mention is never trivial, as the engine sizes it: these requests
+// need tools even when their text is social.
 export function classifyTaskDifficulty(
   task: string,
-  input: { open?: boolean; plan?: boolean; files?: number; images?: number; agents?: readonly string[] } = {},
+  input: {
+    open?: boolean
+    plan?: boolean
+    files?: number
+    images?: number
+    agents?: readonly string[]
+    computer?: boolean
+  } = {},
 ): TaskDifficulty {
-  if (!task.trim() && !input.files && !input.images && !input.agents?.length) return "trivial"
+  if (!task.trim() && !input.files && !input.images && !input.agents?.length && !input.computer) return "trivial"
   return DIFFICULTY[TaskSize.classify({ text: task, ...input }).tier]
 }
 

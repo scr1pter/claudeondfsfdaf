@@ -26,6 +26,8 @@ import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceStore } from "@/project/instance-store"
 import { Global } from "@vectordevai/core/global"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
 
 const shellLayer = Layer.mergeAll(
   LayerNode.compile(
@@ -37,6 +39,8 @@ const shellLayer = Layer.mergeAll(
       Config.node,
       Agent.node,
       RuntimeFlags.node,
+      ComputerSession.node,
+      Session.node,
     ]),
   ),
   testInstanceStoreLayer,

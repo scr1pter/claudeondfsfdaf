@@ -314,11 +314,13 @@
         "electron-store": "11.0.2",
         "electron-updater": "6.8.9",
         "electron-window-state": "^5.0.3",
+        "jsonc-parser": "3.3.1",
         "marked": "^15",
       },
       "devDependencies": {
         "@actions/artifact": "4.0.0",
         "@happy-dom/global-registrator": "20.0.11",
+        "@playwright/test": "catalog:",
         "@sentry/solid": "catalog:",
         "@sentry/vite-plugin": "catalog:",
         "@solid-primitives/i18n": "2.2.1",

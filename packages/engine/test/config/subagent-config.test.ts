@@ -190,7 +190,7 @@ describe("a repository's subagent and workflow keys", () => {
   })
 })
 
-// Preserve the actual 1.99.111 key set; connected review settings were added by the newer engine.
+// The released top-level inventory remains historical; connect and computer need the newer engine.
 const RELEASED_TOP_LEVEL = [
   "$schema",
   "shell",
@@ -231,9 +231,9 @@ const RELEASED_TOP_LEVEL = [
   "local",
   "research",
   "experimental",
-]
+] as const
 const Released = Schema.Struct({
-  ...Struct.omit(ConfigV1.Info.fields, ["connect"]),
+  ...Struct.pick(ConfigV1.Info.fields, RELEASED_TOP_LEVEL),
   budget: Schema.optional(
     Schema.Struct({
       run: Schema.optional(RunBudget.Info),
@@ -277,10 +277,20 @@ const everyKey = {
 }
 
 describe("version skew", () => {
-  test("connect is the only intentional new top-level key", () => {
-    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL, "connect"].sort())
-    expect(Object.keys(Released.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
+  test("connect and computer are the intentional top-level additions", () => {
     expect(() => ConfigParse.schema(Released, { connect: { review: { after_run: "off" } } }, "vector.json")).toThrow()
+    expect(RELEASED_TOP_LEVEL).not.toContain("computer")
+    expect(Object.keys(Released.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
+    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL, "connect", "computer"].sort())
+  })
+
+  test("computer is not a released subagent key and cannot become repository policy", () => {
+    const computer = { enabled: false, default_app_access: "deny" as const }
+    expect(() => ConfigParse.schema(Released, { computer }, "vector.json")).toThrow()
+    expect(ConfigParse.schema(ConfigV1.Info, { computer }, "vector.json").computer).toEqual(computer)
+    // The full non-managed-layer matrix is in config.test.ts (INV-C7); a repository cannot bypass it by being trusted.
+    for (const trusted of [false, true])
+      expect(Config.projectExecutableConfig({ ...user, computer }, trusted, user).computer).toBeUndefined()
   })
 
   test("a config with every new key decodes against the 1.99.111 shape and passes its top-level check", () => {

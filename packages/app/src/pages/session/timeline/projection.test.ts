@@ -14,6 +14,17 @@ const context = (key: string, partIDs: string[], userMessageID = "user-1") =>
     previousAssistantPart: false,
   })
 
+const computer = (key: string, partIDs: string[], userMessageID = "user-1") =>
+  new TimelineRow.AssistantPart({
+    userMessageID,
+    group: {
+      key,
+      type: "computer",
+      refs: partIDs.map((partID) => ({ messageID: "assistant-1", partID })),
+    } satisfies PartGroup,
+    previousAssistantPart: false,
+  })
+
 const user = (userMessageID = "user-1") => new TimelineRow.UserMessage({ userMessageID, anchor: true })
 const keys = (rows: TimelineRow.TimelineRow[]) => rows.map(TimelineRow.key)
 
@@ -66,6 +77,34 @@ describe("reuseTimelineRows", () => {
       previous: [context("context:a", ["a", "b"], "user-1")],
       rows: [context("context:b", ["b"], "user-2")],
       expected: ["assistant-part:user-2:context:b"],
+      reused: [],
+    },
+    {
+      name: "reuses an unchanged computer run",
+      previous: [computer("computer:c1", ["c1", "t2", "c2"])],
+      rows: [computer("computer:c1", ["c1", "t2", "c2"])],
+      expected: ["assistant-part:user-1:computer:c1"],
+      reused: [[0, 0]],
+    },
+    {
+      name: "keeps a computer run's key as steps and notes join it",
+      previous: [computer("computer:c1", ["c1"])],
+      rows: [computer("computer:c1", ["c1", "t2", "c2"])],
+      expected: ["assistant-part:user-1:computer:c1"],
+      reused: [],
+    },
+    {
+      name: "keeps a computer run's key when its trailing notes leave it at the end of the turn",
+      previous: [computer("computer:c1", ["c1", "t2"])],
+      rows: [
+        computer("computer:c1", ["c1"]),
+        new TimelineRow.AssistantPart({
+          userMessageID: "user-1",
+          group: { key: "part:assistant-1:t2", type: "part", ref: { messageID: "assistant-1", partID: "t2" } },
+          previousAssistantPart: true,
+        }),
+      ],
+      expected: ["assistant-part:user-1:computer:c1", "assistant-part:user-1:part:assistant-1:t2"],
       reused: [],
     },
     {

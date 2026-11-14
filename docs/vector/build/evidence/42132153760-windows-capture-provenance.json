@@ -1,0 +1,46 @@
+{
+  "repository": "scr1pter/claudeondfsfdaf",
+  "runId": 42132153760,
+  "jobId": 127611168433,
+  "sourceHead": "c5c1515b135a128a8a1ac907dbd6fe8167b673de",
+  "artifactApiSourceMatched": true,
+  "zipSizeAndApiDigestVerified": true,
+  "zipSingleBoundedEntryVerified": true,
+  "releaseEvidence": false,
+  "artifacts": [
+    {
+      "artifactId": 13464810805,
+      "zipPath": "/workspace/attachments/cab37241-c55d-4a2d-92cc-2a0425027d32/github-actions-artifact-13464810805.zip",
+      "zipBytes": 554,
+      "zipSha256": "1c4301a424b2b94c40d680f63d1c17cad980f8a6610af72080a43700335fb93d",
+      "reportName": "computer-win32-core.json",
+      "reportPath": "/tmp/computer-native-42132153760-windows/computer-win32-core.json",
+      "reportBytes": 2466,
+      "reportSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+      "mode": "off",
+      "code": 0,
+      "totals": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "artifactId": 13464162536,
+      "zipPath": "/workspace/attachments/ceada9cc-1044-45c4-8af2-19ba128f97b6/github-actions-artifact-13464162536.zip",
+      "zipBytes": 860,
+      "zipSha256": "9a58f3a1cc7573f2257f503849881d585a9cd7ea45bcb450b2c9e48f761d4980",
+      "reportName": "computer-win32-privileged.json",
+      "reportPath": "/tmp/computer-native-42132153760-windows/computer-win32-privileged.json",
+      "reportBytes": 4425,
+      "reportSha256": "1840e08b1f88ca4755eebb78d5735eba0b3fb4d90aa5631c43cc13e04ab02bdb",
+      "mode": "auto",
+      "code": 1,
+      "totals": {
+        "passed": 34,
+        "failed": 2,
+        "skipped": 10
+      }
+    }
+  ]
+}

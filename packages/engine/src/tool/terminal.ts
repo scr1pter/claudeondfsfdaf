@@ -13,6 +13,8 @@ import { AbsolutePath, NonNegativeInt, PositiveInt } from "@vectordevai/core/sch
 import { Shell } from "@vectordevai/core/shell"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { Plugin } from "@/plugin"
 import { ShellPermission } from "./shell"
@@ -184,6 +186,8 @@ export const TerminalTool = Tool.define<
   | ChildProcessSpawner
   | FSUtil.Service
   | FreeModelGuests.Service
+  | ComputerSession.Service
+  | Session.Service
 >(
   "terminal",
   Effect.gen(function* () {
@@ -281,6 +285,7 @@ export const TerminalTool = Tool.define<
               : { command: params.command, args: [...params.args] }),
         },
         { kind: "agent", sessionID: ctx.sessionID },
+        permission.beforeRun([scan]),
       )
       if (params.cols !== undefined || params.rows !== undefined)
         yield* pty.update(created.id, { size: size(params.cols ?? 80, params.rows ?? 24) })
@@ -354,11 +359,9 @@ export const TerminalTool = Tool.define<
       })
       const known = Shell.posix(info.command) || Shell.ps(info.command) || Shell.name(info.command) === "cmd"
       const shell = known ? info.command : Shell.acceptable((yield* config.get()).shell)
-      const typed = submit(
-        pending.get(info.id) ?? EMPTY,
-        strokes,
-        Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\",
-      )
+      const continuation = Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\"
+      let line = pending.get(info.id) ?? EMPTY
+      const typed = submit(line, strokes, continuation)
       const scans = yield* Effect.forEach(typed.lines, (line) =>
         Effect.gen(function* () {
           const recalled = line.recalled === true || HISTORY.test(line.text)
@@ -381,12 +384,15 @@ export const TerminalTool = Tool.define<
       // One admission for every line the strokes submit, before the first keystroke: a line refused above or here types
       // nothing, and leaves no claim on a file an earlier line of the same call names.
       yield* permission.admit(ctx, scans)
-      pending.set(info.id, typed.line)
       const from = (yield* pty.read(info.id, { limit: 0 })).end
       for (const [index, data] of writes.entries()) {
         // A program reads escape and the key right after it as one Alt combination, unless they come apart.
         if (index > 0 && writes[index - 1] === "\x1b") yield* Effect.sleep("50 millis")
+        yield* permission.beforeRun(scans)
         yield* pty.write(info.id, data)
+        // A late refusal leaves the terminal's existing prefix in place. Advance only for bytes actually written.
+        line = writes.length === 1 ? typed.line : submit(line, strokes.slice(index, index + 1), continuation).line
+        pending.set(info.id, line)
       }
       yield* Effect.sleep("300 millis")
       const read = yield* pty.read(info.id, { cursor: from, limit: 32_000 })

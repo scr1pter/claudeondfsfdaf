@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { SessionEvent } from "@vectordevai/core/session/event"
+import { ComputerEvent } from "@vectordevai/schema/computer-event"
 import { Integration } from "@vectordevai/schema/integration"
 import { LocalEvent } from "@vectordevai/schema/local-event"
 import { MemoryEvent } from "@vectordevai/schema/memory-event"
@@ -16,11 +17,11 @@ describe("public event manifest", () => {
     expect(EventManifest.Latest).toBe(SchemaEventManifest.Latest)
     expect(EventManifest.Durable).toBe(SchemaEventManifest.Durable)
     expect(EventManifest.Latest.size).toBe(101)
+    expect(EventManifest.Latest.get("computer.state")).toBe(ComputerEvent.State)
     expect(EventManifest.Latest.get("provider.unavailable")).toBe(Integration.Event.Unavailable)
     expect(EventManifest.Latest.get("session.next.ancillary.usage")).toBe(SessionEvent.AncillaryUsage)
     expect(EventManifest.Latest.get("session.next.step.ended")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Latest.get("session.next.step.resumed")).toBe(SessionEvent.Step.Resumed)
-    expect(EventManifest.Latest.get("session.next.ancillary.usage")).toBe(SessionEvent.AncillaryUsage)
     expect(EventManifest.Latest.get("todo.updated")).toBe(Todo.Event.Updated)
     expect(EventManifest.Latest.get("research.updated")).toBe(Research.Event.Updated)
     expect(EventManifest.Latest.get("connect.run.updated")).toBe(Connect.Event.RunUpdated)
