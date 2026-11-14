@@ -8,6 +8,7 @@ on:
       - packages/engine/test/session/structured-output-thinking.test.ts
       - packages/engine/test/session/llm-native-recorded.test.ts
       - packages/engine/test/review/memory-boundary.test.ts
+      - packages/engine/test/review/memory-owner.test.ts
       - packages/engine/test/compliance/egress-inventory.test.ts
   workflow_dispatch:
 
@@ -72,6 +73,10 @@ jobs:
       - name: Check platform-specific review-memory admission
         working-directory: packages/engine
         run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/memory-boundary.test.ts
+
+      - name: Check owner controls with the real supported identity adapter
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/memory-owner.test.ts
 
       - name: Check explicit outbound-address inventory
         working-directory: packages/engine

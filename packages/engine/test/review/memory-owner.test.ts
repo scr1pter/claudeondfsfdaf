@@ -302,7 +302,41 @@ const approvedOutcome = (setup: Setup) =>
   })
 const reopenReason = "The owner found a missing input case and asks to reassess this outcome."
 
-describe("prepared owner controls for isolated review memory (inactive internal ports)", () => {
+test.skipIf(process.platform !== "win32")(
+  "an authenticated Windows owner cannot acquire a review-memory scope or reach trust policy",
+  async () => {
+    await using directory = await tmpdir({ git: true })
+    const instance: InstanceContext = {
+      directory: directory.path,
+      worktree: directory.path,
+      project: { id: repository, worktree: directory.path, time: { created: 1, updated: 1 }, sandboxes: [] },
+    }
+    let trustReads = 0
+    const result = await Effect.runPromise(
+      owned(
+        ReviewMemoryAuthority.ownerScope({
+          trust: () =>
+            Effect.sync(() => {
+              trustReads++
+              return {
+                workspace: directory.path,
+                fingerprint: "fixture",
+                trusted: true,
+                settings: false,
+                ignored: false,
+              }
+            }),
+        }),
+      ).pipe(Effect.provideService(InstanceRef, instance)),
+    )
+    expect(result).toEqual({ ok: false, reason: "authority-unavailable" })
+    expect(trustReads).toBe(0)
+  },
+)
+
+// These thirty cases require the real Linux pinned-directory identity adapter.
+const linux = describe.skipIf(process.platform !== "linux")
+linux("prepared owner controls for isolated review memory (Linux, inactive internal ports)", () => {
   test("reopen seals the full original outcome and human reason, makes no preparation write, and consumes concurrent confirmation once", async () => {
     await run((setup) =>
       owned(
