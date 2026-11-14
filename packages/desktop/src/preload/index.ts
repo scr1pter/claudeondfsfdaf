@@ -152,6 +152,40 @@ const api: ElectronAPI = {
     ipcRenderer.on("deep-link", handler)
     return () => ipcRenderer.removeListener("deep-link", handler)
   },
+  computer: {
+    supported: process.platform !== "linux",
+    status: () => ipcRenderer.invoke("computer-status"),
+    state: () => ipcRenderer.invoke("computer-state"),
+    onState: (cb) => {
+      const handler = (_: unknown, state: Parameters<typeof cb>[0]) => cb(state)
+      ipcRenderer.on("computer-state-changed", handler)
+      return () => ipcRenderer.removeListener("computer-state-changed", handler)
+    },
+    command: (command, arg) => ipcRenderer.invoke("computer-command", command, arg),
+    prefs: () => ipcRenderer.invoke("computer-prefs"),
+    setPrefs: (patch) => ipcRenderer.invoke("computer-set-prefs", patch),
+    permissions: () => ipcRenderer.invoke("computer-permissions"),
+    recheck: () => ipcRenderer.invoke("computer-recheck"),
+    inputSetup: (action) => ipcRenderer.invoke("computer-input-setup", action),
+    openPane: (id) => ipcRenderer.invoke("computer-open-pane", id),
+    reset: (id) => ipcRenderer.invoke("computer-reset", id),
+    apps: (query) => ipcRenderer.invoke("computer-apps", query),
+    removeAlways: (key) => ipcRenderer.invoke("computer-remove-always", key),
+    removeAllAlways: () => ipcRenderer.invoke("computer-remove-all-always"),
+    block: (app) => ipcRenderer.invoke("computer-block", { key: app.key, name: app.name }),
+    unblock: (key) => ipcRenderer.invoke("computer-unblock", key),
+    deleteScreenshots: () => ipcRenderer.invoke("computer-delete-screenshots"),
+  },
+  onComputerOpen: (cb) => {
+    const handler = (_: unknown, href: string) => cb(href)
+    ipcRenderer.on("computer-open-session", handler)
+    return () => ipcRenderer.removeListener("computer-open-session", handler)
+  },
+  onComputerScreenshotsRemoved: (cb) => {
+    const handler = (_: unknown, removal: unknown) => cb(removal)
+    ipcRenderer.on("computer-screenshots-removed", handler)
+    return () => ipcRenderer.removeListener("computer-screenshots-removed", handler)
+  },
 
   openDirectoryPicker: (opts) => ipcRenderer.invoke("open-directory-picker", opts),
   openFilePicker: (opts) => ipcRenderer.invoke("open-file-picker", opts),

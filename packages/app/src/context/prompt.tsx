@@ -39,6 +39,11 @@ export interface AgentPart extends PartBase {
   name: string
 }
 
+export interface ComputerPart extends PartBase {
+  type: "computer"
+  app?: { key: string; name: string }
+}
+
 export interface ImageAttachmentPart {
   type: "image"
   id: string
@@ -57,7 +62,7 @@ export interface ImageAttachmentPart {
   probe?: { pages?: number; tokens: number; suggest: "remember-instead" | "none" }
 }
 
-export type ContentPart = TextPart | FileAttachmentPart | AgentPart | ImageAttachmentPart
+export type ContentPart = TextPart | FileAttachmentPart | AgentPart | ComputerPart | ImageAttachmentPart
 export type Prompt = ContentPart[]
 
 export type FileContextItem = {
@@ -96,6 +101,13 @@ function isPartEqual(partA: ContentPart, partB: ContentPart) {
       )
     case "agent":
       return partB.type === "agent" && partA.name === partB.name
+    case "computer":
+      return (
+        partB.type === "computer" &&
+        partA.content === partB.content &&
+        partA.app?.key === partB.app?.key &&
+        partA.app?.name === partB.app?.name
+      )
     case "image":
       return partB.type === "image" && partA.id === partB.id
   }
@@ -118,6 +130,7 @@ function clonePart(part: ContentPart): ContentPart {
   if (part.type === "text") return { ...part }
   if (part.type === "image") return { ...part }
   if (part.type === "agent") return { ...part }
+  if (part.type === "computer") return { ...part, ...(part.app ? { app: { ...part.app } } : {}) }
   return {
     ...part,
     selection: cloneSelection(part.selection),

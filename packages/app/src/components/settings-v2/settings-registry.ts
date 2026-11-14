@@ -1,5 +1,6 @@
 import type { IconProps } from "@vectordevai/ui/icon"
 import type { SettingsSection } from "./general"
+import { Hands } from "@vectordevai/schema/hands"
 
 export type SettingsTab =
   | SettingsSection
@@ -12,6 +13,7 @@ export type SettingsTab =
   | "about"
   | "trust"
   | "subagents"
+  | "computer"
   | "memory"
   | "local"
   | "shortcuts"
@@ -155,6 +157,23 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "spend ceiling",
           "workflows",
           "saved workflows",
+        ],
+      },
+      {
+        value: "computer",
+        label: Hands.NAME,
+        icon: "hands",
+        keywords: [
+          Hands.NAME,
+          Hands.SHORT,
+          "computer use",
+          "use my computer",
+          "screen recording",
+          "accessibility permission",
+          "always allowed apps",
+          "blocked apps",
+          "screenshots",
+          "mouse",
         ],
       },
       {

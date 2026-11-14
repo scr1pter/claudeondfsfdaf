@@ -16,16 +16,46 @@ export const Secret = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).an
 const Text = Schema.String.check(Schema.isMaxLength(2_000_000))
 const Label = Schema.String.check(Schema.isMaxLength(512))
 
+function screenshot<M extends "image/png" | "image/jpeg" | "image/webp">(mediaType: M) {
+  return Schema.Struct({
+    name: Label,
+    mediaType: Schema.Literal(mediaType),
+    url: Schema.String.check(
+      Schema.isMaxLength(MAX_BYTES),
+      Schema.isPattern(new RegExp(`^data:${mediaType};base64,[A-Za-z0-9+/]+={0,2}$`)),
+    ),
+  })
+}
+
+// Literal variants preserve MIME/URI agreement in generated clients as well as at the server boundary.
+export const Screenshot = Schema.Union([
+  screenshot("image/png"),
+  screenshot("image/jpeg"),
+  screenshot("image/webp"),
+]).annotate({ identifier: "PublicSession.Screenshot" })
+export type Screenshot = typeof Screenshot.Type
+
+const ToolFields = {
+  type: Schema.Literal("tool"),
+  name: Label,
+  callID: Label,
+  status: Schema.Literals(["completed", "error", "interrupted"]),
+  input: Text,
+  output: Text,
+}
+
 export const Part = Schema.Union([
   Schema.Struct({ type: Schema.Literal("text"), text: Text }),
   Schema.Struct({ type: Schema.Literal("reasoning"), text: Text }),
   Schema.Struct({
-    type: Schema.Literal("tool"),
-    name: Label,
-    callID: Label,
-    status: Schema.Literals(["completed", "error", "interrupted"]),
-    input: Text,
-    output: Text,
+    ...ToolFields,
+    screenshots: Schema.Array(Screenshot).check(Schema.isMaxLength(0)).pipe(optional),
+  }),
+  Schema.Struct({
+    ...ToolFields,
+    name: Schema.Literal("computer"),
+    status: Schema.Literal("completed"),
+    screenshots: Schema.Array(Screenshot).check(Schema.isMaxLength(100)).pipe(optional),
   }),
   // Attachments describe visible content; public imports never fetch a file or URL.
   Schema.Struct({ type: Schema.Literal("attachment"), name: Label, mediaType: Label }),
@@ -64,6 +94,8 @@ export const Publish = Schema.Struct({
   previewHash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(optional),
   // Local, account-bound consent for future sessions; never supplied by project config.
   remember: Schema.Boolean.pipe(optional),
+  // A per-publication choice; never remembered for automatic shares or live updates.
+  includeScreenshots: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "PublicSession.Publish" })
 
 export interface Info extends Schema.Schema.Type<typeof Info> {}
@@ -88,6 +120,7 @@ export const Create = Schema.Struct({
   consent: Consent,
   expiresAt: PositiveInt,
   archive: Archive,
+  includeScreenshots: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "PublicSession.Create" })
 
 export interface Update extends Schema.Schema.Type<typeof Update> {}

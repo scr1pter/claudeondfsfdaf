@@ -35,6 +35,11 @@ import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
 import { MAX_STEPS_PROMPT } from "@vectordevai/core/session/runner/max-steps"
 import { ToolRegistry } from "@/tool/registry"
+import { ComputerAvailability } from "@/computer/availability"
+import { ComputerScale } from "@/computer/scale"
+import { ComputerScreens } from "@/computer/screens"
+import { ComputerGeneric } from "@/computer/generic"
+import { Computer } from "@vectordevai/schema/computer"
 import { assertExternalDirectoryEffect, readPatterns } from "@/tool/external-directory"
 import type { Tool } from "@/tool/tool"
 import { MCP } from "../mcp"
@@ -128,6 +133,7 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+const isComputerMention = Schema.is(Computer.MentionMarker)
 const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 // Sessions whose instruction files are kept between requests; an evicted session reads its files again.
 const MAX_INSTRUCTION_SNAPSHOTS = 256
@@ -297,6 +303,7 @@ const layer = Layer.effect(
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
     const registry = yield* ToolRegistry.Service
+    const computer = yield* ComputerAvailability.Service
     const truncate = yield* Truncate.Service
     const image = yield* Image.Service
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -2302,7 +2309,11 @@ const layer = Layer.effect(
       // A run that ends before the provider answers keeps its provisional title without starting another request.
       const answering = yield* Deferred.make<boolean>()
       const ended = yield* Deferred.make<void>()
-      const steps = runSteps(session, answering, Deferred.await(ended), resumed).pipe(
+      const taskAbort = new AbortController()
+      const steps = runSteps(session, answering, Deferred.await(ended), taskAbort.signal, resumed).pipe(
+        // A completed provider request ends only its invocation signal. The attended run owns
+        // cross-request resources, and releases them before waiting for processor settlement.
+        Effect.ensuring(Effect.sync(() => taskAbort.abort())),
         Effect.ensuring(Deferred.succeed(answering, false)),
         // Stop waits for queued snapshots so immediate undo sees all changes from completed steps.
         Effect.ensuring(processor.settle(sessionID)),
@@ -2426,6 +2437,7 @@ const layer = Layer.effect(
       session: Session.Info,
       answering: Deferred.Deferred<boolean>,
       ended: Effect.Effect<void>,
+      taskAbort: AbortSignal,
       resumed?: ResumeFreeModelsInput & { parentID: MessageID },
     ) {
       const ctx = yield* InstanceState.context
@@ -2923,6 +2935,7 @@ const layer = Layer.effect(
             invokedAgents,
             messages: msgs,
             promptOps,
+            taskAbort,
             // A role whose output leaves the machine gets no pointer to a private document when it reads a linked file,
             // and its memory tool finds nothing personal.
             personal: personal && audience === "owner",
@@ -3028,6 +3041,13 @@ const layer = Layer.effect(
             delete tools.memory
             delete tools.workflow
           }
+          const computerReason = ComputerAvailability.sessionReason({
+            parentID: session.parentID,
+            internal: session.internal,
+            guest,
+            freeModel: model.freeModel,
+          })
+          if (computerReason) delete tools.computer
 
           if (lastUser.format?.type === "json_schema") {
             tools["StructuredOutput"] = createStructuredOutputTool({
@@ -3055,6 +3075,14 @@ const layer = Layer.effect(
           const offered = Object.keys(
             LLMRequestPrep.resolveTools({ tools, agent: stepAgent, permission: rules, user: lastUser }),
           )
+          const history = ComputerScreens.replay(
+            stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
+            model,
+            { helper: session.parentID !== undefined || session.internal !== undefined },
+          )
+          const dropMedia = ComputerGeneric.retainHistory(model)
+            ? undefined
+            : ComputerScreens.keep(history, ComputerScale.plan(model, yield* config.get()))
           const [skills, env, snapshot, mcpInstructions, modelMsgs] = yield* Effect.all([
             quick ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
             quick
@@ -3107,10 +3135,7 @@ const layer = Layer.effect(
                 ).pipe(Effect.orDie),
             quick ? Effect.succeed(undefined) : sys.mcp(agent, rules),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
-            MessageV2.toModelMessagesEffect(
-              stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
-              model,
-            ),
+            MessageV2.toModelMessagesEffect(history, model, { dropMedia }),
           ])
           const instructions = snapshot.instructions
           if (tools.memory && snapshot.documents)
@@ -3134,6 +3159,15 @@ const layer = Layer.effect(
             ...(lastUser.executionMode === "fast" ? [FAST_EXECUTION_SYSTEM_PROMPT] : []),
           ]
           const format = lastUser.format ?? { type: "text" as const }
+          if (
+            !offered.includes("computer") &&
+            lastUserMsg?.parts.some(
+              (part) => part.type === "text" && isComputerMention(part.metadata?.[Computer.MENTION_KEY]),
+            )
+          ) {
+            const reason = computerReason ?? (yield* computer.unavailable()) ?? "disabled"
+            system.push(`Explain in one sentence: ${ComputerAvailability.message(reason)}`)
+          }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
           const closingStep = closing === "due" && format.type === "json_schema"
           if (closing === "due") closing = "done"
@@ -3172,9 +3206,9 @@ const layer = Layer.effect(
               personal,
               audience,
             })
-          // A fork's request (5.E.3). While its parent's step is cached (warm), it sends that step's tools and system
-          // blocks as they were; cold, it sends what it worked out as the root, under the same names. Either way each
-          // tool runs as the fork's own, and the ones a fork may not run refuse. The first request of each run names the
+          // A fork's request (5.E.3). While its parent's step is cached (warm), it reuses that step's tools and system
+          // blocks except attended computer access; cold, it sends its own root-shaped setup under the same names.
+          // Each tool runs as the fork's own, and tools it may not run refuse. The first request of each run names the
           // root's cache key, and the last inherited message takes the non-final cache breakpoint.
           const warm = inherited?.prefix?.request
           const keyed = fork !== undefined && !forkRequested
@@ -3188,8 +3222,9 @@ const layer = Layer.effect(
           const ancestry = new Set(inherited?.messages.map((message) => message.info.id))
           const inheritedCount = inherited
             ? (yield* MessageV2.toModelMessagesEffect(
-                msgs.filter((message) => ancestry.has(message.info.id)),
+                history.filter((message) => ancestry.has(message.info.id)),
                 model,
+                { dropMedia },
               )).length
             : 0
           const result = yield* handle.process({
@@ -3200,6 +3235,9 @@ const layer = Layer.effect(
             permission: warm?.permission ?? rules,
             sessionID,
             parentSessionID: session.parentID,
+            computerRequested: lastUserMsg?.parts.some(
+              (part) => part.type === "text" && isComputerMention(part.metadata?.[Computer.MENTION_KEY]),
+            ),
             stableSystem: warm ? warm.stableSystem : env.stable,
             system: warm?.system ?? system,
             messages: [
@@ -5053,6 +5091,7 @@ export const node = LayerNode.make({
     MCP.node,
     LSP.node,
     ToolRegistry.node,
+    ComputerAvailability.node,
     Truncate.node,
     Image.node,
     CrossSpawnSpawner.node,

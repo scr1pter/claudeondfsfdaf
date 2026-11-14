@@ -1,0 +1,30 @@
+{
+  "run": 41937598595,
+  "commit": "ae7278947e1cdb39c80e04204c817a83b4172b7c",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "artifact": 13375510095,
+  "artifactSha256": "0039a84035f0d1e7b155a084e2b7c4fb8f91fc217b6680c2d98a34e4be18d89f",
+  "scope": "Both core paths use the same signed helper in the same native job, with unchanged golden transcripts and privileged checks off.",
+  "reports": {
+    "bun": {
+      "file": "41937598595-bun-core.json",
+      "sha256": "5dac953f9027fc312791fec8d2aeecfdc4e43e9c607bddad40b9f2bd6d85b6f7",
+      "code": 1,
+      "counts": {
+        "passed": 27,
+        "failed": 1,
+        "skipped": 2
+      }
+    },
+    "node": {
+      "file": "41937598595-node-core.json",
+      "sha256": "ddb399cc3ec2c4758e4e7dca81c0a27e1ee31e1db3dd39f6ff8893441ea1e3b0",
+      "code": 0,
+      "counts": {
+        "passed": 28,
+        "failed": 0,
+        "skipped": 2
+      }
+    }
+  }
+}

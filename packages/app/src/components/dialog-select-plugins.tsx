@@ -2,13 +2,19 @@ import { Component, For, Show, createMemo, createSignal } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { Dialog } from "@vectordevai/ui/dialog"
 import { Switch } from "@vectordevai/ui/switch"
+import { useLanguage } from "@/context/language"
+import { usePlatform } from "@/context/platform"
+import { useServerSDK } from "@/context/server-sdk"
 import { useSync } from "@/context/sync"
 import { useMcpAdd, useMcpRemove, useMcpToggle } from "@/context/mcp"
+import { desktopOwns } from "@/pages/layout-computer-notify"
+import { Persist, persisted } from "@/utils/persist"
 import {
   assertPluginInstallable,
-  PLUGIN_CATALOG,
   PLUGIN_CATEGORIES,
   PluginLogo,
+  pluginCopy,
+  visiblePlugins,
   type PluginDef,
 } from "./plugins/catalog"
 import { pluginAuthValues, securePluginConfig } from "./plugins/secure-config"
@@ -38,9 +44,22 @@ export const DialogSelectPlugins: Component = () => {
   const add = useMcpAdd()
   const toggle = useMcpToggle()
   const remove = useMcpRemove()
+  const platform = usePlatform()
+  const serverSDK = useServerSDK()
+  const language = useLanguage()
 
   const [openForm, setOpenForm] = createSignal<string>()
   const [fields, setFields] = createStore<Record<string, string>>({})
+  // On the desktop this storage loads asynchronously; until it has, the notice stays hidden (pluginCopy).
+  const [notice, setNotice, , noticeReady] = persisted(
+    Persist.global("plugins.computer-use-notice"),
+    createStore({ dismissed: false }),
+  )
+
+  // The server's effective company computer policy is the block its engine enforces (E11), so the catalog hides
+  // exactly what that engine refuses to start. Hands copy shows only where the desktop serves Hands for this server.
+  const plugins = createMemo(() => visiblePlugins(sync().data.config.computer))
+  const hands = () => desktopOwns(platform.computer, serverSDK().scope)
 
   // Identity is a plain server-name match: a plugin is "installed" when an
   // MCP server with its name exists. A user-created server with the same name
@@ -50,10 +69,20 @@ export const DialogSelectPlugins: Component = () => {
   const mcpEntry = (plugin: PluginDef) => sync().data.mcp?.[serverName(plugin)]
   const installedCount = createMemo(
     () =>
-      new Set(PLUGIN_CATALOG.filter((plugin) => !plugin.soon && sync().data.mcp?.[serverName(plugin)]).map(serverName))
-        .size,
+      new Set(
+        plugins()
+          .filter((plugin) => !plugin.soon && sync().data.mcp?.[serverName(plugin)])
+          .map(serverName),
+      ).size,
   )
-  const availableCount = new Set(PLUGIN_CATALOG.filter((plugin) => !plugin.soon).map(serverName)).size
+  const availableCount = createMemo(
+    () =>
+      new Set(
+        plugins()
+          .filter((plugin) => !plugin.soon)
+          .map(serverName),
+      ).size,
+  )
 
   const startConnect = (plugin: PluginDef) => {
     if (plugin.auth.kind === "token") {
@@ -115,7 +144,7 @@ export const DialogSelectPlugins: Component = () => {
   return (
     <Dialog
       title="Plugins"
-      description={`${installedCount()} connected · ${availableCount} available. One-click integrations that make Vector a better IDE.`}
+      description={`${installedCount()} connected · ${availableCount()} available. One-click integrations that make Vector a better IDE.`}
       class="vector-mcp-dialog vector-plugins-dialog"
     >
       <div class="max-h-[72vh] overflow-y-auto px-3 pb-3 flex flex-col gap-5">
@@ -124,9 +153,17 @@ export const DialogSelectPlugins: Component = () => {
             <div class="flex flex-col gap-2">
               <div class="px-1 text-11-bold uppercase tracking-[0.08em] text-text-weaker">{category}</div>
               <div class="grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                <For each={PLUGIN_CATALOG.filter((plugin) => plugin.category === category)}>
+                <For each={plugins().filter((plugin) => plugin.category === category)}>
                   {(plugin) => {
                     const entry = () => mcpEntry(plugin)
+                    const copy = createMemo(() =>
+                      pluginCopy(plugin, {
+                        installed: !!entry(),
+                        hands: hands(),
+                        dismissed: noticeReady() ? notice.dismissed : undefined,
+                        t: language.t,
+                      }),
+                    )
                     const status = () => entry()?.status
                     const meta = () => (status() ? statusMeta[status() as string] : undefined)
                     const busy = () => toggle.isPending && toggle.variables === serverName(plugin)
@@ -141,6 +178,7 @@ export const DialogSelectPlugins: Component = () => {
                       <div
                         class="flex flex-col gap-3 rounded-[14px] border border-[rgba(178,140,255,0.16)] bg-white/[0.02] p-3.5 transition-colors duration-200 ease-[cubic-bezier(0.22,0.7,0.28,1)] hover:border-[rgba(178,140,255,0.3)]"
                         classList={{ "opacity-60": plugin.soon }}
+                        data-plugin={plugin.id}
                       >
                         <div class="flex items-center gap-3">
                           <PluginLogo plugin={plugin} />
@@ -153,8 +191,8 @@ export const DialogSelectPlugins: Component = () => {
                                 </span>
                               </Show>
                             </div>
-                            <span class="line-clamp-2 text-12-regular text-text-muted" title={plugin.blurb}>
-                              {plugin.blurb}
+                            <span class="line-clamp-2 text-12-regular text-text-muted" title={copy().blurb}>
+                              {copy().blurb}
                             </span>
                           </div>
                           <Show
@@ -241,6 +279,24 @@ export const DialogSelectPlugins: Component = () => {
                             </Show>
                           </Show>
                         </div>
+
+                        <Show when={copy().notice}>
+                          {(text) => (
+                            <div
+                              class="flex items-start gap-3 pl-[46px] text-12-regular text-text-muted"
+                              data-computer-notice
+                            >
+                              <span class="min-w-0 flex-1">{text()}</span>
+                              <button
+                                type="button"
+                                class="shrink-0 text-11-regular text-text-weaker transition-colors hover:text-text-base"
+                                onClick={() => setNotice("dismissed", true)}
+                              >
+                                {language.t("common.dismiss")}
+                              </button>
+                            </div>
+                          )}
+                        </Show>
 
                         <Show when={!plugin.soon && meta()}>
                           <div class="flex flex-col gap-1 pl-[46px]">

@@ -84,6 +84,9 @@ function init() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
+      // A key recorder inside a dialog takes Escape as part of a shortcut, or as its own cancel. This listener runs
+      // first (window, capture), so the recorder marks itself instead of stopping the event.
+      if (event.target instanceof Element && event.target.closest("[data-dialog-keys='capture']")) return
       close()
       event.preventDefault()
       event.stopPropagation()

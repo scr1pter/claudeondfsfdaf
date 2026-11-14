@@ -1938,6 +1938,162 @@ describe("session.llm.stream", () => {
   )
 
   it.instance(
+    "keeps generic Anthropic computer definitions and clearing on the experimental native runtime",
+    () =>
+      Effect.gen(function* () {
+        const captured: Record<string, unknown>[] = []
+        const executor = Layer.succeed(
+          RequestExecutor.Service,
+          RequestExecutor.Service.of({
+            execute: (request) =>
+              Effect.gen(function* () {
+                const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+                captured.push((yield* Effect.promise(() => web.json())) as Record<string, unknown>)
+                return HttpClientResponse.fromWeb(
+                  request,
+                  createEventResponse([
+                    { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 0 } } },
+                    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+                    { type: "message_stop" },
+                  ]),
+                )
+              }),
+          }),
+        )
+        const resolved = yield* Provider.use.getModel(
+          ProviderV2.ID.make("anthropic"),
+          ModelV2.ID.make("claude-opus-5-5"),
+        )
+        const sessionID = SessionID.make("session-test-native-generic-computer")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const messages: ModelMessage[] = [
+          { role: "user", content: "Read the approved app." },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "reasoning",
+                text: "Earlier reasoning",
+                providerOptions: { anthropic: { signature: "old-signature" } },
+              },
+              { type: "tool-call", toolCallId: "old-computer", toolName: "computer", input: { action: "screenshot" } },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: "old-computer",
+                toolName: "computer",
+                output: { type: "text", value: "Observed app" },
+              },
+            ],
+          },
+        ]
+        const context = yield* InstanceRef
+        if (!context) return yield* Effect.die("InstanceRef not provided")
+        // Both turns use one service lifetime so the second request exercises the frozen definition.
+        yield* Effect.promise(() =>
+          Effect.runPromise(
+            Effect.gen(function* () {
+              const llm = yield* LLM.Service
+              for (const turn of [0, 1]) {
+                yield* llm
+                  .stream({
+                    user: {
+                      id: MessageID.make(`msg_native_generic_${turn}`),
+                      sessionID,
+                      role: "user",
+                      time: { created: 0 },
+                      agent: agent.name,
+                      model: { providerID: resolved.providerID, modelID: resolved.id },
+                    },
+                    sessionID,
+                    model: resolved,
+                    agent,
+                    computerRequested: true,
+                    system: [],
+                    messages:
+                      turn === 0
+                        ? messages
+                        : [
+                            ...messages,
+                            {
+                              role: "assistant",
+                              content: [
+                                {
+                                  type: "reasoning",
+                                  text: "Current reasoning",
+                                  providerOptions: { anthropic: { signature: "fresh-signature" } },
+                                },
+                                { type: "text", text: "The app is ready." },
+                              ],
+                            },
+                            { role: "user", content: "Continue." },
+                          ],
+                    tools: {
+                      computer: tool({
+                        description: turn === 0 ? "Original computer definition" : "Changed capability description",
+                        inputSchema:
+                          turn === 0
+                            ? z.object({ action: z.enum(["screenshot", "click"]) })
+                            : z.object({ action: z.literal("screenshot") }),
+                        execute: async () => ({ output: "unused fake computer", metadata: {} }),
+                      }),
+                    },
+                  })
+                  .pipe(Stream.runDrain)
+              }
+            }).pipe(
+              Effect.provide(llmLayerWithExecutor({ executor, flags: { experimentalNativeLlm: true } })),
+              Effect.provideService(InstanceRef, context),
+            ),
+          ),
+        )
+        expect(captured).toHaveLength(2)
+        expect(captured[0].tools).toEqual(captured[1].tools)
+        expect(captured[0].tools).toContainEqual(
+          expect.objectContaining({ name: "computer", description: "Original computer definition" }),
+        )
+        for (const body of captured) {
+          expect(body.context_management).toMatchObject({
+            edits: [{ type: "clear_tool_uses_20250919", clear_tool_inputs: false }],
+          })
+          expect(JSON.stringify(body)).not.toContain("computer_toolset_20260801")
+          expect(JSON.stringify(body)).not.toContain("old-signature")
+        }
+        expect(JSON.stringify(captured[1])).toContain("fresh-signature")
+      }),
+    {
+      trusted: true,
+      config: () => ({
+        enabled_providers: ["anthropic"],
+        provider: {
+          anthropic: {
+            name: "Anthropic",
+            env: ["ANTHROPIC_API_KEY"],
+            npm: "@ai-sdk/anthropic",
+            api: "https://api.anthropic.com/v1",
+            models: {
+              "claude-opus-5-5": {
+                ...configModel(loadFixture("anthropic", "claude-opus-4-6").model),
+                id: "claude-opus-5-5",
+              } as ConfigModel,
+            },
+            options: { apiKey: "test-anthropic-key", baseURL: `${state.server!.url.origin}/v1` },
+          },
+        },
+      }),
+    },
+  )
+
+  it.instance(
     "streams OpenAI through native runtime when opted in",
     () =>
       Effect.gen(function* () {

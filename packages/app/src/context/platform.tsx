@@ -6,6 +6,7 @@ import type { ServerConnection } from "./server"
 import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
+import type { Computer } from "@vectordevai/schema/computer"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -73,6 +74,15 @@ type PlatformBase = {
 
   /** Desktop account status and sign-in; credentials stay in the main process. */
   vectorAccount?: VectorAccountPlatform
+
+  /** Desktop app control; absent in web builds. Linux reports supported: false. */
+  computer?: Computer.ComputerPlatform
+
+  /**
+   * Desktop only: the built-in engine deleted computer screenshots (retention or Delete all). The value is unchecked
+   * here; the listener decodes it with ComputerScreenshotHistory.decode.
+   */
+  onComputerScreenshotsRemoved?(cb: (removal: unknown) => void): () => void
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

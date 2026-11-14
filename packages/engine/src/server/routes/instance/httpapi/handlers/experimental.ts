@@ -1,4 +1,6 @@
 import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { ComputerAvailability } from "@/computer/availability"
 import { Permission } from "@/permission"
 import { WorkflowOwner } from "@/orchestration/owner"
 import { InstanceState } from "@/effect/instance-state"
@@ -91,6 +93,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const worktreeSvc = yield* Worktree.Service
     const sessions = yield* Session.Service
     const flags = yield* RuntimeFlags.Service
+    const computer = yield* ComputerAvailability.Service
     const tasks = yield* TaskManager.Service
     const workflow = yield* Effect.serviceOption(WorkflowOwner.Service)
     const desktop = yield* DesktopTasks.Service
@@ -337,6 +340,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       const agent = yield* agents.defaultInfo()
       const disabled = Permission.disabled(["task", "workflow"], agent.permission)
       return {
+        computer: yield* computer.capabilities(),
         workflows: flags.backgroundSubagents && !disabled.has("task") && !disabled.has("workflow"),
         backgroundSubagents: flags.backgroundSubagents,
         subagentLimits: true,

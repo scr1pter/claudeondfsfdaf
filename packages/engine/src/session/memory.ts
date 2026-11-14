@@ -354,13 +354,14 @@ const LOCAL_TOOLS = new Set([
 
 const DELEGATION_TOOLS = new Set(["task", "workflow", "task_manage", "send_teammate_message"])
 
-// Tools whose output is the web's: pages, search results, the browsers, Vector Cloud's logs, and every research tool
+// Tools whose output contains outside content: pages, search results, the screen, Vector Cloud's logs, and research
 // (a research run reads the web by design, and its notes and reports quote pages; research_browser is the research
 // agents' own browser, and research is the build agent's way to start a run).
 const WEB_TOOLS = new Set([
   "webfetch",
   "websearch",
   "browser",
+  "computer",
   "vector_cloud",
   "research",
   "research_plan",

@@ -90,6 +90,7 @@ export function projectExecutableConfig(config: Info, trusted: boolean, base: In
   // A repository's own local block never applies, trusted or not: only the user's config and the company's policy
   // set Vector Local, so a cloned repository can neither loosen it nor turn it off.
   delete next.local
+  delete next.computer
   // Spend limits are one overall set across every repository, so a repository's own budget.run is ignored, trusted
   // or not. Its loop switch still follows the trust rules below.
   if (next.budget?.run) {
@@ -2097,7 +2098,12 @@ const layer = Layer.effect(
           const projectSource = scope === "local" && source !== "VECTOR_CONFIG_CONTENT"
           const values = input as Record<string, unknown>
           const kept = companyFiles.has(source) ? [] : locked.filter((key) => values[key] !== undefined)
-          const dropped = [...(input.local === undefined ? [] : ["local"]), ...kept]
+          const dropped = [
+            ...(input.local === undefined ? [] : ["local"]),
+            // Computer policy is company-owned even without a local.lock or locked_keys entry.
+            ...(input.computer === undefined || companyFiles.has(source) ? [] : ["computer"]),
+            ...kept,
+          ]
           const next = dropped.length === 0 ? input : (omit(input, dropped as (keyof Info)[]) as Info)
           const spendKeys = projectSource ? ignoredSpendKeys(next) : []
           if (spendKeys.length) ignoredRunBudgets.push({ source, keys: spendKeys })

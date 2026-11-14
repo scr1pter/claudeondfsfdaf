@@ -768,6 +768,200 @@
         "changes"
       ]
     },
+    "ComputerConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Company switch for computer use (default: true). Enabling it does not grant the user's consent."
+        },
+        "default_app_access": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "deny"
+          ],
+          "description": "Access for apps without a company rule (default: ask). Company allow rules still require user consent."
+        },
+        "allow_always": {
+          "type": "boolean",
+          "description": "Let users remember their own app approvals (default: true)"
+        },
+        "background": {
+          "type": "boolean",
+          "description": "Permit background windows when the user enables them (default: true)"
+        },
+        "keep_awake": {
+          "type": "boolean",
+          "description": "Permit keeping the computer awake while acting (default: true)"
+        },
+        "away_minutes": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "minimum": 5,
+              "maximum": 240
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Maximum minutes without physical input before pausing for the user (5–240)"
+        },
+        "screenshot_retention_days": {
+          "type": "integer",
+          "allOf": [
+            {
+              "minimum": 0
+            },
+            {
+              "maximum": 365
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Maximum days to retain screenshots (0–365); 0 retains none"
+        },
+        "max_actions": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "maximum": 5000
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Computer actions before a check-in with the user (1–5000, default: 300)"
+        },
+        "max_minutes": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "maximum": 600
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Active minutes before a check-in with the user, excluding time awaiting approval (1–600, default: 45)"
+        },
+        "native_tools": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "description": "Provider-native computer tools (default: off in this release)"
+        },
+        "screenshots": {
+          "type": "object",
+          "properties": {
+            "keep": {
+              "type": "integer",
+              "allOf": [
+                {
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "maximum": 10
+                }
+              ],
+              "maximum": 9007199254740991,
+              "description": "Recent screenshots to include in model context (1–10, default: 3)"
+            },
+            "max_width": {
+              "exclusiveMinimum": 0,
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "description": "Maximum screenshot width in pixels"
+            },
+            "max_height": {
+              "exclusiveMinimum": 0,
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "description": "Maximum screenshot height in pixels"
+            }
+          },
+          "additionalProperties": false
+        },
+        "apps": {
+          "type": "object",
+          "properties": {
+            "macos": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              },
+              "description": "Apple-signed apps use bundleId; third-party apps use bundleId@TeamID. Allow still requires user consent."
+            },
+            "windows": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "aumid": {
+                        "type": "string"
+                      },
+                      "access": {
+                        "type": "string",
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "aumid",
+                      "access"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "publisher": {
+                        "type": "string"
+                      },
+                      "product": {
+                        "type": "string"
+                      },
+                      "binary": {
+                        "type": "string"
+                      },
+                      "access": {
+                        "type": "string",
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "publisher",
+                      "product",
+                      "access"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "description": "Verified packaged app AUMIDs or Authenticode publisher and product rules, optionally narrowed by binary. Allow still requires user consent."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "LocalWeb": {
       "type": "string",
       "enum": [
@@ -1842,6 +2036,10 @@
           },
           "additionalProperties": false,
           "description": "Task sizing: how much harness, reasoning and verification each request gets."
+        },
+        "computer": {
+          "$ref": "#/$defs/ComputerConfig",
+          "description": "Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent."
         },
         "local": {
           "$ref": "#/$defs/LocalConfig",

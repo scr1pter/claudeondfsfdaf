@@ -6,7 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { browserCommand, owningDirectory, selectBrowserSpecs, selectUnitTests, unitCommand } from "./codium-ci-tests"
 
-const root = new URL("../../..", import.meta.url).pathname
+const root = fileURLToPath(new URL("../../..", import.meta.url))
 const read = (path: string) => Bun.file(`${root}/${path}`).text()
 
 describe("release workflow supply-chain policy", () => {
@@ -73,7 +73,38 @@ describe("release workflow supply-chain policy", () => {
     expect(workflow).toContain('git merge-base --is-ancestor "$source_commit" origin/main')
     expect(workflow).not.toContain("gh release download")
     expect(workflow.match(/id: platform-artifact/g)).toHaveLength(3)
-    expect(workflow.match(/artifact_digest:/g)).toHaveLength(3)
+    expect(workflow.match(/^ +artifact_digest:/gm)).toHaveLength(3)
+    const jobs = (
+      Bun.YAML.parse(workflow) as {
+        jobs: Record<
+          string,
+          {
+            outputs?: Record<string, string>
+            needs?: string | string[]
+            "runs-on"?: string
+            steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>
+          }
+        >
+      }
+    ).jobs
+    for (const platform of ["mac", "windows", "linux"])
+      expect(jobs[platform]?.outputs?.artifact_digest).toBe("${{ steps.platform-artifact.outputs.artifact-digest }}")
+    expect(jobs.windows?.outputs?.helper_arm64_artifact_id).toBe(
+      "${{ steps.arm-package.outputs.artifact-id || steps.arm-restore.outputs.artifact_ids }}",
+    )
+    expect(jobs.windows?.outputs?.helper_arm64_artifact_digest).toBe(
+      "${{ steps.arm-package.outputs.artifact-digest || steps.arm-restore.outputs.artifact_digests }}",
+    )
+    const arm = jobs["windows-arm64-helper"]
+    expect(arm?.["runs-on"]).toBe("windows-11-arm")
+    expect(arm?.needs).toContain("windows")
+    expect(jobs.release?.needs).toContain("windows-arm64-helper")
+    const proof = arm?.steps?.find(
+      (step) => step.name === "Restore the exact final ARM64 package proof by run, id and digest",
+    )
+    expect(proof?.env?.PROOF_ID).toBe("${{ needs.windows.outputs.helper_arm64_artifact_id }}")
+    expect(proof?.env?.PROOF_DIGEST).toBe("${{ needs.windows.outputs.helper_arm64_artifact_digest }}")
+    expect(proof?.run).toContain("--required --expected-id $env:PROOF_ID --expected-digest $env:PROOF_DIGEST")
     expect(
       workflow.match(/actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/g)?.length,
     ).toBeGreaterThanOrEqual(4)
@@ -438,7 +469,12 @@ describe("Codium CI lane", () => {
     ])
     // The flags above mirror the packages' own scripts; a change there must reach the picker too.
     const app = (await Bun.file(`${root}/packages/app/package.json`).json()) as { scripts: Record<string, string> }
-    expect(app.scripts["test:unit"]).toContain("--isolate")
+    expect(app.scripts["test:unit"]).toBe("node --test ./scripts/test-unit.test.mjs && node ./scripts/test-unit.mjs")
+    const appUnit = await read("packages/app/scripts/test-unit.mjs")
+    expect(appUnit).toContain(
+      'const argumentsBeforePath = ["test", "--isolate", "--only-failures", "--preload", "./happydom.ts"]',
+    )
+    expect(appUnit).toMatch(/run\("bun",\s*\[\.\.\.argumentsBeforePath,\s*file\],\s*\{\s*cwd:\s*root,/)
     expect(app.scripts["test:browser"]).toContain("--conditions=browser")
     expect(app.scripts["test:e2e"]).toBe("playwright test")
     expect(await read("packages/desktop/scripts/test.ts")).toContain('"--no-env-file", "test"')

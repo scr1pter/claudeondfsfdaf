@@ -1719,3 +1719,184 @@ html:is([data-vector-reduce-animations="true"], [data-vector-animation-speed="of
     border: 1px solid Highlight;
   }
 }
+
+/* Hands: the pinned card above the task list, the Tasks button's dot and the Watch dialog. */
+.vector-bg-tasks-computer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 8px 12px;
+  padding: var(--bgt-card-pad);
+  border: 1px solid color-mix(in srgb, var(--vx-purple, #8b5cf6) 40%, transparent);
+  border-radius: 12px;
+  background: var(--bgt-card);
+}
+
+.vector-bg-tasks-computer-status {
+  flex: none;
+  color: var(--bgt-run-text);
+  font-size: var(--bgt-fs-meta);
+}
+
+.vector-bg-tasks-computer-status[data-phase="asking"],
+.vector-bg-tasks-computer-status[data-phase="handoff"] {
+  color: var(--bgt-wait-text);
+}
+
+.vector-bg-tasks-computer-status[data-phase="paused"],
+.vector-bg-tasks-computer-status[data-phase="done"],
+.vector-bg-tasks-computer-status[data-phase="stopped"] {
+  color: var(--bgt-text-2);
+}
+
+.vector-bg-tasks-computer-step,
+.vector-bg-tasks-computer-detail,
+.vector-bg-tasks-computer-removed {
+  margin: 0;
+  color: var(--bgt-text-2);
+  font-size: var(--bgt-fs-meta);
+  line-height: var(--bgt-lh);
+  overflow-wrap: anywhere;
+}
+
+.vector-bg-tasks-computer-detail,
+.vector-bg-tasks-computer-removed {
+  color: var(--bgt-text-3);
+}
+
+.vector-bg-tasks-computer-apps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vector-bg-tasks-computer-apps > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bgt-well);
+  color: var(--bgt-text-1);
+  font-size: var(--bgt-fs-table);
+}
+
+.vector-bg-tasks-computer-apps > li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A fixed box, so the card's height never waits for the image to decode. */
+.vector-bg-tasks-computer-thumb,
+.vector-bg-tasks-computer-shot {
+  display: block;
+  width: 160px;
+  height: 100px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: var(--bgt-well);
+  overflow: hidden;
+}
+
+.vector-bg-tasks-computer-thumb {
+  cursor: pointer;
+}
+
+.vector-bg-tasks-computer-thumb > img,
+.vector-bg-tasks-computer-shot {
+  width: 160px;
+  height: 100px;
+  object-fit: contain;
+}
+
+.vector-bg-tasks-computer-thumb:focus-visible,
+.vector-bg-tasks-computer-button:focus-visible,
+.vector-bg-tasks-computer-link:focus-visible {
+  outline: 2px solid var(--bgt-ring);
+  outline-offset: 2px;
+}
+
+.vector-bg-tasks-computer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vector-bg-tasks-computer-button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--bgt-well);
+  color: var(--bgt-text-1);
+  font-size: var(--bgt-fs-meta);
+  cursor: pointer;
+}
+
+.vector-bg-tasks-computer-button:hover:not(:disabled) {
+  background: var(--bgt-well-hover);
+}
+
+.vector-bg-tasks-computer-button[data-variant="stop"],
+.vector-bg-tasks-computer-button[data-variant="primary"] {
+  background: var(--vx-purple, #8b5cf6);
+  color: white;
+}
+
+.vector-bg-tasks-computer-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.vector-bg-tasks-computer-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--bgt-run-text);
+  font-size: var(--bgt-fs-meta);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.vector-bg-tasks-computer-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vector-bg-tasks-computer-detail[data-variant="warning"] {
+  color: var(--bgt-wait-text);
+}
+
+.vector-bg-tasks-launch {
+  position: relative;
+}
+
+.vector-bg-tasks-computer-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vx-purple, #8b5cf6);
+  pointer-events: none;
+}
+
+.vector-computer-watch {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.vector-computer-watch > .vector-bg-tasks-computer {
+  margin: 0;
+}

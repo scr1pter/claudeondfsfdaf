@@ -1,3 +1,5 @@
+import { Hands } from "@vectordevai/schema/hands"
+
 export type VectorRelease = {
   version: string
   title: string
@@ -22,6 +24,15 @@ export const upcomingRelease = {
 // desktop or npm release (1.99.9 has notes but no installers), so the releases page marks this one Latest.
 // Update it in the same change that publishes the next desktop installers.
 export const publishedDesktopVersion = "1.99.112"
+
+// Vector Hands has not shipped. Keep this draft separate from the published/versioned changelog.
+export const handsReleasePreview = {
+  label: "Vector Hands — unreleased",
+  since: "In development:",
+  title: `${Hands.NAME}: approved desktop apps, with Stop and take over`,
+  availability: "Unreleased; release approval and native manual checks remain pending.",
+  summary: `${Hands.NAME} lets Vector work in the local desktop apps you approve. App access asks separately from sensitive steps such as sending, deleting, pasting your clipboard or running code. Eligible apps can offer Always allow; browsers, file managers, finance and developer apps continue to ask. A glow and the “${Hands.BANNER}” banner show when it acts, with Stop, Take over and Esc while working in the foreground. Protected apps and credential fields stay yours to operate. Screenshots stay in conversations on this computer, go to the model you select when image input is available, and are excluded from conversation shares unless you include them. Settings offers retention and Delete all screenshots. Requires macOS 14 or later or Windows 10 build 19041 or later with a compatible local engine. Linux, WSL, remote engines and locked-session operation are not included. Ad-hoc macOS builds are Preview, and macOS may ask you to grant access again after a helper update. Windows administrator and consent surfaces require a manual handoff.`,
+}
 
 // Vector Brain arrives in desktop 1.99.110. The site deploys from main, so until the download page offers that release
 // the landing page and the investor page say it is coming in it, and from then on that it is new in it. The readme and

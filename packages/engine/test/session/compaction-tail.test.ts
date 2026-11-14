@@ -1,12 +1,9 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { SessionV1 } from "@vectordevai/core/v1/session"
-import { Token } from "@vectordevai/core/util/token"
 import { SessionCompaction } from "../../src/session/compaction"
-import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ProviderTest } from "../fake/provider"
-import type { Provider } from "../../src/provider/provider"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.empty)
@@ -34,8 +31,176 @@ function message(index: number, text = "x".repeat(400)): SessionV1.WithParts {
   }
 }
 
-const estimate = Effect.fnUntraced(function* (input: { messages: SessionV1.WithParts[]; model: Provider.Model }) {
-  return Token.estimate(JSON.stringify(yield* MessageV2.toModelMessagesEffect(input.messages, input.model)))
+const estimate = SessionCompaction.estimate
+
+function png(width: number, height: number, bytes = 24) {
+  const data = Buffer.alloc(bytes)
+  data.set([137, 80, 78, 71, 13, 10, 26, 10])
+  data.writeUInt32BE(width, 16)
+  data.writeUInt32BE(height, 20)
+  return `data:image/png;base64,${data.toString("base64")}`
+}
+
+function screenshot(index: number, url: string, frame?: { width: number; height: number }): SessionV1.WithParts {
+  const msg = message(index, "Screenshot captured")
+  msg.parts.push({
+    id: PartID.make(`prt_image_${index}`),
+    messageID: msg.info.id,
+    sessionID,
+    type: "tool",
+    tool: "computer",
+    callID: `call_image_${index}`,
+    state: {
+      status: "completed",
+      input: { action: "screenshot" },
+      title: "Screenshot",
+      output: "Screenshot 1",
+      metadata: frame ? { frame } : {},
+      time: { start: 0, end: 1 },
+      attachments: [
+        {
+          id: PartID.make(`prt_image_attachment_${index}`),
+          messageID: msg.info.id,
+          sessionID,
+          type: "file",
+          mime: "image/png",
+          url,
+        },
+      ],
+    },
+  })
+  return msg
+}
+
+describe("compaction image estimate", () => {
+  it.effect("counts visual tokens independently of screenshot transport size across provider conversions", () =>
+    Effect.gen(function* () {
+      const small = screenshot(0, png(1024, 768))
+      const large = screenshot(0, png(1024, 768, 3 * 1024 * 1024))
+      for (const npm of ["@ai-sdk/openai", "@ai-sdk/anthropic", "@ai-sdk/openai-compatible", "@ai-sdk/google"]) {
+        const selectedModel = { ...model, api: { ...model.api, npm } }
+        const baseline = yield* estimate({ messages: [small], model: selectedModel })
+        expect(yield* estimate({ messages: [large], model: selectedModel })).toBe(baseline)
+        expect(baseline).toBeGreaterThan(250)
+        expect(baseline).toBeLessThan(5_000)
+      }
+    }),
+  )
+
+  it.effect("uses image dimensions and saved frame metadata, with a bounded fallback for unknown images", () =>
+    Effect.gen(function* () {
+      const selectedModel = { ...model, api: { ...model.api, npm: "@ai-sdk/anthropic" } }
+      const small = yield* estimate({ messages: [screenshot(0, png(64, 64))], model: selectedModel })
+      const large = yield* estimate({ messages: [screenshot(0, png(1440, 900))], model: selectedModel })
+      const saved = yield* estimate({
+        messages: [screenshot(0, "data:image/png;base64,invalid", { width: 1440, height: 900 })],
+        model: selectedModel,
+      })
+      expect(large).toBeGreaterThan(small)
+      expect(saved).toBe(large)
+      for (const url of ["data:image/png;base64,invalid", png(0, 0)]) {
+        const tokens = yield* estimate({ messages: [screenshot(0, url)], model: selectedModel })
+        expect(tokens).toBeGreaterThan(1_000)
+        expect(tokens).toBeLessThan(5_000)
+      }
+      const id = MessageID.make("msg_remote_image")
+      const remote: SessionV1.WithParts = {
+        info: {
+          id,
+          role: "user",
+          sessionID,
+          agent: "build",
+          model: { providerID: model.providerID, modelID: model.id },
+          time: { created: 0 },
+        },
+        parts: [
+          {
+            id: PartID.make("prt_remote_image"),
+            messageID: id,
+            sessionID,
+            type: "file",
+            mime: "image/png",
+            url: "https://example.invalid/screenshot.png",
+          },
+        ],
+      }
+      const tokens = yield* estimate({ messages: [remote], model: selectedModel })
+      expect(tokens).toBeGreaterThan(1_000)
+      expect(tokens).toBeLessThan(5_000)
+    }),
+  )
+
+  it.effect("counts only images sent to the model and still accounts for actual text", () =>
+    Effect.gen(function* () {
+      const photo = screenshot(0, png(1440, 900))
+      const baseline = yield* estimate({ messages: [photo], model })
+      const moreText = screenshot(0, png(1440, 900))
+      moreText.parts.push({
+        id: PartID.make("prt_more_text"),
+        messageID: moreText.info.id,
+        sessionID,
+        type: "text",
+        text: "x".repeat(4_000),
+      })
+      expect(yield* estimate({ messages: [moreText], model })).toBeGreaterThan(baseline + 999)
+      const compacted = screenshot(0, png(1440, 900))
+      const part = compacted.parts[1]!
+      if (part.type === "tool" && part.state.status === "completed") part.state.time.compacted = 1
+      expect(yield* estimate({ messages: [compacted], model })).toBeLessThan(baseline)
+      const failed = screenshot(0, png(1440, 900))
+      if (failed.info.role === "assistant") failed.info.error = { name: "UnknownError", data: { message: "failed" } }
+      expect(yield* estimate({ messages: [failed], model })).toBe(yield* estimate({ messages: [], model }))
+    }),
+  )
+
+  it.effect("reads JPEG, GIF and WebP header dimensions without decoding pixels", () =>
+    Effect.gen(function* () {
+      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 64, 0, 64, 1, 1, 0x11, 0])
+      const gif = Buffer.from([71, 73, 70, 56, 57, 97, 64, 0, 64, 0])
+      const webp = Buffer.alloc(30)
+      webp.write("RIFF", 0)
+      webp.write("WEBP", 8)
+      webp.write("VP8X", 12)
+      webp.writeUIntLE(63, 24, 3)
+      webp.writeUIntLE(63, 27, 3)
+      const selectedModel = { ...model, api: { ...model.api, npm: "@ai-sdk/anthropic" } }
+      const expected = yield* estimate({ messages: [screenshot(0, png(64, 64))], model: selectedModel })
+      for (const data of [jpeg, gif, webp]) {
+        const image = screenshot(0, `data:image/png;base64,${data.toString("base64")}`)
+        expect(yield* estimate({ messages: [image], model: selectedModel })).toBe(expected)
+      }
+    }),
+  )
+
+  it.effect("bounds estimates for extreme declared image dimensions", () =>
+    Effect.gen(function* () {
+      for (const npm of ["@ai-sdk/google", "@ai-sdk/anthropic", "@ai-sdk/openai", "@ai-sdk/unknown"]) {
+        const selectedModel = { ...model, api: { ...model.api, id: "vision-test", npm } }
+        const tokens = yield* estimate({ messages: [screenshot(0, png(1_000_000, 1_000_000))], model: selectedModel })
+        expect(tokens).toBeGreaterThan(250)
+        expect(tokens).toBeLessThan(9_000)
+      }
+    }),
+  )
+
+  it.effect("retains the same recent screenshot suffix when base64 grows by several megabytes", () =>
+    Effect.gen(function* () {
+      const messages = [message(0), message(1), screenshot(2, png(1024, 768)), message(3)]
+      const budget = yield* estimate({ messages: messages.slice(2), model })
+      for (const bytes of [24, 3 * 1024 * 1024]) {
+        messages[2] = screenshot(2, png(1024, 768, bytes))
+        expect(
+          yield* SessionCompaction.splitTurn({
+            messages,
+            model,
+            turn: { start: 0, end: messages.length, id: messages[0]!.info.id },
+            budget,
+            estimate,
+          }),
+        ).toEqual({ start: 2, id: messages[2]!.info.id })
+      }
+    }),
+  )
 })
 
 describe("compaction tail selection", () => {
@@ -166,10 +331,9 @@ describe("compaction tail selection", () => {
       messages[3]!.parts = []
       for (const npm of ["@ai-sdk/openai", "@ai-sdk/openai-compatible", "@ai-sdk/anthropic"]) {
         const selectedModel = { ...model, api: { ...model.api, npm } }
-        const converted = yield* Effect.forEach(messages, (_, index) =>
-          MessageV2.toModelMessagesEffect(messages.slice(index), selectedModel),
+        const sizes = yield* Effect.forEach(messages, (_, index) =>
+          estimate({ messages: messages.slice(index), model: selectedModel }),
         )
-        const sizes = converted.map((items) => Token.estimate(JSON.stringify(items)))
         sizes.slice(1).forEach((size, index) => expect(size).toBeLessThanOrEqual(sizes[index]!))
         for (const budget of sizes.slice(1).flatMap((size) => [size, size - 1])) {
           const expected = sizes.findIndex((size, index) => index > 0 && size <= budget)

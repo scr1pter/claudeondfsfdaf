@@ -599,7 +599,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("abort", abort)
       .handle("init", init)
       .handle("share", share)
-      .handle("sharePreview", (ctx) => publicSharing.preview({ sessionID: ctx.params.sessionID }))
+      .handle("sharePreview", (ctx) =>
+        publicSharing.review({
+          sessionID: ctx.params.sessionID,
+          includeScreenshots: ctx.query.includeScreenshots === "true",
+        }),
+      )
       .handle("shareFlush", (ctx) => publicSharing.flush(ctx.params.sessionID))
       .handle("unshare", unshare)
       .handle("summarize", summarize)

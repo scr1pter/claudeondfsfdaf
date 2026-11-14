@@ -3,6 +3,7 @@ import { WorkflowMarkers } from "@/orchestration/constants"
 import { assertWritable } from "@/tool/owned-path"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { Agent } from "@/agent/agent"
+import { ComputerNativeContext } from "@/computer/native-context"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -82,6 +83,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   invokedAgents: readonly string[]
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  /** Owned by the prompt run, independently of each provider request. */
+  taskAbort?: AbortSignal
   // The request's size this step, for the escalate tool; absent where sizing does not apply.
   taskSize?: TaskSizeContext
   // Whether the owner's personal memory and private documents may go to this step's model: no guest is in the
@@ -163,6 +166,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     sessionID: input.session.id,
     parentID: input.session.parentID,
     abort: options.abortSignal!,
+    taskAbort: input.taskAbort,
     messageID: input.processor.message.id,
     callID: options.toolCallId,
     extra: {
@@ -173,6 +177,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       outward: input.outward === true,
       invokedAgents: input.invokedAgents,
       promptOps: input.promptOps,
+      ...ComputerNativeContext.executionContext(options.experimental_context),
       [WorkflowMarkers.TASK_OFFERED]: taskOffered(tools, input.agent.permission, input.session.permission),
       ...(input.taskSize ? { taskSize: input.taskSize } : {}),
       ...(input.delegation ? { delegation: input.delegation } : {}),
@@ -260,8 +265,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             { files: req.patterns.map((pattern) => path.resolve(instance.worktree, pattern)) },
           )
         }
-        yield* permission.ask({ ...req, ...request })
-        if (req.permission !== "edit") return
+        // Return the person's answer to this request; later prompt/memory confirmations cannot turn it into Always.
+        const answer = yield* permission.ask({ ...req, ...request })
+        if (req.permission !== "edit") return answer
         const instance = yield* InstanceState.context
         // A file Vector reads into an agent's prompt or permissions asks again, every time and in every session, after
         // the edit rules allowed the change: whichever tool writes it, and whatever configuration or a client allows.
@@ -289,9 +295,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         const files = req.patterns.filter((pattern) =>
           SessionMemory.source(path.resolve(instance.worktree, pattern), brain.files()),
         )
-        if (files.length === 0) return
+        if (files.length === 0) return answer
         const hold = input.session.parentID ? "subagent" : SessionMemory.taint(yield* history())
-        if (!hold) return
+        if (!hold) return answer
         yield* permission.ask({
           permission: PermissionPolicy.MEMORY_SOURCE,
           patterns: files,
@@ -299,6 +305,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           metadata: { ...req.metadata, hold },
           ...request,
         })
+        return answer
       }).pipe(Effect.orDie),
   })
 

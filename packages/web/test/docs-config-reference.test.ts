@@ -32,6 +32,27 @@ async function section(name: string, id: string) {
 
 const strict = { errors: "all", onExcessProperty: "error" } as const
 
+test("company computer policy samples decode and state their minimum engine version", async () => {
+  const sample = await Bun.file(new URL("../src/data/local/vector.json", import.meta.url)).json()
+  const config = Schema.decodeUnknownSync(ConfigV1.Info)(sample, strict)
+  expect(config.computer).toMatchObject({
+    enabled: true,
+    default_app_access: "ask",
+    native_tools: "off",
+    screenshots: { keep: 3, max_width: 1440, max_height: 900 },
+  })
+  const schema = await Bun.file(new URL("../public/config.json", import.meta.url)).json()
+  expect(schema.$defs.Config.properties.computer.description).toContain("Company-policy only")
+  expect(schema.$defs.Config.properties.computer.description).toContain("1.99.112")
+  expect(schema.$defs.ComputerConfig.properties.max_actions.allOf).toContainEqual({ maximum: 5000 })
+  const guide = await page("local")
+  expect(guide).toContain("Vector 1.99.112 or later")
+  expect(guide).toContain("user's consent")
+  const profile = await Bun.file(new URL("../src/data/local/ai.vector.managed.mobileconfig", import.meta.url)).text()
+  expect(profile).toContain("<key>computer</key>")
+  expect(profile).toContain("Vector 1.99.112 or later")
+})
+
 test("every vector.json sample in the docs is one Vector reads, without a key it does not know", async () => {
   const failures: string[] = []
   let count = 0
@@ -61,7 +82,11 @@ test("the agent and command file samples are files Vector loads", async () => {
   }
   for (const sample of commands) {
     const md = ConfigMarkdown.parse(sample)
-    const exit = Schema.decodeUnknownExit(ConfigCommandV1.Info)({ name: "sample", ...md.data, template: md.content.trim() })
+    const exit = Schema.decodeUnknownExit(ConfigCommandV1.Info)({
+      name: "sample",
+      ...md.data,
+      template: md.content.trim(),
+    })
     expect(Exit.isSuccess(exit)).toBe(true)
   }
 })
@@ -77,7 +102,9 @@ test("the config schema's help links land on the sections that list agent fields
   ] as const) {
     expect(schema).toContain(`see https://vectordev.ai/docs/${link}"`)
     expect(docsMoved[link]).toBe(target)
-    expect(vercel.redirects.find((redirect) => redirect.source === `/docs/${link}`)?.destination).toBe(`/docs/${target}`)
+    expect(vercel.redirects.find((redirect) => redirect.source === `/docs/${link}`)?.destination).toBe(
+      `/docs/${target}`,
+    )
   }
   const agents = await section("subagents", "custom-agents")
   for (const field of ["description", "mode", "model", "variant", "prompt", "steps", "permission", "hidden", "disable"])

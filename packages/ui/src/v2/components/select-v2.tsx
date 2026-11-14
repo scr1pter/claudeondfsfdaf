@@ -59,6 +59,8 @@ export type SelectV2Props<T> = Omit<
   numeric?: boolean
   children?: (item: T) => JSX.Element
   valueClass?: string
+  /** Where the listbox is portalled. Inside a dialog, pass its content so the list opens above the dialog's layer. */
+  mount?: HTMLElement
 }
 
 export function SelectV2<T>(props: SelectV2Props<T>) {
@@ -80,6 +82,7 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
     "numeric",
     "disabled",
     "valueClass",
+    "mount",
     "placement",
     "gutter",
     "sameWidth",
@@ -198,7 +201,7 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
           <ChevronDown />
         </span>
       </Kobalte.Trigger>
-      <Kobalte.Portal>
+      <Kobalte.Portal mount={local.mount}>
         <Kobalte.Content data-component="menu-v2-content" data-slot="select-v2-content">
           <Kobalte.Listbox data-slot="select-v2-listbox" />
         </Kobalte.Content>

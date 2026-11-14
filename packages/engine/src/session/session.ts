@@ -9,6 +9,8 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
 import path from "path"
 import { BackgroundJob } from "@/background/job"
+import { ComputerLog } from "@/computer/log"
+import { ComputerSession } from "@/computer/session"
 import { Decimal } from "decimal.js"
 import type { ProviderMetadata, Usage } from "@vectordevai/llm"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
@@ -668,7 +670,13 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service | ShareNext.Service
+  | BackgroundJob.Service
+  | ComputerLog.Service
+  | ComputerSession.Service
+  | RuntimeFlags.Service
+  | Database.Service
+  | EventV2Bridge.Service
+  | ShareNext.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -677,6 +685,8 @@ const layer: Layer.Layer<
     const database = yield* Database.Service
     const audience = SessionAudience.make(database)
     const background = yield* BackgroundJob.Service
+    const computerLog = yield* ComputerLog.Service
+    const computerSessions = yield* ComputerSession.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
 
@@ -909,6 +919,9 @@ const layer: Layer.Layer<
         if (links.length) return yield* publicShareWarning(links)
       }
       yield* sharing.removeTree(sessionID)
+      // Drain computer work before removing its private record. A failed unlink must not commit session deletion.
+      yield* computerSessions.retire(sessionID)
+      yield* computerLog.remove(sessionID).pipe(Effect.orDie)
       try {
         // `remove` needs to work in all cases, such as broken sessions that
         // run cleanup without instance state.
@@ -944,12 +957,12 @@ const layer: Layer.Layer<
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        yield* events.publish(SessionV1.Event.PartUpdated, {
+        const event = yield* events.publish(SessionV1.Event.PartUpdated, {
           sessionID: part.sessionID,
           part: structuredClone(part),
           time: Date.now(),
         })
-        return part
+        return event.data.part as T
       }).pipe(Effect.withSpan("Session.updatePart"))
 
     const getPart: Interface["getPart"] = Effect.fn("Session.getPart")(function* (input) {
@@ -1693,7 +1706,15 @@ function listByProject(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node, ShareNext.node],
+  deps: [
+    BackgroundJob.node,
+    ComputerLog.node,
+    ComputerSession.node,
+    RuntimeFlags.node,
+    Database.node,
+    EventV2Bridge.node,
+    ShareNext.node,
+  ],
 })
 
 export * as Session from "./session"

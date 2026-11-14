@@ -1,6 +1,6 @@
 import { afterEach, expect } from "bun:test"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { Cause, Effect, Exit, Fiber, Layer, Queue } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Queue, Schema } from "effect"
 import { Question } from "../../src/question"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -19,6 +19,7 @@ const askEffect = Effect.fn("QuestionTest.ask")(function* (input: {
   sessionID: SessionID
   questions: ReadonlyArray<Question.Info>
   tool?: Question.Tool
+  metadata?: Question.Request["metadata"]
 }) {
   const question = yield* Question.Service
   return yield* question.ask(input)
@@ -64,6 +65,44 @@ const waitForPending = Effect.fn("QuestionTest.waitForPending")(function* (count
     yield* Queue.take(asked).pipe(Effect.timeout("2 seconds"))
   }
 })
+
+for (const metadata of [
+  { computer: { kind: "handoff", app: "Notes", reason: "credential" } },
+  { computer: { kind: "check_in", actions: 300, minutes: 45 } },
+] as const) {
+  it.instance(`ask - preserves ${metadata.computer.kind} metadata in the event and pending request`, () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const asked = yield* Queue.unbounded<Question.Request>()
+      const off = yield* events.listen((event) => {
+        if (event.type === Question.Event.Asked.type)
+          Queue.offerUnsafe(asked, Schema.decodeUnknownSync(Question.Request)(event.data))
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+      const fiber = yield* askEffect({
+        sessionID: SessionID.make("ses_computer"),
+        questions: [
+          {
+            question: "Continue?",
+            header: "Computer",
+            options: [
+              { label: "Continue", description: "Continue the task" },
+              { label: "Stop", description: "End the task" },
+            ],
+            custom: false,
+          },
+        ],
+        metadata,
+      }).pipe(Effect.forkScoped)
+      const event = yield* Queue.take(asked).pipe(Effect.timeout("2 seconds"))
+      expect(event.metadata).toEqual(metadata)
+      expect((yield* listEffect)[0].metadata).toEqual(metadata)
+      yield* replyEffect({ requestID: event.id, answers: [["Continue"]] })
+      expect(yield* Fiber.join(fiber)).toEqual([["Continue"]])
+    }),
+  )
+}
 
 it.instance(
   "ask - remains pending until answered",

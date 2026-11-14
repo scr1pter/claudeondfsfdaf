@@ -49,6 +49,7 @@ import { Location } from "@vectordevai/core/location"
 import { PluginV2 } from "@vectordevai/core/plugin"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { isNativeSpecialist } from "@vectordevai/core/agent/specialists"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -83,6 +84,28 @@ const CLOUD_MUTATIONS = [
   "vector_cloud_environment",
   "vector_cloud_hosting",
 ]
+
+// The computer tool's permissions (tool id `computer`). A person answers each one whenever it is raised
+// (PermissionPolicy.requiresApproval), and the rulesets say so too: they ask by default, and no allow turns one into
+// an allow (see the pass after the config loop). A deny still wins.
+const COMPUTER_ASKS = {
+  [PermissionPolicy.COMPUTER_APP]: "ask",
+  [PermissionPolicy.COMPUTER_OBSERVE]: "ask",
+  [PermissionPolicy.COMPUTER_INTERACT]: "ask",
+  [PermissionPolicy.COMPUTER_SENSITIVE]: "ask",
+} as const satisfies Record<string, "ask">
+const COMPUTER_PERMISSIONS = Object.keys(COMPUTER_ASKS)
+// Plan mode only observes (section 1.3): `computer_app` still asks, at observe level, and every interacting or
+// sensitive step is denied. The computer tool also refuses interacting actions in plan mode before it asks.
+const PLAN_COMPUTER = {
+  [PermissionPolicy.COMPUTER_INTERACT]: "deny",
+  [PermissionPolicy.COMPUTER_SENSITIVE]: "deny",
+} as const satisfies Record<string, "deny">
+
+/** The computer asks an agent with its own tool list gets: all four when the list includes `computer`, else none. */
+export function computerAsks(tools: readonly string[]): Partial<typeof COMPUTER_ASKS> {
+  return tools.includes("computer") ? { ...COMPUTER_ASKS } : {}
+}
 
 // Deep research's agents (section 5.3): the lead, its web workers and the judge that checks the lead's citations.
 export const RESEARCH = "research"
@@ -300,6 +323,7 @@ const layer = Layer.effect(
           browser_external: "ask",
           browser_interact: "ask",
           browser_sensitive: "ask",
+          ...COMPUTER_ASKS,
           webfetch: "ask",
           private_network: "ask",
           websearch: "ask",
@@ -359,6 +383,7 @@ const layer = Layer.effect(
             Permission.fromConfig({
               "*": "deny",
               ...Object.fromEntries(tools.map((tool) => [tool, "allow" as const])),
+              ...computerAsks(tools),
               read: readDefaults,
               bash: readonlyVerificationBash,
               external_directory: readonlyExternalDirectory,
@@ -409,6 +434,7 @@ const layer = Layer.effect(
                     browser_sensitive: "ask" as const,
                   }
                 : {}),
+              ...computerAsks(tools),
               ...(subagents.length
                 ? {
                     task: {
@@ -467,6 +493,7 @@ const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 plan_exit: "allow",
+                ...PLAN_COMPUTER,
                 task: {
                   general: "deny",
                   debug: "deny",
@@ -848,6 +875,28 @@ const layer = Layer.effect(
           agents[name].permission = Permission.merge(
             permission,
             Permission.fromConfig(Object.fromEntries(unnamed.map((key) => [key, "ask" as const]))),
+          )
+        }
+
+        // No allow answers a computer ask, whoever wrote it (a wildcard such as "*": "allow" or a rule naming the
+        // permission; user, repository or agent config): each allow that covers a computer permission is followed, at
+        // its own place, by an ask for the same pattern, so a deny written after it still wins. Plan mode's denies come
+        // last, so no rule reopens interacting with the computer in plan mode.
+        for (const [name, item] of Object.entries(agents)) {
+          item.permission = Permission.merge(
+            item.permission.flatMap((rule) =>
+              rule.action !== "allow"
+                ? [rule]
+                : [
+                    rule,
+                    ...COMPUTER_PERMISSIONS.filter((key) => Wildcard.match(key, rule.permission)).map((key) => ({
+                      permission: key,
+                      pattern: rule.pattern,
+                      action: "ask" as const,
+                    })),
+                  ],
+            ),
+            name === "plan" ? Permission.fromConfig(PLAN_COMPUTER) : [],
           )
         }
 

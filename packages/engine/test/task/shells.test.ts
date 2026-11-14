@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { afterEach, describe, expect } from "bun:test"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
@@ -16,6 +17,7 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
+import { ComputerSession } from "@/computer/session"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Plugin } from "@/plugin"
 import { InstanceStore } from "@/project/instance-store"
@@ -90,6 +92,7 @@ const it = testEffect(
       Plugin.node,
       Truncate.node,
       Config.node,
+      ComputerSession.node,
       Agent.node,
       RuntimeFlags.node,
     ]),
@@ -188,6 +191,43 @@ const refusalOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   )
 
 describe("background shell commands", () => {
+  it.instance("a late pre-spawn refusal releases its reserved slot and starts no process", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const { directory } = yield* TestInstance
+      const root = yield* sessions.create()
+      const marker = path.join(directory, "must-not-start.txt")
+      const ready = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      const state = { completed: false }
+      const running = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "write a start witness",
+          process: script(`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            yield* Deferred.succeed(ready, undefined)
+            yield* Deferred.await(proceed)
+            if (state.completed)
+              return yield* Effect.die(new Error("A fresh Allow once is required after computer use."))
+          }),
+        })
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(ready)
+      state.completed = true
+      yield* Deferred.succeed(proceed, undefined)
+      const result = yield* Fiber.join(running)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toContain("fresh Allow once")
+      expect(existsSync(marker)).toBe(false)
+      expect(yield* shells.full(root.id)).toBe(false)
+      expect(yield* shells.list(root.id)).toEqual([])
+    }),
+  )
+
   it.instance("start writes the output file, and the exit note carries the exit code and the output's end", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

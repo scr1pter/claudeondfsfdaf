@@ -1,0 +1,34 @@
+{
+  "run": 41940043968,
+  "commit": "de7cee0b5f58f63b53e4b26a00d4326ebbea9de6",
+  "candidateArtifact": 13376740838,
+  "candidateArchiveSha256": "143559a97d755050203e823019549f7c580961007bc79ca156e600fae8e96810",
+  "candidateFileSha256": "1859e9ee5a16375861ec8fc17d6025717b93c1f1ba7a2090396d5b198979b371",
+  "reportsArtifact": 13376935216,
+  "sourceVerification": "Measured sourceDigest recomputed against an exact git archive of de7cee0b, not the in-progress working tree.",
+  "validation": {
+    "universalCompilation": "passed",
+    "reproducibleShippingBytes": "passed",
+    "requiredNodeCore": {
+      "passed": 28,
+      "failed": 0,
+      "skipped": 2
+    },
+    "isolatedAutoCore": {
+      "passed": 28,
+      "failed": 0,
+      "skipped": 2
+    },
+    "skips": ["M1 keyboard feature not implemented", "M11 isolated privileged target unavailable"]
+  },
+  "lock": {
+    "enforce": true,
+    "helperVersion": "1.0.0",
+    "sourceDigest": "381c513a32fb0452e76887573d89be6169c596e75a6af5817a5a35cfe1829774",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "0688ca73439cbdea594b4d6e8c34ac5ee8a44667",
+      "arm64": "ecae9edd0293eccd7fd761bbf735cee012144531"
+    }
+  }
+}

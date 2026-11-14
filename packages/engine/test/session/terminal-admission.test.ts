@@ -128,6 +128,7 @@ const terminal = Effect.fn("TerminalAdmissionTest.terminal")(function* (
           const item = { permission: request.permission, patterns: request.patterns }
           asked.push(item)
           during?.(item)
+          return undefined
         }),
     }),
   )

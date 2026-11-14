@@ -92,6 +92,7 @@ export type Event =
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
+  | EventComputerState
   | EventSessionCompacted
   | EventResearchUpdated
   | EventLocalUpdated
@@ -1770,6 +1771,7 @@ export type GlobalEvent = {
            */
           questions: Array<QuestionInfo>
           tool?: QuestionTool
+          metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
         }
       }
     | {
@@ -1787,6 +1789,14 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           requestID: string
+        }
+      }
+    | {
+        id: string
+        type: "computer.state"
+        properties: {
+          sessionID: string
+          state: ComputerState2
         }
       }
     | {
@@ -2184,6 +2194,41 @@ export type RunBudget = {
   unpricedSteps?: number
 }
 
+export type ComputerConfig = {
+  enabled?: boolean
+  default_app_access?: "ask" | "deny"
+  allow_always?: boolean
+  background?: boolean
+  keep_awake?: boolean
+  away_minutes?: number
+  screenshot_retention_days?: number
+  max_actions?: number
+  max_minutes?: number
+  native_tools?: "auto" | "off"
+  screenshots?: {
+    keep?: number
+    max_width?: number
+    max_height?: number
+  }
+  apps?: {
+    macos?: {
+      [key: string]: "allow" | "deny"
+    }
+    windows?: Array<
+      | {
+          aumid: string
+          access: "allow" | "deny"
+        }
+      | {
+          publisher: string
+          product: string
+          binary?: string
+          access: "allow" | "deny"
+        }
+    >
+  }
+}
+
 export type LocalAllowed = {
   source: string
   hosts?: Array<string>
@@ -2449,6 +2494,7 @@ export type ConfigWithLocks = {
       }
     }
   }
+  computer?: ComputerConfig
   local?: LocalConfig
   research?: ResearchConfig
   experimental?: {
@@ -2645,6 +2691,7 @@ export type Config = {
       }
     }
   }
+  computer?: ComputerConfig
   local?: LocalConfig
   research?: ResearchConfig
   experimental?: {
@@ -2678,6 +2725,12 @@ export type TeamsError = {
     code: "unavailable" | "denied" | "invalid" | "storage"
     message: string
   }
+}
+
+export type UnknownError1 = {
+  _tag: "UnknownError"
+  message: string
+  ref?: string
 }
 
 export type ProjectTrustStatus = {
@@ -2821,6 +2874,11 @@ export type Provider = {
 
 export type ExperimentalCapabilities = {
   backgroundSubagents: boolean
+  computer?: {
+    available: boolean
+    protocol?: number
+    reason?: string
+  }
   workDelegation?: boolean
   subagentLimits?: boolean
   sessionStop?: boolean
@@ -4582,6 +4640,7 @@ export type QuestionRequest = {
    */
   questions: Array<QuestionInfo>
   tool?: QuestionTool
+  metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
 }
 
 export type QuestionNotFoundError = {
@@ -5411,7 +5470,7 @@ export type SessionNotFoundError = {
   message: string
 }
 
-export type UnknownError1 = {
+export type UnknownError2 = {
   _tag: "UnknownError"
   message: string
   ref?: string
@@ -5571,6 +5630,24 @@ export type QuestionRejected2 = {
   }
 }
 
+export type ComputerState = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "computer.state"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    state: ComputerState2
+  }
+}
+
 export type V2Event =
   | ModelCatalogRefreshed
   | IntegrationUpdated
@@ -5659,6 +5736,7 @@ export type V2Event =
   | QuestionAsked
   | QuestionReplied2
   | QuestionRejected2
+  | ComputerState
   | SessionCompacted
   | ResearchUpdated
   | LocalUpdated
@@ -6155,6 +6233,110 @@ export type ProjectTime = {
   created: number
   updated: number
   initialized?: number
+}
+
+export type ComputerHandoffReason =
+  | "credential"
+  | "sign_in"
+  | "captcha"
+  | "payment_details"
+  | "admin_prompt"
+  | "security_prompt"
+  | "capture_confirm"
+  | "elevated"
+  | "site_permission"
+  | "download"
+  | "extension"
+  | "protocol_handler"
+  | "macros"
+  | "other"
+
+export type ComputerHandoffQuestionMetadata = {
+  computer: {
+    kind: "handoff"
+    app?: string
+    reason: ComputerHandoffReason
+  }
+}
+
+export type ComputerCheckInQuestionMetadata = {
+  computer: {
+    kind: "check_in"
+    actions: number
+    minutes: number
+  }
+}
+
+export type ComputerPhase =
+  | "off"
+  | "setup"
+  | "ready"
+  | "working"
+  | "asking"
+  | "handoff"
+  | "paused"
+  | "waiting"
+  | "done"
+  | "stopped"
+
+export type ComputerMode = "foreground" | "background"
+
+export type ComputerAppKey = string
+
+export type ComputerIcon = string
+
+export type ComputerPauseReason =
+  | "input"
+  | "button"
+  | "locked"
+  | "suspend"
+  | "away"
+  | "helper"
+  | "detection"
+  | "secure_input"
+  | "secure_desktop"
+  | "overlay"
+  | "pointer"
+
+export type ComputerAskKind = "app" | "sensitive" | "handoff" | "pointer" | "check_in"
+
+export type ComputerState2 = {
+  phase: ComputerPhase
+  backend: "local-macos" | "local-windows" | "remote"
+  mode: ComputerMode
+  holder?: {
+    sessionID: string
+    directory: string
+    title: string
+    startedAt: number
+    actions: number
+  }
+  apps: Array<{
+    key: ComputerAppKey
+    name: string
+    icon?: ComputerIcon
+  }>
+  step?: string
+  pause?: ComputerPauseReason
+  secureInputHolder?: string
+  ask?: {
+    requestID: string
+    directory: string
+    kind: ComputerAskKind
+    title: string
+    detail?: string
+    canAlways: boolean
+    icon?: ComputerIcon
+    shownAt: number
+  }
+  queue: Array<{
+    sessionID: string
+    title: string
+  }>
+  escStops: boolean
+  stopChord: string
+  lease: number
+  reduceMotion: boolean
 }
 
 export type EventServerInstanceDisposed = {
@@ -6942,6 +7124,21 @@ export type ConfigV2ExperimentalPolicy = {
 
 export type TeamsId = string
 
+export type ComputerProtectionResult = {
+  paths: Array<string>
+  directories: Array<string>
+}
+
+export type ComputerPruneInput = {
+  before?: number
+  sessionID?: string
+  all?: boolean
+}
+
+export type ComputerPruneResult = {
+  removed: number
+}
+
 export type ModelCodium = {
   lab?: string
   role?: "floor" | "default" | "ceiling"
@@ -7453,7 +7650,25 @@ export type PublicSessionPublish = {
   expiresAt: number
   previewHash?: string
   remember?: boolean
+  includeScreenshots?: boolean
 }
+
+export type PublicSessionScreenshot =
+  | {
+      name: string
+      mediaType: "image/png"
+      url: string
+    }
+  | {
+      name: string
+      mediaType: "image/jpeg"
+      url: string
+    }
+  | {
+      name: string
+      mediaType: "image/webp"
+      url: string
+    }
 
 export type PublicSessionPart =
   | {
@@ -7471,6 +7686,16 @@ export type PublicSessionPart =
       status: "completed" | "error" | "interrupted"
       input: string
       output: string
+      screenshots?: Array<PublicSessionScreenshot>
+    }
+  | {
+      type: "tool"
+      name: "computer"
+      callID: string
+      status: "completed"
+      input: string
+      output: string
+      screenshots?: Array<PublicSessionScreenshot>
     }
   | {
       type: "attachment"
@@ -9600,6 +9825,7 @@ export type QuestionAsked = {
      */
     questions: Array<QuestionInfo>
     tool?: QuestionTool
+    metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
   }
 }
 
@@ -10823,6 +11049,7 @@ export type EventQuestionAsked = {
      */
     questions: Array<QuestionInfo>
     tool?: QuestionTool
+    metadata?: ComputerHandoffQuestionMetadata | ComputerCheckInQuestionMetadata
   }
 }
 
@@ -10842,6 +11069,15 @@ export type EventQuestionRejected = {
   properties: {
     sessionID: string
     requestID: string
+  }
+}
+
+export type EventComputerState = {
+  id: string
+  type: "computer.state"
+  properties: {
+    sessionID: string
+    state: ComputerState2
   }
 }
 
@@ -11511,6 +11747,79 @@ export type EventSubscribeResponses = {
 }
 
 export type EventSubscribeResponse = EventSubscribeResponses[keyof EventSubscribeResponses]
+
+export type ComputerProtectedPathsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/computer/protected-paths"
+}
+
+export type ComputerProtectedPathsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type ComputerProtectedPathsError = ComputerProtectedPathsErrors[keyof ComputerProtectedPathsErrors]
+
+export type ComputerProtectedPathsResponses = {
+  /**
+   * ComputerProtection.Result
+   */
+  200: ComputerProtectionResult
+}
+
+export type ComputerProtectedPathsResponse = ComputerProtectedPathsResponses[keyof ComputerProtectedPathsResponses]
+
+export type ComputerPruneScreenshotsData = {
+  body?: ComputerPruneInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/computer/screenshots/prune"
+}
+
+export type ComputerPruneScreenshotsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type ComputerPruneScreenshotsError = ComputerPruneScreenshotsErrors[keyof ComputerPruneScreenshotsErrors]
+
+export type ComputerPruneScreenshotsResponses = {
+  /**
+   * ComputerPrune.Result
+   */
+  200: ComputerPruneResult
+}
+
+export type ComputerPruneScreenshotsResponse =
+  ComputerPruneScreenshotsResponses[keyof ComputerPruneScreenshotsResponses]
 
 export type ConfigGetData = {
   body?: never
@@ -18225,6 +18534,7 @@ export type SessionSharePreviewData = {
   query?: {
     directory?: string
     workspace?: string
+    includeScreenshots?: "true" | "false"
   }
   url: "/session/{id}/share/preview"
 }
@@ -19801,7 +20111,9 @@ export type ServerSessionSessionSharePreviewData = {
   path: {
     sessionID: string
   }
-  query?: never
+  query?: {
+    includeScreenshots?: "true" | "false"
+  }
   url: "/api/session/{sessionID}/share/preview"
 }
 
@@ -20158,7 +20470,7 @@ export type V2SessionResumeFreeModelsErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionResumeFreeModelsError = V2SessionResumeFreeModelsErrors[keyof V2SessionResumeFreeModelsErrors]
@@ -20383,7 +20695,7 @@ export type V2SessionRevertStageErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionRevertStageError = V2SessionRevertStageErrors[keyof V2SessionRevertStageErrors]
@@ -20428,7 +20740,7 @@ export type V2SessionRevertClearErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionRevertClearError = V2SessionRevertClearErrors[keyof V2SessionRevertClearErrors]
@@ -20510,7 +20822,7 @@ export type V2SessionContextErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionContextError = V2SessionContextErrors[keyof V2SessionContextErrors]
@@ -20730,7 +21042,7 @@ export type V2SessionMessagesErrors = {
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError2
 }
 
 export type V2SessionMessagesError = V2SessionMessagesErrors[keyof V2SessionMessagesErrors]

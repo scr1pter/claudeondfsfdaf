@@ -1,0 +1,95 @@
+{
+  "run": 42008224102,
+  "head": "3e256c9bb4aede686c3b55f18560c72ad1b7932f",
+  "macJob": 127180426351,
+  "artifacts": [
+    {
+      "id": 13407060407,
+      "kind": "candidate",
+      "sha256": "111adf4088b82022cce75a7469ac6fb77ce2685aeb98589afa66b5dc715effa5",
+      "bytes": 478,
+      "files": [
+        "identity.lock.computed.json"
+      ]
+    },
+    {
+      "id": 13406776862,
+      "kind": "reports",
+      "sha256": "faae8191b7db5504f9f3528f69b1bf01c78cd721641aaf5b4535873cc2bf3024",
+      "bytes": 1400,
+      "files": [
+        "computer-darwin-core.json",
+        "computer-darwin-privileged.json"
+      ]
+    }
+  ],
+  "candidateSha256": "565148bcef41070f70c4f627f7d63c9989cf667f0f63ee928ffb2c16397908de",
+  "independentSourceArchive": "3e256c9bb4aede686c3b55f18560c72ad1b7932f",
+  "independentSourceDigest": "01e82279c3afa8a5043cd01519b878a7da5460aea2fa1120edbd1b4228f4dc4c",
+  "sourceDigestMatches": true,
+  "candidate": {
+    "enforce": true,
+    "helperVersion": "1.0.10",
+    "sourceDigest": "01e82279c3afa8a5043cd01519b878a7da5460aea2fa1120edbd1b4228f4dc4c",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "e92a9fffc34ea97cd665630d6d2af3684a09d8cb",
+      "arm64": "b54108fef0489e0d3abd5937b030021960dea030"
+    }
+  },
+  "nativeUnits": "required aggregate and standalone diagnostic aggregate passed",
+  "core": {
+    "passed": 31,
+    "failed": 0,
+    "skipped": 1
+  },
+  "isolatedAuto": {
+    "passed": 33,
+    "failed": 0,
+    "skipped": 13,
+    "targetSetup": "isolated-target and isolated-target-cleanup pass",
+    "capture": "screen_denied skips",
+    "accessibilityAndInput": "accessibility_denied skips"
+  },
+  "windows": "x64 and ARM64 compiled; actual x64 probe failed fixed-size TokenElevation query; repaired in635231bd, validation pending",
+  "matchingMatrix": {
+    "run": 42011210765,
+    "head": "5d1ffe43807f4cab7bfd80e142cbf876b160a3a5",
+    "macRequired": "production build/lock/reproducibility and required core pass on build host, macOS26 and macOS15 Intel",
+    "macOptional": {
+      "buildHost": {
+        "passed": 33,
+        "skipped": 13,
+        "failed": 0
+      },
+      "macos26": {
+        "passed": 33,
+        "skipped": 13,
+        "failed": 0
+      },
+      "macos15Intel": {
+        "passed": 30,
+        "skipped": 0,
+        "failed": 2,
+        "failures": [
+          {
+            "name": "unit",
+            "reason": "deadline"
+          },
+          {
+            "name": "privileged",
+            "reason": "required-core-check-failed"
+          }
+        ]
+      }
+    },
+    "intelReportArtifact": {
+      "id": 13408556309,
+      "sha256": "7230b14d738bebd47308c1b69095543cf618b5b8361898c23c223ddab4d15338",
+      "bytes": 1211,
+      "downloadedAndVerified": true
+    },
+    "windows": "W4 compile fails before runtime; narrow SDK/type repairs follow",
+    "completeMatchingPass": false
+  }
+}

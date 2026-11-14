@@ -1091,6 +1091,170 @@
         ]
       }
     },
+    "/computer/protected-paths": {
+      "get": {
+        "tags": ["computer"],
+        "operationId": "computer.protectedPaths",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ComputerProtection.Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputerProtectionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "UnknownError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownError1"
+                }
+              }
+            }
+          }
+        },
+        "description": "Return trusted instruction, memory and configuration paths for the owner's desktop input gate. File contents are never returned.",
+        "summary": "Read paths protected from computer input",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.computer.protectedPaths({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/computer/screenshots/prune": {
+      "post": {
+        "tags": ["computer"],
+        "operationId": "computer.pruneScreenshots",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ComputerPrune.Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputerPruneResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "UnknownError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownError1"
+                }
+              }
+            }
+          }
+        },
+        "description": "Delete computer screenshots before a time or in a session. Use all: true to delete every screenshot and reclaim database pages. Only the server owner can delete screenshots.",
+        "summary": "Delete stored computer screenshots",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComputerPruneInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.computer.pruneScreenshots({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/config": {
       "get": {
         "tags": ["config"],
@@ -17300,6 +17464,15 @@
               "type": "string"
             },
             "required": false
+          },
+          {
+            "name": "includeScreenshots",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            },
+            "required": false
           }
         ],
         "responses": {
@@ -21121,6 +21294,15 @@
               "pattern": "^ses"
             },
             "required": true
+          },
+          {
+            "name": "includeScreenshots",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            },
+            "required": false
           }
         ],
         "security": [],
@@ -21951,7 +22133,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UnknownError1"
+                  "$ref": "#/components/schemas/UnknownError2"
                 }
               }
             }
@@ -22477,7 +22659,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UnknownError1"
+                  "$ref": "#/components/schemas/UnknownError2"
                 }
               }
             }
@@ -22586,7 +22768,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UnknownError1"
+                  "$ref": "#/components/schemas/UnknownError2"
                 }
               }
             }
@@ -22767,7 +22949,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UnknownError1"
+                  "$ref": "#/components/schemas/UnknownError2"
                 }
               }
             }
@@ -23345,7 +23527,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UnknownError1"
+                  "$ref": "#/components/schemas/UnknownError2"
                 }
               }
             }
@@ -27622,6 +27804,9 @@
           },
           {
             "$ref": "#/components/schemas/EventQuestionRejected"
+          },
+          {
+            "$ref": "#/components/schemas/EventComputerState"
           },
           {
             "$ref": "#/components/schemas/EventSessionCompacted"
@@ -33043,6 +33228,16 @@
                       },
                       "tool": {
                         "$ref": "#/components/schemas/QuestionTool"
+                      },
+                      "metadata": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/ComputerHandoffQuestionMetadata"
+                          },
+                          {
+                            "$ref": "#/components/schemas/ComputerCheckInQuestionMetadata"
+                          }
+                        ]
                       }
                     },
                     "required": ["id", "sessionID", "questions"],
@@ -33112,6 +33307,35 @@
                       }
                     },
                     "required": ["sessionID", "requestID"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "type", "properties"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": ["computer.state"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "sessionID": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      },
+                      "state": {
+                        "$ref": "#/components/schemas/ComputerState"
+                      }
+                    },
+                    "required": ["sessionID", "state"],
                     "additionalProperties": false
                   }
                 },
@@ -34193,6 +34417,126 @@
         },
         "additionalProperties": false
       },
+      "ComputerConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "default_app_access": {
+            "type": "string",
+            "enum": ["ask", "deny"]
+          },
+          "allow_always": {
+            "type": "boolean"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "keep_awake": {
+            "type": "boolean"
+          },
+          "away_minutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "minimum": 5,
+            "maximum": 240
+          },
+          "screenshot_retention_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 365
+          },
+          "max_actions": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 5000
+          },
+          "max_minutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 600
+          },
+          "native_tools": {
+            "type": "string",
+            "enum": ["auto", "off"]
+          },
+          "screenshots": {
+            "type": "object",
+            "properties": {
+              "keep": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 10
+              },
+              "max_width": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "max_height": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "apps": {
+            "type": "object",
+            "properties": {
+              "macos": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["allow", "deny"]
+                }
+              },
+              "windows": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "aumid": {
+                          "type": "string"
+                        },
+                        "access": {
+                          "type": "string",
+                          "enum": ["allow", "deny"]
+                        }
+                      },
+                      "required": ["aumid", "access"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "publisher": {
+                          "type": "string"
+                        },
+                        "product": {
+                          "type": "string"
+                        },
+                        "binary": {
+                          "type": "string"
+                        },
+                        "access": {
+                          "type": "string",
+                          "enum": ["allow", "deny"]
+                        }
+                      },
+                      "required": ["publisher", "product", "access"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
       "LocalAllowed": {
         "type": "object",
         "properties": {
@@ -35042,6 +35386,9 @@
             },
             "additionalProperties": false
           },
+          "computer": {
+            "$ref": "#/components/schemas/ComputerConfig"
+          },
           "local": {
             "$ref": "#/components/schemas/LocalConfig"
           },
@@ -35671,6 +36018,9 @@
             },
             "additionalProperties": false
           },
+          "computer": {
+            "$ref": "#/components/schemas/ComputerConfig"
+          },
           "local": {
             "$ref": "#/components/schemas/LocalConfig"
           },
@@ -35784,6 +36134,23 @@
           }
         },
         "required": ["name", "data"],
+        "additionalProperties": false
+      },
+      "UnknownError1": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["UnknownError"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "message"],
         "additionalProperties": false
       },
       "ProjectTrustStatus": {
@@ -36214,6 +36581,23 @@
         "properties": {
           "backgroundSubagents": {
             "type": "boolean"
+          },
+          "computer": {
+            "type": "object",
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "protocol": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": ["available"],
+            "additionalProperties": false
           },
           "workDelegation": {
             "type": "boolean"
@@ -41603,6 +41987,16 @@
           },
           "tool": {
             "$ref": "#/components/schemas/QuestionTool"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComputerHandoffQuestionMetadata"
+              },
+              {
+                "$ref": "#/components/schemas/ComputerCheckInQuestionMetadata"
+              }
+            ]
           }
         },
         "required": ["id", "sessionID", "questions"],
@@ -44227,7 +44621,7 @@
         "required": ["_tag", "sessionID", "message"],
         "additionalProperties": false
       },
-      "UnknownError1": {
+      "UnknownError2": {
         "type": "object",
         "properties": {
           "_tag": {
@@ -44710,6 +45104,57 @@
         "required": ["id", "type", "data"],
         "additionalProperties": false
       },
+      "computer.state": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["computer.state"]
+          },
+          "durable": {
+            "type": "object",
+            "properties": {
+              "aggregateID": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": ["aggregateID", "seq", "version"],
+            "additionalProperties": false
+          },
+          "location": {
+            "$ref": "#/components/schemas/LocationRef"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "state": {
+                "$ref": "#/components/schemas/ComputerState"
+              }
+            },
+            "required": ["sessionID", "state"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "data"],
+        "additionalProperties": false
+      },
       "V2Event": {
         "anyOf": [
           {
@@ -44972,6 +45417,9 @@
           },
           {
             "$ref": "#/components/schemas/question.rejected"
+          },
+          {
+            "$ref": "#/components/schemas/computer.state"
           },
           {
             "$ref": "#/components/schemas/SessionCompacted"
@@ -46325,6 +46773,262 @@
           }
         },
         "required": ["created", "updated"],
+        "additionalProperties": false
+      },
+      "ComputerHandoffReason": {
+        "type": "string",
+        "enum": [
+          "credential",
+          "sign_in",
+          "captcha",
+          "payment_details",
+          "admin_prompt",
+          "security_prompt",
+          "capture_confirm",
+          "elevated",
+          "site_permission",
+          "download",
+          "extension",
+          "protocol_handler",
+          "macros",
+          "other"
+        ]
+      },
+      "ComputerHandoffQuestionMetadata": {
+        "type": "object",
+        "properties": {
+          "computer": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["handoff"]
+              },
+              "app": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "reason": {
+                "$ref": "#/components/schemas/ComputerHandoffReason"
+              }
+            },
+            "required": ["kind", "reason"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["computer"],
+        "additionalProperties": false
+      },
+      "ComputerCheckInQuestionMetadata": {
+        "type": "object",
+        "properties": {
+          "computer": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["check_in"]
+              },
+              "actions": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "minutes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["kind", "actions", "minutes"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["computer"],
+        "additionalProperties": false
+      },
+      "ComputerPhase": {
+        "type": "string",
+        "enum": ["off", "setup", "ready", "working", "asking", "handoff", "paused", "waiting", "done", "stopped"]
+      },
+      "ComputerMode": {
+        "type": "string",
+        "enum": ["foreground", "background"]
+      },
+      "ComputerAppKey": {
+        "type": "string"
+      },
+      "ComputerIcon": {
+        "type": "string",
+        "pattern": "^data:image\\/png;base64,[A-Za-z0-9+/]*={0,2}$",
+        "maxLength": 10946
+      },
+      "ComputerPauseReason": {
+        "type": "string",
+        "enum": [
+          "input",
+          "button",
+          "locked",
+          "suspend",
+          "away",
+          "helper",
+          "detection",
+          "secure_input",
+          "secure_desktop",
+          "overlay",
+          "pointer"
+        ]
+      },
+      "ComputerAskKind": {
+        "type": "string",
+        "enum": ["app", "sensitive", "handoff", "pointer", "check_in"]
+      },
+      "ComputerState": {
+        "type": "object",
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/ComputerPhase"
+          },
+          "backend": {
+            "type": "string",
+            "enum": ["local-macos", "local-windows", "remote"]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ComputerMode"
+          },
+          "holder": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "directory": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "startedAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "actions": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["sessionID", "directory", "title", "startedAt", "actions"],
+            "additionalProperties": false
+          },
+          "apps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "$ref": "#/components/schemas/ComputerAppKey"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "icon": {
+                  "$ref": "#/components/schemas/ComputerIcon"
+                }
+              },
+              "required": ["key", "name"],
+              "additionalProperties": false
+            }
+          },
+          "step": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "pause": {
+            "$ref": "#/components/schemas/ComputerPauseReason"
+          },
+          "secureInputHolder": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "ask": {
+            "type": "object",
+            "properties": {
+              "requestID": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "directory": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "kind": {
+                "$ref": "#/components/schemas/ComputerAskKind"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "canAlways": {
+                "type": "boolean"
+              },
+              "icon": {
+                "$ref": "#/components/schemas/ComputerIcon"
+              },
+              "shownAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": ["requestID", "directory", "kind", "title", "canAlways", "shownAt"],
+            "additionalProperties": false
+          },
+          "queue": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sessionID": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 256
+                }
+              },
+              "required": ["sessionID", "title"],
+              "additionalProperties": false
+            }
+          },
+          "escStops": {
+            "type": "boolean"
+          },
+          "stopChord": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "lease": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reduceMotion": {
+            "type": "boolean"
+          }
+        },
+        "required": ["phase", "backend", "mode", "apps", "queue", "escStops", "stopChord", "lease", "reduceMotion"],
         "additionalProperties": false
       },
       "EventServerInstanceDisposed": {
@@ -48917,6 +49621,57 @@
         "type": "string",
         "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
       },
+      "ComputerProtectionResult": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "maxItems": 4096
+          },
+          "directories": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "maxItems": 4096
+          }
+        },
+        "required": ["paths", "directories"],
+        "additionalProperties": false
+      },
+      "ComputerPruneInput": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": "number",
+            "minimum": 0
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "all": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ComputerPruneResult": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["removed"],
+        "additionalProperties": false
+      },
       "ModelCodium": {
         "type": "object",
         "properties": {
@@ -50531,10 +51286,77 @@
           },
           "remember": {
             "type": "boolean"
+          },
+          "includeScreenshots": {
+            "type": "boolean"
           }
         },
         "required": ["consent", "expiresAt"],
         "additionalProperties": false
+      },
+      "PublicSessionScreenshot": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "mediaType": {
+                "type": "string",
+                "enum": ["image/png"]
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 4000000,
+                "pattern": "^data:image\\/png;base64,[A-Za-z0-9+/]+={0,2}$"
+              }
+            },
+            "required": ["name", "mediaType", "url"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "mediaType": {
+                "type": "string",
+                "enum": ["image/jpeg"]
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 4000000,
+                "pattern": "^data:image\\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$"
+              }
+            },
+            "required": ["name", "mediaType", "url"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "mediaType": {
+                "type": "string",
+                "enum": ["image/webp"]
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 4000000,
+                "pattern": "^data:image\\/webp;base64,[A-Za-z0-9+/]+={0,2}$"
+              }
+            },
+            "required": ["name", "mediaType", "url"],
+            "additionalProperties": false
+          }
+        ]
       },
       "PublicSessionPart": {
         "anyOf": [
@@ -50594,6 +51416,51 @@
               "output": {
                 "type": "string",
                 "maxLength": 2000000
+              },
+              "screenshots": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PublicSessionScreenshot"
+                },
+                "maxItems": 0
+              }
+            },
+            "required": ["type", "name", "callID", "status", "input", "output"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["tool"]
+              },
+              "name": {
+                "type": "string",
+                "enum": ["computer"]
+              },
+              "callID": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "status": {
+                "type": "string",
+                "enum": ["completed"]
+              },
+              "input": {
+                "type": "string",
+                "maxLength": 2000000
+              },
+              "output": {
+                "type": "string",
+                "maxLength": 2000000
+              },
+              "screenshots": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PublicSessionScreenshot"
+                },
+                "maxItems": 100
               }
             },
             "required": ["type", "name", "callID", "status", "input", "output"],
@@ -56933,6 +57800,16 @@
               },
               "tool": {
                 "$ref": "#/components/schemas/QuestionTool"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ComputerHandoffQuestionMetadata"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ComputerCheckInQuestionMetadata"
+                  }
+                ]
               }
             },
             "required": ["id", "sessionID", "questions"],
@@ -60708,6 +61585,16 @@
               },
               "tool": {
                 "$ref": "#/components/schemas/QuestionTool"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ComputerHandoffQuestionMetadata"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ComputerCheckInQuestionMetadata"
+                  }
+                ]
               }
             },
             "required": ["id", "sessionID", "questions"],
@@ -60777,6 +61664,35 @@
               }
             },
             "required": ["sessionID", "requestID"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
+      "EventComputerState": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["computer.state"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "state": {
+                "$ref": "#/components/schemas/ComputerState"
+              }
+            },
+            "required": ["sessionID", "state"],
             "additionalProperties": false
           }
         },
@@ -61267,6 +62183,9 @@
     {
       "name": "event",
       "description": "Instance event stream route."
+    },
+    {
+      "name": "computer"
     },
     {
       "name": "config",

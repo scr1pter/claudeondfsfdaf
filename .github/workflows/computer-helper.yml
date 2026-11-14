@@ -1,0 +1,1066 @@
+name: Computer helper
+
+on:
+  workflow_call:
+    inputs:
+      helper-channel:
+        type: string
+        required: false
+        default: prod
+      artifact-suffix:
+        type: string
+        required: false
+        default: ""
+      privileged-required:
+        type: boolean
+        required: false
+        default: false
+      full-desktop-e2e:
+        type: boolean
+        required: false
+        default: true
+      isolated-desktop:
+        type: boolean
+        required: false
+        default: false
+      windows-only:
+        type: boolean
+        required: false
+        default: false
+      linux-only:
+        type: boolean
+        required: false
+        default: false
+      reuse-artifacts:
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      darwin-digest:
+        description: Source digest of the verified macOS helper
+        value: ${{ jobs.mac-build.outputs.digest }}
+      win32-digest:
+        description: Source digest of the verified Windows helper
+        value: ${{ jobs.windows-build.outputs.digest }}
+  workflow_dispatch:
+    inputs:
+      helper-channel:
+        description: Exact desktop/helper identity channel
+        type: choice
+        options: [prod, beta, dev]
+        required: false
+        default: prod
+      artifact-suffix:
+        description: Artifact suffix (letters, digits, dot, underscore or hyphen)
+        type: string
+        required: false
+        default: ""
+      privileged-required:
+        description: Fail if isolated native scenarios fail or skip
+        type: boolean
+        required: false
+        default: false
+      full-desktop-e2e:
+        description: Run real Electron overlay and desktop end-to-end lanes
+        type: boolean
+        required: false
+        default: true
+      isolated-desktop:
+        description: Allow native scenarios only in this disposable CI desktop
+        type: boolean
+        required: false
+        default: false
+      windows-only:
+        description: Run both Windows architectures without the macOS jobs
+        type: boolean
+        required: false
+        default: false
+      linux-only:
+        description: Run only the Linux Electron overlay and desktop checks
+        type: boolean
+        required: false
+        default: false
+      reuse-artifacts:
+        description: Restore immutable shipping and test artifacts from this same run before rebuilding
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: ["ci/computer-**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-computer-helper-${{ inputs['linux-only'] && (inputs['windows-only'] && 'invalid-linux-windows' || 'linux-only') || inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['helper-channel'] || 'prod' }}-${{ inputs['artifact-suffix'] || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  VECTOR_CHANNEL: ${{ inputs['helper-channel'] || 'prod' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      suffix: ${{ steps.plan.outputs.suffix }}
+      extended: ${{ steps.plan.outputs.extended }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      windows: ${{ steps.plan.outputs.windows }}
+      windows-protocol: ${{ steps.plan.outputs.windows-protocol }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve native coverage and safe artifact names
+        id: plan
+        shell: bash
+        env:
+          ARTIFACT_SUFFIX: ${{ inputs['artifact-suffix'] || github.sha }}
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] || false }}
+          ISOLATED_DESKTOP: ${{ inputs['isolated-desktop'] || false }}
+          EVENT_NAME: ${{ github.event_name }}
+          FULL_DESKTOP_E2E: ${{ toJSON(inputs['full-desktop-e2e']) }}
+          LINUX_ONLY: ${{ inputs['linux-only'] || false }}
+          WINDOWS_ONLY: ${{ inputs['windows-only'] || false }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # HELPER_PLATFORM_GUARD_BEGIN
+          if [[ "$LINUX_ONLY" == true && "$WINDOWS_ONLY" == true ]]; then
+            echo "::error::linux-only and windows-only cannot both be selected."
+            exit 1
+          fi
+          # HELPER_PLATFORM_GUARD_END
+          # HELPER_CHANNEL_GUARD_BEGIN
+          case "$VECTOR_CHANNEL" in prod|beta|dev) ;; *) echo "::error::Choose helper-channel prod, beta or dev."; exit 1 ;; esac
+          if [[ "$VECTOR_CHANNEL" != prod ]]; then ARTIFACT_SUFFIX="$ARTIFACT_SUFFIX-$VECTOR_CHANNEL"; fi
+          # HELPER_CHANNEL_GUARD_END
+          if [[ ! "$ARTIFACT_SUFFIX" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::The artifact suffix has unsupported characters."
+            exit 1
+          fi
+          if [[ "$PRIVILEGED_REQUIRED" == true && "$ISOLATED_DESKTOP" != true ]]; then
+            echo "::error::Required native scenarios need explicit isolated-desktop input."
+            exit 1
+          fi
+          extended=true
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            extended=false
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/computer-changed-paths"
+            if rg -q '(^packages/desktop/native/|^packages/desktop/(scripts/.*computer|test/(computer/|fixtures/computer-protocol/)|src/(main|preload)/computer)|^packages/(schema|core|engine|app)/.*(computer|hands)|^\.github/workflows/(computer-helper|test)\.yml$|^bun\.lock$|^package\.json$)' "$RUNNER_TEMP/computer-changed-paths"; then
+              extended=true
+            fi
+          fi
+          windows=false
+          windows_protocol=false
+          if [[ -f packages/desktop/native/computer-helper/windows/CMakeLists.txt ]]; then windows=true; fi
+          if [[ "$windows" == true && -f packages/desktop/native/computer-helper/windows/src/protocol.cpp ]]; then windows_protocol=true; fi
+          # A reusable release caller may itself be a push: its explicit false must win.
+          # Only a direct CI-branch push has no input and defaults to the full desktop lanes.
+          desktop=false
+          if [[ "$FULL_DESKTOP_E2E" == true || ( "$EVENT_NAME" == push && "$FULL_DESKTOP_E2E" != false ) ]]; then desktop=true; fi
+          if [[ "${LINUX_ONLY:-false}" == true ]]; then desktop=true; fi
+          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
+          echo "suffix=$ARTIFACT_SUFFIX" >> "$GITHUB_OUTPUT"
+          echo "extended=$extended" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+          echo "windows-protocol=$windows_protocol" >> "$GITHUB_OUTPUT"
+          if [[ "$windows" != true ]]; then
+            echo "SKIPPED: Windows native jobs await W1's CMake target." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$windows_protocol" != true ]]; then
+            echo "Windows unit/version/probe checks run; protocol, conformance and parent-death checks remain pending W2." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "C4 checks helper signing; C8 runs real Electron overlay properties and actual Linux unsupported Hands behavior. Native OS Stop/capture requires isolated-desktop." >> "$GITHUB_STEP_SUMMARY"
+
+  mac-build:
+    needs: plan
+    if: ${{ !inputs['linux-only'] && !inputs['windows-only'] }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    outputs:
+      digest: ${{ steps.digest.outputs.value }}
+      native-ready: ${{ steps.native-ready.outputs.value }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Require the pinned Xcode
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
+            echo "::error::Xcode 16.4 is required at /Applications/Xcode_16.4.app; another toolchain is not accepted."
+            exit 1
+          fi
+          xcodebuild -version
+          xcrun --sdk macosx swiftc --version
+      - name: Setup Node for the real Electron smoke
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Restore immutable helpers from an earlier attempt
+        id: restore
+        if: ${{ inputs['reuse-artifacts'] }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: bun --no-env-file ./scripts/computer-helper-artifact.ts --mode native-darwin --suffix "$ARTIFACT_SUFFIX" --destination native/out/darwin
+      - name: Verify restored macOS source and signature before native checks
+        if: ${{ steps.restore.outputs.restored == 'true' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin
+      - name: Build the channel universal helper twice
+        id: build
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin-repro
+      - name: Require identical shipping bytes
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          cmp native/out/darwin/computer-helper.json native/out/darwin-repro/computer-helper.json
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto"
+          import { readFileSync } from "node:fs"
+          import path from "node:path"
+          const first = "native/out/darwin"
+          const second = "native/out/darwin-repro"
+          const manifest = JSON.parse(readFileSync(path.join(first, "computer-helper.json"), "utf8"))
+          for (const [name, entry] of Object.entries(manifest.files)) {
+            const digests = [first, second].map(root => createHash("sha256").update(readFileSync(path.join(root, name))).digest("hex"))
+            if (digests[0] !== entry.sha256 || digests[1] !== entry.sha256) throw new Error("A repeated helper build changed shipping bytes.")
+          }
+          NODE
+      - name: Run required grant-free native checks
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-core.json"
+      - name: Diagnose failed build-host native units separately
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
+      - name: Run explicitly isolated privileged scenarios
+        id: isolated
+        if: ${{ inputs['isolated-desktop'] }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          set -euo pipefail
+          mode=auto
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-privileged.json"
+      - name: Diagnose failed optional native units separately
+        if: ${{ always() && steps.isolated.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          if node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from "node:fs"
+          import path from "node:path"
+          const file = path.join(process.env.RUNNER_TEMP, "computer-darwin-privileged.json")
+          process.exit(existsSync(file) && JSON.parse(readFileSync(file, "utf8")).checks.some(check => check.name === "unit" && check.status === "failed") ? 0 : 1)
+          NODE
+          then
+            bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
+          fi
+      - name: Summarize native checks without payloads
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          for (const name of ["computer-darwin-core.json", "computer-darwin-privileged.json"]) {
+            const file = path.join(process.env.RUNNER_TEMP, name)
+            if (!existsSync(file)) continue
+            const report = JSON.parse(readFileSync(file, "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
+            const sidecar = file + ".unit-diagnostic.json"
+            if (existsSync(sidecar)) {
+              const d = JSON.parse(readFileSync(sidecar, "utf8"))
+              if (!["complete", "wall-deadline", "output-cap", "spawn-failed", "io-error"].includes(d.trigger) ||
+                  typeof d.exitObserved !== "boolean" || typeof d.closeObserved !== "boolean" ||
+                  ![d.stdoutBytes, d.stderrBytes].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error("Invalid unit diagnostic summary.")
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- Unit command: " + d.trigger + ", exit=" + d.exitObserved + ", close=" + d.closeObserved + ", stdoutBytes=" + d.stdoutBytes + ", stderrBytes=" + d.stderrBytes + "\n")
+            }
+          }
+          NODE
+      # Only reproducible builds with passing core checks may produce a baseline candidate. The enforced gate
+      # still fails until that measurement is reviewed and committed; prebuilt verification avoids a third build.
+      - name: Enforce the measured production identity lock
+        id: lock
+        if: ${{ success() && (inputs['helper-channel'] || 'prod') == 'prod' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin --check-lock
+      - name: Require the measured macOS helper version and toolchain for this channel
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          const lock = JSON.parse(readFileSync("native/computer-helper/macos/identity.lock.json", "utf8"))
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          if (lock.enforce !== true || lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain)
+            throw new Error("The channel helper does not match the measured production version and toolchain.")
+          NODE
+      - name: Expose the verified source digest
+        id: digest
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from "node:fs"
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          appendFileSync(process.env.GITHUB_OUTPUT, "value=" + manifest.sourceDigest + "\n")
+          NODE
+      - name: Archive shipping files and native test executables separately
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        env:
+          COPYFILE_DISABLE: "1"
+        run: |
+          set -euo pipefail
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin VectorComputer.app computer-helper.json
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin-tests.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin tests
+      - name: Upload shipping helper
+        id: shipping-artifact
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-darwin.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      - name: Upload native tests
+        id: native-tests-artifact
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-darwin-tests.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      # These admitted artifacts let the independent matrix diagnose the same bytes even if a later
+      # signing/Electron fixture fails. The complete reusable workflow remains a release dependency.
+      - name: Admit verified native artifacts for the independent macOS matrix
+        id: native-ready
+        if: ${{ success() && (steps.restore.outputs.restored == 'true' || (steps['shipping-artifact'].outcome == 'success' && steps['native-tests-artifact'].outcome == 'success')) }}
+        timeout-minutes: 1
+        run: echo "value=true" >> "$GITHUB_OUTPUT"
+      - name: Check helper signing contracts and actual Node modules
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          bun test --only-failures --timeout 30000 ./scripts/entitlements.test.ts
+          bun test --only-failures --timeout 30000 ./scripts/computer-helper-sign.test.ts
+          bun test --only-failures --timeout 30000 ./scripts/computer-helper-package-node.test.ts
+      - name: Install the pinned Electron runtime for the unsigned signing fixture
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Verify unsigned helper entitlements and final fuse signatures
+        timeout-minutes: 3
+        run: bun test --only-failures --timeout 90000 ./scripts/unsigned-mac.test.ts
+      - name: Verify certificate signing with a temporary trusted CI identity
+        timeout-minutes: 5
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-fixture.sh"
+      - name: Remove any interrupted signing fixture trust and keychain
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh"
+      - name: Install the exact pinned Electron runtime
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Run real Electron overlay properties and controller lifecycle
+        id: overlay_controller
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 3
+        run: bun --no-env-file ./scripts/computer-overlay-smoke.ts
+      - name: Restore the immutable never-shipped overlay stage
+        id: overlay-restore
+        if: ${{ inputs['reuse-artifacts'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform darwin --suffix "$ARTIFACT_SUFFIX" --destination native/out/overlay-darwin
+      - name: Build the source-bound never-shipped native overlay stage
+        # Preserve compiler feedback after a fatal controller failure; this cannot authorize native checks or archives.
+        if: ${{ !cancelled() && (steps.overlay_controller.outcome == 'success' || steps.overlay_controller.outcome == 'failure') && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 20
+        run: bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform darwin --helper native/out/darwin --out native/out/overlay-darwin
+      - name: Run actual isolated macOS overlay Stop and capture
+        if: ${{ success() && inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          set -euo pipefail
+          native_args=(--native-stage native/out/overlay-darwin)
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then native_args+=(--require-native); fi
+          status=0
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts "${native_args[@]}" || status=$?
+          if [[ "$status" == 77 && "$PRIVILEGED_REQUIRED" != true ]]; then
+            echo "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$status" != 0 ]]; then
+            exit "$status"
+          fi
+      - name: Preserve only the small overlay manifest diagnostic
+        if: ${{ always() && (needs.plan.outputs.desktop == 'true') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-darwin-manifest-diagnostic-${{ needs.plan.outputs.suffix }}-${{ github.run_attempt }}
+          path: packages/desktop/native/out/overlay-darwin/computer-overlay-smoke.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+      - name: Archive the verified never-shipped overlay stage separately
+        if: ${{ success() && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform darwin --archive native/out/overlay-darwin --output "$RUNNER_TEMP/computer-overlay-smoke-darwin.tar"
+      - name: Upload the immutable never-shipped overlay stage
+        if: ${{ success() && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-smoke-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-overlay-smoke-darwin.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      - name: Preserve measured lock candidate
+        if: ${{ always() && (inputs['helper-channel'] || 'prod') == 'prod' && hashFiles('packages/desktop/native/out/darwin/identity.lock.computed.json') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-lock-candidate-${{ needs.plan.outputs.suffix }}
+          path: packages/desktop/native/out/darwin/identity.lock.computed.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Preserve check reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-reports-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-darwin-*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  mac-test:
+    needs: [plan, mac-build]
+    if: ${{ always() && !cancelled() && !inputs['linux-only'] && !inputs['windows-only'] && needs.plan.outputs.extended == 'true' && needs['mac-build'].outputs['native-ready'] == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [macos-15-intel, macos-26]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Download shipping helper
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Download native test executables
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Restore executable modes and verify the native artifact
+        timeout-minutes: 4
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          set -euo pipefail
+          mkdir -p native/out/darwin
+          tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin.tar" -C native/out/darwin
+          tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin-tests.tar" -C native/out/darwin
+          /usr/bin/codesign --verify --strict native/out/darwin/VectorComputer.app
+          helper_args=(--platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin)
+          if [[ "$VECTOR_CHANNEL" == prod ]]; then helper_args+=(--check-lock); fi
+          bun --no-env-file ./scripts/build-computer-helper.ts "${helper_args[@]}"
+      - name: Run required grant-free native checks
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-matrix.json"
+      - name: Diagnose failed grant-free native units separately
+        if: ${{ failure() }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
+      - name: Run explicitly isolated matrix scenarios
+        id: isolated
+        if: ${{ inputs['isolated-desktop'] }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          set -euo pipefail
+          mode=auto
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-matrix-privileged.json"
+      - name: Diagnose failed optional native units separately
+        if: ${{ always() && steps.isolated.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          if node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from "node:fs"
+          import path from "node:path"
+          const file = path.join(process.env.RUNNER_TEMP, "computer-darwin-matrix-privileged.json")
+          process.exit(existsSync(file) && JSON.parse(readFileSync(file, "utf8")).checks.some(check => check.name === "unit" && check.status === "failed") ? 0 : 1)
+          NODE
+          then
+            bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
+          fi
+      - name: Summarize matrix checks without payloads
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          for (const name of ["computer-darwin-matrix.json", "computer-darwin-matrix-privileged.json"]) {
+            const file = path.join(process.env.RUNNER_TEMP, name)
+            if (!existsSync(file)) continue
+            const report = JSON.parse(readFileSync(file, "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
+            const sidecar = file + ".unit-diagnostic.json"
+            if (existsSync(sidecar)) {
+              const d = JSON.parse(readFileSync(sidecar, "utf8"))
+              if (!["complete", "wall-deadline", "output-cap", "spawn-failed", "io-error"].includes(d.trigger) ||
+                  typeof d.exitObserved !== "boolean" || typeof d.closeObserved !== "boolean" ||
+                  ![d.stdoutBytes, d.stderrBytes].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error("Invalid unit diagnostic summary.")
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- Unit command: " + d.trigger + ", exit=" + d.exitObserved + ", close=" + d.closeObserved + ", stdoutBytes=" + d.stdoutBytes + ", stderrBytes=" + d.stderrBytes + "\n")
+            }
+          }
+          NODE
+      - name: Preserve check report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-report-${{ matrix.host }}-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-darwin-matrix*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  windows-build:
+    needs: plan
+    if: ${{ !inputs['linux-only'] && needs.plan.outputs.windows == 'true' }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      digest: ${{ steps.digest.outputs.value }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node for the real Electron smoke
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Configure the MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Restore immutable helpers from an earlier attempt
+        id: restore
+        if: ${{ inputs['reuse-artifacts'] }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: |
+          bun --no-env-file ./scripts/computer-helper-artifact.ts --mode native-win32 --suffix $env:ARTIFACT_SUFFIX --destination native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Immutable Windows helper restore failed." }
+      - name: Verify restored Windows source before native checks
+        if: ${{ steps.restore.outputs.restored == 'true' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Restored Windows helper source verification failed." }
+      - name: Build both channel helper architectures
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        timeout-minutes: 20
+        run: |
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }
+      - name: Run Windows unit and fresh version/probe checks
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          import { spawnSync } from "node:child_process"
+          import path from "node:path"
+          const root = path.resolve("native/out/win32/x64")
+          const contexts = new Set()
+          const run = (file, args) => {
+            const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
+            if (result.error || result.status !== 0) {
+              if (result.stderr) process.stderr.write(result.stderr.slice(0, 8192))
+              throw new Error("A required Windows native check failed.")
+            }
+            for (const line of (result.stderr || "").split(/\r?\n/)) {
+              const match = /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n) c=(s|q|o|g|m|z|i|t|r|v|p|a|e|b)$/.exec(line)
+              if (!match) continue
+              const context = `vector-caller-context initial r=${match[1]} d=${match[2]} o=${match[3]} a=${match[4]} c=${match[5]}`
+              if (contexts.has(context)) continue
+              contexts.add(context)
+              process.stderr.write(context + "\n")
+            }
+            return result.stdout
+          }
+          run(path.join(root, "tests/vector-computer-tests.exe"), [])
+          const executable = path.join(root, "vector-computer.exe")
+          const manifest = JSON.parse(readFileSync(path.join(root, "computer-helper.json"), "utf8"))
+          const version = JSON.parse(run(executable, ["--version", "--json"]))
+          if (version.sourceDigest !== manifest.sourceDigest || version.arch !== "x64") throw new Error("Windows native identity differs from its manifest.")
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const probe = JSON.parse(run(executable, ["--probe", "--json"]))
+            if (probe.permissions?.screen !== "n/a" || probe.permissions?.accessibility !== "n/a" || typeof probe.captureBlocked !== "boolean" || typeof probe.elevated !== "boolean")
+              throw new Error("The Windows native probe is invalid.")
+          }
+          NODE
+      - name: Run required Windows protocol and lifecycle checks
+        if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 8
+        run: |
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
+          if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
+      - name: Run explicitly isolated Windows scenarios
+        if: ${{ inputs['isolated-desktop'] && needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+        run: |
+          $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-privileged.json"
+          if ($LASTEXITCODE -ne 0) { throw "The isolated Windows scenarios failed or were required but skipped." }
+      - name: Summarize Windows protocol readiness
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          WINDOWS_PROTOCOL: ${{ needs.plan.outputs.windows-protocol }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          if (process.env.WINDOWS_PROTOCOL !== "true")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\nSKIPPED: W2 has not supplied Windows protocol/conformance/parent-death behavior.\n")
+          for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-.*\.json$/.test(name))) {
+            const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
+          }
+          NODE
+      - name: Install the exact pinned Electron runtime
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 5
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      - name: Run real Electron overlay properties and controller lifecycle
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 3
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts
+          if ($LASTEXITCODE -ne 0) { throw "The actual Electron overlay properties or controller lifecycle failed." }
+      - name: Restore the immutable never-shipped overlay stage
+        id: overlay-restore
+        if: ${{ inputs['reuse-artifacts'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform win32 --suffix $env:ARTIFACT_SUFFIX --destination native/out/overlay-win32
+          if ($LASTEXITCODE -ne 0) { throw "Immutable overlay stage restore failed." }
+      - name: Build the source-bound never-shipped native overlay stage
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 20
+        run: |
+          bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
+          if ($LASTEXITCODE -ne 0) { throw "The never-shipped Windows overlay stage build failed." }
+      - name: Run actual isolated medium-token Windows overlay Stop
+        if: ${{ inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          # The native stage always enters its finite verified medium-token Electron bootstrap.
+          # A high-token process cannot become an input fallback, even on an elevated hosted runner.
+          $required = @()
+          if ($env:PRIVILEGED_REQUIRED -eq "true") { $required = @("--require-native") }
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 @required
+          $status = $LASTEXITCODE
+          if ($status -eq 77 -and $env:PRIVILEGED_REQUIRED -ne "true") {
+            "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          } elseif ($status -ne 0) {
+            throw "Actual isolated overlay Stop failed or required native evidence is unavailable."
+          }
+      - name: Archive the verified never-shipped overlay stage separately
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform win32 --archive native/out/overlay-win32 --output "$env:RUNNER_TEMP/computer-overlay-smoke-win32.tar"
+          if ($LASTEXITCODE -ne 0) { throw "The verified overlay stage archive failed." }
+      - name: Upload the immutable never-shipped overlay stage
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-smoke-win32-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-overlay-smoke-win32.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      - name: Expose the verified source digest
+        id: digest
+        run: |
+          $first = Get-Content native/out/win32/x64/computer-helper.json -Raw | ConvertFrom-Json
+          $second = Get-Content native/out/win32/arm64/computer-helper.json -Raw | ConvertFrom-Json
+          if ($first.sourceDigest -ne $second.sourceDigest) { throw "Windows architecture source digests differ." }
+          "value=$($first.sourceDigest)" >> $env:GITHUB_OUTPUT
+      - name: Archive shipping files and tests separately
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        run: |
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/win32 x64/vector-computer.exe x64/computer-helper.json arm64/vector-computer.exe arm64/computer-helper.json
+          if ($LASTEXITCODE -ne 0) { throw "Windows shipping archive failed." }
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32-tests.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/win32 x64/tests arm64/tests
+          if ($LASTEXITCODE -ne 0) { throw "Windows test archive failed." }
+      - name: Upload shipping helpers
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-win32.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      - name: Upload native tests
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-win32-tests.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      - name: Preserve check reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-reports-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-win32-*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  windows-arm64-test:
+    needs: [plan, windows-build]
+    if: ${{ !inputs['linux-only'] && (inputs['windows-only'] || needs.plan.outputs.extended == 'true') && needs.plan.outputs.windows == 'true' }}
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Download shipping helpers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-win32-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Download native test executables
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-win32-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Restore and verify the ARM64 artifact
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          New-Item -ItemType Directory -Force native/out/win32 | Out-Null
+          tar -xpf "$env:RUNNER_TEMP/computer-artifacts/computer-helper-win32.tar" -C native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Windows helper extraction failed." }
+          tar -xpf "$env:RUNNER_TEMP/computer-artifacts/computer-helper-win32-tests.tar" -C native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Windows native test extraction failed." }
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 native artifact verification failed." }
+      - name: Run ARM64 unit and fresh version/probe checks
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          import { spawnSync } from "node:child_process"
+          import path from "node:path"
+          const root = path.resolve("native/out/win32/arm64")
+          const run = (file, args) => {
+            const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
+            if (result.error || result.status !== 0) {
+              if (result.stderr) process.stderr.write(result.stderr.slice(0, 8192))
+              throw new Error("A required ARM64 native check failed.")
+            }
+            return result.stdout
+          }
+          run(path.join(root, "tests/vector-computer-tests.exe"), [])
+          const executable = path.join(root, "vector-computer.exe")
+          const manifest = JSON.parse(readFileSync(path.join(root, "computer-helper.json"), "utf8"))
+          const version = JSON.parse(run(executable, ["--version", "--json"]))
+          if (version.sourceDigest !== manifest.sourceDigest || version.arch !== "arm64") throw new Error("ARM64 identity differs from its manifest.")
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const probe = JSON.parse(run(executable, ["--probe", "--json"]))
+            if (probe.permissions?.screen !== "n/a" || probe.permissions?.accessibility !== "n/a" || typeof probe.captureBlocked !== "boolean" || typeof probe.elevated !== "boolean")
+              throw new Error("The ARM64 native probe is invalid.")
+          }
+          NODE
+      - name: Run required ARM64 protocol and lifecycle checks
+        if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 8
+        run: |
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-arm64.json"
+          if ($LASTEXITCODE -ne 0) { throw "Required ARM64 conformance failed." }
+      - name: Run explicitly isolated ARM64 scenarios
+        if: ${{ inputs['isolated-desktop'] && needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+        run: |
+          $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-arm64-privileged.json"
+          if ($LASTEXITCODE -ne 0) { throw "The isolated ARM64 scenarios failed or were required but skipped." }
+      - name: Summarize ARM64 protocol readiness
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          WINDOWS_PROTOCOL: ${{ needs.plan.outputs.windows-protocol }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          if (process.env.WINDOWS_PROTOCOL !== "true")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\nSKIPPED: W2 has not supplied ARM64 protocol/conformance/parent-death behavior.\n")
+          for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-arm64.*\.json$/.test(name))) {
+            const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
+          }
+          NODE
+      - name: Preserve check report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-arm64-report-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-win32-arm64*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  overlay-linux:
+    needs: plan
+    if: ${{ !inputs['windows-only'] && (needs.plan.outputs.desktop == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install isolated Electron display dependencies
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xvfb xauth libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libgtk-3-0t64 libasound2t64
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node node_modules/electron/install.js
+      - name: Check actual Linux Electron overlay properties
+        timeout-minutes: 3
+        run: xvfb-run -a -s "-screen 0 1280x900x24 -nolisten tcp" bun --no-env-file ./scripts/computer-overlay-smoke.ts
+
+  desktop-e2e-linux:
+    needs: plan
+    if: ${{ !inputs['windows-only'] && (needs.plan.outputs.desktop == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install isolated Electron display dependencies
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xvfb xauth libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libgtk-3-0t64 libasound2t64
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node node_modules/electron/install.js
+      - name: Build the actual dev desktop and Node engine
+        timeout-minutes: 15
+        env:
+          VECTOR_CHANNEL: dev
+          VECTOR_COMPUTER_HELPER: skip
+        run: |
+          set -euo pipefail
+          export VECTOR_RELEASE_CATALOG_PATH="$PWD/../web/public/models/api.json"
+          export VECTOR_RELEASE_CATALOG_SHA256="$(sha256sum "$VECTOR_RELEASE_CATALOG_PATH" | cut -d ' ' -f 1)"
+          bun --no-env-file ./scripts/prebuild.ts
+          bun --no-env-file ./scripts/build-desktop.ts
+      - name: Compile the explicit virtual helper for actual Node
+        timeout-minutes: 2
+        run: bun build ./test/computer/fake-helper.ts --target node --format esm --outfile "$RUNNER_TEMP/computer-fake-helper.mjs"
+      - name: Run actual Node Playwright against the dev Electron
+        timeout-minutes: 5
+        env:
+          VECTOR_COMPUTER_E2E_FAKE_HELPER: ${{ runner.temp }}/computer-fake-helper.mjs
+        run: xvfb-run -a -s "-screen 0 1280x900x24 -nolisten tcp" node ./node_modules/@playwright/test/cli.js test --config=e2e/playwright.config.ts

@@ -1,3 +1,5 @@
+import type { AgentPart, ComputerPart, FileAttachmentPart, Prompt } from "@/context/prompt"
+
 const MAX_BREAKS = 200
 
 export function createTextFragment(content: string): DocumentFragment {
@@ -61,7 +63,7 @@ export function setCursorPosition(parent: HTMLElement, position: number) {
     const isText = node.nodeType === Node.TEXT_NODE
     const isPill =
       node.nodeType === Node.ELEMENT_NODE &&
-      ((node as HTMLElement).dataset.type === "file" || (node as HTMLElement).dataset.type === "agent")
+      ["file", "agent", "computer"].includes((node as HTMLElement).dataset.type ?? "")
     const isBreak = node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "BR"
 
     if (isText && remaining <= length) {
@@ -126,7 +128,7 @@ export function setRangeEdge(parent: HTMLElement, range: Range, edge: "start" | 
     const isText = node.nodeType === Node.TEXT_NODE
     const isPill =
       node.nodeType === Node.ELEMENT_NODE &&
-      ((node as HTMLElement).dataset.type === "file" || (node as HTMLElement).dataset.type === "agent")
+      ["file", "agent", "computer"].includes((node as HTMLElement).dataset.type ?? "")
     const isBreak = node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "BR"
 
     if (isText && remaining <= length) {
@@ -145,4 +147,178 @@ export function setRangeEdge(parent: HTMLElement, range: Range, edge: "start" | 
 
     remaining -= length
   }
+}
+
+export function createPill(part: FileAttachmentPart | AgentPart | ComputerPart) {
+  const pill = document.createElement("span")
+  pill.textContent = part.content
+  pill.setAttribute("data-type", part.type)
+  if (part.type === "file") {
+    pill.setAttribute("data-path", part.path)
+    if (part.mime) pill.setAttribute("data-mime", part.mime)
+    if (part.filename) pill.setAttribute("data-filename", part.filename)
+    if (part.url) pill.setAttribute("data-url", part.url)
+    if (part.source?.type === "resource") {
+      pill.setAttribute("data-source-type", part.source.type)
+      pill.setAttribute("data-source-client-name", part.source.clientName)
+      pill.setAttribute("data-source-uri", part.source.uri)
+    }
+  }
+  if (part.type === "agent") pill.setAttribute("data-name", part.name)
+  if (part.type === "computer" && part.app) {
+    pill.setAttribute("data-app-key", part.app.key)
+    pill.setAttribute("data-app-name", part.app.name)
+  }
+  pill.setAttribute("contenteditable", "false")
+  pill.style.userSelect = "text"
+  pill.style.cursor = "default"
+  return pill
+}
+
+export const isNormalizedEditor = (editor: HTMLElement) =>
+  Array.from(editor.childNodes).every((node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? ""
+      if (!text.includes("\u200B")) return true
+      if (text !== "\u200B") return false
+
+      const prev = node.previousSibling
+      const next = node.nextSibling
+      const prevIsBr = prev?.nodeType === Node.ELEMENT_NODE && (prev as HTMLElement).tagName === "BR"
+      return !!prevIsBr && !next
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return false
+    const el = node as HTMLElement
+    if (el.dataset.type === "file") return true
+    if (el.dataset.type === "agent") return true
+    if (el.dataset.type === "computer")
+      return el.getAttribute("contenteditable") === "false" && computerApp(el) !== false
+    return el.tagName === "BR"
+  })
+
+export function parsePromptFromDOM(editor: HTMLElement): Prompt {
+  const parts: Prompt = []
+  let position = 0
+  let buffer = ""
+
+  const flushText = () => {
+    let content = buffer
+    if (content.includes("\r")) content = content.replace(/\r\n?/g, "\n")
+    if (content.includes("\u200B")) content = content.replace(/\u200B/g, "")
+    buffer = ""
+    if (!content) return
+    parts.push({ type: "text", content, start: position, end: position + content.length })
+    position += content.length
+  }
+
+  const pushFile = (file: HTMLElement) => {
+    const content = file.textContent ?? ""
+    const source =
+      file.dataset.sourceType === "resource" && file.dataset.sourceClientName && file.dataset.sourceUri
+        ? {
+            type: "resource" as const,
+            text: {
+              value: content,
+              start: position,
+              end: position + content.length,
+            },
+            clientName: file.dataset.sourceClientName,
+            uri: file.dataset.sourceUri,
+          }
+        : undefined
+    parts.push({
+      type: "file",
+      path: file.dataset.path!,
+      content,
+      start: position,
+      end: position + content.length,
+      ...(file.dataset.mime ? { mime: file.dataset.mime } : {}),
+      ...(file.dataset.filename ? { filename: file.dataset.filename } : {}),
+      ...(file.dataset.url ? { url: file.dataset.url } : {}),
+      ...(source ? { source } : {}),
+    })
+    position += content.length
+  }
+
+  const pushAgent = (agent: HTMLElement) => {
+    const content = agent.textContent ?? ""
+    parts.push({
+      type: "agent",
+      name: agent.dataset.name!,
+      content,
+      start: position,
+      end: position + content.length,
+    })
+    position += content.length
+  }
+
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      buffer += node.textContent ?? ""
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+
+    const el = node as HTMLElement
+    if (el.dataset.type === "file") {
+      flushText()
+      pushFile(el)
+      return
+    }
+    if (el.dataset.type === "agent") {
+      flushText()
+      pushAgent(el)
+      return
+    }
+    if (el.dataset.type === "computer") {
+      const app = computerApp(el)
+      const content = el.textContent ?? ""
+      if (app === false || el.getAttribute("contenteditable") !== "false") {
+        buffer += content
+        return
+      }
+      flushText()
+      parts.push({
+        type: "computer",
+        content,
+        start: position,
+        end: position + content.length,
+        ...(app ? { app } : {}),
+      })
+      position += content.length
+      return
+    }
+    if (el.tagName === "BR") {
+      buffer += "\n"
+      return
+    }
+
+    for (const child of Array.from(el.childNodes)) {
+      visit(child)
+    }
+  }
+
+  const children = Array.from(editor.childNodes)
+  children.forEach((child, index) => {
+    const isBlock = child.nodeType === Node.ELEMENT_NODE && ["DIV", "P"].includes((child as HTMLElement).tagName)
+    visit(child)
+    if (isBlock && index < children.length - 1) {
+      buffer += "\n"
+    }
+  })
+
+  flushText()
+
+  if (parts.length === 0) parts.push({ type: "text", content: "", start: 0, end: 0 })
+  return parts
+}
+
+// Missing both attributes denotes the feature pill. A partial app identity must stay ordinary text instead of
+// silently becoming a different computer hint during normalization or a paste round-trip.
+function computerApp(pill: HTMLElement): ComputerPart["app"] | false {
+  const key = pill.dataset.appKey
+  const name = pill.dataset.appName
+  if (key === undefined && name === undefined) return undefined
+  if (!key?.trim() || !name?.trim()) return false
+  return { key, name }
 }

@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import type { Computer } from "@vectordevai/schema/computer"
 
 /*
  * Keeps the computer awake while the local engine has work running.
@@ -380,6 +381,57 @@ export function setDesktopWorkBlocker(blocker: PowerBlocker | undefined) {
   desktopHeld = undefined
   desktopBlocker = blocker
   syncDesktopWork()
+}
+
+/** Hands owns a separate prevent-display-sleep blocker; ordinary engine work may still let the display sleep. */
+export function createComputerKeepAwake(input: {
+  blocker: PowerBlocker
+  clock?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(timer: unknown): void }
+}) {
+  const clock = input.clock ?? {
+    setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms),
+    clearTimeout: (timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  }
+  const state: { held?: number; timer?: unknown; epoch: number } = { epoch: 0 }
+  const cancel = () => {
+    state.epoch++
+    if (state.timer !== undefined) clock.clearTimeout(state.timer)
+    state.timer = undefined
+  }
+  const release = () => {
+    cancel()
+    const held = state.held
+    state.held = undefined
+    if (held !== undefined) input.blocker.stop(held)
+  }
+  return {
+    update(value: { phase: Computer.ComputerPhase; allowed: boolean; away?: boolean; pause?: Computer.PauseReason }) {
+      if (
+        !value.allowed ||
+        value.away ||
+        value.pause === "away" ||
+        value.pause === "locked" ||
+        value.pause === "suspend" ||
+        value.pause === "secure_desktop" ||
+        ["off", "setup", "ready", "done", "stopped"].includes(value.phase)
+      ) {
+        release()
+        return
+      }
+      if (value.phase === "working") {
+        cancel()
+        if (state.held === undefined) state.held = input.blocker.start()
+        return
+      }
+      // Keep one deadline for continuous user waiting; heartbeats and changing ask text cannot postpone it.
+      if (state.held === undefined || state.timer !== undefined) return
+      const epoch = state.epoch
+      state.timer = clock.setTimeout(() => {
+        if (state.epoch === epoch) release()
+      }, 2 * 60_000)
+    },
+    close: release,
+  }
 }
 
 /** Keeps the computer awake while `work` runs, however it ends. */

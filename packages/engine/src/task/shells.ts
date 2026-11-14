@@ -95,6 +95,8 @@ export type StartInput = {
   command: string
   /** The process to spawn, made by the shell tool's foreground helper (its sandbox and environment included). */
   process: ChildProcess.Command
+  /** Rechecks dynamic permissions after asynchronous setup and immediately before process creation. */
+  beforeSpawn?: Effect.Effect<void>
   /** Milliseconds, at most MAX_TIMEOUT. Without it the command runs until it exits or is stopped. */
   timeout?: number
   /** How the exit note reaches the session. */
@@ -490,6 +492,7 @@ const layer = Layer.effect(
           },
           catch: (error) => new Error(`Vector could not create the command's output file: ${String(error)}`),
         })
+        if (input.beforeSpawn) yield* input.beforeSpawn
         const spawned = yield* spawner.spawn(input.process).pipe(
           Scope.provide(scope),
           Effect.mapError((error) => new Error(`Vector could not start the command: ${error.message}`)),

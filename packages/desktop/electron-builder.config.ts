@@ -5,7 +5,14 @@ import { promisify } from "node:util"
 
 import { Arch } from "electron-builder"
 import type { Configuration } from "electron-builder"
+import { APP_IDS, EXECUTABLE_NAMES } from "./scripts/channel-ids"
 import { verifyNativeModules } from "./scripts/verify-native"
+import { computerHelperPaths } from "./scripts/computer-helper-package"
+import {
+  computerHelperSkipRequested,
+  loadComputerHelperSigningNode,
+  prepareComputerHelperNode,
+} from "./scripts/computer-helper-package-node"
 
 const execFileAsync = promisify(execFile)
 const packageDir = path.dirname(fileURLToPath(import.meta.url))
@@ -47,6 +54,11 @@ const channel = (() => {
   return "dev"
 })()
 const unsignedMac = allowUnsignedRelease && !signMac && channel !== "dev"
+const skipComputerHelper = computerHelperSkipRequested(channel, process.env)
+const macComputerHelper = skipComputerHelper ? undefined : computerHelperPaths("darwin", channel, undefined, packageDir)
+const windowsComputerHelper = skipComputerHelper
+  ? undefined
+  : computerHelperPaths("win32", channel, undefined, packageDir)
 
 if (process.env.GITHUB_ACTIONS === "true" && channel === "prod" && !allowUnsignedRelease) {
   if (process.platform === "darwin" && (!signMac || !notarizeMac || !signDmg)) {
@@ -56,18 +68,6 @@ if (process.env.GITHUB_ACTIONS === "true" && channel === "prod" && !allowUnsigne
     throw new Error("Production Windows artifacts require VECTOR_WINDOWS_PUBLISHER_NAME.")
   }
 }
-
-const APP_IDS = {
-  dev: "ai.vector.app.dev",
-  beta: "ai.vector.app.beta",
-  prod: "ai.vector.app",
-} as const
-
-const EXECUTABLE_NAMES = {
-  dev: "vector-desktop-dev",
-  beta: "vector-desktop-beta",
-  prod: "vector-desktop",
-} as const
 
 const getBase = (appId: string, executableName: string): Configuration => ({
   // Updater artifacts are immutable by version. Publishing latest*.yml last can
@@ -91,13 +91,31 @@ const getBase = (appId: string, executableName: string): Configuration => ({
   afterPack: async (context) => {
     const platform = context.electronPlatformName
     if (platform !== "darwin" && platform !== "win32" && platform !== "linux") return
+    const helper = await prepareComputerHelperNode(context, {
+      channel,
+      directory: packageDir,
+      environment: process.env,
+    })
     const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
     const resources =
       platform === "darwin" ? path.join(app, "Contents", "Resources") : path.join(context.appOutDir, "resources")
     const arch = Arch[context.arch]
     for (const target of arch === "universal" ? ["x64", "arm64"] : [arch])
-      await verifyNativeModules(resources, platform, target)
-    if (unsignedMac && platform === "darwin") await signUnsignedMac(app)
+      await verifyNativeModules(resources, platform, target, { skipComputerHelper })
+    if (platform !== "darwin" || skipComputerHelper) return
+    if (!helper || helper.manifests.length !== 1 || helper.manifests[0]?.platform !== "darwin")
+      throw new Error("The verified macOS computer helper manifest is missing.")
+    const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
+    await signer.prepareComputerHelperMacSigning(
+      { app, channel, sourceManifest: helper.manifests[0] },
+      { directory: packageDir, environment: process.env },
+    )
+    if (unsignedMac)
+      await signer.installUnsignedMacComputerHelperFuses(
+        context.packager,
+        { channel, signUnsignedMac },
+        { directory: packageDir, environment: process.env },
+      )
   },
   extraResources: [
     {
@@ -127,9 +145,11 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     },
   ],
   mac: {
+    extraFiles: macComputerHelper?.extraFiles ?? [],
     extraResources: [
       { from: "node_modules/electron/dist/LICENSE", to: "Electron-LICENSE.txt" },
       { from: "node_modules/electron/dist/LICENSES.chromium.html", to: "LICENSES.chromium.html" },
+      ...(macComputerHelper?.extraResources ?? []),
     ],
     category: "public.app-category.developer-tools",
     icon: `resources/icons/icon.icns`,
@@ -141,6 +161,16 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     // Even identity "-" enumerates keychains in the pinned builder. Apply the
     // ad-hoc signature ourselves, then let fuse reset re-seal the modified app.
     identity: signMac ? undefined : unsignedMac ? null : "-",
+    sign:
+      unsignedMac || skipComputerHelper
+        ? undefined
+        : async (options, packager) => {
+            const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
+            await signer.signMacWithComputerHelper(options, packager, {
+              directory: packageDir,
+              environment: process.env,
+            })
+          },
     gatekeeperAssess: false,
     entitlements: "resources/entitlements.plist",
     entitlementsInherit: "resources/entitlements.plist",
@@ -155,6 +185,9 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     schemes: ["vector"],
   },
   win: {
+    extraResources: windowsComputerHelper?.extraResources ?? [],
+    // The helper manifest/pin describe its final bytes; release signing happens before the desktop build.
+    signExts: ["!vector-computer.exe"],
     icon: `resources/icons/icon.ico`,
     signExecutable: !allowUnsignedRelease,
     signtoolOptions: allowUnsignedRelease
@@ -230,19 +263,11 @@ function getConfig() {
 }
 
 export async function signUnsignedMac(appPath: string) {
-  await execFileAsync("/usr/bin/codesign", [
-    "--force",
-    "--deep",
-    "--sign",
-    "-",
-    "--options",
-    "runtime",
-    "--timestamp=none",
-    "--entitlements",
-    path.join(packageDir, "resources/entitlements.plist"),
-    appPath,
-  ])
-  await execFileAsync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath])
+  const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
+  return signer.signUnsignedMacWithComputerHelper(
+    { app: appPath, channel },
+    { directory: packageDir, environment: process.env },
+  )
 }
 
 export default getConfig()

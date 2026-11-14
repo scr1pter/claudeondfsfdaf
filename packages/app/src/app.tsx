@@ -59,6 +59,7 @@ import { ErrorPage } from "./pages/error"
 import type { ExternalAgent } from "@vectordevai/schema/external-agent"
 import { LaunchAttach, LaunchReadyProbe, LaunchSettingsMirror } from "@/features/launch/launch-handoff"
 import { LaunchYield, yieldLaunchScreen } from "@/features/launch/launch-yield"
+import { createComputerMotionMirror } from "@/features/computer/motion-mirror"
 import { useCheckServerHealth } from "./utils/server-health"
 import { afterFirstRun } from "./utils/desktop-local"
 import { legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
@@ -595,6 +596,21 @@ function DraftProviders(props: ParentProps) {
   )
 }
 
+// Inside SettingsProvider, beside LaunchSettingsMirror: Hands' glow and banner follow the app's Reduced motion
+// setting, which main cannot read. Only a supported desktop has anything to sync.
+function ComputerMotionMirror() {
+  const computer = usePlatform().computer
+  if (!computer?.supported) return null
+  const settings = useSettings()
+  const mirror = createComputerMotionMirror(computer)
+  onCleanup(mirror.dispose)
+  createEffect(() => {
+    if (!settings.ready()) return
+    void mirror.push(settings.appearance.reduceAnimations() || settings.appearance.animationSpeed() === "off")
+  })
+  return null
+}
+
 // Vector has one look: its own theme in dark. The preload paints it before the first frame (it puts back a theme or
 // colour scheme saved by an earlier version); this keeps it if anything picks another one while the app runs.
 function VectorThemeSync() {
@@ -814,6 +830,7 @@ export function AppInterface(props: {
         <SettingsProvider>
           <VectorThemeSync />
           <LaunchSettingsMirror />
+          <ComputerMotionMirror />
           <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
             <Show when={useSettings().general.newLayoutDesigns().toString()} keyed>
               <Dynamic

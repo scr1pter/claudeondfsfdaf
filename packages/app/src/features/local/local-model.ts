@@ -1,3 +1,4 @@
+import { Hands } from "@vectordevai/schema/hands"
 import type {
   Config,
   EgressEvent,
@@ -121,6 +122,7 @@ const NAMES: Record<string, string> = {
   "vector-cloud": "Vector Cloud",
   "git-remote": "Vector's own git fetches and pushes",
   webfetch: "Web reads",
+  "computer-bridge": `${Hands.NAME} on this computer`,
   "agent-browser": "The agent's browser",
   "research-reader": "Deep research reads",
   "research-browser": "Research browsers",

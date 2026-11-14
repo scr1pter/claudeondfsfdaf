@@ -9,6 +9,7 @@ import { Effect, Schema } from "effect"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { SessionArchive } from "@vectordevai/core/share/archive"
+import { Hands } from "@vectordevai/schema/hands"
 
 function redact(kind: string, id: string, value: string) {
   return value.trim() ? `[redacted:${kind}:${id}]` : value
@@ -273,6 +274,11 @@ export const ExportCommand = effectCmd({
       .option("sanitize", {
         describe: "redact sensitive transcript and file data (native sessions use the portable format)",
         type: "boolean",
+      })
+      .option("include-screenshots", {
+        describe: `include ${Hands.NAME} screenshots in this export unless sanitizing`,
+        type: "boolean",
+        default: false,
       }),
   handler: Effect.fn("Cli.export")(function* (args) {
     return yield* run(args)
@@ -283,6 +289,7 @@ const run = Effect.fn("Cli.export.body")(function* (args: {
   sessionID?: string
   sanitize?: boolean
   public?: boolean
+  "include-screenshots"?: boolean
 }) {
   const shares = yield* PublicSessionShare.Service
   const svc = yield* Session.Service
@@ -326,17 +333,20 @@ const run = Effect.fn("Cli.export.body")(function* (args: {
   }
 
   return yield* Effect.gen(function* () {
-    const local = yield* shares.export({ sessionID: sessionID! })
+    const selection = {
+      sessionID: sessionID!,
+      includeScreenshots: args["include-screenshots"] === true && !args.sanitize,
+    }
+    const local = yield* shares.export(selection)
     const portable = args.public || (args.sanitize && "engine" in local)
-    // The portable format has no owner-only marker, and an import treats it as ordinary guest input. A conversation
-    // with isolated work would lose its restriction, so it is exported only in the local format, which keeps it.
+    // The portable format loses the owner-only marker; keep isolated work in a local archive.
     if (portable && local.privacy === "owner-only")
       return yield* fail(
         "This conversation has owner-only isolated work, so it cannot be exported in the portable format. Export it without --public or --sanitize to keep its owner-only marker.",
       )
     const output = portable
       ? yield* shares
-          .preview({ sessionID: sessionID! })
+          .preview(selection)
           .pipe(Effect.map((archive) => (args.sanitize ? sanitizePublic(archive) : archive)))
       : "engine" in local
         ? Schema.encodeSync(SessionArchive.Native)(local)
