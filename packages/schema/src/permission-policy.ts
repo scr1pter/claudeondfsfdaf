@@ -89,6 +89,21 @@ export const TERMINAL_OWN = "own:"
 export const TERMINAL_OTHER = "other:"
 
 /**
+ * Starting a terminal while the shell sandbox is on: the terminal runs outside it. Its own permission, apart from the
+ * shell tool's unsandboxed_shell, asked every time: neither auto-accept nor Full access answers it, and it has no
+ * "always" (canAutoApprove).
+ */
+export const TERMINAL_UNSANDBOXED = "unsandboxed_terminal"
+
+/** Whether a request is a terminal ask about a terminal the agent did not open: the user's, or another session's. */
+export function otherTerminal(permission?: string, patterns?: readonly string[]) {
+  return (
+    (permission === TERMINAL || permission === TERMINAL_INPUT) &&
+    Boolean(patterns?.some((pattern) => pattern.startsWith(TERMINAL_OTHER)))
+  )
+}
+
+/**
  * A terminal line the shell may have filled from somewhere Vector cannot read: its history, its kill ring, an editor,
  * or a command name tab completion finished. It may run a Vercel or Supabase command on the command-line tool's own
  * login, which the shell asks for every time, so it asks every time too: a Vector Cloud permission with no "always"
@@ -114,15 +129,30 @@ export function requiresApproval(permission?: string, always?: readonly string[]
   )
 }
 
+/**
+ * Whether auto-accept or Full access may answer a request on its own. Never for the user's own terminals or another
+ * session's (an ssh session to production, say: what the agent reads or types there is the user's to allow), nor for
+ * starting a terminal outside the shell sandbox.
+ */
 export function canAutoApprove(permission?: string, always?: readonly string[], patterns?: readonly string[]) {
   return (
     permission !== "doom_loop" &&
     permission !== "browser_sensitive" &&
+    permission !== TERMINAL_UNSANDBOXED &&
     !permission?.startsWith("computer_") &&
+    !otherTerminal(permission, patterns) &&
     !requiresApproval(permission, always, patterns)
   )
 }
 
+/**
+ * Whether a request offers "Always allow". A terminal the agent did not open still may be allowed always, by its own
+ * id, as the user chooses: only auto-accept may not answer for them.
+ */
 export function canAlwaysApprove(permission?: string, always?: readonly string[], patterns?: readonly string[]) {
-  return canAutoApprove(permission, always, patterns) && Boolean(always?.length)
+  return (
+    (canAutoApprove(permission, always, patterns) ||
+      (otherTerminal(permission, patterns) && !requiresApproval(permission, always, patterns))) &&
+    Boolean(always?.length)
+  )
 }

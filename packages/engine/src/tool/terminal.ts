@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schema, Semaphore } from "effect"
 import stripAnsi from "strip-ansi"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -15,6 +15,7 @@ import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { Plugin } from "@/plugin"
+import { TaskPlace } from "@/task/place"
 import { ShellPermission } from "./shell"
 import { Sandbox } from "./shell/sandbox"
 import { Tool } from "./tool"
@@ -150,6 +151,25 @@ const FOREIGN = new Set(["fish", "nu"])
 // line from it again (zsh's `r`, `fc -s` and `fc -e -` in bash and zsh, PowerShell's `r`, `ihy` and Invoke-History), so
 // the line as typed does not say what runs. A `!` before a blank, `=` or `(` is never expanded (`!=`, `[ ! -f x ]`).
 const HISTORY = /![^\s=(]|^\s*\^|(?:^|[\s;&|(`{])(?:r|fc|ihy|invoke-history)(?=$|[\s;&|)}])/i
+// A line that sets something an interactive shell runs later, on its own, whatever comes next: a prompt variable or a
+// prompt hook (bash's PROMPT_COMMAND and PS0-PS4, zsh's PROMPT and RPROMPT with prompt_subst, precmd and preexec,
+// TRAP functions), a startup file (BASH_ENV, ENV, ZDOTDIR), an alias, a key binding or a widget (bind, bindkey, zle),
+// a line pushed into the next prompt or the history (zsh's print -z and print -s, vared, history -s), an option
+// (setopt, shopt), a trap, a script read into the shell (source, `.`), or PowerShell's prompt and PSReadLine handlers.
+// The line scanned alone says nothing of what runs at the next prompt, so it asks every time, and so does every line
+// typed into that terminal after it, an empty Enter included.
+const HOOKS = new RegExp(
+  [
+    String.raw`(?:^|[\s;&|(\`{])(?:PROMPT_COMMAND|PS[0-4]|PROMPT[234]?|RPROMPT2?|RPS[12]|BASH_ENV|ENV|ZDOTDIR|precmd_functions|preexec_functions|chpwd_functions|zle_\w+)(?:\[[^\]]*\])?\+?=`,
+    String.raw`(?:^|[;&|({\n]|\b(?:then|do|else))\s*(?:\w+=\S*\s+)*(?:builtin\s+|command\s+)?(?:alias|unalias|bind|bindkey|zle|vared|setopt|unsetopt|shopt|source|trap|enable|autoload|zmodload|doskey|Set-PSReadLineOption|Set-PSReadLineKeyHandler|Register-EngineEvent|\.(?=\s+\S))(?=$|\s)`,
+    String.raw`\bprint\s+(?:-\w*\s+)*-\w*[zs]`,
+    String.raw`\bhistory\s+(?:-\w*\s+)*-\w*s`,
+    String.raw`(?:^|[;&|({\n]\s*)(?:function\s+)?(?:precmd|preexec|chpwd|periodic|zshexit|zshaddhistory|command_not_found_handler?|TRAP[A-Z]+|prompt)\s*(?:\(\s*\)|\{)`,
+    String.raw`\bfunction\s+(?:global:)?prompt\b`,
+    String.raw`\$function:(?:global:)?prompt\b`,
+  ].join("|"),
+  "i",
+)
 // Keys that may put text in the line Vector never sees: history (arrows, page keys, ctrl-p and ctrl-n, ctrl-r's search),
 // the kill ring (ctrl-y), and keys after which the next ones are commands (escape for Meta or vi's command mode, where
 // `k` recalls a line, and ctrl-x, whose ctrl-e hands the line to an editor).
@@ -194,6 +214,21 @@ export const TerminalTool = Tool.define<
     const guests = yield* FreeModelGuests.Service
     // By terminal. Lines the user types themselves are not here: the scan sees only what the agent typed.
     const pending = new Map<PtyID, Line>()
+    // Terminals whose shell the agent gave a hook (HOOKS): every line it types there after asks every time.
+    const tainted = new Set<PtyID>()
+    // One input at a time per terminal, from reading its pending line to the last keystroke: two calls of one message
+    // run at once, and each must scan the line the other left, not the one before it.
+    const locks = new Map<PtyID, Semaphore.Semaphore>()
+    const locked = (id: PtyID) => {
+      const lock = locks.get(id) ?? Semaphore.makeUnsafe(1)
+      locks.set(id, lock)
+      return lock.withPermits(1)
+    }
+    const forget = (id: PtyID) => {
+      pending.delete(id)
+      tainted.delete(id)
+      locks.delete(id)
+    }
 
     // In a session an invited guest has acted in, the terminals the agent did not open (the user's, such as the one a
     // Host locally agent runs in, and other sessions') are neither listed nor used: what the agent reads there would
@@ -352,42 +387,55 @@ export const TerminalTool = Tool.define<
           ...(params.keys === undefined ? {} : { keys: params.keys }),
         },
       })
-      const known = Shell.posix(info.command) || Shell.ps(info.command) || Shell.name(info.command) === "cmd"
-      const shell = known ? info.command : Shell.acceptable((yield* config.get()).shell)
-      const typed = submit(
-        pending.get(info.id) ?? EMPTY,
-        strokes,
-        Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\",
-      )
-      const scans = yield* Effect.forEach(typed.lines, (line) =>
+      // Who reads what is typed: an interactive shell, whose lines the scan reads as the commands they are; fish or nu,
+      // whose grammar it does not read; or a program (a command line's, a REPL, a dev server, ssh), for which a line is
+      // its own input and no shell command at all, so it goes as written, unread, with no shell history to recall.
+      const reader = readerOf(info)
+      const shell = reader === "shell" ? info.command : Shell.acceptable((yield* config.get()).shell)
+      const from = yield* locked(info.id)(
         Effect.gen(function* () {
-          const recalled = line.recalled === true || HISTORY.test(line.text)
-          return yield* permission.ask(ctx, {
-            command: line.text,
-            cwd: info.cwd,
-            shell,
-            ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line.text) } : {}),
-            unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
-            // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
-            recalled:
-              recalled ||
-              (!line.exact &&
-                line.text
-                  .split(/[\s;&|()`{}]+/)
-                  .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
-          })
+          const typed = submit(
+            pending.get(info.id) ?? EMPTY,
+            strokes,
+            Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\",
+          )
+          const scans = yield* Effect.forEach(typed.lines, (line) =>
+            Effect.gen(function* () {
+              if (reader === "program")
+                return yield* permission.ask(ctx, { command: line.text, cwd: info.cwd, shell, unread: true })
+              // A hook set now, or before, runs commands at the next prompt that no line says.
+              const hooked = tainted.has(info.id) || HOOKS.test(line.text)
+              if (HOOKS.test(line.text)) tainted.add(info.id)
+              const recalled = line.recalled === true || HISTORY.test(line.text) || hooked
+              return yield* permission.ask(ctx, {
+                command: line.text,
+                cwd: info.cwd,
+                shell,
+                unread: !line.exact || recalled || reader === "foreign",
+                // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and
+                // tab).
+                recalled:
+                  recalled ||
+                  (!line.exact &&
+                    line.text
+                      .split(/[\s;&|()`{}]+/)
+                      .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
+              })
+            }),
+          )
+          // One admission for every line the strokes submit, before the first keystroke: a line refused above or here
+          // types nothing, and leaves no claim on a file an earlier line of the same call names.
+          yield* permission.admit(ctx, scans)
+          pending.set(info.id, typed.line)
+          const from = (yield* pty.read(info.id, { limit: 0 })).end
+          for (const [index, data] of writes.entries()) {
+            // A program reads escape and the key right after it as one Alt combination, unless they come apart.
+            if (index > 0 && writes[index - 1] === "\x1b") yield* Effect.sleep("50 millis")
+            yield* pty.write(info.id, data)
+          }
+          return from
         }),
       )
-      // One admission for every line the strokes submit, before the first keystroke: a line refused above or here types
-      // nothing, and leaves no claim on a file an earlier line of the same call names.
-      yield* permission.admit(ctx, scans)
-      pending.set(info.id, typed.line)
-      const from = (yield* pty.read(info.id, { limit: 0 })).end
-      for (const [index, data] of writes.entries()) {
-        // A program reads escape and the key right after it as one Alt combination, unless they come apart.
-        if (index > 0 && writes[index - 1] === "\x1b") yield* Effect.sleep("50 millis")
-        yield* pty.write(info.id, data)
-      }
       yield* Effect.sleep("300 millis")
       const read = yield* pty.read(info.id, { cursor: from, limit: 32_000 })
       const shown = clean(read.output)
@@ -433,7 +481,9 @@ export const TerminalTool = Tool.define<
           // Enough to match a ready line in a chatty log, without cleaning megabytes on every poll.
           state.raw = (state.raw + read.output).slice(-512_000)
           state.text = clean(state.raw)
-          state.found = pattern?.test(state.text) === true
+          // The model's pattern runs on the last MATCH_WINDOW characters only: a pattern that backtracks badly over a
+          // long log would otherwise hold the engine on every poll.
+          state.found = pattern?.test(state.text.slice(-MATCH_WINDOW)) === true
           state.changed = now
         }
         const matched = state.found
@@ -473,7 +523,7 @@ export const TerminalTool = Tool.define<
       yield* askOther(params, ctx, info)
       if (params.action === "close") {
         yield* pty.remove(info.id)
-        pending.delete(info.id)
+        forget(info.id)
         return {
           title: info.title,
           metadata: metadata(params, info),
@@ -509,6 +559,8 @@ export const TerminalTool = Tool.define<
       // Refused before anything is asked: a terminal runs outside the sandbox Web access None keeps every command in.
       if (["open", "type", "keys"].includes(params.action) && offline.enabled && offline.web === "none")
         return yield* Effect.die(new Error(OFFLINE))
+      if (params.pattern !== undefined && params.pattern.length > PATTERN_MAX)
+        return usage(params, `The pattern is longer than ${PATTERN_MAX} characters. Wait for a shorter one.`)
       if (params.action === "list") return yield* list(ctx)
       if (params.action === "open") return yield* open(params, ctx, directory)
       if (params.id === undefined)
@@ -657,6 +709,10 @@ function tail(text: string, lines: number, chars: number) {
   return text.split("\n").slice(-lines).join("\n").slice(-chars)
 }
 
+// How much of the latest output a wait pattern is matched against, and the longest pattern taken.
+const MATCH_WINDOW = 64_000
+const PATTERN_MAX = 500
+
 // The pattern as a regular expression, or as literal text when it is not a valid one.
 function matcher(pattern: string) {
   try {
@@ -670,20 +726,43 @@ function size(cols: number, rows: number) {
   return { cols: Math.min(Math.max(cols, 20), 500), rows: Math.min(Math.max(rows, 5), 200) }
 }
 
+// A terminal runs outside the shell sandbox, the one that bounds what auto-approved commands can do, so starting one
+// with the sandbox on asks under a permission of its own: never the shell tool's unsandboxed_shell (whose "always" and
+// auto-accept would then start every terminal, and every command whose sandbox failed, without a word), never answered
+// by auto-accept or Full access, and with no "always" (PermissionPolicy.canAutoApprove).
 function unsandboxed(command: string) {
   return {
-    permission: "unsandboxed_shell",
+    permission: PermissionPolicy.TERMINAL_UNSANDBOXED,
     patterns: [process.platform],
-    always: [process.platform],
+    always: [],
     metadata: { command, platform: process.platform, reason: "Terminals run outside the shell sandbox." },
   }
 }
 
-// A terminal the session's agent opened, or its parent's when this is a subagent.
+// What reads the lines typed into a terminal (see input).
+function readerOf(info: Pty.Info): "shell" | "foreign" | "program" {
+  if (Shell.interactive(info.command, info.args)) return "shell"
+  if (FOREIGN.has(Shell.name(info.command)) && info.args.every((arg) => /^-(?:l|i|-login|-interactive)$/.test(arg)))
+    return "foreign"
+  return "program"
+}
+
+// A terminal the session's agent opened, its parent's when this is a subagent, or one of its own helpers' (a subagent
+// it started, or theirs): the main agent reads its helper's dev server as its own.
 function own(info: Pty.Info, ctx: Tool.Context) {
-  return (
-    info.owner?.kind === "agent" && (info.owner.sessionID === ctx.sessionID || info.owner.sessionID === ctx.parentID)
-  )
+  if (info.owner?.kind !== "agent") return false
+  if (info.owner.sessionID === ctx.sessionID || info.owner.sessionID === ctx.parentID) return true
+  return lineage(info.owner.sessionID).includes(ctx.sessionID)
+}
+
+// A session's ancestors, nearest first, as far as this engine started them (TaskPlace keeps who started whom).
+function lineage(sessionID: string) {
+  const found: string[] = []
+  for (let id = TaskPlace.parentOf(sessionID); id !== undefined && found.length < 32; id = TaskPlace.parentOf(id)) {
+    if (found.includes(id)) break
+    found.push(id)
+  }
+  return found
 }
 
 function describe(info: Pty.Info, ctx: Tool.Context) {
