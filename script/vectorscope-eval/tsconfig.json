@@ -6,6 +6,10 @@
   "extends": "../../packages/engine/tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // The desktop baseline imports DOM components transitively. Their JSX is Solid DOM, not the engine TUI runtime.
+    "jsxImportSource": "solid-js",
+    // Match the App's import treatment when checking its source through the desktop baseline.
+    "verbatimModuleSyntax": false,
     "paths": {
       "@/*": ["../../packages/engine/src/*", "../../packages/app/src/*"],
       "@test/*": ["../../packages/engine/test/*"]
