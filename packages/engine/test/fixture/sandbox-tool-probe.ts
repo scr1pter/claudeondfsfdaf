@@ -4,6 +4,7 @@ import path from "node:path"
 import { spawn, execFile, type SpawnOptions } from "node:child_process"
 import { promisify } from "node:util"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { mcpProbeCode } from "./sandbox-mcp-code"
 
 /**
  * CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. A build without the
@@ -482,11 +483,7 @@ export async function probeToolProcesses() {
       phase = "actual-mcp-launch"
       const transport = await localTransport({
         command: node,
-        args: [
-          "-e",
-          code.replace("JSON.stringify(result)", 'JSON.stringify({jsonrpc:"2.0",method:"probe",params:result})'),
-          String(dummy.pid),
-        ],
+        args: ["-e", mcpProbeCode(code), String(dummy.pid)],
         cwd: process.cwd(),
         env: Object.fromEntries(
           Object.entries(process.env).filter((item): item is [string, string] => item[1] !== undefined),
