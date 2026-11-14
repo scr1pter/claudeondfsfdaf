@@ -24,6 +24,7 @@ import * as NodeChildProcess from "node:child_process"
 import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { untrustedChildEnvironment } from "./child-environment"
+import { OwnedProcess } from "./owned-process"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
 
@@ -291,7 +292,7 @@ export const make = Effect.gen(function* () {
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
     Effect.callback<
-      readonly [NodeChildProcess.ChildProcess, ExitSignal, ReturnType<typeof captureOutput>],
+      readonly [NodeChildProcess.ChildProcess, ExitSignal, ReturnType<typeof captureOutput>, OwnedProcess.Control?],
       PlatformError.PlatformError
     >((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
@@ -299,6 +300,8 @@ export const make = Effect.gen(function* () {
       // Bun resumes stdio at native exit, before a delayed Effect reader can attach.
       // Pipe immediately into bounded streams; retain backpressure until consumed.
       const captured = captureOutput(proc)
+      const ownership = OwnedProcess.options(command)
+      const owned = ownership && proc.pid ? OwnedProcess.track(proc, captured.dispose, ownership) : undefined
       let end = false
       let spawned = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
@@ -320,7 +323,7 @@ export const make = Effect.gen(function* () {
       })
       proc.on("spawn", () => {
         spawned = true
-        resume(Effect.succeed([proc, signal, captured]))
+        resume(Effect.succeed([proc, signal, captured, owned]))
       })
       return Effect.sync(() => {
         proc.kill("SIGTERM")
@@ -409,7 +412,7 @@ export const make = Effect.gen(function* () {
           const extra = fds(command.options)
           const dir = yield* cwd(command.options)
 
-          const [proc, signal, captured] = yield* Effect.acquireRelease(
+          const [proc, signal, captured, owned] = yield* Effect.acquireRelease(
             spawn(command, {
               cwd: dir,
               env: env(command.options),
@@ -418,7 +421,12 @@ export const make = Effect.gen(function* () {
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
             }),
-            Effect.fnUntraced(function* ([proc, signal, captured]) {
+            Effect.fnUntraced(function* ([proc, signal, captured, owned]) {
+              if (owned) {
+                yield* Effect.promise(owned.stop)
+                yield* Effect.sync(captured.dispose)
+                return
+              }
               // A caller may never consume the pipes. Release their backpressure before
               // waiting for native close, which also waits for stdio to close.
               yield* Effect.sync(captured.dispose)
@@ -447,7 +455,7 @@ export const make = Effect.gen(function* () {
           const fd = yield* setupFds(command, proc, extra)
           const out = setupOutput(command, captured, sout, serr)
           let ref = true
-          return makeHandle({
+          const handle = makeHandle({
             pid: ProcessId(proc.pid!),
             stdin: yield* setupStdin(command, proc, sin),
             stdout: out.stdout,
@@ -467,6 +475,16 @@ export const make = Effect.gen(function* () {
               )
             }),
             kill: (opts?: ChildProcess.KillOptions) => {
+              if (owned)
+                return Effect.promise(owned.stop).pipe(
+                  Effect.flatMap((result) =>
+                    result.terminated
+                      ? Effect.void
+                      : Effect.fail(
+                          toPlatformError("kill", new Error(result.error ?? "Command cleanup failed"), command),
+                        ),
+                  ),
+                )
               const sig = opts?.killSignal ?? "SIGTERM"
               const send = (s: NodeJS.Signals) =>
                 Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
@@ -490,6 +508,8 @@ export const make = Effect.gen(function* () {
               })
             }),
           })
+          if (owned) OwnedProcess.bind(handle, owned)
+          return handle
         }
         case "PipedCommand": {
           const flat = flatten(command)

@@ -579,6 +579,7 @@ describe("BackgroundJob durable rows", () => {
     | { kind: "started"; row: BackgroundJob.Started }
     | { kind: "settled"; id: string; p: BackgroundJob.Settled }
     | { kind: "promoted"; id: string; p: BackgroundJob.Holder }
+    | { kind: "metadata"; id: string; p: BackgroundJob.MetadataUpdated }
 
   // A store that records each call, then behaves as `act` says: write, fail, die or never answer.
   const recorder = (act: (call: Call) => Effect.Effect<void, unknown> = () => Effect.void) => {
@@ -588,6 +589,8 @@ describe("BackgroundJob durable rows", () => {
       started: (row) => record({ kind: "started", row }),
       settled: (id, p) => record({ kind: "settled", id, p }),
       promoted: (id, p) => record({ kind: "promoted", id, p }),
+      metadataUpdated: (id, p, publish = Effect.void) =>
+        record({ kind: "metadata", id, p }).pipe(Effect.andThen(publish), Effect.as(true)),
     }
     return { calls, store }
   }
@@ -603,6 +606,333 @@ describe("BackgroundJob durable rows", () => {
     Effect.gen(function* () {
       while (!check()) yield* Effect.sleep("5 millis")
     }).pipe(Effect.timeout("2 seconds"))
+
+  it.live("metadata queues behind start and merges detached patches into independent accepted bases", () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>()
+      const { calls, store } = recorder((call) => (call.kind === "started" ? Deferred.await(ready) : Effect.void))
+      const { scope, jobs } = yield* registry(store)
+      const job = yield* jobs.start({
+        type: "shell",
+        metadata: { memoryOnly: "local output path" },
+        durable: { ...durable, metadata: { durableOnly: "recovery" } },
+        run: Effect.never,
+      })
+      const patch = { pid: 123, detail: { label: "captured" } }
+      const first = yield* jobs
+        .updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      const second = yield* jobs
+        .updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { outputBytes: 24 } })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      patch.detail.label = "mutated"
+      expect((yield* jobs.get(job.id))?.metadata).toEqual({ memoryOnly: "local output path" })
+      expect(calls.map((call) => call.kind)).toEqual(["started"])
+      yield* Deferred.succeed(ready, undefined)
+      expect(yield* Fiber.join(first)).toBe(true)
+      expect(yield* Fiber.join(second)).toBe(true)
+      expect((yield* jobs.get(job.id))?.metadata).toEqual({
+        memoryOnly: "local output path",
+        pid: 123,
+        detail: { label: "captured" },
+        outputBytes: 24,
+      })
+      expect(calls.filter((call) => call.kind === "metadata").map((call) => call.p.metadata)).toEqual([
+        { durableOnly: "recovery", pid: 123, detail: { label: "captured" } },
+        { durableOnly: "recovery", pid: 123, detail: { label: "captured" }, outputBytes: 24 },
+      ])
+      const read = yield* jobs.get(job.id)
+      if (read?.metadata) read.metadata.detail = { label: "reader" }
+      expect((yield* jobs.get(job.id))?.metadata?.detail).toEqual({ label: "captured" })
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.live("metadata refuses stale holders, non-durable and drained jobs, invalid JSON and the promotion flag", () =>
+    Effect.gen(function* () {
+      const { calls, store } = recorder()
+      const { scope, jobs } = yield* registry(store)
+      const job = yield* jobs.start({ type: "shell", durable, run: Effect.never })
+      const local = yield* jobs.start({ type: "shell", run: Effect.never })
+      const holder = { owner: owner.runtime, attempt: 2 }
+      expect(yield* jobs.updateMetadata(job.id, { ...holder, owner: "other", patch: { pid: 1 } })).toBe(false)
+      expect(yield* jobs.updateMetadata(job.id, { ...holder, attempt: undefined, patch: { pid: 1 } })).toBe(false)
+      expect(yield* jobs.updateMetadata(job.id, { ...holder, attempt: 1, patch: { pid: 1 } })).toBe(false)
+      expect(yield* jobs.updateMetadata(local.id, { ...holder, patch: { pid: 1 } })).toBe(false)
+      const cyclic: Record<string, unknown> = {}
+      cyclic.self = cyclic
+      let getterCalls = 0
+      for (const patch of [
+        cyclic,
+        { value: undefined },
+        { value: NaN },
+        { value: () => 1 },
+        { ["k".repeat(4097)]: 1 },
+        { background: true },
+        {
+          get value() {
+            getterCalls++
+            return 1
+          },
+        },
+      ]) {
+        expect(yield* jobs.updateMetadata(job.id, { ...holder, patch })).toBe(false)
+      }
+      expect(getterCalls).toBe(0)
+      yield* jobs.cancel(job.id)
+      expect(yield* jobs.updateMetadata(job.id, { ...holder, patch: { pid: 1 } })).toBe(false)
+      expect(calls.filter((call) => call.kind === "metadata")).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.live("failed metadata writes publish neither base and later patches cannot resurrect failed fields", () =>
+    Effect.gen(function* () {
+      for (const failed of [Effect.succeed(false), Effect.fail("disk full"), Effect.die("closed")]) {
+        const { store } = recorder()
+        const values: Record<string, unknown>[] = []
+        const { scope, jobs } = yield* registry({
+          ...store,
+          metadataUpdated: (_id, p, publish = Effect.void) =>
+            Effect.suspend(() => {
+              values.push(p.metadata)
+              return values.length === 1 ? failed : publish.pipe(Effect.as(true))
+            }),
+        })
+        const job = yield* jobs.start({
+          type: "shell",
+          metadata: { memory: true },
+          durable: { ...durable, metadata: { durable: true } },
+          run: Effect.never,
+        })
+        const holder = { owner: owner.runtime, attempt: 2 }
+        expect(yield* jobs.updateMetadata(job.id, { ...holder, patch: { failed: "never publish" } })).toBe(false)
+        expect((yield* jobs.get(job.id))?.metadata).toEqual({ memory: true })
+        expect(yield* jobs.updateMetadata(job.id, { ...holder, patch: { pid: 7 } })).toBe(true)
+        expect((yield* jobs.get(job.id))?.metadata).toEqual({ memory: true, pid: 7 })
+        expect(values[1]).toEqual({ durable: true, pid: 7 })
+        yield* Scope.close(scope, Exit.void)
+      }
+    }),
+  )
+
+  it.live("metadata serializes only validated descriptors without invoking proxy getters or toJSON", () =>
+    Effect.gen(function* () {
+      const { calls, store } = recorder()
+      const { scope, jobs } = yield* registry(store)
+      const job = yield* jobs.start({ type: "shell", durable, run: Effect.never })
+      let reads = 0
+      const patch = new Proxy(
+        { pid: 9, nested: [1, null, false] },
+        {
+          get: () => {
+            reads++
+            return () => ({ background: true, bypassed: "validation" })
+          },
+        },
+      )
+      expect(yield* jobs.updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch })).toBe(true)
+      expect(reads).toBe(0)
+      expect((yield* jobs.get(job.id))?.metadata).toEqual({ pid: 9, nested: [1, null, false] })
+      expect(calls.find((call) => call.kind === "metadata")).toMatchObject({
+        p: { metadata: { pid: 9, nested: [1, null, false] } },
+      })
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.live("a failed started write cannot patch a previous durable incarnation", () =>
+    Effect.gen(function* () {
+      const { calls, store } = recorder((call) =>
+        call.kind === "started" ? Effect.fail("cannot insert") : Effect.void,
+      )
+      const { scope, jobs } = yield* registry(store)
+      const job = yield* jobs.start({ type: "shell", durable, run: Effect.never })
+      expect(yield* jobs.updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { pid: 9 } })).toBe(false)
+      expect((yield* jobs.get(job.id))?.metadata).toBeUndefined()
+      expect(calls.filter((call) => call.kind === "metadata")).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.live("cancel and disposal finalizers can publish exit facts before their incarnation drains", () =>
+    Effect.gen(function* () {
+      for (const disposing of [false, true]) {
+        const { calls, store } = recorder()
+        const { scope, jobs } = yield* registry(store, () => disposing)
+        const accepted: boolean[] = []
+        const job = yield* jobs.start({
+          id: "shell-finalizer",
+          type: "shell",
+          durable,
+          run: Effect.never.pipe(
+            Effect.ensuring(
+              jobs
+                .updateMetadata("shell-finalizer", {
+                  owner: owner.runtime,
+                  attempt: 2,
+                  patch: { exitCode: 143, outputBytes: 42, truncated: false },
+                })
+                .pipe(Effect.tap((value) => Effect.sync(() => accepted.push(value)))),
+            ),
+          ),
+        })
+        if (disposing) yield* Scope.close(scope, Exit.void)
+        else yield* jobs.cancel(job.id)
+        expect(accepted).toEqual([true])
+        expect((yield* jobs.wait({ id: job.id })).info).toMatchObject({
+          status: disposing ? "interrupted" : "cancelled",
+          metadata: { exitCode: 143, outputBytes: 42, truncated: false },
+        })
+        expect(calls.filter((call) => call.kind === "metadata")).toHaveLength(1)
+        expect(yield* jobs.updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { late: true } })).toBe(
+          false,
+        )
+        yield* Scope.close(scope, Exit.void)
+      }
+    }),
+  )
+
+  it.live("caller interruption after the store commits still publishes matching memory and drains the write", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const { store } = recorder()
+      let caller: Fiber.Fiber<boolean> | undefined
+      let persisted: Record<string, unknown> | undefined
+      const { scope, jobs } = yield* registry({
+        ...store,
+        metadataUpdated: (_id, p, publish = Effect.void) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined)
+            yield* Deferred.await(release)
+            persisted = p.metadata
+            if (caller) yield* Fiber.interrupt(caller)
+            yield* publish
+            return true
+          }),
+      })
+      const job = yield* jobs.start({ type: "shell", durable, run: Effect.never })
+      caller = yield* jobs
+        .updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { pid: 11 } })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(entered)
+      yield* Deferred.succeed(release, undefined)
+      yield* jobs.cancel(job.id)
+      expect(persisted).toEqual({ pid: 11 })
+      expect((yield* jobs.wait({ id: job.id })).info?.metadata).toEqual({ pid: 11 })
+      expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.live("same-id reuse waits for metadata publication and rejects the previous attempt afterward", () =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const { calls, store } = recorder((call) =>
+        call.kind === "metadata"
+          ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      )
+      const { scope, jobs } = yield* registry(store)
+      const job = yield* jobs.start({
+        id: "reused-shell",
+        type: "shell",
+        durable,
+        run: Deferred.await(finish).pipe(Effect.as("done")),
+      })
+      const writing = yield* jobs
+        .updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { pid: 12 } })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(held)
+      yield* Deferred.succeed(finish, undefined)
+      const previous = yield* jobs.wait({ id: job.id }).pipe(Effect.forkChild({ startImmediately: true }))
+      const reused = yield* jobs
+        .start({ id: job.id, type: "shell", durable: { ...durable, attempt: 3 }, run: Effect.never })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      expect(calls.filter((call) => call.kind === "started")).toHaveLength(1)
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(writing)).toBe(true)
+      expect((yield* Fiber.join(previous)).info?.metadata).toEqual({ pid: 12 })
+      expect((yield* Fiber.join(reused)).metadata).toBeUndefined()
+      expect(yield* jobs.updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { old: true } })).toBe(false)
+      expect(yield* jobs.updateMetadata(job.id, { owner: owner.runtime, attempt: 3, patch: { pid: 13 } })).toBe(true)
+      expect((yield* jobs.get(job.id))?.metadata).toEqual({ pid: 13 })
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("a stalled metadata write times out without blocking unrelated work or promotion", () =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>()
+      const { store } = recorder()
+      const { scope, jobs } = yield* registry({
+        ...store,
+        metadataUpdated: () => Deferred.succeed(held, undefined).pipe(Effect.andThen(Effect.never)),
+      })
+      const job = yield* jobs.start({ type: "shell", durable, run: Effect.never })
+      const writing = yield* jobs
+        .updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { pid: 14 } })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(held)
+      const other = yield* jobs.start({ type: "task", durable, run: Effect.succeed("unrelated") })
+      expect((yield* jobs.wait({ id: other.id })).info?.output).toBe("unrelated")
+      expect((yield* jobs.list()).length).toBe(2)
+      expect((yield* jobs.promote(job.id))?.metadata?.background).toBe(true)
+      const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild({ startImmediately: true }))
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* Fiber.join(writing)).toBe(false)
+      yield* Fiber.join(closing)
+      expect((yield* jobs.get(job.id))?.metadata).toEqual({ background: true })
+    }),
+  )
+
+  it.live("a promotion during a held metadata write survives publication without leaking into durable metadata", () =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const { calls, store } = recorder((call) =>
+        call.kind === "metadata"
+          ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      )
+      const { scope, jobs } = yield* registry(store)
+      const job = yield* jobs.start({ type: "shell", metadata: { background: false }, durable, run: Effect.never })
+      const writing = yield* jobs
+        .updateMetadata(job.id, { owner: owner.runtime, attempt: 2, patch: { pid: 15 } })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(held)
+      expect((yield* jobs.promote(job.id))?.metadata?.background).toBe(true)
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(writing)).toBe(true)
+      expect((yield* jobs.get(job.id))?.metadata).toEqual({ background: true, pid: 15 })
+      expect(calls.find((call) => call.kind === "metadata")).toMatchObject({ p: { metadata: { pid: 15 } } })
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.live("metadata enforces the exact UTF-8 cap and reserves only in-memory promotion room", () =>
+    Effect.gen(function* () {
+      const { calls, store } = recorder()
+      const { scope, jobs } = yield* registry(store)
+      const holder = { owner: owner.runtime, attempt: 2 }
+      const exact = { value: "é".repeat(2042) }
+      expect(new TextEncoder().encode(JSON.stringify(exact)).length).toBe(4096)
+      const fixed = yield* jobs.start({ type: "shell", promotable: false, durable, run: Effect.never })
+      expect(yield* jobs.updateMetadata(fixed.id, { ...holder, patch: exact })).toBe(true)
+      expect(yield* jobs.updateMetadata(fixed.id, { ...holder, patch: { value: exact.value + "x" } })).toBe(false)
+      const promotable = yield* jobs.start({ type: "shell", durable, run: Effect.never })
+      expect(yield* jobs.updateMetadata(promotable.id, { ...holder, patch: exact })).toBe(false)
+      const room = { value: "x".repeat(4096 - JSON.stringify({ value: "", background: true }).length) }
+      expect(yield* jobs.updateMetadata(promotable.id, { ...holder, patch: room })).toBe(true)
+      const promoted = yield* jobs.promote(promotable.id)
+      expect(new TextEncoder().encode(JSON.stringify(promoted?.metadata)).length).toBe(4096)
+      expect(calls.filter((call) => call.kind === "metadata").map((call) => call.p.metadata)).toEqual([exact, room])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
 
   it.live("cancel() while not disposing records cancelled", () =>
     Effect.gen(function* () {
