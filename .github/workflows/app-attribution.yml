@@ -1,0 +1,42 @@
+name: App attribution checks
+
+on:
+  push:
+    branches: [build-candidate]
+    paths:
+      - .github/workflows/app-attribution.yml
+      - packages/app/src/pages/session/agent-follow.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  attribution:
+    name: Saved edit attribution (${{ matrix.host }})
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-24.04, windows-latest]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Check saved edit attribution
+        working-directory: packages/app
+        run: bun test --isolate --preload ./happydom.ts ./src/pages/session/agent-follow.test.ts
+        env:
+          CI: "true"
+      - name: Check App types
+        working-directory: packages/app
+        run: bun typecheck
