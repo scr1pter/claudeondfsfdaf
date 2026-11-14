@@ -333,7 +333,7 @@ it.instance("closing the real store scope interrupts its owner and forbids late 
   }),
 )
 
-it.instance("a rejecting registered disposer retains the failed lease and refuses later loads", () =>
+it.instance("a rejecting disposer quarantines its directory without poisoning store shutdown", () =>
   Effect.gen(function* () {
     const { store, close } = yield* isolated
     const input = yield* selection
@@ -354,7 +354,36 @@ it.instance("a rejecting registered disposer retains the failed lease and refuse
     expect(Exit.isFailure(yield* store.load(input).pipe(Effect.exit))).toBe(true)
     expect(Exit.isFailure(yield* store.reload(input).pipe(Effect.exit))).toBe(true)
     expect(Option.isNone(yield* fresh(store)(input, () => Effect.die("Failed lease was reused")))).toBe(true)
-    expect(Exit.isFailure(yield* close.pipe(Effect.exit))).toBe(true)
+    expect((yield* store.loaded()).some((context) => context.directory === input.directory)).toBe(false)
+    expect(Exit.isSuccess(yield* close.pipe(Effect.exit))).toBe(true)
+  }),
+)
+
+it.instance("global disposal continues through an exclusive cleanup failure to every other owner", () =>
+  Effect.gen(function* () {
+    const { store, close } = yield* isolated
+    const bad = yield* selection
+    const good = yield* selection
+    const entered = yield* Deferred.make<void>()
+    const ready = yield* Deferred.make<void>()
+    let cleaned = false
+    yield* disposer(bad.directory, Effect.die(new Error("PRIVATE_DISPOSER_REJECTION")))
+    yield* disposer(good.directory, Effect.sync(() => { cleaned = true }))
+    const first = yield* fresh(store)(bad, () =>
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+    ).pipe(Effect.forkChild({ startImmediately: true }))
+    yield* awaitWithTimeout(Deferred.await(entered), "First owner did not enter")
+    const second = yield* fresh(store)(good, () =>
+      Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never)),
+    ).pipe(Effect.forkChild({ startImmediately: true }))
+    yield* awaitWithTimeout(Deferred.await(ready), "Second owner did not enter")
+    yield* awaitWithTimeout(store.disposeAll(), "A failed owner blocked another owner's disposal")
+    expect(Exit.isFailure(yield* Fiber.await(first))).toBe(true)
+    expect(Exit.hasInterrupts(yield* Fiber.await(second))).toBe(true)
+    expect(cleaned).toBe(true)
+    expect(Option.isNone(yield* fresh(store)(bad, () => Effect.die("Failed directory was lent")))).toBe(true)
+    expect(Option.isSome(yield* fresh(store)(good, () => Effect.succeed("fresh")))).toBe(true)
+    yield* close
   }),
 )
 

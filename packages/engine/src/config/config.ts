@@ -1907,7 +1907,14 @@ const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (current: InstanceContext) {
-        const ctx = yield* Effect.promise(() => ConfigPaths.canonicalScope(current))
+        const ctx = yield* Effect.tryPromise({
+          try: () => ConfigPaths.canonicalScope(current),
+          catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("configuration scope could not be canonicalized", { cause }).pipe(Effect.as(current)),
+          ),
+        )
         const auth = yield* authSvc.all().pipe(Effect.orDie)
         const managed = ConfigManaged.read()
         const projectFiles = Flag.VECTOR_DISABLE_PROJECT_CONFIG

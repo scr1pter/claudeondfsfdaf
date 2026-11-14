@@ -1,11 +1,11 @@
 import { readdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { mergeConfig } from "vite"
+import { defineConfig, mergeConfig } from "vite"
 import appConfig from "../vite.config"
 
 // Compile the App and every regression fixture before browsers start. Preview
 // serves stable chunks without dev optimizer generations invalidating imports.
-export default mergeConfig(appConfig, {
+export default defineConfig(async (env) => mergeConfig(await appConfig(env), {
   build: {
     outDir: "dist-e2e",
     rollupOptions: {
@@ -18,4 +18,4 @@ export default mergeConfig(appConfig, {
       ],
     },
   },
-})
+}))

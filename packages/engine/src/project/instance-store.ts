@@ -66,6 +66,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
     const fresh = new Map<string, Fresh>()
     const owned = new WeakSet<InstanceContext>()
     const unconfirmed = new Set<string>()
+    const failedFresh = new Set<string>()
     const uncachedDisposals = new Map<string, Deferred.Deferred<void>>()
     let draining = false
     let closed = false
@@ -156,6 +157,8 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
         Effect.gen(function* () {
           while (true) {
             if (closed) return yield* Effect.die(new Error("Instance store is closed"))
+            if (failedFresh.has(directory))
+              return yield* Effect.die(new Error("Exclusive instance cleanup was not confirmed"))
             const owner = fresh.get(directory)
             if (owner) {
               if (
@@ -203,6 +206,8 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
         Effect.gen(function* () {
           while (true) {
             if (closed) return yield* Effect.die(new Error("Instance store is closed"))
+            if (failedFresh.has(directory))
+              return yield* Effect.die(new Error("Exclusive instance cleanup was not confirmed"))
             const owner = fresh.get(directory)
             if (owner) {
               if ((yield* FreshBootstrap) === owner || (yield* FreshOwner) === owner)
@@ -307,9 +312,13 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
       draining = true
       yield* Effect.gen(function* () {
         for (const owner of [...fresh.values()]) {
-          const stop = yield* Deferred.await(owner.stop)
-          yield* stop
-          yield* Deferred.await(owner.released)
+          yield* Effect.gen(function* () {
+            const stop = yield* Deferred.await(owner.stop)
+            yield* stop
+            yield* Deferred.await(owner.released)
+          }).pipe(
+            Effect.catchCause((cause) => Effect.logWarning("exclusive instance disposal failed", { cause })),
+          )
         }
         yield* Effect.logInfo("disposing all instances")
         yield* Effect.forEach(
@@ -380,6 +389,11 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
               }).pipe(Effect.exit)
               if (Exit.isFailure(cleanup)) {
                 owner.phase = "failed"
+                // Keep this directory quarantined without keeping a dead owner in the global shutdown queue.
+                unconfirmed.add(directory)
+                failedFresh.add(directory)
+                if (cache.get(directory) === owner.entry) cache.delete(directory)
+                if (fresh.get(directory) === owner) fresh.delete(directory)
                 const refused = Exit.die(new Error("Exclusive instance cleanup was not confirmed"))
                 yield* Deferred.done(owner.released, refused)
                 return yield* refused
