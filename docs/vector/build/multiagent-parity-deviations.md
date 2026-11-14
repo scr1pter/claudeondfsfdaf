@@ -2351,7 +2351,9 @@ Remaining:
 - No macOS runner.
 
 
-## 2026-11-09 Background command lifetime follow-up (native Windows acceptance pending)
+## 2026-11-09 Background command lifetime follow-up (native Windows acceptance passed 2026-11-12)
+
+Status (2026-11-12): native Windows acceptance and full CI passed at PR #26 head `4059f6a70`. See "Update (2026-11-12, PR #26 head)" at the end of this entry. The paragraphs before that update are kept as they were written on 2026-11-09, so their "pending" statements describe that date.
 
 The November 2 implementation bounds Stop by closing output and ignoring a timed-out process-group kill, then releases its admission slot. This follow-up makes the result explicit: only confirmed process-group/job termination and output drain release the slot. An uncertain cleanup is reported as failed, retains that conversation’s reservation, and never claims the remaining process stopped. Recovery still never kills a stored PID. POSIX process groups are not an OS sandbox; children that create independent groups may escape control.
 
@@ -2366,3 +2368,13 @@ Final local integration evidence: Engine typecheck passed after splitting the Wi
 Independent integration review by the coordinating root closed the ownership, cancellation barrier, durable acknowledgment, recovery authority and retained-admission boundaries. Windows-specific source review also fixed an orphan window by assigning the kill-on-close Job Object atomically in CreateProcessW with PROC_THREAD_ATTRIBUTE_JOB_LIST, rather than afterward. Every outward Windows termination proof now also requires output-reader settlement. Native tests cover actual cmd, PowerShell and Git Bash, suspended PID acknowledgment, holder death during creation, assignment refusal, EOF, descendant cleanup, protocol isolation, environment and output failure/stall. Those tests must run and pass on native Windows CI before this implementation is accepted there; local portable passes are not that evidence.
 
 Admission retention is process-local. An uncertain cleanup consumes its conversation’s slot until Vector restarts; restarting does not establish that an escaped process stopped. Recovery only reports persisted facts and never sends signals to recovered PIDs. Ordinary foreground commands are not opted into the new controller.
+
+Update (2026-11-12, PR #26 head): every run below is a `pull_request` run of PR #26 at head `4059f6a70d81c6e4fea9d39b1d388fc6af872477`. Each ran once (attempt 1) and concluded `success`. The counts come from the official job logs. The Windows startup failure, its correction, and the first native pass at `a193d18d9` (run 43150320218) are in docs/vector/build/process-ownership-followup.md.
+
+- Windows background containment [43151685952](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151685952), job `130962118761`, `windows-latest`. `test/tool/shell-windows-process.test.ts`: 23 pass, 1 skip (the non-Windows refusal case), 0 fail, 97 assertions. ShellJobs `test/task/shells.test.ts`: 11 pass, 3 skip (the three `onPosix` cases), 0 fail, 92 assertions. The Windows process-tree stop case passed. `test/tool/task-manage.test.ts -t 'background commands|running commands'`: the three background-command cases passed, 49 filtered out, 0 fail, 27 assertions.
+- test [43151685886](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151685886): 21 jobs passed, 0 failed, 3 manual jobs skipped. These include all 4 Linux and 12 Windows engine shards. The three cases that failed main's 42515544563 passed: Linux engine shard 1/4 `130962118998` and Windows engine shard 1/12 `130962119181`.
+- Verify [43151685821](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151685821): Website build, the 30-minute Vector Local desktop packet capture, and the Vector Local air-gap job passed.
+- typecheck [43151685946](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151685946): app, cloud, desktop and engine passed.
+- Vector standalone installers [43151686001](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151686001): `windows` and `windows-native` passed.
+
+This is the native Windows CI evidence that this entry's independent-review paragraph required. It covers Linux and Windows runners only. No macOS run, release review, merge or release is claimed.
