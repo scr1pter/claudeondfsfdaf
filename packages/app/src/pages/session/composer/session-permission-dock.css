@@ -1,3 +1,35 @@
+[data-component="connect-permission-patch"] {
+  min-width: 0;
+  width: 100%;
+
+  [data-slot="connect-permission-patch-title"] {
+    margin-bottom: 6px;
+    color: var(--v2-text-text-muted);
+    font-size: 12px;
+  }
+
+  pre {
+    margin: 0;
+    max-height: min(22rem, 40dvh);
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid var(--v2-border-border-base);
+    border-radius: 8px;
+    background: var(--v2-background-bg-layer-01);
+    color: var(--v2-text-text-base);
+    font-family: var(--font-family-mono, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+    tab-size: 2;
+  }
+
+  pre:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus);
+    outline-offset: 2px;
+  }
+}
+
 [data-slot="computer-permission-details"] {
   display: flex;
   flex-direction: column;

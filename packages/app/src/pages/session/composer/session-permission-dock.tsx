@@ -6,7 +6,7 @@ import type { PermissionRequest } from "@vectordevai/sdk/v2"
 import { Button } from "@vectordevai/ui/button"
 import { DockPrompt } from "@vectordevai/session-ui/dock-prompt"
 import { Icon } from "@vectordevai/ui/icon"
-import { connectConsentDetails } from "@/features/connect/consent"
+import { connectConsentDetails, connectConsentDiff } from "@/features/connect/consent"
 import { useLanguage } from "@/context/language"
 import { cloudPermissionScope, permissionStatements } from "./cloud-permission-scope"
 import { canAlwaysAllowPermission } from "@/context/permission-policy"
@@ -101,6 +101,20 @@ function GenericPermissionDock(props: PermissionDockProps) {
             <span data-slot="permission-spacer" aria-hidden="true" />
             <div data-slot="permission-hint" data-component="connect-permission-details">
               {details()}
+            </div>
+          </div>
+        )}
+      </Show>
+
+      <Show when={connectConsentDiff(props.request)}>
+        {(diff) => (
+          <div data-slot="permission-row">
+            <span data-slot="permission-spacer" aria-hidden="true" />
+            <div data-component="connect-permission-patch">
+              <div data-slot="connect-permission-patch-title">Changes to apply</div>
+              <pre role="region" aria-label="Changes to apply" tabIndex={0}>
+                {diff()}
+              </pre>
             </div>
           </div>
         )}

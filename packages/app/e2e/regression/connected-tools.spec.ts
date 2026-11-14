@@ -12,6 +12,42 @@ function reply(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) })
 }
 
+test("connected write approval shows the full patch as text before an explicit once-only decision", async ({
+  page,
+}) => {
+  const diff = "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-before\n+<script>literal patch text</script>\n"
+  const app = await setup(page, {
+    capabilities: { connections: true },
+    status: { [rootID]: { type: "busy" } },
+    permissions: [
+      {
+        id: "per_connected_write",
+        sessionID: rootID,
+        permission: "connect_write",
+        patterns: ["src/a.ts"],
+        always: [],
+        metadata: { runID: "cr_fixture", description: "Merge the reviewed fix.", diff },
+      },
+    ],
+  })
+  await app.open()
+  const dock = page.locator('[data-component="dock-prompt"][data-kind="permission"]')
+  const patch = dock.getByRole("region", { name: "Changes to apply" })
+  await expect(patch).toBeVisible()
+  await patch.focus()
+  await expect(patch).toBeFocused()
+  expect(await patch.textContent()).toBe(diff)
+  await expect(patch.locator("script")).toHaveCount(0)
+  await expect(dock.getByRole("button", { name: "Allow always", exact: true })).toHaveCount(0)
+  const reply = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === `/session/${rootID}/permissions/per_connected_write`,
+  )
+  await dock.getByRole("button", { name: "Allow once", exact: true }).click()
+  expect((await reply).postDataJSON()).toEqual({ response: "once" })
+})
+
 test("connected settings keep an unsaved draft and focus when a run refreshes", async ({ page }) => {
   const app = await setup(page, { capabilities: { connections: true }, globalConfig: {} })
   const scopes: (string | null)[] = []
