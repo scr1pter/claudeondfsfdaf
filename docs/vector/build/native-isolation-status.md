@@ -54,3 +54,12 @@ The separate legacy @vector sandbox job `132364311238` at source `ceed2426`
 also refused prepare before its runtime probes. Its generic error is not evidence
 of the same cause as the native keeper failure. No native implementation is
 transplanted wholesale into the legacy preparation path by this diagnostic step.
+
+The first bounded diagnostic dispatch,
+[43619796230](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43619796230)
+at `065287ba`, stopped in the pure-policy step: 29 cases passed, and one still
+expected the old 114-element diagnostic product rather than the expanded 162.
+Both stale Python expectations are corrected; no native prepare ran in that
+dispatch. A local request to execute only its pure diagnostic class was refused
+by the fixture's CI-only gate before tests or native initialization. That gate
+was left intact; the correction awaits a fresh bounded hosted dispatch.

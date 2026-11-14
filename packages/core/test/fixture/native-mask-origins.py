@@ -587,8 +587,8 @@ class KeeperDiagnosticTests(unittest.TestCase):
                     stage = NATIVE["keeper_failure_stage"](outcome, log, info)
                     self.assertEqual(stage, f"prepare-keeper-{outcome}-log-{log}-info-{info}")
                     stages.append(stage)
-        self.assertEqual(len(stages), 114)
-        self.assertEqual(len(set(stages)), 114)
+        self.assertEqual(len(stages), 162)
+        self.assertEqual(len(set(stages)), 162)
         for values in (
             ("exit", "empty", "empty"), ("child-exit-log-empty", "empty", "empty"),
             ("timeout", "phase-network", "empty"), ("child-exit", "bwrap-private", "empty"),
