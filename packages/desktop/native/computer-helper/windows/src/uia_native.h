@@ -36,7 +36,18 @@ inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
   L"actor-current", L"actor-current-budget", L"actor-complete", L"actor-expired", L"actor-cancelled", L"actor-revoked",
   L"actor-com-uninitialized", L"actor-com-cancellation-unavailable", L"actor-com-timer-unavailable", L"actor-com-expired"
 };
-struct WindowsUiaDiagnostic { std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none}; };
+struct WindowsUiaDiagnostic {
+  std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none};
+  std::atomic<WindowsUiaPhase> timeout_phase{WindowsUiaPhase::none};
+  // The first deadline observer samples before expiry/retirement. Late work cannot rewrite this observation.
+  void note_timeout() noexcept {
+    auto empty = WindowsUiaPhase::none;
+    timeout_phase.compare_exchange_strong(empty, phase.load(std::memory_order_relaxed), std::memory_order_relaxed);
+  }
+  WindowsUiaPhase failure_phase(bool available) const noexcept {
+    return (available ? phase : timeout_phase).load(std::memory_order_relaxed);
+  }
+};
 static_assert(std::atomic<WindowsUiaPhase>::is_always_lock_free);
 static_assert(windows_uia_phases.size() == static_cast<size_t>(WindowsUiaPhase::actor_com_expired) + 1);
 class NativeUia;

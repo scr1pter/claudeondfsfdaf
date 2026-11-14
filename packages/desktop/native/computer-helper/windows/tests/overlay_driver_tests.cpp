@@ -207,6 +207,26 @@ size_t run_overlay_driver_tests() {
     require(overlay_driver_stage_name(static_cast<OverlayDriverStage>(overlay_driver_stages.size())).empty(), "overlay-driver.out-of-range-stage-has-no-name");
   });
   test([] {
+    for (const auto phase : {WindowsUiaPhase::actor_queued, WindowsUiaPhase::prepare_create, WindowsUiaPhase::root_element}) {
+      const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+      diagnostic->phase.store(phase);
+      require(diagnostic->failure_phase(false) == WindowsUiaPhase::none, "overlay-driver.retired-actor-without-timeout-snapshot-does-not-publish-live-phase");
+      diagnostic->note_timeout();
+      diagnostic->phase.store(WindowsUiaPhase::actor_expired);
+      diagnostic->phase.store(WindowsUiaPhase::actor_complete);
+      diagnostic->note_timeout();
+      require(diagnostic->failure_phase(false) == phase, "overlay-driver.first-timeout-phase-survives-late-work-and-later-timeouts");
+      require(diagnostic->failure_phase(true) == WindowsUiaPhase::actor_complete, "overlay-driver.healthy-actor-keeps-existing-live-phase-observation");
+      const auto stage = overlay_driver_uia_stage(diagnostic->failure_phase(false));
+      require(stage.has_value(), "overlay-driver.immutable-timeout-phase-remains-a-closed-stage");
+      try { throw Failure{L"no_ui_tree", L"PRIVATE NATIVE CONTENT"}; }
+      catch (...) {
+        const auto result = overlay_driver_caught(OverlayDriverMode::stop, *stage, std::current_exception());
+        require(!result.ok && !result.skipped && result.exit_code() == 1 && result.cause == L"core_failure:no_ui_tree", "overlay-driver.timeout-snapshot-cannot-change-failure-or-create-a-skip");
+      }
+    }
+  });
+  test([] {
     require(!overlay_driver_uia_stage(WindowsUiaPhase::none) && !overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(windows_uia_phases.size())), "overlay-driver.uia-unknown-phases-have-no-stage");
     for (size_t index = 1; index < windows_uia_phases.size(); ++index) {
       const auto stage = overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(index));
