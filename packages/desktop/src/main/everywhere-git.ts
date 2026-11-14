@@ -7,11 +7,36 @@ import { heldBack } from "@vectordevai/core/everywhere/publish"
 import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN, isRepositoryName } from "@vectordevai/schema/everywhere"
 import { parseGithubRemote } from "./github-api"
 
-const SAFE_CONFIG = /^(?:core\.(?:repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree|hookspath|fsmonitor|sshcommand|longpaths)|extensions\.(?:worktreeconfig|objectformat)|user\.(?:name|email)|(?:commit|tag)\.gpgsign|remote\.[a-z0-9_.-]+\.(?:url|pushurl|fetch|tagopt|prune)|branch\.[a-z0-9_./-]+\.(?:remote|merge|pushremote))$/i
+/**
+ * Local keys git and common tools write that never run a command, rewrite a URL, filter content or name a helper.
+ * Git for Windows writes core.symlinks, gh writes remote.<n>.gh-resolved and branch.<b>.gh-merge-base, VS Code writes
+ * branch.<b>.vscode-merge-base, and partial clones write the promisor keys. Everything else stays refused, including
+ * submodule.<n>.update, filter.*, include*, url.*, http.*, credential.*, core.editor/pager/askpass and gpg.*.
+ */
+const SAFE_CONFIG = new RegExp("^(?:" + [
+  "core\\.(?:repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree|hookspath|fsmonitor|sshcommand|longpaths|symlinks|autocrlf)",
+  "extensions\\.(?:worktreeconfig|objectformat|partialclone)",
+  "user\\.(?:name|email)",
+  "(?:commit|tag)\\.gpgsign",
+  "pull\\.rebase",
+  "maintenance\\.(?:auto|strategy|[a-z-]+\\.(?:enabled|schedule))",
+  "remote\\.[a-z0-9_.-]+\\.(?:url|pushurl|fetch|tagopt|prune|gh-resolved|promisor|partialclonefilter)",
+  "branch\\.[a-z0-9_./-]+\\.(?:remote|merge|pushremote|rebase|vscode-merge-base|gh-merge-base|github-pr-owner-number)",
+  "submodule\\.[a-z0-9_./-]+\\.(?:url|active)",
+].join("|") + ")$", "i")
 
 /** Repository config cannot introduce a filter, include, URL rewrite, proxy, command, or credential helper. */
 export function safeRepositoryConfig(text: string) {
   return text.split("\0").filter(Boolean).every((item) => SAFE_CONFIG.test(item.split("\n", 1)[0]!))
+}
+
+/** Why a declared project folder can or cannot take a job. The reason is local only: the job declines `not-mapped`. */
+export type RepositoryMapping = "mapped" | "unsafe-config" | "other-repository" | "unavailable"
+class UnsafeConfig extends Error {
+  constructor() { super("Everywhere refuses executable repository configuration") }
+}
+class OtherRepository extends Error {
+  constructor() { super("The Everywhere workspace remote does not match") }
 }
 
 function mapsRepository(config: string, repository: string) {
@@ -93,14 +118,14 @@ export function createEverywhereGit(input: {
   const configuration = async (cwd: string) => {
     // --local alone omits config.worktree when extensions.worktreeConfig is enabled.
     const local = await run(["config", "--null", "--list", "--local", "--no-includes"], cwd)
-    if (!safeRepositoryConfig(local)) throw new Error("Everywhere refuses executable repository configuration")
+    if (!safeRepositoryConfig(local)) throw new UnsafeConfig()
     const file = path.resolve(cwd, (await run(["rev-parse", "--git-path", "config.worktree"], cwd)).trim())
     // Git's --worktree --list fails when an enabled worktree has no optional config file yet.
     // Only proved absence is empty; unreadable, oversized or malformed files still refuse the operation.
     const worktree = await hash(file) === "absent" ? "" : await run(["config", "--null", "--list", "--file", file, "--no-includes"], cwd)
-    if (!safeRepositoryConfig(worktree)) throw new Error("Everywhere refuses executable repository configuration")
+    if (!safeRepositoryConfig(worktree)) throw new UnsafeConfig()
     const config = local + worktree
-    if (!mapsRepository(config, input.repository)) throw new Error("The Everywhere workspace remote does not match")
+    if (!mapsRepository(config, input.repository)) throw new OtherRepository()
     return config
   }
   const authority = async (cwd: string) => {
@@ -122,8 +147,9 @@ export function createEverywhereGit(input: {
   return {
     run,
     unchanged,
-    async mapped() {
-      return await configuration(input.directory).then(() => true, () => false)
+    async mapping(): Promise<RepositoryMapping> {
+      return await configuration(input.directory).then(() => "mapped" as const, (error: unknown) =>
+        error instanceof UnsafeConfig ? "unsafe-config" : error instanceof OtherRepository ? "other-repository" : "unavailable")
     },
     async snapshot(cwd = input.directory): Promise<GitSnapshot> {
       await configuration(cwd)

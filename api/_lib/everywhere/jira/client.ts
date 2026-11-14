@@ -1,7 +1,7 @@
 import { ApiError } from "../../http.js"
 import { platformFetch, readPlatformJson } from "../fetch.js"
 import { everywhereKeys } from "../keys.js"
-import type { Store } from "../store.js"
+import { storeScore, type Store } from "../store.js"
 import { JIRA_UUID, jiraObject } from "./fit.js"
 
 export const JIRA_SCOPES = ["read:jira-work", "read:jira-user", "read:app-user-token", "read:app-system-token"] as const
@@ -14,9 +14,9 @@ export function jiraClient(input: { readonly cloudId: string; readonly userToken
     if (operation !== "myself" && (!id || !/^[1-9][0-9]{0,19}$/.test(id))) throw new JiraFailure()
     if (operation === "comment" && (!commentId || !/^[1-9][0-9]{0,19}$/.test(commentId))) throw new JiraFailure()
     const key = everywhereKeys.jiraRetry(`jira:${input.cloudId}`)
-    const until = await input.store(["ZSCORE", key, "until"])
-    if (until !== null && until !== undefined && (typeof until !== "string" || !/^[0-9]{1,16}$/.test(until))) throw new JiraFailure()
-    if (Number(until) > input.now()) throw new JiraFailure(Number(until) - input.now())
+    // Native Redis may answer the score as a number; a malformed or negative one is a store fault, not a cooldown.
+    const until = storeScore(await input.store(["ZSCORE", key, "until"]))
+    if (until > input.now()) throw new JiraFailure(until - input.now())
     const path = operation === "myself" ? "/rest/api/3/myself" : operation === "comment" ? `/rest/api/3/issue/${id}/comment/${commentId}` :
       `/rest/api/3/issue/${id}?fields=summary,description,project,reporter,comment`
     const response = await platformFetch("jira", `https://api.atlassian.com/ex/jira/${input.cloudId}${path}`, {

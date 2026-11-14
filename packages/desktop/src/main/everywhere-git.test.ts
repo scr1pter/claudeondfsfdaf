@@ -20,6 +20,25 @@ test("unknown executable config and secret-bearing inherited environment fail cl
   expect(env.GIT_CONFIG_GLOBAL).toBe(os.devNull)
 })
 
+test("stock Windows, gh, VS Code and partial-clone settings are inert and stay allowed", () => {
+  // A default Git for Windows clone (symlinks off), after `gh repo set-default`, a VS Code branch and a partial clone.
+  const stock = [
+    "core.repositoryformatversion\n0", "core.filemode\nfalse", "core.bare\nfalse", "core.logallrefupdates\ntrue",
+    "core.symlinks\nfalse", "core.ignorecase\ntrue", "core.autocrlf\ntrue",
+    "remote.origin.url\nhttps://github.com/acme/app.git", "remote.origin.fetch\n+refs/heads/*:refs/remotes/origin/*",
+    "remote.origin.gh-resolved\nbase", "remote.origin.promisor\ntrue", "remote.origin.partialclonefilter\nblob:none",
+    "extensions.partialclone\norigin", "branch.main.remote\norigin", "branch.main.merge\nrefs/heads/main",
+    "branch.fix/retry.vscode-merge-base\norigin/main", "branch.fix/retry.rebase\nfalse", "branch.fix/retry.gh-merge-base\nmain",
+    "pull.rebase\nfalse", "maintenance.auto\nfalse", "maintenance.strategy\nincremental", "maintenance.gc.enabled\nfalse",
+    "submodule.vendor/lib.url\nhttps://github.com/acme/lib.git", "submodule.vendor/lib.active\ntrue",
+  ]
+  expect(safeRepositoryConfig(`${stock.join("\0")}\0`)).toBe(true)
+  for (const key of ["submodule.vendor/lib.update", "core.editor", "core.pager", "core.askpass", "gpg.program", "http.proxy",
+    "http.https://github.com/.extraheader", "includeif.gitdir:/x/.path", "remote.origin.uploadpack", "remote.origin.receivepack",
+    "branch.main.vscode-merge-base.extra", "maintenance.gc.command"])
+    expect({ key, safe: safeRepositoryConfig(`core.symlinks\nfalse\0${key}\nanything\0`) }).toEqual({ key, safe: false })
+})
+
 test("actual git ignores hooks, holds workflow files, and detects metadata changes", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "everywhere-git-"))
   const git = (...args: string[]) => execFileSync("git", ["-c", `core.hooksPath=${os.devNull}`, ...args], {
@@ -38,7 +57,7 @@ test("actual git ignores hooks, holds workflow files, and detects metadata chang
     git("add", ".")
     git("commit", "-qm", "fixture")
     const runner = createEverywhereGit({ directory, repository: "acme/app", identity: { name: "Fixture", email: "fixture@example.invalid" } })
-    expect(await runner.mapped()).toBe(true)
+    expect(await runner.mapping()).toBe("mapped")
     const snapshot = await runner.snapshot()
     await writeFile(path.join(directory, "README.md"), "after\n")
     await writeFile(path.join(directory, ".husky", "pre-commit"), "#!/bin/sh\nprintf malicious > hook-ran\n")
@@ -61,15 +80,19 @@ test("the actual local remote must match the declared allowed project before wor
   try {
     git("init", "-q")
     const runner = createEverywhereGit({ directory, repository: "acme/app", identity: { name: "Fixture", email: "fixture@example.invalid" } })
-    expect(await runner.mapped()).toBe(false)
+    expect(await runner.mapping()).toBe("other-repository")
     git("remote", "add", "origin", "https://github.com/acme/other.git")
-    expect(await runner.mapped()).toBe(false)
+    expect(await runner.mapping()).toBe("other-repository")
     git("remote", "set-url", "origin", "https://github.com.evil.invalid/acme/app.git")
-    expect(await runner.mapped()).toBe(false)
+    expect(await runner.mapping()).toBe("other-repository")
     git("remote", "set-url", "origin", "ssh://git@github.com/ACME/APP.git")
-    expect(await runner.mapped()).toBe(true)
+    expect(await runner.mapping()).toBe("mapped")
+    // What a default Git for Windows clone and `gh repo set-default` write to the actual local config.
+    git("config", "core.symlinks", "false")
+    git("config", "remote.origin.gh-resolved", "base")
+    expect(await runner.mapping()).toBe("mapped")
     git("config", "include.path", "ignored-fixture-config")
-    expect(await runner.mapped()).toBe(false)
+    expect(await runner.mapping()).toBe("unsafe-config")
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 
@@ -151,11 +174,11 @@ test("active config.worktree includes, filters and URL rewrites are refused befo
     authenticate: async () => { authentications++; return undefined } })
   try {
     // A newly created linked worktree legitimately has no config.worktree file.
-    expect(await runner.mapped()).toBe(true)
+    expect(await runner.mapping()).toBe("mapped")
     for (const key of ["include.path", "filter.fixture.clean", "url.https://rewrite.invalid/.insteadOf"]) {
       const snapshot = await runner.snapshot()
       f.git("-C", f.worktree, "config", "--worktree", key, "fixture-missing")
-      expect(await runner.mapped()).toBe(false)
+      expect(await runner.mapping()).toBe("unsafe-config")
       await expect(runner.snapshot()).rejects.toThrow("Everywhere refuses executable repository configuration")
       await expect(runner.fetch(snapshot, "main", createJobId(Date.now()))).rejects.toThrow("Everywhere git authority changed")
       expect(await runner.stage(snapshot, f.worktree)).toBeUndefined()
@@ -164,7 +187,7 @@ test("active config.worktree includes, filters and URL rewrites are refused befo
       f.git("-C", f.worktree, "config", "--worktree", "--unset", key)
     }
     f.git("-C", f.worktree, "config", "--worktree", "remote.origin.url", "https://github.com/acme/other.git")
-    expect(await runner.mapped()).toBe(false)
+    expect(await runner.mapping()).toBe("other-repository")
     expect(authentications).toBe(0)
     expect(f.git("-C", f.worktree, "status", "--porcelain")).toBe("")
   } finally { await rm(f.root, { recursive: true, force: true }) }

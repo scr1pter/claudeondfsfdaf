@@ -50,7 +50,7 @@ function fixture() {
     summary: async () => "Fixed retry handling.", posting: async (parts) => ({ status: "clean", parts }),
   }
   const git: RunnerGit = {
-    run: async () => "", unchanged: async () => true, mapped: async () => true,
+    run: async () => "", unchanged: async () => true, mapping: async () => "mapped",
     snapshot: async (directory) => ({ directory: directory ?? "/fixture/project", gitDirectory: "/fixture/git", commonDirectory: "/fixture/common", config: [], pushUrl: "https://github.com/acme/app.git", baseSha: (directory ? "b" : "a").repeat(40) }),
     fetch: async () => "b".repeat(40),
     stage: async () => ({ held: [], files: 1, diff: "diff --git a/file.ts b/file.ts\n@@ -0,0 +1 @@\n+const retry = true\n" }),
@@ -116,11 +116,18 @@ test("an unmapped repository declines under its exact lease", async () => {
 })
 
 test("a stale project declaration cannot authorize a different repository in that folder", async () => {
-  const f = fixture()
-  f.git.mapped = async () => false
-  await createEverywhereRunner(f.deps).offer("fixture-offer")
-  expect(f.calls.find((call) => call.kind === "decline")?.value).toEqual({ reason: "not-mapped", lease: f.job.lease.id })
-  expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
+  for (const mapping of ["other-repository", "unsafe-config", "unavailable"] as const) {
+    const f = fixture()
+    const logged: string[] = []
+    f.git.mapping = async () => mapping
+    await createEverywhereRunner({ ...f.deps, log: (message) => logged.push(message) }).offer("fixture-offer")
+    expect(f.calls.find((call) => call.kind === "decline")?.value).toEqual({ reason: "not-mapped", lease: f.job.lease.id })
+    expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
+    // The owner can tell refused settings from a wrong remote, without repository output in the log.
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain(mapping === "unsafe-config" ? "local git settings" : mapping === "other-repository" ? "not the allowed repository" : "could not read")
+    expect(logged[0]).not.toContain("acme")
+  }
 })
 
 test("a changed Github trigger declines its exact lease before started, worktree or engine admission", async () => {

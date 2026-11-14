@@ -1,17 +1,11 @@
 import { everywhereKeys } from "../keys.js"
-import { storeInteger, storeUnavailable, type Store } from "../store.js"
+import { storeScore, type Store } from "../store.js"
 import type { SlackMethod } from "./client.js"
 
 /** Atomic max: concurrent shorter Retry-After answers cannot shorten a previous workspace cooldown. */
 export function slackCooldown(store: Store, installation: string) {
   return {
-    read: async (method: SlackMethod) => {
-      const value = await store(["ZSCORE", everywhereKeys.slackRetry(installation, method), "until"])
-      if (value === null || value === undefined) return 0
-      const at = storeInteger(value)
-      if (at < 0) throw storeUnavailable()
-      return at
-    },
+    read: async (method: SlackMethod) => storeScore(await store(["ZSCORE", everywhereKeys.slackRetry(installation, method), "until"])),
     write: async (method: SlackMethod, at: number, _ttlMs: number) => {
       if (!Number.isSafeInteger(at) || at <= 0) throw new RangeError("Invalid Slack cooldown")
       const key = everywhereKeys.slackRetry(installation, method)
