@@ -1001,25 +1001,27 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0) - heldUsd) : undefined
         const ops = entry.call.promptOps
         const yieldInstance = yield* InstanceState.context
-        const readSource = placed?.parentDirectory ?? yieldInstance.worktree
-        const readOrigins =
+        const readPlace =
           request.action === "review" && adapter.id === "vectorscope" && ops
-            ? [
-                readSource,
-                yield* Effect.tryPromise(() => realpath(readSource)).pipe(
-                  Effect.catch(() => refusal("read-rule", "Connect could not resolve the review's read authority.")),
-                ),
-              ]
-            : []
+            ? yield* Effect.tryPromise(() => reviewRoot(request.directory, yieldInstance)).pipe(
+                Effect.catch(() => refusal("read-rule", "Connect could not resolve the review's read authority.")),
+              )
+            : undefined
+        const readSources = readPlace ? [...new Set([readPlace.root, ...(placed ? [placed.parentDirectory] : [])])] : []
+        const readOrigins = readPlace
+          ? yield* Effect.tryPromise(async () => [
+              ...readSources,
+              ...readPlace.prefixes,
+              ...(await Promise.all(readSources.map((root) => realpath(root)))),
+            ]).pipe(Effect.catch(() => refusal("read-rule", "Connect could not resolve the review's read authority.")))
+          : []
         const readRules = rules.map((rule) => ({ ...rule }))
         const service =
-          request.action === "review" && adapter.id === "vectorscope" && ops
+          readPlace && ops
             ? ConnectReviewService.qualify({
                 helper: helperFor(entry, ops, adapter.id, true),
                 active: () => entry.run.status === "running" && !entry.finishing,
-                readRoot:
-                  placed?.directory ??
-                  (yield* Effect.promise(async () => (await reviewRoot(request.directory, yieldInstance)).root)),
+                readRoot: placed?.directory ?? readPlace.root,
                 readDenies: entry.readDenies?.map((rule) => rule.pattern) ?? ConnectPolicy.readPatterns(rules),
                 checkReads: (paths) => {
                   const block = ConnectPolicy.diffReadBlock(paths, readRules, readOrigins)

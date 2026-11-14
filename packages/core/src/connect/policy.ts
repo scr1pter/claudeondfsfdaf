@@ -731,11 +731,12 @@ export function diffReadBlock(paths: Iterable<string>, requester: Ruleset, roots
   for (const path of paths) {
     const block = readBlock(path, requester, [])
     if (block) return block
-    // Relative rules name the tool's worktree. Check explicit absolute rules separately, under every admitted
-    // source spelling, so a default ask does not erase a relative allow and an isolated worktree cannot reopen one.
+    // Relative rules name the tool's worktree. Absolute aliases check only explicit absolute rules; non-repository
+    // resource prefixes keep the actual relative rules. A default ask must not erase a valid relative allow.
     for (const root of roots) {
       const full = `${root.replaceAll("\\", "/").replace(/\/$/, "")}/${path}`
-      const alias = readBlock(full, aliases, [])
+      const rules = root.startsWith("/") || /^[A-Za-z]:[\\/]/.test(root) ? aliases : requester
+      const alias = readBlock(full, rules, [])
       if (alias) return { ...alias, path }
     }
   }

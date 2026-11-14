@@ -558,6 +558,32 @@ describe("lifecycle", () => {
 })
 
 describe("checks before anything is asked", () => {
+  it.instance("a diff outside the instance retains its actual source's absolute secret question", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-diff-origin-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(outside, { recursive: true, force: true })))
+      yield* Effect.promise(() => fs.mkdir(path.join(outside, ".git")))
+      yield* write(outside, "private.key", "WITHHELD_OTHER_REPOSITORY")
+      const { hub, requester } = yield* setup([
+        { permission: "read", pattern: "*", action: "allow" },
+        { permission: "read", pattern: path.join(outside, "private.key"), action: "ask" },
+      ])
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          expect(context.reviewService).toBeDefined()
+          const checked = yield* ConnectReviewService.checkReads(context.reviewService!, ["private.key"]).pipe(
+            Effect.exit,
+          )
+          expect(Exit.isFailure(checked)).toBe(true)
+          return clean()
+        })
+      const { ops } = recorder()
+      const run = yield* hub.run({ request: review(requester.id, outside), call: { ...asker(), promptOps: ops } })
+      expect(run.result?.state).toBe("completed")
+      expect(seen).toHaveLength(1)
+    }),
+  )
+
   it.instance("the qualified diff authority keeps secret asks and denies without widening requester reads", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup([

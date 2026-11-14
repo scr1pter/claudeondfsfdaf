@@ -601,6 +601,19 @@ describe("read rules a review must not get around", () => {
     expect(ConnectPolicy.diffReadBlock(["private.key"], permitted, ["C:\\source\\repo"])?.action).toBe("deny")
   })
 
+  test("non-repository tool resource prefixes keep requester secret questions in diff admission", () => {
+    expect(
+      ConnectPolicy.diffReadBlock(
+        ["private.key"],
+        [
+          { permission: "read", pattern: "*", action: "allow" },
+          { permission: "read", pattern: "workspace/private.key", action: "ask" },
+        ],
+        ["workspace"],
+      ),
+    ).toEqual({ path: "private.key", pattern: "workspace/private.key", action: "ask" })
+  })
+
   test("under the build agent's defaults only the docker and kube patterns are looked for", () => {
     expect(ConnectPolicy.readPatterns(buildRules)).toEqual([
       ".docker/config.json",
