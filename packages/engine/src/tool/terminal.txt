@@ -11,7 +11,7 @@ Actions:
 - resize: sets `cols` and `rows`.
 - rename: sets the tab title to `title`.
 - close: ends the terminal's process, and kills it with its process group if it ignores the hangup, then removes the terminal.
-- reveal: shows a terminal in the user's terminal panel; `focus: true` also moves the user's keyboard focus to it. A client without a terminal panel shows nothing.
+- reveal: shows a terminal in the user's terminal panel; `focus: true` also moves the user's keyboard focus to it, unless the user is typing in another field at that moment. A client without a terminal panel shows nothing.
 
 Every result that shows output ends its header with `cursor=N`. Pass that cursor to the next read or wait to see only what is new.
 
