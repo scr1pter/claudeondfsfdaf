@@ -5,7 +5,7 @@ A30 follows A29 (`f254efc5`) and drafts contract §7.2 for the legal read. It ch
 ## Where the work is
 
 - **`codium`**, commit `986a8096` ("A30 legal page guard"): `test/codium-legal.test.ts` and one CI trigger. The test pins each legal page by its effective date (sha256 of the source, LF line endings), checks that checkout's `CODIUM_TERMS_DATE` equals the terms page's date and that both pages carry the same date, and checks that every link to a `/legal/terms` or `/legal/privacy` anchor in the repository (outside `docs/vector/build/`) lands on an anchor that exists. `.github/workflows/vector-codium.yml` also runs on pushes to `codium-legal`, so the drafts get the Codium lane before A60 merges them.
-- **`codium-legal`**, commit `94a5004e` ("A30 legal drafts"), one commit on top of `986a8096`, in the worktree `~/.cache/vector-codium-legal`. It is **not pushed** (see "Not done"). It changes `packages/web/src/pages/legal/terms.astro`, `privacy.astro`, `LegalPage.astro` (every anchor gets the scroll margin `#codium` had), `api/_lib/codium-consent.ts` (`CODIUM_TERMS_DATE`), `test/codium-legal.test.ts` (the draft checks and new pins) and `test/no-topups.test.ts` (the legal pages are no longer allowed wholesale; their lines are checked like any other).
+- **`codium-legal`**, commit `94a5004e` ("A30 legal drafts"), one commit on top of `986a8096`, in the worktree `~/.cache/vector-codium-legal`. It was pushed on 2026-11-14 after a merge of `codium` (see "Pushed"). It changes `packages/web/src/pages/legal/terms.astro`, `privacy.astro`, `LegalPage.astro` (every anchor gets the scroll margin `#codium` had), `api/_lib/codium-consent.ts` (`CODIUM_TERMS_DATE`), `test/codium-legal.test.ts` (the draft checks and new pins) and `test/no-topups.test.ts` (the legal pages are no longer allowed wholesale; their lines are checked like any other).
 
 ## The drafts
 
@@ -59,7 +59,10 @@ Typechecks on `codium-legal`: root `tsconfig.json` (`api/**`, 118 files) passes;
 
 CI-only: the Codium lane on `codium-legal` (it runs every `test/` file there once the branch is pushed).
 
+## Pushed (2026-11-14 UTC)
+
+`codium-legal` is on GitHub. Merge commit `1d31ed8e` brings `codium` at `1ce8f5f3` into `94a5004e` with no conflicts; of the files the drafts touch, only `test/no-topups.test.ts` had moved on `codium`, in other entries. The pre-push hook ran and passed (turbo typecheck, 26 of 26 packages); it was not skipped. CI at `1d31ed8e`, all success on attempt 1: Vector Codium [43549193866](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43549193866) (push), and by dispatch test [43549200909](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43549200909), typecheck [43549203617](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43549203617) and Verify [43549206154](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43549206154). The drafts are still not on `codium`; A60's release commit merges them.
+
 ## Not done
 
-- **`codium-legal` is not on GitHub.** The repository's pre-push hook (`.husky/pre-push`, set as `core.hooksPath`) runs `bun typecheck`, which is `bun turbo typecheck` over every package. Running turbo on this Mac, and skipping the hook, are both outside this run's rules, so the push is left for a machine where the hook can run: `git push origin codium-legal` from `~/.cache/vector-codium-legal`.
 - The legal read itself (owner step 15) and A60's selection of the "where available" blocks.
