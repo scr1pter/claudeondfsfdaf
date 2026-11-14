@@ -1,4 +1,5 @@
-import { readConfig } from "./config.js"
+import { readConfig, type EverywhereConfig } from "./config.js"
+import { codiumAccountAuthority } from "./adapters/account.js"
 import { createJobEvents } from "./events.js"
 import type { JobsContext } from "./jobs.js"
 import type { Platforms } from "./platform.js"
@@ -11,15 +12,22 @@ import { createJiraAdapter } from "./jira/adapter.js"
 import { createJiraRoutes } from "./jira/a2a.js"
 import { everywhereStore } from "./store.js"
 
+/** Unwired services remain unavailable; account guards use the actual deletion key. */
+export function productionPorts(config: EverywhereConfig = readConfig()) {
+  return { ...safePorts(config), accountAuthority: codiumAccountAuthority }
+}
+
 export function productionPlatformDeps() {
-  return { config: readConfig, context: productionContext, ports: safePorts() }
+  return { config: readConfig, context: productionContext, ports: productionPorts() }
 }
 
 export function configuredPlatforms(deps: SlackDeps & Partial<Pick<LinearDeps, "privateResult" | "sleep">>): Platforms {
   const config = deps.config()
-  return { ...(config.enabled && config.platforms.has("slack") && config.slack ? { slack: createSlackAdapter(deps) } : {}),
+  return {
+    ...(config.enabled && config.platforms.has("slack") && config.slack ? { slack: createSlackAdapter(deps) } : {}),
     ...(config.enabled && config.platforms.has("linear") && config.linear ? { linear: createLinearAdapter(deps) } : {}),
-    ...(config.enabled && config.platforms.has("jira") && config.jira ? { jira: createJiraAdapter(deps).adapter } : {}) }
+    ...(config.enabled && config.platforms.has("jira") && config.jira ? { jira: createJiraAdapter(deps).adapter } : {}),
+  }
 }
 
 export function productionPlatforms(): Platforms {
@@ -28,7 +36,14 @@ export function productionPlatforms(): Platforms {
 
 export function productionContext(): JobsContext {
   const config = readConfig()
-  return { store: everywhereStore(), keys: config.dataKeys, offer: config.offer, now: Date.now(), accountAuthority: safePorts().accountAuthority }
+  const accountAuthority = productionPorts(config).accountAuthority
+  return {
+    store: everywhereStore(fetch, accountAuthority),
+    keys: config.dataKeys,
+    offer: config.offer,
+    now: Date.now(),
+    accountAuthority,
+  }
 }
 
 /** Production jobs routes and the cron share exactly the same posting hooks. */
