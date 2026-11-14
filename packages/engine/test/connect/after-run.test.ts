@@ -564,6 +564,11 @@ cliIt.live(
       yield* Effect.promise(() => fs.writeFile(path.join(project, "parser.ts"), "export const parser = 1\n"))
       yield* Effect.promise(() => $`git add parser.ts`.cwd(project).quiet())
       yield* Effect.promise(() => $`git -c commit.gpgsign=false commit -m base`.cwd(project).quiet())
+      const ownerConfig = path.join(home, ".config", "vector", "vector.json")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.dirname(ownerConfig), { recursive: true })
+        await fs.writeFile(ownerConfig, JSON.stringify({ agent: { vectorscope: { model: "lmstudio/test-model" } } }))
+      })
       const release = Promise.withResolvers<void>()
       yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()))
       yield* llm.push(reply().tool("read", { filePath: path.join(project, "parser.ts") }))
@@ -588,6 +593,7 @@ cliIt.live(
           timeoutMs: 45_000,
           env: {
             VECTOR_EXPERIMENTAL_CONNECT: "true",
+            VECTOR_APP_NAMESPACE: "vector",
             VECTOR_CONFIG_CONTENT: JSON.stringify({
               ...testProviderConfig(llm.url),
               model: "lmstudio/test-model",

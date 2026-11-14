@@ -12,6 +12,7 @@ import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { ConnectHub } from "@/connect/hub"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
 import { ConnectGit } from "@/connect/git"
+import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
@@ -22,6 +23,7 @@ import { MessageID, PartID } from "@/session/schema"
 import { SessionSummary } from "@/session/summary"
 import type { TaskPromptOps } from "@/tool/task"
 import { disposeAllInstances, TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
+import { ownerReviewModel } from "../fixture/review-model"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -109,6 +111,7 @@ const live = testEffect(
         layer: ConnectHub.layerWith([VectorScopeAdapter.make({ requirements })]),
         deps: [...ConnectHub.DEPS, ...VectorScopeAdapter.DEPS],
       }),
+      Config.node,
       SessionPrompt.node,
       Session.node,
       Git.node,
@@ -177,6 +180,7 @@ const setup = (kind: "clean" | "process") =>
           ].join("\n"),
     )
     const llm = yield* TestLLMServer
+    yield* ownerReviewModel()
     yield* write(
       directory,
       "vector.json",

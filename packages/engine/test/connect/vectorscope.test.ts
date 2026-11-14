@@ -926,7 +926,8 @@ describe("a review through connect", () => {
         script.outcome = () => ({ skipped: [{ path: "src/huge.ts", reason: "size-limit" }] })
         const sized = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
         expect(sized.result?.verdict).toBe("incomplete")
-        expect(sized.result?.state).toBe("completed")
+        // The shared verdict classifies a size-limited review as partial, even when its reviewer returned normally.
+        expect(sized.result?.state).toBe("partial")
         expect(sized.result?.notes).toContain("1 file skipped: too large to review")
 
         script.outcome = () => ({ skipped: [{ path: "bun.lock", reason: "lockfile" }] })
@@ -1411,11 +1412,19 @@ describe("the same review from the CLI and from connect", () => {
           posting: async () => [],
         }
         const request = run.request as Connect.ReviewRequest
+        const head = yield* git(directory, "rev-parse", "HEAD")
         const cli = yield* executeLocalReview(
-          VectorScopeAdapter.reviewOptions({ request, maxCost: viaConnect.input.config.maxCostUsd, env: {} }),
+          {
+            ...VectorScopeAdapter.reviewOptions({ request, maxCost: viaConnect.input.config.maxCostUsd, env: {} }),
+            // Compare the same admitted policy snapshot. Connect's service pins settings to HEAD, while an
+            // ordinary standalone CLI call deliberately reads the owner's current working-tree settings.
+            context: { expectedHead: head, settingsRef: head, stateless: true, identity: "vectorscope" },
+          },
           deps,
         ).pipe(Effect.provideService(Git.Service, yield* Git.Service))
         expect(cli.exitCode).toBe(0)
+        expect(viaConnect.input.rulesSource).toBe("base branch")
+        expect(cliCalls[0]!.rulesSource).toBe("base branch")
         const strip = ({
           parentID: _p,
           knownPath: _k,

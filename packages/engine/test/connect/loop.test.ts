@@ -37,6 +37,7 @@ import { Session } from "@/session/session"
 import { SessionSummary } from "@/session/summary"
 import { NpmTest } from "../fake/npm"
 import { disposeAllInstances, TestInstance, trustWorkspace } from "../fixture/fixture"
+import { ownerReviewModel } from "../fixture/review-model"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -110,6 +111,7 @@ const live = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectHub.node,
+      Config.node,
       SessionPrompt.node,
       Session.node,
       SpendGuard.node,
@@ -273,6 +275,7 @@ live.instance(
       const test = yield* TestInstance
       const directory = test.directory
       const llm = yield* TestLLMServer
+      yield* ownerReviewModel()
       // Worktree trust compares exact config bytes. A Windows checkout's global autocrlf conversion would
       // change vector.json and correctly withhold its fake provider, before this test reaches the fix.
       yield* git(directory, "config", "core.autocrlf", "false")
@@ -530,6 +533,7 @@ const isolated = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectHub.node,
+      Config.node,
       SessionPrompt.node,
       Session.node,
       SpendGuard.node,
@@ -593,6 +597,7 @@ isolated.instance(
       const test = yield* TestInstance
       const directory = test.directory
       const llm = yield* TestLLMServer
+      yield* ownerReviewModel()
       // Keep the parent and its task checkout byte-identical, as the task-isolation fixtures do.
       yield* git(directory, "config", "core.autocrlf", "false")
       yield* write(directory, {
