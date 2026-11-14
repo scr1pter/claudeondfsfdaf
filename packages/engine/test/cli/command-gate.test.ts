@@ -3,6 +3,14 @@ import yargs from "yargs"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { commandGate } from "@/cli/command-gate"
 import { WorkflowCommand } from "@/cli/cmd/workflow"
+import {
+  VaultCommand,
+  VaultBackupCommand,
+  VaultRestoreCommand,
+  VaultForgetCommand,
+  VaultStatusCommand,
+  VaultVersionsCommand,
+} from "@/cli/cmd/vault"
 
 const prior = process.env[ChildEnvironment.AGENT_MARKER]
 afterEach(() => {
@@ -31,6 +39,21 @@ async function invoke(argv: string[], vector = true) {
           .option("attach", { type: "string" }),
       handler: () => {
         calls.push("handler")
+      },
+    })
+    .command({
+      ...VaultCommand,
+      builder: (args) => {
+        const handler = () => {
+          calls.push("handler")
+        }
+        return args
+          .command({ ...VaultBackupCommand, handler })
+          .command({ ...VaultRestoreCommand, handler })
+          .command({ ...VaultForgetCommand, handler })
+          .command({ ...VaultStatusCommand, handler })
+          .command({ ...VaultVersionsCommand, handler })
+          .demandCommand()
       },
     })
     .middleware((options) =>
@@ -105,4 +128,45 @@ test("duplicate workflow options cannot bypass owner refusal or trigger setup", 
   const owner = await invoke(argv)
   expect(owner.calls).toEqual([])
   expect(String(owner.failure)).toContain("exactly one")
+})
+
+test("agent-marked Vault mutations refuse before account transport for installed and source entrypoints", async () => {
+  process.env[ChildEnvironment.AGENT_MARKER] = "ses_outer"
+  for (const vector of [true, false]) {
+    for (const argv of [
+      ["vault", "backup", "--github", "owner/private"],
+      ["vault", "restore", "version", "--github", "owner/private"],
+      ["vault", "forget", "--everything", "--yes", "--github", "owner/private"],
+    ]) {
+      const result = await invoke(argv, vector)
+      expect(result.calls).toEqual([])
+      expect(String(result.failure)).toContain("agents cannot")
+    }
+  }
+})
+
+test("Vault read-only commands remain available under the marker and owners can mutate", async () => {
+  process.env[ChildEnvironment.AGENT_MARKER] = "ses_outer"
+  for (const command of ["status", "versions"])
+    expect(await invoke(["vault", command])).toEqual({ calls: ["account", "handler"], failure: undefined })
+  delete process.env[ChildEnvironment.AGENT_MARKER]
+  for (const command of ["backup", "restore", "forget"])
+    expect(await invoke(["vault", command])).toEqual({ calls: ["account", "handler"], failure: undefined })
+})
+
+test("direct Vault mutation handlers also refuse an empty agent marker before project, key, or transport work", async () => {
+  process.env[ChildEnvironment.AGENT_MARKER] = ""
+  for (const command of ["backup", "restore", "forget"]) {
+    const failure = await yargs(["vault", command, "--github", "owner/private"])
+      .command(VaultCommand)
+      .exitProcess(false)
+      .help(false)
+      .version(false)
+      .parseAsync()
+      .then(
+        () => undefined,
+        (error: unknown) => String(error),
+      )
+    expect(failure).toContain("agents cannot")
+  }
 })

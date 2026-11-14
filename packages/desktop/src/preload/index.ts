@@ -59,6 +59,53 @@ const api: ElectronAPI = {
     install: () => ipcRenderer.invoke("updater-install"),
   },
   reportBug: (input) => ipcRenderer.invoke("report-bug", input),
+  reports: {
+    list: () => ipcRenderer.invoke("reports-list"),
+    status: () => ipcRenderer.invoke("reports-status"),
+  },
+  remote: {
+    status: () => ipcRenderer.invoke("remote-status"),
+    setEnabled: (enabled) => ipcRenderer.invoke("remote-set-enabled", enabled),
+    startPairing: () => ipcRenderer.invoke("remote-pair-start"),
+    confirmPairing: (code) => ipcRenderer.invoke("remote-pair-confirm", code),
+    cancelPairing: () => ipcRenderer.invoke("remote-pair-cancel"),
+    unpair: (device) => ipcRenderer.invoke("remote-unpair", device),
+    disconnectAll: () => ipcRenderer.invoke("remote-disconnect-all"),
+    isPhoneTurn: (sessionIDs) => ipcRenderer.invoke("remote-phone-turn", sessionIDs),
+    onChange: (callback) => {
+      const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
+      ipcRenderer.on("remote-changed", handler)
+      return () => ipcRenderer.removeListener("remote-changed", handler)
+    },
+  },
+  phoneAlerts: {
+    send: (alert) => ipcRenderer.invoke("phone-alert-send", alert),
+  },
+  vault: {
+    status: () => ipcRenderer.invoke("vault-status"),
+    configure: (input) => ipcRenderer.invoke("vault-configure", input),
+    backup: () => ipcRenderer.invoke("vault-backup"),
+    versions: () => ipcRenderer.invoke("vault-versions"),
+    restore: (input) => ipcRenderer.invoke("vault-restore", input),
+    forget: (version) => ipcRenderer.invoke("vault-forget", version),
+    remove: () => ipcRenderer.invoke("vault-delete"),
+    onChange: (callback) => {
+      const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
+      ipcRenderer.on("vault-changed", handler)
+      return () => ipcRenderer.removeListener("vault-changed", handler)
+    },
+  },
+  ops: {
+    request: (input) => ipcRenderer.invoke("ops-request", input),
+    image: (input) => ipcRenderer.invoke("ops-image", input),
+    merge: (input) => ipcRenderer.invoke("ops-merge", input),
+  },
+  hosted: {
+    request: (input) => ipcRenderer.invoke("hosted-request", input),
+    liveView: (input) => ipcRenderer.invoke("hosted-live-view", input),
+    files: (input) => ipcRenderer.invoke("hosted-files", input),
+    open: (input) => ipcRenderer.invoke("hosted-open", input),
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),
@@ -329,6 +376,7 @@ const api: ElectronAPI = {
     confirmDeletion: () => ipcRenderer.invoke("vector-account-confirm-deletion"),
     cancelDeletion: () => ipcRenderer.invoke("vector-account-cancel-deletion"),
     deleteAccount: (email) => ipcRenderer.invoke("vector-account-delete", email),
+    roadmap: (request) => ipcRenderer.invoke("vector-account-roadmap", request),
     onChange: (callback) => {
       const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
       ipcRenderer.on("vector-account-changed", handler)

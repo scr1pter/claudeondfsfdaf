@@ -291,7 +291,7 @@ describe("the Chromium dispatcher", () => {
     )
     expect(await send(session, details("https://checkout.stripe.com/c/pay"))).toEqual({})
     expect(await send(session, details(`${origin}/account?model_plan=success`))).toEqual({ cancel: true })
-    expect(await send(session, details(`${origin}/account?model_topup=cancelled`))).toEqual({ cancel: true })
+    expect(await send(session, details(`${origin}/account?model_plan=cancelled`))).toEqual({ cancel: true })
     expect(await send(session, details(`${origin}/pricing`))).toEqual({ cancel: true })
     // A frame of the site is not the window's page, so it loads.
     expect(await send(session, details(`${origin}/frame`, "subFrame"))).toEqual({})

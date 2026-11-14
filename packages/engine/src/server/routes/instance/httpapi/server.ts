@@ -14,6 +14,9 @@ import { BackgroundJob } from "@/background/job"
 import { TaskManager } from "@/task/manager"
 import { WorkflowOwner } from "@/orchestration/owner"
 import { ConnectOwner } from "@/connect/owner"
+import { PlaybookClient } from "@/orchestration/playbooks"
+import { HostedFollow } from "@/hosted/follow"
+import { CloudBrain } from "@/brain/run-bundle"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -292,6 +295,9 @@ const app = LayerNode.group([
   WorkflowOwner.node,
   ConnectOwner.node,
   TaskNotify.node,
+  PlaybookClient.node,
+  HostedFollow.node,
+  CloudBrain.node,
   TaskLimits.node,
   TaskRecovery.node,
   TaskAttention.node,

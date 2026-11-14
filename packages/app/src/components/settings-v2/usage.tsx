@@ -182,7 +182,9 @@ export const SettingsUsageV2: Component = () => {
         </ButtonV2>
       </div>
 
-      <SettingsVectorCodium />
+      <SettingsVectorCodium
+        summary={summary.state === "ready" || summary.state === "refreshing" ? summary.latest : undefined}
+      />
       <Show when={summary()?.legacyCodium}>
         <p class="text-12-regular text-text-weak">
           This server combines Codium and own token totals. Update the server to see separate own tokens and daily

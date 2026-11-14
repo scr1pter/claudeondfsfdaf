@@ -49,3 +49,15 @@ No provider/Stripe/customer GitHub API call, account setting, deployment, sales 
 ## Completed CI evidence
 
 The A23/preparation push at `ad1878309645adb5409e02bab678b145b73b7d3b` passed the normal 23-package pre-push hook. [Scoped workflow 41256437634](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41256437634) completed successfully: eight package typechecks, Codium test files, browser specs, HttpApi exerciser scenarios and generated-client check. This supersedes the pending CI status above. The later native billing-fixture timeout correction is isolated in `67e3161e`: raw independent snapshot reads are handled by `Promise.allSettled`, preserving all assertions and fitting the native five-second timeout (2.048 seconds locally).
+
+## Status on 8 Nov 2026 (P4b)
+
+The P4 review of A23 and A24 (`codium-p4-repairs.md`, F16 to F34) found one defect in A23's scope: the research report's
+Spend line wrote `- Spend: Codium` for a run that spent no dollars beside its Codium steps, and the V1 judge's re-save
+of a mixed run dropped `+ Codium`, against label plan §3.2 (F16). Both report tools and the judge's re-save now call
+`SpendGuard.reportSpend`; reports saved earlier are not rewritten. The self-evolving integration gate under "Integration
+with self-evolving" is met at `origin/self-evolving` `245f730f` (F22). The engine review model's missing `codium` cost
+kind (F18) is handed to P4d. The "Validation" section above describes its own day: its pending pre-push and CI lines are
+superseded by "Completed CI evidence", whose run 41256437634 (push, head `ad187830`, success) was checked again by id
+under `scr1pter/vectordev.ai`; the link above names the repository `scr1pter/claudeondfsfdaf`, as GitHub's run records
+still do. Nothing earlier in this record was changed.

@@ -25,8 +25,9 @@ test("the desktop app docs describe today's Settings, not the removed pages", as
     "Vector has one look, its own dark theme, and shows its interface in your computer's language.",
   )
   expect(text).toContain("Vector Tab")
-  // Codium shows shares of credits, never amounts.
-  expect(text).toContain("the share of this month's credits left")
+  // Codium shows a share of the month, never amounts, credits or top-ups (A29).
+  expect(text).toContain("your Vector Codium plan with how much of this month is left, as a percentage")
+  expect(text).not.toMatch(/credits|top-?ups?|purchased/i)
   for (const removed of [
     "Appearance",
     "colour scheme",

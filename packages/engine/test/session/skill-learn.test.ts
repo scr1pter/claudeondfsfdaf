@@ -420,6 +420,18 @@ describe("the model drafter's gate", () => {
     expect(SessionSkillLearn.drafts({ ...allowed, setting: "local-only", local: true })).toBe(true)
   })
 
+  test("Codium requires explicit consent even on always, and off, Local mode and held traces still win", () => {
+    const codium = { ...allowed, codium: true, setting: "local-only" as const }
+    expect(SessionSkillLearn.drafts(codium)).toBe(false)
+    expect(SessionSkillLearn.drafts({ ...codium, consent: "ask" })).toBe(false)
+    expect(SessionSkillLearn.drafts({ ...codium, setting: "always", consent: "off" })).toBe(false)
+    expect(SessionSkillLearn.drafts({ ...codium, consent: "on" })).toBe(true)
+    expect(SessionSkillLearn.drafts({ ...codium, consent: "on", local: true })).toBe(false)
+    expect(SessionSkillLearn.drafts({ ...codium, consent: "on", setting: "off" })).toBe(false)
+    expect(SessionSkillLearn.drafts({ ...codium, consent: "on", held: true })).toBe(false)
+    expect(SessionSkillLearn.drafts({ ...codium, consent: "on", mayTrain: true })).toBe(false)
+  })
+
   test("is skipped when off, local-only without Vector Local, held, on a model that may train, or past a budget", () => {
     expect(SessionSkillLearn.drafts({ ...allowed, setting: "off" })).toBe(false)
     expect(SessionSkillLearn.drafts({ ...allowed, setting: "local-only", local: false })).toBe(false)

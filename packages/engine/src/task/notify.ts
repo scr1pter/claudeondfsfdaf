@@ -34,7 +34,10 @@ import type { RunBudget } from "@vectordevai/schema/run-budget"
 // starts one. A note that should not start a turn is recorded with noReply and marked taskQuiet.
 
 export type Note = {
-  kind: "result" | "message" | "attention" | "interrupted" | "shell" | "connect"
+  kind: "result" | "message" | "attention" | "interrupted" | "shell" | "connect" | "hosted"
+  hostedID?: string
+  /** Trusted engine receipt, never read from public part metadata. A retry upserts these same two IDs. */
+  receipt?: { messageID: MessageID; partID: PartID }
   taskID?: SessionID
   taskIDs?: SessionID[]
   shellID?: string
@@ -251,6 +254,8 @@ function metadata(note: Note, quiet: boolean): Record<string, unknown> {
         ? { taskMessage: { taskID: note.taskID } }
         : note.kind === "attention"
           ? { taskAttention: { taskID: note.taskID, kind: note.attention, state: note.state } }
+          : note.kind === "hosted"
+            ? { hostedJobNotification: { jobID: note.hostedID, state: note.state } }
           : note.kind === "interrupted"
             ? { taskInterrupted: { taskIDs: note.taskIDs ?? [] } }
             : {
@@ -477,7 +482,20 @@ const layer = Layer.effect(
       })
 
     // `now`: the notes are written before this returns, and never start a turn.
-    const deliver = Effect.fnUntraced(function* (parentID: SessionID, batch: readonly Pending[], now = false) {
+    const deliver: (parentID: SessionID, batch: readonly Pending[], now?: boolean) => Effect.Effect<void, Session.NotFound> = Effect.fnUntraced(function* (parentID, batch, now = false) {
+      // Durable receipts have their own stable message and part identity. Keep them out of an ordinary batched note,
+      // including when a revert held them in the window, and never let one start a model turn.
+      if (batch.length > 1 && batch.some((item) => item.note.receipt)) {
+        for (const item of batch.filter((item) => item.note.receipt)) yield* deliver(parentID, [item], true)
+        const ordinary = batch.filter((item) => !item.note.receipt)
+        if (ordinary.length) yield* deliver(parentID, ordinary, now)
+        return
+      }
+      const receipt = batch[0]?.note.receipt
+      if (receipt) {
+        const part = yield* sessions.getPart({ sessionID: parentID, messageID: receipt.messageID, partID: receipt.partID }).pipe(Effect.orDie)
+        if (part?.type === "text" && part.text === batch[0]?.note.text) return
+      }
       // A revert started while the notes were held is waited out here too.
       const parent = yield* unreverted(parentID, 1_000)
       const workflow = SubagentLifecycle.read(parent)
@@ -507,7 +525,7 @@ const layer = Layer.effect(
       // a batch with nothing in it that wakes, such as stopped subagents: stopping work never makes the agent carry on
       // alone.
       const halted = (yield* guard.snapshot(parentID))?.stopped !== undefined
-      const messageID = MessageID.ascending()
+      const messageID = receipt?.messageID ?? MessageID.ascending()
       // Each result note is claimed for this message, so it is sent once: another engine on this database may have
       // recovered it into a human's prompt while it was held.
       const claimed: SessionID[] = []
@@ -532,7 +550,7 @@ const layer = Layer.effect(
       if (!lead) return
       const stopped = yield* Effect.forEach(sent, (item) => launchStopped(item.note))
       const silent =
-        coordinator || now || fenced.has(parentID) || halted || !sent.some((item, i) => wakes(item.note) && !stopped[i])
+        Boolean(receipt) || coordinator || now || fenced.has(parentID) || halted || !sent.some((item, i) => wakes(item.note) && !stopped[i])
       // The parent's turn runs on its own: the window is free again once the message is on its way, so a note landing
       // during that turn joins it. A prompt that never wrote the message gives its claims back for recovery.
       const prompt = {
@@ -549,6 +567,7 @@ const layer = Layer.effect(
           : { variant: lead.variant }),
         ...(silent ? { noReply: true } : {}),
         parts: sent.map(({ note }) => ({
+          ...(receipt ? { id: receipt.partID } : {}),
           type: "text" as const,
           synthetic: true,
           text: note.text,
@@ -571,7 +590,7 @@ const layer = Layer.effect(
                 time: { created: yield* Clock.currentTimeMillis },
               })
               const parts = yield* Effect.forEach(prompt.parts, (part) =>
-                sessions.updatePart({ ...part, id: PartID.ascending(), messageID, sessionID: parentID }),
+                sessions.updatePart({ ...part, id: part.id ?? PartID.ascending(), messageID, sessionID: parentID }),
               )
               return { info, parts }
             })

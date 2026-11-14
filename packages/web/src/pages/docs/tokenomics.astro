@@ -12,7 +12,8 @@ export const prerender = true
             Vector prices each chat from the tokens the provider reported on the assistant messages — input,
             output, reasoning, cache reads and cache writes — at the model catalog's list price. Automations and
             parallel agents are also written to a local ledger, and an automation is refused a start once your daily
-            cap is spent.
+            cap is spent. <a href="/docs/codium">Vector Codium</a> steps are not counted in dollars: they show the
+            label Codium instead of tokens or a price, and step limits still apply to them.
           </p>
           <dl class="doc-rows">
             {spendRows.map(([term, detail]) => (<div><dt>{term}</dt><dd>{detail}</dd></div>))}
@@ -92,7 +93,9 @@ export const prerender = true
             Settings → Usage reports what Vector recorded locally: lifetime tokens split into input, output, cache and
             reasoning, the cost recorded against them, chats completed, average tokens per chat, average time per run,
             the longest run and the peak day. It also keeps a daily streak with your current and longest run, seven
-            days of activity, and your top five models by share of all-time token use.
+            days of activity, and your top five models by share of all-time token use. Work on Vector Codium is counted
+            there as Codium, without its tokens or a cost, and the same page shows how much of your month it used, as a
+            percentage.
           </p>
           <h3>The Run Guard, from desktop 1.99.108</h3>
           <p>

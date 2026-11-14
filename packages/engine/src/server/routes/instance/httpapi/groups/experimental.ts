@@ -49,6 +49,20 @@ export class WorkflowApiError extends Schema.ErrorClass<WorkflowApiError>("Workf
   { httpApiStatus: 400 },
 ) {}
 
+export class AccountWorkApiError extends Schema.ErrorClass<AccountWorkApiError>("AccountWorkApiError")(
+  { message: Schema.String }, { httpApiStatus: 400 },
+) {}
+export const PlaybookSelection = Schema.Struct({
+  name: Schema.String.check(Schema.isPattern(/^vector-[a-z0-9]+(?:-[a-z0-9]+)*$/), Schema.isMaxLength(64)),
+  version: Schema.String.check(Schema.isMaxLength(32)),
+  sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+  replace: Schema.optional(Schema.Boolean),
+})
+const PlaybookEntry = Schema.Struct({
+  name: Schema.String, version: Schema.String, sha256: Schema.String, installed: Schema.Boolean, current: Schema.Boolean,
+})
+const HostedJobLink = Schema.Struct({ id: Schema.String, title: Schema.optional(Schema.String), delivered: Schema.Boolean })
+
 export const TaskListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   descendants: Schema.optional(QueryBoolean),
@@ -163,6 +177,11 @@ export const SessionListQuery = Schema.Struct({
 
 export const ExperimentalPaths = {
   workflowSaved: "/experimental/workflow/saved",
+  playbooks: "/experimental/workflow/playbooks",
+  playbookInstall: "/experimental/workflow/playbooks/install",
+  hostedJobs: "/experimental/session/:sessionID/hosted-jobs",
+  brainPreview: "/experimental/brain/run-bundle/preview",
+  brainProposalsImport: "/experimental/brain/run-proposals/import",
   workflowValidate: "/experimental/workflow/validate",
   workflowStart: "/experimental/session/:sessionID/workflow",
   workflowList: "/experimental/session/:sessionID/workflow",
@@ -505,6 +524,37 @@ export const ExperimentalApi = HttpApi.make("experimental")
             description: "Owner-authenticated desktop relay with an expiring lease. No callback URLs are accepted.",
           }),
         ),
+        HttpApiEndpoint.post("brainPreview", ExperimentalPaths.brainPreview, {
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Struct({ includeBrain: Schema.Literal(true), publicRepository: Schema.Boolean }),
+          success: Schema.Struct({ path: Schema.Literal("brain/bundle.json"), base64url: Schema.String,
+            sha256: Schema.String, bytes: NonNegativeInt, entries: NonNegativeInt, skills: NonNegativeInt }),
+          error: AccountWorkApiError,
+        }).annotateMerge(OpenApi.annotations({ identifier: "experimental.brain.preview", summary: "Preview explicitly selected repository Brain bytes without uploading" })),
+        HttpApiEndpoint.post("brainProposalsImport", ExperimentalPaths.brainProposalsImport, {
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Struct({ path: Schema.Literal("brain/proposals.json"),
+            base64url: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]+$/), Schema.isMaxLength(Math.ceil(512 * 1024 * 4 / 3))),
+            sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)), publicRepository: Schema.Boolean }),
+          success: Schema.Struct({ proposed: NonNegativeInt, known: NonNegativeInt, refused: NonNegativeInt, over: NonNegativeInt }),
+          error: AccountWorkApiError,
+        }).annotateMerge(OpenApi.annotations({ identifier: "experimental.brain.importProposals", summary: "Stage owner-selected returned Brain drafts for review" })),
+        HttpApiEndpoint.get("playbooksList", ExperimentalPaths.playbooks, {
+          query: WorkspaceRoutingQuery, success: Schema.Array(PlaybookEntry), error: AccountWorkApiError,
+        }).annotateMerge(OpenApi.annotations({ identifier: "experimental.playbooks.list", summary: "List owner Playbooks for personal installation" })),
+        HttpApiEndpoint.post("playbookInstall", ExperimentalPaths.playbookInstall, {
+          query: WorkspaceRoutingQuery, payload: PlaybookSelection,
+          success: Schema.Struct({ name: Schema.String, version: Schema.String }), error: AccountWorkApiError,
+        }).annotateMerge(OpenApi.annotations({ identifier: "experimental.playbooks.install", summary: "Install a selected Playbook in owner configuration" })),
+        HttpApiEndpoint.get("hostedJobs", ExperimentalPaths.hostedJobs, {
+          params: { sessionID: SessionID }, query: WorkspaceRoutingQuery,
+          success: Schema.Array(HostedJobLink), error: AccountWorkApiError,
+        }).annotateMerge(OpenApi.annotations({ identifier: "experimental.hosted.jobs", summary: "Reconnect hosted jobs to their original owner conversation" })),
+        HttpApiEndpoint.post("hostedJobAttach", ExperimentalPaths.hostedJobs, {
+          params: { sessionID: SessionID }, query: WorkspaceRoutingQuery,
+          payload: Schema.Struct({ jobID: Schema.String.check(Schema.isPattern(/^(?:jb|jr)_[a-z2-7]{26}$/)) }),
+          success: HostedJobLink, error: AccountWorkApiError,
+        }).annotateMerge(OpenApi.annotations({ identifier: "experimental.hosted.attach", summary: "Return a current-account hosted job report to this owner conversation" })),
         HttpApiEndpoint.get("workflowSaved", ExperimentalPaths.workflowSaved, {
           query: WorkspaceRoutingQuery,
           success: Workflow.SavedList,

@@ -1,6 +1,7 @@
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 import { validCliTokenID, verifyCliTokenClaims } from "./cli-token.js"
+import { killRelaySessions } from "./remote-relay.js"
 
 /**
  * CLI tokens are stateless HMAC grants with a ninety-day life (see cli-token.ts),
@@ -66,6 +67,11 @@ export async function revokeCliToken(
 /**
  * Returns false when no store is configured: the caller reports that tokens stay
  * valid until they expire rather than pretending the account was fully closed.
+ *
+ * Once the mark is written, the account's Vector Remote connections are closed too
+ * (WP A40, S6): the mark already stops new relay tickets, and the relay refuses the
+ * tickets issued before now. That step is best effort and does not change the answer;
+ * a relay it cannot reach drops a phone within a minute of its ticket's expiry.
  */
 export async function revokeAccountTokens(accountID: string, fetcher: typeof fetch = fetch): Promise<boolean> {
   const kv = store()
@@ -76,7 +82,11 @@ export async function revokeAccountTokens(accountID: string, fetcher: typeof fet
   }).catch(() => undefined)
   if (!response?.ok) return false
   const body: unknown = await response.json().catch(() => undefined)
-  return Boolean(body && typeof body === "object" && "result" in body && body.result === "OK" && !("error" in body))
+  const revoked = Boolean(
+    body && typeof body === "object" && "result" in body && body.result === "OK" && !("error" in body),
+  )
+  if (revoked) await killRelaySessions(accountID, fetcher)
+  return revoked
 }
 
 /**

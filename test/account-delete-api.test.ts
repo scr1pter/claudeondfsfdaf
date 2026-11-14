@@ -27,7 +27,8 @@ let accountID = ""
 let identityDeletions = 0
 let revocationWrites = 0
 let revocationAvailable = false
-// The persistent store's JSON commands, as the deletion grant's single use reads and writes them.
+// The persistent store's JSON commands, as the deletion grant's single use and account deletion's tombstone read and
+// write them.
 const store = new Map<string, string>()
 
 beforeEach(async () => {
@@ -51,6 +52,11 @@ beforeEach(async () => {
       if (command[0] === "SET") {
         if (!command.includes("NX") || !store.has(command[1]!)) store.set(command[1]!, command[2]!)
         response.end(JSON.stringify({ result: "OK" }))
+        return
+      }
+      // Account deletion's scans (WP A57: the outbox and the last erase step). This store holds no Codium records.
+      if (command[0] === "SCAN" || command[0] === "ZSCAN") {
+        response.end(JSON.stringify({ result: ["0", []] }))
         return
       }
       response.end(JSON.stringify({ result: [1, 60] }))

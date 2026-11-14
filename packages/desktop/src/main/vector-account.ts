@@ -1,5 +1,10 @@
 import { createHash, randomBytes } from "node:crypto"
-import type { VectorAccountStatus, VectorBillingResult, VectorDeletionResult } from "@vectordevai/app/vector-account"
+import type {
+  VectorAccountStatus,
+  VectorBillingResult,
+  VectorDeletionResult,
+  VectorRoadmapResult,
+} from "@vectordevai/app/vector-account"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { Option, Schema } from "effect"
 import type { BillingOutcome } from "./billing-navigation"
@@ -289,6 +294,43 @@ export function createVectorAccount(deps: Dependencies) {
     /** The account's Vector Codium plan and balances. The token goes only to vectordev.ai; the renderer gets the result. */
     async codium() {
       return ModelPlanStatus.fetchStatus(await token().catch(() => undefined), deps.fetch)
+    },
+    /**
+     * Settings > Roadmap vote (WP A34): reads the roadmap, votes or nominates. The token goes only to vectordev.ai,
+     * which decides from the account's plan whether it may vote; the renderer gets vectordev.ai's answer or its message.
+     */
+    async roadmap(input: unknown): Promise<VectorRoadmapResult> {
+      const request = roadmapRequest(input)
+      if (!request) return { ok: false, message: "Vector could not send that to the roadmap vote." }
+      const secret = await token().catch(() => undefined)
+      if (!secret) return { ok: false, code: "SIGN_IN", message: "Sign in to Vector to see the roadmap vote." }
+      const response = await deps
+        .fetch(ROADMAP_URL, {
+          method: request.body ? "POST" : "GET",
+          headers: {
+            accept: "application/json",
+            authorization: `Bearer ${secret}`,
+            ...(request.body ? { "content-type": "application/json" } : {}),
+          },
+          ...(request.body ? { body: JSON.stringify(request.body) } : {}),
+          redirect: "error",
+          signal: AbortSignal.timeout(15_000),
+        })
+        .catch(() => undefined)
+      if (!response)
+        return { ok: false, message: "Vector could not reach vectordev.ai. Check your connection and try again." }
+      const payload: unknown = await response.json().catch(() => undefined)
+      if (!response.ok) {
+        const error = apiError(payload)
+        return {
+          ok: false,
+          ...(error?.code ? { code: error.code } : {}),
+          message: error?.message ?? "Vector could not load the roadmap vote. Try again shortly.",
+        }
+      }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload))
+        return { ok: false, message: "Vector could not load the roadmap vote. Try again shortly." }
+      return { ok: true, roadmap: payload }
     },
     async start() {
       if (!(await deps.available())) return fail(secureStorageError)
@@ -615,6 +657,35 @@ function tokenClient(token: string) {
 }
 
 /** vectordev.ai's `{ error: { code, message } }`, with the message kept to a line the app can show. */
+const ROADMAP_URL = `${ModelPlanStatus.SITE}/api/roadmap`
+const ROADMAP_QUARTER = /^\d{4}-q[1-4]$/
+const ROADMAP_CANDIDATE = /^[a-z0-9][a-z0-9-]{0,39}$/
+
+/**
+ * A roadmap request the app may make, as the body vectordev.ai takes (none for a read), or undefined for anything
+ * else. vectordev.ai checks the text itself; this only keeps the request to the shapes Settings sends.
+ */
+function roadmapRequest(input: unknown): { body?: Record<string, string> } | undefined {
+  if (!input || typeof input !== "object") return
+  const value = input as Record<string, unknown>
+  if (value.kind === "read") return {}
+  if (typeof value.quarter !== "string" || !ROADMAP_QUARTER.test(value.quarter)) return
+  if (value.kind === "vote")
+    return typeof value.choice === "string" && ROADMAP_CANDIDATE.test(value.choice)
+      ? { body: { action: "vote", quarter: value.quarter, choice: value.choice } }
+      : undefined
+  if (value.kind !== "nominate" || typeof value.title !== "string" || value.title.length > 400) return
+  if (value.detail !== undefined && (typeof value.detail !== "string" || value.detail.length > 1_200)) return
+  return {
+    body: {
+      action: "nominate",
+      quarter: value.quarter,
+      title: value.title,
+      ...(value.detail ? { detail: value.detail } : {}),
+    },
+  }
+}
+
 function apiError(payload: unknown) {
   const error = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined
   if (!error || typeof error !== "object") return

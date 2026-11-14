@@ -56,6 +56,7 @@ const layer = Layer.effect(
       list: () => InstanceState.useEffect(state, (jobs) => jobs.list()),
       get: (id) => InstanceState.useEffect(state, (jobs) => jobs.get(id)),
       start: (input) => InstanceState.useEffect(state, (jobs) => jobs.start(input)),
+      updateMetadata: (id, input) => InstanceState.useEffect(state, (jobs) => jobs.updateMetadata(id, input)),
       extend: (input) => InstanceState.useEffect(state, (jobs) => jobs.extend(input)),
       wait: (input) => InstanceState.useEffect(state, (jobs) => jobs.wait(input)),
       waitForPromotion: (id) => InstanceState.useEffect(state, (jobs) => jobs.waitForPromotion(id)),

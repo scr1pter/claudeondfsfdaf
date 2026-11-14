@@ -62,15 +62,15 @@ test("deletion reads the confirmation body and reaches no destructive step witho
   }
 })
 
-test("the account page warns that deletion ends any Codium plan and its credits", async () => {
-  // cancelModelPlanAccount cancels the account's subscriptions and disables its credit keys before the identity goes.
+test("the account page warns that deletion ends any Codium plan and what is left of its month", async () => {
+  // cancelModelPlanAccount cancels the account's subscriptions and disables its keys before the identity goes.
   const page = (
     await Bun.file(new URL("../src/components/marketing/account/AccountPage.tsx", import.meta.url)).text()
   ).replace(/\s+/g, " ")
   expect(page).toContain("stops the CLI tokens this account has issued.")
-  expect(page).toContain(
-    "Any Vector Codium plan ends at once, and the credits left, this month's or purchased, can no longer be used.",
-  )
+  expect(page).toContain("Any Vector Codium plan ends at once, and what is left of this month can no longer be used.")
+  // Codium sells monthly plans only (A29): the warning names no credits and no purchased top-ups.
+  expect(page).not.toMatch(/credits|purchased/i)
 })
 
 test("in production, deletion without the token store stops before anything is destroyed", async () => {

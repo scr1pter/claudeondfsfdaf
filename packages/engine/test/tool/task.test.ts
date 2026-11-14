@@ -5356,7 +5356,7 @@ describe("subagent limits", () => {
         taskContext({ sessionID: chat.id, messageID: assistant.id, promptOps: never }),
       )
       expect(result.output.split("\n").filter((line) => line.includes("subagents are running or waiting"))).toEqual([
-        "8 subagents are running or waiting in this conversation (it runs at most 8 at once). Each one spends on the user's provider keys, so tell the user how many are working.",
+        "8 subagents are running or waiting in this conversation (it runs at most 8 at once). Each one spends on the user's provider keys or Vector Codium plan, so tell the user how many are working.",
       ])
       expect(result.output).not.toContain("Queued:")
     }),

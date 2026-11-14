@@ -26,6 +26,10 @@ import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { freeModelMayTrain, FREE_MODEL_TRAINING_OWNER_ONLY } from "@vectordevai/core/free-model-choice"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@vectordevai/core/util/error"
+import { Database } from "@vectordevai/core/database/database"
+import { PartTable } from "@vectordevai/core/session/sql"
+import { eq } from "drizzle-orm"
+import { isDeepStrictEqual } from "node:util"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { InstanceState } from "@/effect/instance-state"
@@ -580,6 +584,22 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       ) {
         return yield* new HttpApiError.BadRequest({})
       }
+      // Step usage and its Codium flag are the engine's record (its processor writes through Session.updatePart, not
+      // this route). The projector keeps a stored part's message and session, so a part is edited where it is stored,
+      // and an edit never moves a step's figures between the own and Codium totals or certifies Codium tokens as own.
+      const database = yield* Database.Service
+      const row = yield* database.db
+        .select()
+        .from(PartTable)
+        .where(eq(PartTable.id, payload.id))
+        .get()
+        .pipe(Effect.orDie)
+      if (row && (row.session_id !== payload.sessionID || row.message_id !== payload.messageID)) {
+        return yield* new HttpApiError.BadRequest({})
+      }
+      const stored =
+        row && ({ ...row.data, id: row.id, sessionID: row.session_id, messageID: row.message_id } as SessionV1.Part)
+      if (!isDeepStrictEqual(stepUsage(stored), stepUsage(payload))) return yield* new HttpApiError.BadRequest({})
       return yield* session.updatePart(payload)
     })
 
@@ -616,3 +636,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("updatePart", updatePart)
   }),
 )
+
+// The figures a step-finish part adds to the session's own or Codium totals; any other part adds none.
+function stepUsage(part: SessionV1.Part | undefined) {
+  if (part?.type !== "step-finish") return undefined
+  return { billing: part.billing, cost: part.cost, unpriced: part.unpriced === true, tokens: part.tokens }
+}

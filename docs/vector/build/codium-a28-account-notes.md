@@ -13,3 +13,9 @@ Public response decoding drops private fields and validates optional state, sche
 Focused checks pass: 19 account component cases, 15 status/config decoder cases, ten billing action/status-read cases and 15 pricing cases (59 total). These cover request methods and bodies, full-charge upgrade copy, scheduled downgrade/Keep behavior including sales-off scheduling, paused recovery, unavailable meters, qualification, retired fields, preview guards and unsafe replies. The pricing/account render tests use server rendering; actual React mount/click wiring received independent source review, not a claim of a mounted browser test. The final combined Web type check passes after the downgrade correction (198 files, zero errors or warnings, 184 informational hints). No public Protocol or Server schema changed, so SDK/client generation is unnecessary.
 
 Independent source review is clear after the downgrade correction. The reviewer checked the actual handlers, duplicate guards, full-charge wording, state/meter qualification, Stripe response boundaries, preview behavior and back/forward refresh ordering without editing source or running tests. The normal 23-package push hook and exact revision scoped CI remain publication gates. A27's separate one-line wording correction is `b12f3cab`; it is documented in its own notes and included in the next CI revision.
+
+**Status, 8 Nov 2026 (P4d).** The publication gates named above were met: run 41272142017 (Vector Codium, push, head
+`d13d91e3`) completed with success, 10 of 10 jobs (Codium tests 124746918153; the other job ids are in
+`codium-p4-repairs.md`, F72). P4's review (`codium-p4-repairs.md`, "A28 account page") confirmed no defect on the
+account page: it shows no purchased or top-up text, an old-shaped status still renders (H7), and the offers and the
+paused recovery follow spec A28 as refined by the A28 deviation.

@@ -59,7 +59,7 @@ export type MemoryFilter = "active" | "review" | "archived" | "all"
  * Settings > Memory's sections: memory, the skills Vector learned, what it learned about the user, what workflows got
  * checks passing for less, documents, research, and the local model documents are searched by meaning with.
  */
-export type MemoryTab = "memory" | "skills" | "about" | "workflow" | "documents" | "research" | "model"
+export type MemoryTab = "memory" | "skills" | "about" | "workflow" | "documents" | "research" | "model" | "backup"
 
 export const MEMORY_TABS: readonly { value: MemoryTab; label: string }[] = [
   { value: "memory", label: "Memory" },

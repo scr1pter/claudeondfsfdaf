@@ -22,6 +22,11 @@ on:
         default: all
         type: choice
         options: [all, api, browser]
+      hosted:
+        description: Also boot a throwaway cloud computer from the base snapshot and check it from inside (WP A54)
+        required: false
+        default: false
+        type: boolean
 
 # One run at a time: the checks share one Stripe test account and one test store.
 concurrency:
@@ -178,3 +183,41 @@ jobs:
           fi
           ./node_modules/.bin/playwright install --with-deps chromium
           ./node_modules/.bin/playwright test --config e2e/codium/playwright.config.ts
+
+  # WP A54: the real-microVM check of the cloud computer's image, which Docker cannot show: the firewall on the
+  # provider's own kernel, the agent's egress from inside, the loop-mounted disk, and Chromium's own sandbox. It starts
+  # one throwaway computer from the base snapshot on the hosted test team (never tagged as a subscriber's computer) and
+  # always stops it. Needs CODIUM_E2E_HOSTED_VERCEL_TOKEN, _TEAM_ID, _PROJECT_ID and CODIUM_E2E_HOSTED_SNAPSHOT in
+  # codium-test; only after Vercel's written OK (contract §8.2 step 14).
+  hosted-microvm:
+    name: Cloud computer on a real microVM
+    needs: guard
+    if: inputs.hosted
+    runs-on: ubuntu-24.04
+    environment: codium-test
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CODIUM_E2E_TARGET: ${{ needs.guard.outputs.target }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Boot a throwaway computer and check it from inside
+        working-directory: packages/hosted-computer
+        env:
+          CODIUM_E2E_HOSTED_VERCEL_TOKEN: ${{ secrets.CODIUM_E2E_HOSTED_VERCEL_TOKEN }}
+          CODIUM_E2E_HOSTED_VERCEL_TEAM_ID: ${{ secrets.CODIUM_E2E_HOSTED_VERCEL_TEAM_ID }}
+          CODIUM_E2E_HOSTED_VERCEL_PROJECT_ID: ${{ secrets.CODIUM_E2E_HOSTED_VERCEL_PROJECT_ID }}
+          CODIUM_E2E_HOSTED_SNAPSHOT: ${{ secrets.CODIUM_E2E_HOSTED_SNAPSHOT }}
+        run: |
+          set -euo pipefail
+          for name in CODIUM_E2E_HOSTED_VERCEL_TOKEN CODIUM_E2E_HOSTED_VERCEL_TEAM_ID CODIUM_E2E_HOSTED_VERCEL_PROJECT_ID CODIUM_E2E_HOSTED_SNAPSHOT; do
+            test -n "${!name:-}" || { echo "$name is missing from codium-test."; exit 1; }
+          done
+          bun script/microvm-check.ts
