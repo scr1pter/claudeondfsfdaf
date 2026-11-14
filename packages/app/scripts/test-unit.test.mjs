@@ -164,11 +164,84 @@ test("an empty Windows inventory fails before invoking any process", async (t) =
   assert.deepEqual(calls, [])
 })
 
-test("Linux preserves the one whole-source invocation and reports its failure", async (t) => {
-  const root = await fixture(t, ["src/a.test.ts", "src/b.test.ts"])
+test("Linux runs the complete inventory once in serial order and reports every failure without retry", async (t) => {
+  const root = await fixture(t, [
+    "src/z.test.ts",
+    "src/b.test.ts",
+    "src/a.test.ts",
+    "src/c.test.ts",
+    "src/d.test.ts",
+    "src/e.test.ts",
+  ])
+  const calls = []
+  const output = []
+  let active = 0
+  const result = await runUnitTests({
+    platform: "linux",
+    root,
+    log: (line) => output.push(line),
+    run: async (command, args, options) => {
+      assert.equal(active, 0)
+      active++
+      await Promise.resolve()
+      calls.push({ command, args, options })
+      active--
+      if (args.at(-1) === "./src/a.test.ts") return { code: 1 }
+      if (args.at(-1) === "./src/b.test.ts") return { code: 3 }
+      if (args.at(-1) === "./src/c.test.ts") return { code: null, signal: "SIGABRT" }
+      if (args.at(-1) === "./src/d.test.ts") throw new Error("Synthetic process start failure")
+      if (args.at(-1) === "./src/e.test.ts") return { code: 0, signal: "SIGILL" }
+      return { code: 0 }
+    },
+  })
+  const expected = [
+    "./src/a.test.ts",
+    "./src/b.test.ts",
+    "./src/c.test.ts",
+    "./src/d.test.ts",
+    "./src/e.test.ts",
+    "./src/z.test.ts",
+  ]
+  assert.deepEqual(
+    calls.map((call) => call.args.at(-1)),
+    expected,
+  )
+  assert.deepEqual(result.files, expected)
+  assert.equal(new Set(calls.map((call) => call.args.at(-1))).size, expected.length)
+  assert.equal(result.code, 1)
+  assert.deepEqual(result.failed, expected.slice(0, -1))
+  for (const call of calls) {
+    assert.equal(call.command, "bun")
+    assert.deepEqual(call.args.slice(0, -1), ["test", "--isolate", "--only-failures", "--preload", "./happydom.ts"])
+    assert.deepEqual(call.options, { cwd: root })
+  }
+  assert.ok(output.includes("App unit test failed: ./src/e.test.ts (SIGILL)"))
+  assert.ok(output.includes("App unit tests: 1/6 files passed"))
+})
+
+test("all Linux files passing produces success after each file runs once", async (t) => {
+  const root = await fixture(t, ["src/b.test.ts", "src/a.test.ts"])
   const calls = []
   const result = await runUnitTests({
     platform: "linux",
+    root,
+    log: () => {},
+    run: async (_command, args, options) => {
+      assert.deepEqual(options, { cwd: root })
+      calls.push(args.at(-1))
+      return { code: 0 }
+    },
+  })
+  assert.equal(result.code, 0)
+  assert.deepEqual(result.failed, [])
+  assert.deepEqual(calls, ["./src/a.test.ts", "./src/b.test.ts"])
+})
+
+test("macOS preserves the one whole-source invocation and reports its failure", async (t) => {
+  const root = await fixture(t, ["src/a.test.ts", "src/b.test.ts"])
+  const calls = []
+  const result = await runUnitTests({
+    platform: "darwin",
     root,
     log: () => {},
     run: async (...args) => {

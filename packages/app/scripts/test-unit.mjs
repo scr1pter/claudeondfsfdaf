@@ -58,21 +58,22 @@ export function runProcess(command, args, options, runtime = { spawn, setTimeout
   })
 }
 
-/** Fresh Bun processes on Windows contain the observed isolate-runner crash without retries or omitted files. */
+/** Fresh Bun processes on Windows and Linux contain isolate-runner crashes without retries or omitted files. */
 export async function runUnitTests({
   platform = process.platform,
   root = directory,
   run = runProcess,
   log = console.log,
 } = {}) {
-  const files = platform === "win32" ? await unitFiles(root) : ["./src"]
+  const perFile = platform === "win32" || platform === "linux"
+  const files = perFile ? await unitFiles(root) : ["./src"]
   if (!files.length) throw new Error("No app unit test files found under ./src")
   const failed = []
   for (const file of files) {
     log(`App unit test: ${file}`)
     const result = await Promise.resolve()
       // A passing Vite fixture retained its Windows Bun process for 49 minutes. Bound the child lifecycle,
-      // without changing Bun's per-test deadlines, retrying files or truncating the Linux aggregate suite.
+      // without changing Bun's per-test deadlines. Linux keeps its existing no-child-watchdog policy.
       .then(() =>
         run("bun", [...argumentsBeforePath, file], {
           cwd: root,
@@ -87,7 +88,7 @@ export async function runUnitTests({
     failed.push(file)
     log(`App unit test failed: ${file} (${result.error ?? result.signal ?? `exit ${result.code}`})`)
   }
-  if (platform === "win32") log(`App unit tests: ${files.length - failed.length}/${files.length} files passed`)
+  if (perFile) log(`App unit tests: ${files.length - failed.length}/${files.length} files passed`)
   if (failed.length) log(`Failed app unit paths:\n${failed.join("\n")}`)
   return { code: failed.length ? 1 : 0, files, failed }
 }

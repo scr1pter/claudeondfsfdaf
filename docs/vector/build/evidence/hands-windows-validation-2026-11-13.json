@@ -474,5 +474,64 @@
       "proof": "GitHub job metadata."
     },
     "qualification": "All five small core-report archives were independently rehashed and parsed. Core execution and desktop-test success are not final installer/package, granted-permission, hardware calibration, signing or publication proof. Helper 1.0.15 remains unreleased."
+  },
+  "browser321": {
+    "source": "321b4ea7f83a3ffa598850e6443a33b13336b9dd",
+    "run": 43559365124,
+    "status": "success",
+    "windows": {
+      "job": 132339624397,
+      "logSha256": "5e61e1a662984d5a210ab63672b7c081be38336d4b902ba6f4f7abe659aa4486",
+      "failed": 0,
+      "retries": 0,
+      "passed": 67,
+      "skipped": 0,
+      "logBytes": 49507
+    },
+    "linux": {
+      "job": 132339624452,
+      "logSha256": "9be0e43d2b4092f5ecaeebe214bf36862e2ddd11bc551a18c6958b3f289b30f4",
+      "failed": 0,
+      "retries": 0,
+      "passed": 67,
+      "skipped": 0,
+      "logBytes": 59298
+    },
+    "scope": "Scripted Chromium fixtures; all five corrected cases executed. No real hardware calibration claim.",
+    "localFakePlatform": {
+      "assertions": 93,
+      "passed": 16,
+      "failed": 0
+    },
+    "localAppTypecheck": "passed",
+    "localE2ETypecheck": "passed"
+  },
+  "linuxAppRunnerContainment": {
+    "firstFailure": {
+      "nodeHarnessPassed": 11,
+      "run": 43552031298,
+      "nativeCrash": "segmentation fault 0x400000002 / SIGILL",
+      "elapsedMs": 26207,
+      "source": "d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb",
+      "job": 132320487135,
+      "runtime": "Bun 1.3.14",
+      "appSuite": "not completed; no failed assertion reported"
+    },
+    "independentFailure": {
+      "nativeCrash": "segmentation fault 0x0 / SIGILL",
+      "job": 132340641152,
+      "appSuite": "not completed; no failed assertion reported",
+      "elapsedMs": 27981,
+      "source": "321b4ea7f83a3ffa598850e6443a33b13336b9dd",
+      "run": 43559325574
+    },
+    "oldRepeat": "Request refused because workflow was still running; no repeat started; held after independent reproduction",
+    "change": "Linux now reuses existing Windows exact-once sorted inventory and serial fresh-process execution, retaining --isolate, preload and all assertions. Nonzero exit, signal and spawn error remain failures; all remaining files execute once.",
+    "timeouts": "Windows 120-second watchdog unchanged; Linux existing no-child-watchdog policy unchanged; macOS aggregate path unchanged",
+    "localHarness": {
+      "failed": 0,
+      "passed": 13
+    },
+    "hostedAppSuite": "pending current-source CI verification"
   }
 }
