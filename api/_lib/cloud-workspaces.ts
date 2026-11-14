@@ -13,6 +13,8 @@ import { requireUnrevokedAccount } from "./revocation.js"
 
 const BODY_LIMIT = 128 * 1024
 const RESPONSE_LIMIT = 2 * 1024 * 1024
+/** The host answers an account close at once (it records the fence and erases in the background), so wait at most this. */
+const CLOSE_TIMEOUT_MS = 10_000
 
 /**
  * Whether this deployment was ever pointed at a workspace host. Only a deployment with neither setting held no
@@ -23,15 +25,17 @@ export function cloudWorkspacesConfigured() {
 }
 
 /**
- * Fence a verified account durably before deleting its identity; the host then reaps its data asynchronously. Account
- * deletion runs this as its `workspaces` erase part (codium-erase.ts), again on every retry and on the follow-up pass:
- * the host answers `closed` for an account it already closed. `deadline` (real time, ms) shortens the wait for the host
- * so the part stops inside the deletion's time budget.
+ * Fence a verified account durably before deleting its identity; the host then erases its workspaces in the background
+ * and answers how many are still left (`remaining`). Account deletion (codium-erase.ts) runs this right after revoking
+ * the account's tokens, records it as its `workspaces` erase part, and runs it again on every retry and on the follow-up
+ * pass: the host answers `closed` for an account it already closed. The follow-up pass sets `requireErased`, so it fails
+ * while any workspace is left and the deletion stays due, backs off and alerts the owner. `deadline` (real time, ms)
+ * shortens the wait for the host so the call stops inside the deletion's time budget.
  */
 export async function closeCloudWorkspaces(
   accountID: string,
   fetcher: typeof fetch = fetch,
-  options: { deadline?: number } = {},
+  options: { deadline?: number; requireErased?: boolean } = {},
 ) {
   if (!cloudWorkspacesConfigured()) return
   if (!accountId(accountID)) throw unavailable()
@@ -48,7 +52,9 @@ export async function closeCloudWorkspaces(
     body,
     redirect: "error",
     signal: AbortSignal.timeout(
-      options.deadline === undefined ? 30_000 : Math.max(1_000, Math.min(30_000, options.deadline - Date.now())),
+      options.deadline === undefined
+        ? CLOSE_TIMEOUT_MS
+        : Math.max(1_000, Math.min(CLOSE_TIMEOUT_MS, options.deadline - Date.now())),
     ),
   }).catch(() => {
     throw unavailable()
@@ -58,8 +64,22 @@ export async function closeCloudWorkspaces(
     throw unavailable()
   }
   const result = await upstreamJson(response)
-  if (!record(result) || !exact(result, ["closed"]) || result.closed !== true) throw unavailable()
-  return { closed: true as const }
+  if (
+    !record(result) ||
+    !exact(result, ["closed", "remaining"]) ||
+    result.closed !== true ||
+    typeof result.remaining !== "number" ||
+    !Number.isSafeInteger(result.remaining) ||
+    result.remaining < 0
+  )
+    throw unavailable()
+  if (options.requireErased && result.remaining > 0)
+    throw new ApiError(
+      503,
+      "WORKSPACE_CLEANUP_PENDING",
+      "The account's cloud workspaces are closed, but their files are not erased yet.",
+    )
+  return { closed: true as const, remaining: result.remaining }
 }
 
 /** The website authenticates the account; only the configured private workspace host receives its signed identity. */
@@ -220,7 +240,8 @@ function parseWorkspaceCommand(value: unknown) {
 
 function workspaceHost() {
   const configured = process.env.VECTOR_WORKSPACES_ORIGIN?.trim() ?? ""
-  const secret = process.env.VECTOR_WORKSPACES_SECRET ?? ""
+  // Trimmed as the host trims its own copy (main.ts `required`), so a secret saved with a trailing newline still signs.
+  const secret = process.env.VECTOR_WORKSPACES_SECRET?.trim() ?? ""
   let origin: URL
   try {
     origin = new URL(configured)

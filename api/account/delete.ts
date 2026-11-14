@@ -35,10 +35,11 @@ import { persistentStore } from "../_lib/persistent-store.js"
  *      cleanup cron, so nothing below is left half-done for good
  *   4. revoke CLI and desktop tokens, which are stateless and would otherwise
  *      keep a terminal signed in for up to ninety days, then close the
- *      account's Codium snapshot, then cancel model-plan checkout,
- *      subscriptions and keys
- *   5. close the account's cloud workspaces on their host, erase every Codium
- *      and hosted record (codium-erase.ts) and write the erase marker
+ *      account's cloud workspaces on their host (best effort here; step 5
+ *      records it), then close the account's Codium snapshot, then cancel
+ *      model-plan checkout, subscriptions and keys
+ *   5. erase every Codium and hosted record (codium-erase.ts), the cloud
+ *      workspaces' close first, and write the erase marker
  *   6. erase usage counts linked to the account, before the identity: once it
  *      is gone, an install's earlier unlinked days can no longer be found
  *   7. delete the identity itself, which waits for the erase marker

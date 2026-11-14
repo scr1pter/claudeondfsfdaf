@@ -408,6 +408,8 @@ try {
   const door = await signedOut.newPage()
   await door.goto(savedURL, { waitUntil: "domcontentloaded" })
   await expect(door.getByRole("link", { name: "Sign in to Vector", exact: true })).toBeVisible({ timeout: 15_000 })
+  // The public page says the pilot is closed instead of reading as a launched product.
+  await expect(door.getByRole("heading", { name: "Cloud workspaces are a private pilot.", exact: true })).toBeVisible()
   expect(backend.authenticatedReads).toBe(before)
   await signedOut.close()
   expect(pageErrors).toEqual([])

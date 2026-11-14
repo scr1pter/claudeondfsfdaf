@@ -119,4 +119,9 @@ test("host signatures bind actor, exact bytes, route, verb and current timestamp
     expect(() => verifyWorkspaceRequest({ ...input, headers, ...patch })).toThrow()
   headers.set("x-vector-account", id)
   expect(() => verifyWorkspaceRequest({ ...input, headers })).toThrow()
+  // The signature covers the id as sent; the verified id is lower-case, as the store and the account fence keep it.
+  const upper = new Headers(signWorkspaceRequest({ ...input, accountId: account.toUpperCase() }))
+  expect(verifyWorkspaceRequest({ ...input, headers: upper }).accountId).toBe(account.toLowerCase())
+  upper.set("x-vector-account", account.toLowerCase())
+  expect(() => verifyWorkspaceRequest({ ...input, headers: upper })).toThrow()
 })

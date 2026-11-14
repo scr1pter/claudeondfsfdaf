@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -196,6 +197,7 @@ function fixture(input: { modelLimit?: number; maxActive?: number; publish?: typ
     get store() {
       return store
     },
+    directory,
     advance: (milliseconds: number) => {
       clock += milliseconds
     },
@@ -371,6 +373,45 @@ test("account closure durably blocks the workspace and removes its saved data wi
   expect(value.state.calls).toBe(0)
   await value.restart()
   expect((await value.call("/workspaces")).status).toBe(403)
+})
+
+test("account closure answers how many workspaces are still to erase, and the reaper reports any it leaves behind", async () => {
+  const value = fixture({ maxActive: 2 })
+  const kept = await value.create()
+  await value.create()
+  value.failedStops.add(kept)
+  const first = await value.call("/accounts/close", {})
+  expect(first.status).toBe(202)
+  expect(await first.json()).toEqual({ closed: true, remaining: 2 })
+  await value.service.settle()
+  // One container keeps refusing to stop: its workspace and data stay, the answer says so, and the reaper fails loudly
+  // (main.ts logs it) instead of retrying in silence.
+  expect(await (await value.call("/accounts/close", {})).json()).toEqual({ closed: true, remaining: 1 })
+  await expect(value.service.reap()).rejects.toThrow("still need cleanup")
+  expect(value.store.list(owner).map((workspace) => workspace.id)).toEqual([kept])
+  value.failedStops.clear()
+  await value.service.reap()
+  expect(value.store.list(owner)).toEqual([])
+  expect(await (await value.call("/accounts/close", {})).json()).toEqual({ closed: true, remaining: 0 })
+})
+
+test("account ids are fenced lower-case, whatever case the close was signed in", async () => {
+  const value = fixture()
+  const id = await value.create()
+  const closed = await value.call("/accounts/close", {}, owner.toUpperCase())
+  expect(await closed.json()).toEqual({ closed: true, remaining: 1 })
+  expect((await value.call("/workspaces")).status).toBe(403)
+  expect((await value.call(`/workspaces/${id}/start`, {})).status).toBe(403)
+  await value.service.settle()
+  expect(value.store.list(owner)).toEqual([])
+  // A fence an earlier version stored in the signed case moves to lower case when the service starts.
+  expect((await value.call("/workspaces", undefined, other)).status).toBe(200)
+  const database = new Database(join(value.directory, "requests.sqlite"))
+  database.query("INSERT INTO closed_account(account,closed_at) VALUES (?,?)").run(other.toUpperCase(), 1)
+  database.close()
+  await value.restart()
+  expect((await value.call("/workspaces", undefined, other)).status).toBe(403)
+  expect((await value.call("/workspaces", undefined, other.toUpperCase())).status).toBe(403)
 })
 
 test("closed accounts keep their paid-work fence even when cleanup needs a retry", async () => {
