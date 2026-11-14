@@ -7,10 +7,6 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { Database } from "@vectordevai/core/database/database"
-import { ProjectTable } from "@vectordevai/core/project/sql"
-import { SessionTable } from "@vectordevai/core/session/sql"
-import { AbsolutePath } from "@vectordevai/core/schema"
-import { eq } from "drizzle-orm"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
@@ -20,7 +16,6 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { InstanceRef } from "@/effect/instance-ref"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import type { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -123,6 +118,35 @@ beforeAll(() => {
       const url = new URL(request.url)
       const body = (await request.json().catch(() => ({}))) as Body
       server.hits.push({ path: url.pathname, body })
+      if (url.pathname.endsWith("/responses"))
+        return sse([
+          {
+            type: "response.created",
+            sequence_number: 1,
+            response: { id: "resp_choice", created_at: 1, model: "gpt-5.2", service_tier: null },
+          },
+          {
+            type: "response.completed",
+            sequence_number: 2,
+            response: {
+              incomplete_details: null,
+              service_tier: null,
+              usage: {
+                input_tokens: 1,
+                input_tokens_details: { cached_tokens: 0 },
+                output_tokens: 0,
+                output_tokens_details: { reasoning_tokens: 0 },
+              },
+            },
+          },
+        ])
+      if (url.pathname.endsWith(":streamGenerateContent"))
+        return sse([
+          {
+            candidates: [{ content: { role: "model", parts: [{ text: "4" }] }, finishReason: "STOP", index: 0 }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+          },
+        ])
       if (!url.pathname.endsWith("/messages"))
         return Response.json({ error: { message: "not served by this fake" } }, { status: 400 })
       // Titles and other helper requests get a plain answer; only the run's own steps follow the script.
@@ -217,36 +241,10 @@ const schema = {
   additionalProperties: false,
 }
 
-const ordinarySession = Effect.fnUntraced(function* (sessionID: SessionID) {
-  const database = yield* Database.Service
-  if (yield* database.db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
-    return
-  const instance = yield* InstanceRef
-  if (!instance) return yield* Effect.die("InstanceRef not provided")
-  yield* database.db
-    .insert(ProjectTable)
-    .values({ id: instance.project.id, worktree: AbsolutePath.make(instance.worktree), sandboxes: [] })
-    .onConflictDoNothing()
-    .run()
-  const events = yield* EventV2Bridge.Service
-  yield* events.publish(SessionV1.Event.Created, {
-    sessionID,
-    info: SessionV1.SessionInfo.make({
-      id: sessionID,
-      projectID: instance.project.id,
-      directory: instance.directory,
-      slug: "structured-output-fixture",
-      title: "Structured output fixture",
-      version: "test",
-      time: { created: 1, updated: 1 },
-    }),
-  })
-})
-
 describe("structured output: the tool choice each provider is sent", () => {
   const it = testEffect(
     AppNodeBuilder.build(
-      LayerNode.group([LLM.node, Provider.node, Database.node, EventV2Bridge.node, SessionProjector.node]),
+      LayerNode.group([LLM.node, Provider.node, Session.node, Database.node, EventV2Bridge.node, SessionProjector.node]),
       [[Database.node, Database.layerFromPath(":memory:")]],
     ),
   )
@@ -259,8 +257,8 @@ describe("structured output: the tool choice each provider is sent", () => {
     thinking?: false
   }) {
     const model = yield* Provider.use.getModel(ProviderV2.ID.make(input.providerID), ModelV2.ID.make(input.modelID))
-    const sessionID = SessionID.make("session-structured-choice")
-    yield* ordinarySession(sessionID)
+    const sessions = yield* Session.Service
+    const sessionID = (yield* sessions.create({ title: "Structured output fixture" })).id
     const agent = {
       name: "build",
       mode: "primary",
@@ -295,7 +293,7 @@ describe("structured output: the tool choice each provider is sent", () => {
           chose: (choice) => chose.push(choice),
           ...(input.thinking === false ? { thinking: false as const } : {}),
         })
-        .pipe(Stream.runDrain, Effect.exit),
+        .pipe(Stream.runDrain),
     )
     return { body: server.hits.at(-1)!.body, chose }
   })

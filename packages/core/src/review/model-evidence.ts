@@ -54,7 +54,7 @@ import {
 // promptsDigest catches a change to the text of the core prompts and output schemas without a bump, since it renders
 // every section a prompt can have; it cannot see a runner filling those inputs differently or a change to the prompts'
 // length limits.
-export const REVIEW_PIPELINE_REVISION = 1
+export const REVIEW_PIPELINE_REVISION = 2
 
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it

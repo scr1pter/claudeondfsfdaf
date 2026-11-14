@@ -1,8 +1,7 @@
 import { afterAll, describe, expect } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
-import os from "node:os"
+import { readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { sql } from "drizzle-orm"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
@@ -11,10 +10,12 @@ import { BackgroundJob } from "@vectordevai/core/background-job"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Database } from "@vectordevai/core/database/database"
 import { it } from "./lib/effect"
+import { tmpdir } from "./fixture/tmpdir"
 
 // Before anything reads the machine id, so the test never writes the user's state folder.
-const temporary = mkdtempSync(path.join(os.tmpdir(), "vector-core-test-"))
-afterAll(() => rmSync(temporary, { recursive: true, force: true }))
+const temporaryDirectory = await tmpdir()
+const temporary = temporaryDirectory.path
+afterAll(() => temporaryDirectory[Symbol.asyncDispose]())
 const machineFile = path.join(temporary, "machine-id")
 BackgroundJobStore.useMachineFile(machineFile)
 
