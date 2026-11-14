@@ -10,7 +10,6 @@ import type { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import type { TaskIsolation } from "@/task/isolation"
 import { TaskPlace } from "@/task/place"
-import { FileLock } from "@/tool/file-lock"
 
 // InstanceStore bootstraps the runtime that already contains Connect. Resolve it at use time, as isolation does,
 // instead of making the registry's static service graph depend on its own bootstrap.
@@ -36,14 +35,13 @@ export const use = <A, E, R>(
     const home = yield* InstanceState.context
     const sessions = yield* Session.Service
     const store = yield* instances()
-    // A review disposes only its own fresh work instance. It cannot retire one another live caller is using.
-    if ((yield* store.loaded()).some((ctx) => FileLock.key(ctx.directory) === FileLock.key(input.record.directory)))
+    if (!store.withFresh)
       return yield* new Connect.Refusal({
         code: "unavailable",
-        message: "The task's worktree instance is in use. Wait for it to close before reviewing it.",
+        message: "This engine cannot exclusively own a task review instance. The review did not start.",
       })
-    return yield* Effect.acquireUseRelease(
-      store.load({ directory: input.record.directory, worktree: input.record.directory, project: home.project }),
+    const result = yield* store.withFresh(
+      { directory: input.record.directory, worktree: input.record.directory, project: home.project },
       (work) =>
         Effect.gen(function* () {
           const place = yield* sessions.create({
@@ -53,7 +51,7 @@ export const use = <A, E, R>(
           })
           TaskPlace.set(place.id, { home, work })
           input.places.add(place.id)
-          return yield* review(place.id).pipe(
+          return yield* Effect.suspend(() => review(place.id)).pipe(
             Effect.ensuring(
               input.stopHelpers.pipe(
                 Effect.ensuring(
@@ -66,8 +64,13 @@ export const use = <A, E, R>(
             ),
           )
         }),
-      (work) => store.dispose(work),
     )
+    if (Option.isNone(result))
+      return yield* new Connect.Refusal({
+        code: "unavailable",
+        message: "The task's worktree instance is in use. Wait for it to close before reviewing it.",
+      })
+    return result.value
   })
 
 /** Keep asks closed too: reviewing must not acquire read authority the requester would have had to ask for. */

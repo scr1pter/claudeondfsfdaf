@@ -11,6 +11,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Connect } from "@vectordevai/schema/connect"
+import type { SessionID } from "@vectordevai/schema/session-id"
 import { Agent } from "@/agent/agent"
 import { ConnectHub } from "@/connect/hub"
 import { ConnectPlacement } from "@/connect/placement"
@@ -261,6 +262,57 @@ const unsupportedGit = (f: Effect.Success<ReturnType<typeof fixture>>) =>
       false,
     )
   })
+
+live.instance(
+  "a task review refuses an occupied actual instance without retiring another caller's context",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
+      yield* f.settle()
+      const home = yield* InstanceState.context
+      const shared = yield* f.store.load({ directory: f.workPath, worktree: f.workPath, project: home.project })
+      const children = yield* f.sessions.children(f.parent.id)
+      const run = yield* f.run()
+      expect(run.result?.state).toBe("refused")
+      expect(run.result?.summary).toContain("instance is in use")
+      expect(yield* f.store.load({ directory: f.workPath })).toBe(shared)
+      expect((yield* f.sessions.children(f.parent.id)).map((session) => session.id)).toEqual(
+        children.map((session) => session.id),
+      )
+      expect(yield* f.llm.inputs).toHaveLength(0)
+      yield* f.store.dispose(shared)
+    }),
+  { git: true },
+)
+
+live.instance(
+  "missing exclusive-instance capability refuses task placement before creating helpers or using legacy load",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
+      const record = yield* f.settle()
+      const { withFresh, ...oldStore } = f.store
+      expect(withFresh).toBeDefined()
+      const children = yield* f.sessions.children(f.parent.id)
+      const places = new Set<SessionID>()
+      const refused = yield* ConnectPlacement.use(
+        { record, requester: f.parent.id, places, stopHelpers: Effect.void },
+        () => Effect.die("Unsupported placement callback ran"),
+      ).pipe(Effect.provideService(InstanceStore.Service, oldStore), Effect.result)
+      expect(refused._tag).toBe("Failure")
+      expect(places.size).toBe(0)
+      expect((yield* f.sessions.children(f.parent.id)).map((session) => session.id)).toEqual(
+        children.map((session) => session.id),
+      )
+      expect(
+        (yield* f.store.loaded()).some((context) => FileLock.key(context.directory) === FileLock.key(f.workPath)),
+      ).toBe(false)
+      expect(yield* f.llm.inputs).toHaveLength(0)
+    }),
+  { git: true },
+)
 
 live.instance(
   "the actual reviewer reads the task copy, retains the requester lineage and spends from its live run",
@@ -709,7 +761,7 @@ live.instance(
       const running = yield* f.run({ abort: caller.signal }).pipe(Effect.forkChild)
       yield* f.llm.wait(1)
       expect((yield* f.store.loaded()).some((ctx) => FileLock.key(ctx.directory) === FileLock.key(f.workPath))).toBe(
-        true,
+        false,
       )
       const place = (yield* f.sessions.children(f.parent.id)).find(
         (session) => session.internal === "vectorscope.place",
