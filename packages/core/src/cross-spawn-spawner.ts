@@ -292,48 +292,56 @@ export const make = Effect.gen(function* () {
   }
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
-    Effect.callback<
-      readonly [NodeChildProcess.ChildProcess, ExitSignal, ReturnType<typeof captureOutput>, OwnedProcess.Control?],
-      PlatformError.PlatformError
-    >((resume) => {
-      const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const isolated = ProcessIsolation.launch(command.command, command.args, {
-        cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
-        shell: opts.shell,
-        env: opts.env,
+    Effect.gen(function* () {
+      const isolated = yield* Effect.try({
+        try: () =>
+          ProcessIsolation.launch(command.command, command.args, {
+            cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
+            shell: opts.shell,
+            env: opts.env,
+          }),
+        catch: (error) => toPlatformError("spawn", toError(error), command),
       })
-      const proc = launch(isolated.file, isolated.args, { ...opts, shell: isolated.shell })
-      // Bun resumes stdio at native exit, before a delayed Effect reader can attach.
-      // Pipe immediately into bounded streams; retain backpressure until consumed.
-      const captured = captureOutput(proc)
-      const ownership = OwnedProcess.options(command)
-      const owned = ownership && proc.pid ? OwnedProcess.track(proc, captured.dispose, ownership) : undefined
-      let end = false
-      let spawned = false
-      let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
-      proc.on("error", (err) => {
-        // Once the child runs, an error is not a failure to start. On Windows cross-spawn emits ENOENT in place of
-        // exit for exit status 1 from any command run under a shell, and a failed kill emits one too. Destroying the
-        // output here would leave its readers waiting for an end that never comes; close still settles the exit.
-        if (spawned) return
-        captured.dispose()
-        resume(Effect.fail(toPlatformError("spawn", err, command)))
-      })
-      proc.on("exit", (...args) => {
-        exit = args
-      })
-      proc.on("close", (...args) => {
-        if (end) return
-        end = true
-        Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
-      })
-      proc.on("spawn", () => {
-        spawned = true
-        resume(Effect.succeed([proc, signal, captured, owned]))
-      })
-      return Effect.sync(() => {
-        proc.kill("SIGTERM")
-        captured.dispose()
+      return yield* Effect.callback<
+        readonly [NodeChildProcess.ChildProcess, ExitSignal, ReturnType<typeof captureOutput>, OwnedProcess.Control?],
+        PlatformError.PlatformError
+      >((resume) => {
+        const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
+        const proc = launch(isolated.file, isolated.args, { ...opts, shell: isolated.shell })
+        // Bun resumes stdio at native exit, before a delayed Effect reader can attach.
+        // Pipe immediately into bounded streams; retain backpressure until consumed.
+        const captured = captureOutput(proc)
+        const ownership = OwnedProcess.options(command)
+        const owned = ownership && proc.pid ? OwnedProcess.track(proc, captured.dispose, ownership) : undefined
+        let end = false
+        let spawned = false
+        let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
+        proc.on("error", (err) => {
+          // Once the child runs, an error is not a failure to start. On Windows cross-spawn emits ENOENT in place of
+          // exit for exit status 1 from any command run under a shell, and a failed kill emits one too. Destroying the
+          // output here would leave its readers waiting for an end that never comes; close still settles the exit.
+          if (spawned) return
+          captured.dispose()
+          resume(Effect.fail(toPlatformError("spawn", err, command)))
+        })
+        proc.on("exit", (...args) => {
+          exit = args
+        })
+        proc.on("close", (...args) => {
+          if (end) return
+          end = true
+          Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
+        })
+        proc.on("spawn", () => {
+          spawned = true
+          resume(Effect.succeed([proc, signal, captured, owned]))
+        })
+        if (owned)
+          return Effect.promise(owned.stop).pipe(Effect.asVoid, Effect.ensuring(Effect.sync(captured.dispose)))
+        return Effect.sync(() => {
+          proc.kill("SIGTERM")
+          captured.dispose()
+        })
       })
     })
 
