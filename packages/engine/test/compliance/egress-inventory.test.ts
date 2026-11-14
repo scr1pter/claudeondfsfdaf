@@ -87,6 +87,8 @@ const WITHOUT_SOURCE: Readonly<Record<string, string>> = {
 // Call sites of the registry that consult Vector Local through another file, and how. Every other call site of an
 // engine source consults it itself.
 const DECIDED_ELSEWHERE: Readonly<Record<string, string>> = {
+  "packages/engine/src/tool/browser-bridge.ts":
+    "The authenticated desktop IPC shared by browser commands and session cleanup. BrowserTool approves each page through webAccess before sending; the desktop's egress filter decides page requests. Closing an owned context opens no destination.",
   "packages/engine/src/tool/research-search.ts":
     "Decides each results page a search loads with ResearchSearch.reachable (core research/search.ts) before it asks the desktop's research browser.",
   "packages/core/src/tool/research-search.ts":
@@ -295,9 +297,9 @@ const UNLABELLED_CALLS: ReadonlyArray<{ readonly file: string; readonly call: st
     why: "Its own helper named fetch, which runs git fetch through Git.run; each fetch is decided there.",
   },
   {
-    file: "packages/engine/src/tool/browser.ts",
+    file: "packages/engine/src/tool/browser-bridge.ts",
     call: "return fetch(`${url}/command`",
-    why: "The desktop app's browser bridge on this computer; the page itself is decided before (webAccess).",
+    why: "The desktop app's authenticated browser IPC on this computer, extracted from browser.ts. BrowserTool decides pages before sending (webAccess), the desktop filters page requests, and session cleanup only closes owned contexts.",
   },
   {
     file: "packages/core/src/tool/research-search.ts",

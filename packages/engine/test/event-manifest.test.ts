@@ -16,7 +16,8 @@ describe("public event manifest", () => {
     expect(EventManifest.Definitions).toBe(SchemaEventManifest.Definitions)
     expect(EventManifest.Latest).toBe(SchemaEventManifest.Latest)
     expect(EventManifest.Durable).toBe(SchemaEventManifest.Durable)
-    expect(EventManifest.Latest.size).toBe(101)
+    // Hands and Connect both contribute a live compatibility event.
+    expect(EventManifest.Latest.size).toBe(102)
     expect(EventManifest.Latest.get("computer.state")).toBe(ComputerEvent.State)
     expect(EventManifest.Latest.get("provider.unavailable")).toBe(Integration.Event.Unavailable)
     expect(EventManifest.Latest.get("session.next.ancillary.usage")).toBe(SessionEvent.AncillaryUsage)

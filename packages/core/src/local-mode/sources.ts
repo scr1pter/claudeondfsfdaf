@@ -437,7 +437,8 @@ export const SOURCES: readonly Source[] = [
     id: "cloud-computer",
     purpose: "account",
     hosts: VECTOR,
-    sends: "Your Vector sign-in, the job you send to your cloud computer, and the take-over, stop and live view actions you choose",
+    sends:
+      "Your Vector sign-in, the job you send to your cloud computer, and the take-over, stop and live view actions you choose",
     why: "The cloud computer Vector runs for you: starting jobs, the pre-start estimate, take-over and the live view",
     local: "blocked",
     where: ["desktop"],
@@ -681,6 +682,7 @@ export const SOURCES: readonly Source[] = [
       "packages/desktop/src/main/browser-agent.ts",
       "packages/desktop/src/main/egress-filter.ts",
       "packages/engine/src/tool/browser.ts",
+      "packages/engine/src/tool/browser-bridge.ts",
     ],
     note: "Follows Web access",
   },
