@@ -97,6 +97,7 @@ export type Event =
   | EventLocalUpdated
   | EventLocalBlocked
   | EventMemoryLearned
+  | EventConnectRunUpdated
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -1835,6 +1836,39 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "connect.run.updated"
+        properties: {
+          sessionID?: string
+          run: {
+            id: string
+            request: ConnectRequest
+            status: ConnectRunStatus
+            progress?: ConnectProgress
+            result?: {
+              state: ConnectResultState
+              verdict?: ConnectVerdict
+              summary: string
+              findings: Array<ConnectFinding>
+              sendsTo?: "this-computer" | "vector-codium" | string | string
+              cached?: boolean
+              cost?: ConnectCost
+              sessions: Array<string>
+              notes: Array<string>
+              refusal?: ConnectRefusalCode
+              target?: ConnectTarget
+              head?: string
+              base?: string
+            }
+            time: {
+              created: number
+              started?: number
+              ended?: number
+            }
+          }
+        }
+      }
+    | {
+        id: string
         type: "vcs.branch.updated"
         properties: {
           branch?: string
@@ -2270,6 +2304,17 @@ export type ResearchConfig = {
   retain_days?: number
 }
 
+export type ConnectReviewConfig = {
+  after_run?: "off" | "report" | "repair"
+  before_commit?: "off" | "offer" | "run"
+  max_rounds?: number
+  max_cost_usd?: number
+}
+
+export type ConnectConfig = {
+  review?: ConnectReviewConfig
+}
+
 export type ConfigWithLocks = {
   $schema?: string
   shell?: string
@@ -2451,6 +2496,7 @@ export type ConfigWithLocks = {
   }
   local?: LocalConfig
   research?: ResearchConfig
+  connect?: ConnectConfig
   experimental?: {
     vectorscope?: boolean
     disable_paste_summary?: boolean
@@ -2648,6 +2694,7 @@ export type Config = {
   }
   local?: LocalConfig
   research?: ResearchConfig
+  connect?: ConnectConfig
   experimental?: {
     vectorscope?: boolean
     disable_paste_summary?: boolean
@@ -2835,6 +2882,7 @@ export type ExperimentalCapabilities = {
   vectorscopeSettings?: boolean
   vectorscopeRuns?: boolean
   vectorscopeReviewMemoryControls?: boolean
+  connections?: boolean
 }
 
 export type ToolListItem = {
@@ -4551,6 +4599,11 @@ export type MemoryResearchSourceText = {
   private: boolean
 }
 
+export type ConnectApiError = {
+  code: "disabled" | "forbidden" | "not_found" | "invalid"
+  message: string
+}
+
 export type Project = {
   id: string
   worktree: string
@@ -5698,6 +5751,7 @@ export type V2Event =
   | LocalUpdated
   | LocalBlocked
   | MemoryLearned
+  | ConnectRunUpdated
   | VcsBranchUpdated
   | WorkspaceReady
   | WorkspaceFailed
@@ -6190,6 +6244,133 @@ export type ProjectTime = {
   updated: number
   initialized?: number
 }
+
+export type ConnectBudget = {
+  maxCostUsd?: number
+  timeoutMinutes?: number
+}
+
+export type ConnectTarget =
+  | {
+      kind: "uncommitted"
+    }
+  | {
+      kind: "staged"
+    }
+  | {
+      kind: "branch"
+      base?: string
+    }
+  | {
+      kind: "task"
+      task: string
+    }
+
+export type ConnectReviewRequest = {
+  id: string
+  to: string
+  requester: {
+    kind: "agent" | "user" | "workflow"
+    sessionID?: string
+    agent?: string
+  }
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "review"
+  target: ConnectTarget
+  security?: boolean
+  since?: string
+}
+
+export type ConnectFixMode = "here" | "worktree"
+
+export type ConnectFixRequest = {
+  id: string
+  to: string
+  requester: {
+    kind: "agent" | "user" | "workflow"
+    sessionID?: string
+    agent?: string
+  }
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "fix"
+  run: string
+  findings: Array<string>
+  mode: ConnectFixMode
+}
+
+export type ConnectRequest = ConnectReviewRequest | ConnectFixRequest
+
+export type ConnectRunStatus = "queued" | "running" | "done"
+
+export type ConnectProgress = {
+  pass?: string
+  message: string
+  at: number
+}
+
+export type ConnectResultState = "completed" | "partial" | "refused" | "failed" | "cancelled"
+
+export type ConnectVerdict = "clean" | "findings" | "blocking" | "incomplete" | "not-reviewed"
+
+export type ConnectSeverity = "blocking" | "concern" | "nit"
+
+export type ConnectCategory =
+  | "bug"
+  | "security"
+  | "reliability"
+  | "performance"
+  | "tests"
+  | "maintainability"
+  | "style"
+  | "docs"
+
+export type ConnectSide = "RIGHT" | "LEFT"
+
+export type ConnectBucket = "inline" | "overflow" | "outside-diff" | "elsewhere" | "nit" | "still-open"
+
+export type ConnectFindingStatus = "open" | "fixing" | "fixed" | "still-open" | "new" | "dismissed"
+
+export type ConnectFinding = {
+  id: string
+  severity: ConnectSeverity
+  category: ConnectCategory
+  path: string
+  line?: number
+  side: ConnectSide
+  title: string
+  body: string
+  source: "review" | "security"
+  verified?: boolean
+  suggestion?: string
+  bucket: ConnectBucket
+  status: ConnectFindingStatus
+}
+
+export type ConnectCostKind = "free" | "priced" | "plan" | "local" | "unknown"
+
+export type ConnectCost = {
+  kind: ConnectCostKind
+  usd?: number
+}
+
+export type ConnectRefusalCode =
+  | "unknown"
+  | "effect"
+  | "permission"
+  | "denied"
+  | "read-rule"
+  | "limit"
+  | "budget"
+  | "unavailable"
+  | "input"
+  | "not-allowed"
+  | "escalate"
 
 export type EventServerInstanceDisposed = {
   id: string
@@ -7362,23 +7543,41 @@ export type WorkflowValidateInput = {
   }
 }
 
-export type WorkflowPlanStage = {
+export type WorkflowPlanAgentStage = {
   id: string
   title: string
   phase: string
-  agent: string
-  model?: string
-  effort?: string
-  isolation?: string
   items: number | "dynamic"
   serial: boolean
   writes: string
   asks: Array<string>
+  kind?: "agent"
+  agent: string
+  model?: string
+  effort?: string
+  isolation?: string
   verify?: {
     agent: string
     maxRounds: number
   }
 }
+
+export type WorkflowPlanConnectStage = {
+  id: string
+  title: string
+  phase: string
+  items: number | "dynamic"
+  serial: boolean
+  writes: string
+  asks: Array<string>
+  kind: "connect"
+  connect: {
+    to: string
+    action: string
+  }
+}
+
+export type WorkflowPlanStage = WorkflowPlanAgentStage | WorkflowPlanConnectStage
 
 export type WorkflowPlan = {
   title: string
@@ -7464,6 +7663,74 @@ export type ResearchMeasurement = {
   population?: string
   methodology?: string
   definition?: string
+}
+
+export type ConnectKind = "agent" | "helper" | "tool" | "runtime" | "service" | "mcp" | "workflow" | "skill"
+
+export type ConnectOwner =
+  | "main"
+  | "vectorscope"
+  | "hands"
+  | "vector-at-mention"
+  | "codium"
+  | "cloud-workspaces"
+  | "plugin"
+  | "user"
+
+export type ConnectPlace = "local" | "your-cloud" | "vector-cloud"
+
+export type ConnectState = "ready" | "busy" | "unavailable" | "off" | "not-installed"
+
+export type ConnectReach = "connect" | "ui" | "none" | string
+
+export type ConnectActionId = "review" | "fix"
+
+export type ConnectEffect = "read" | "write"
+
+export type ConnectResultKind = "review" | "fix"
+
+export type ConnectAction = {
+  id: ConnectActionId
+  title: string
+  effects: Array<ConnectEffect>
+  background: boolean
+  result: ConnectResultKind
+}
+
+export type ConnectActivity = {
+  running: number
+  lastRunAt?: number
+}
+
+export type ConnectReviewInput = {
+  to?: string
+  target?: ConnectTarget
+  security?: boolean
+  background?: boolean
+  budget?: ConnectBudget
+  since?: string
+}
+
+export type ConnectDirectoryReviewInput = {
+  to?: string
+  target?: ConnectTarget
+  security?: boolean
+  background?: boolean
+  budget?: ConnectBudget
+  since?: string
+  requestKey: string
+}
+
+export type ConnectRegisterInput = {
+  sessionID: string
+  target: ConnectTarget
+  findings: Array<ConnectFinding>
+}
+
+export type ConnectDismissInput = {
+  sessionID: string
+  findings: Array<string>
+  reason?: string
 }
 
 export type ProjectDirectories = Array<{
@@ -10034,6 +10301,87 @@ export type MemoryLearned = {
   }
 }
 
+export type ConnectRequester = {
+  kind: "agent" | "user" | "workflow"
+  sessionID?: string
+  agent?: string
+}
+
+export type ConnectReviewRequest1 = {
+  id: string
+  to: string
+  requester: ConnectRequester
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "review"
+  target: ConnectTarget
+  security?: boolean
+  since?: string
+}
+
+export type ConnectFixRequest1 = {
+  id: string
+  to: string
+  requester: ConnectRequester
+  requestID: string
+  directory: string
+  background: boolean
+  budget?: ConnectBudget
+  action: "fix"
+  run: string
+  findings: Array<string>
+  mode: ConnectFixMode
+}
+
+export type ConnectResult = {
+  state: ConnectResultState
+  verdict?: ConnectVerdict
+  summary: string
+  findings: Array<ConnectFinding>
+  sendsTo?: "this-computer" | "vector-codium" | string | string
+  cached?: boolean
+  cost?: ConnectCost
+  sessions: Array<string>
+  notes: Array<string>
+  refusal?: ConnectRefusalCode
+  target?: ConnectTarget
+  head?: string
+  base?: string
+}
+
+export type ConnectRun = {
+  id: string
+  request: ConnectRequest
+  status: ConnectRunStatus
+  progress?: ConnectProgress
+  result?: ConnectResult
+  time: {
+    created: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type ConnectRunUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "connect.run.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID?: string
+    run: ConnectRun
+  }
+}
+
 export type VcsBranchUpdated = {
   id: string
   metadata?: {
@@ -11228,6 +11576,40 @@ export type EventMemoryLearned = {
     sessionID: string
     entryIDs: Array<string>
     messageID?: string
+  }
+}
+
+export type EventConnectRunUpdated = {
+  id: string
+  type: "connect.run.updated"
+  properties: {
+    sessionID?: string
+    run: {
+      id: string
+      request: ConnectRequest
+      status: ConnectRunStatus
+      progress?: ConnectProgress
+      result?: {
+        state: ConnectResultState
+        verdict?: ConnectVerdict
+        summary: string
+        findings: Array<ConnectFinding>
+        sendsTo?: "this-computer" | "vector-codium" | string | string
+        cached?: boolean
+        cost?: ConnectCost
+        sessions: Array<string>
+        notes: Array<string>
+        refusal?: ConnectRefusalCode
+        target?: ConnectTarget
+        head?: string
+        base?: string
+      }
+      time: {
+        created: number
+        started?: number
+        ended?: number
+      }
+    }
   }
 }
 
@@ -16860,6 +17242,437 @@ export type MemoryResearchSourceResponses = {
 }
 
 export type MemoryResearchSourceResponse = MemoryResearchSourceResponses[keyof MemoryResearchSourceResponses]
+
+export type ConnectListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect"
+}
+
+export type ConnectListErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectListError = ConnectListErrors[keyof ConnectListErrors]
+
+export type ConnectListResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    id: string
+    kind: ConnectKind
+    title: string
+    summary: string
+    owner: ConnectOwner
+    place: ConnectPlace
+    sendsTo?: "this-computer" | "vector-codium" | string | string
+    state: ConnectState
+    reason?: string
+    reach: ConnectReach
+    actions?: Array<ConnectAction>
+    activity?: ConnectActivity
+  }>
+}
+
+export type ConnectListResponse = ConnectListResponses[keyof ConnectListResponses]
+
+export type ConnectRunsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect/runs"
+}
+
+export type ConnectRunsErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectRunsError = ConnectRunsErrors[keyof ConnectRunsErrors]
+
+export type ConnectRunsResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }>
+}
+
+export type ConnectRunsResponse = ConnectRunsResponses[keyof ConnectRunsResponses]
+
+export type ConnectGetData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect/runs/{runID}"
+}
+
+export type ConnectGetErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectGetError = ConnectGetErrors[keyof ConnectGetErrors]
+
+export type ConnectGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectGetResponse = ConnectGetResponses[keyof ConnectGetResponses]
+
+export type ConnectReviewData = {
+  body?: ConnectReviewInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/connect"
+}
+
+export type ConnectReviewErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectReviewError = ConnectReviewErrors[keyof ConnectReviewErrors]
+
+export type ConnectReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectReviewResponse = ConnectReviewResponses[keyof ConnectReviewResponses]
+
+export type ConnectDirectoryReviewData = {
+  body?: ConnectDirectoryReviewInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/connect/review"
+}
+
+export type ConnectDirectoryReviewErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectDirectoryReviewError = ConnectDirectoryReviewErrors[keyof ConnectDirectoryReviewErrors]
+
+export type ConnectDirectoryReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectDirectoryReviewResponse = ConnectDirectoryReviewResponses[keyof ConnectDirectoryReviewResponses]
+
+export type ConnectCancelData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/connect/runs/{runID}/cancel"
+}
+
+export type ConnectCancelErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectCancelError = ConnectCancelErrors[keyof ConnectCancelErrors]
+
+export type ConnectCancelResponses = {
+  /**
+   * Success
+   */
+  200: boolean
+}
+
+export type ConnectCancelResponse = ConnectCancelResponses[keyof ConnectCancelResponses]
+
+export type ConnectRegisterData = {
+  body?: ConnectRegisterInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/connect/findings"
+}
+
+export type ConnectRegisterErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectRegisterError = ConnectRegisterErrors[keyof ConnectRegisterErrors]
+
+export type ConnectRegisterResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectRegisterResponse = ConnectRegisterResponses[keyof ConnectRegisterResponses]
+
+export type ConnectDismissData = {
+  body?: ConnectDismissInput
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/connect/runs/{runID}/dismiss"
+}
+
+export type ConnectDismissErrors = {
+  /**
+   * ConnectApiError | InvalidRequestError
+   */
+  400: ConnectApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ConnectDismissError = ConnectDismissErrors[keyof ConnectDismissErrors]
+
+export type ConnectDismissResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    request: ConnectRequest
+    status: ConnectRunStatus
+    progress?: ConnectProgress
+    result?: {
+      state: ConnectResultState
+      verdict?: ConnectVerdict
+      summary: string
+      findings: Array<ConnectFinding>
+      sendsTo?: "this-computer" | "vector-codium" | string | string
+      cached?: boolean
+      cost?: ConnectCost
+      sessions: Array<string>
+      notes: Array<string>
+      refusal?: ConnectRefusalCode
+      target?: ConnectTarget
+      head?: string
+      base?: string
+    }
+    time: {
+      created: number
+      started?: number
+      ended?: number
+    }
+  }
+}
+
+export type ConnectDismissResponse = ConnectDismissResponses[keyof ConnectDismissResponses]
 
 export type ProjectListData = {
   body?: never

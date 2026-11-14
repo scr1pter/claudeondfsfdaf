@@ -11,6 +11,7 @@ import PROMPT_REVIEW from "../../src/agent/prompt/review.txt"
 import { VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { GENERAL_SUBAGENT } from "../../src/agent/subagent-kind"
 import { NATIVE_SPECIALISTS } from "@vectordevai/core/agent/specialists"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { WorkflowMarkers } from "../../src/orchestration/constants"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
@@ -527,8 +528,15 @@ it.instance("native Subagents include the configurable coding specialists and de
       .map((agent) => agent.name)
       .toSorted()
     // The hidden workflow coordinator (WP31, G.4) is native too: an engine-reserved name, not a specialist to turn off.
+    // So is connected tools' hidden fix agent (CW-07), which only connect launches.
     expect(specialists).toEqual(
-      [...NATIVE_SPECIALISTS, RESEARCHER, RESEARCH_JUDGE, WorkflowMarkers.WORKFLOW_AGENT].toSorted(),
+      [
+        ...NATIVE_SPECIALISTS,
+        RESEARCHER,
+        RESEARCH_JUDGE,
+        WorkflowMarkers.WORKFLOW_AGENT,
+        ConnectPolicy.FIX_AGENT,
+      ].toSorted(),
     )
     expect(NATIVE_SPECIALISTS).not.toContain(RESEARCHER)
     expect(NATIVE_SPECIALISTS).not.toContain(RESEARCH_JUDGE)

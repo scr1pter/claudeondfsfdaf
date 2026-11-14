@@ -475,6 +475,59 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
+exports[`vector CLI help-text snapshots every documented command emits stable help text: vector connected --help 1`] = `
+"vector connected <action> [runID]
+
+list connected tools, inspect review runs, start a review or cancel it on a running server
+
+Positionals:
+  action                           [string] [required] [choices: "list", "runs", "review", "cancel"]
+  runID   review run to cancel                                                              [string]
+
+Options:
+  -h, --help         show help                                                             [boolean]
+  -v, --version      show version number                                                   [boolean]
+      --print-logs   print logs to stderr                                                  [boolean]
+      --log-level    log level                  [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         run without external plugins                                          [boolean]
+      --attach       URL of the server                                           [string] [required]
+      --session      conversation ID                                                        [string]
+      --dir          directory on the server                                                [string]
+      --uncommitted                                                       [boolean] [default: false]
+      --staged                                                            [boolean] [default: false]
+      --base         branch review base                                                     [string]
+      --json                                                              [boolean] [default: false]
+      --username                                                                            [string]
+      --password     prefer VECTOR_SERVER_PASSWORD                                          [string]"
+`;
+
+exports[`vector CLI help-text snapshots every documented command emits stable help text: vector workflow --help 1`] = `
+"vector workflow <action> [target]
+
+validate workflows or manage runs (separate from memory workflow insights)
+
+Positionals:
+  action        [string] [required] [choices: "saved", "validate", "list", "show", "resume", "stop"]
+  target  workflow name/file for validate; run ID for show, resume or stop                  [string]
+
+Options:
+  -h, --help          show help                                                            [boolean]
+  -v, --version       show version number                                                  [boolean]
+      --print-logs    print logs to stderr                                                 [boolean]
+      --log-level     log level                 [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure          run without external plugins                                         [boolean]
+      --attach        owning server URL; omit for offline file validation                   [string]
+  -s, --session       parent session ID for list, show, resume or stop                      [string]
+      --dir           workspace directory on the attached server                            [string]
+      --file          replacement workflow JSON file for resume                             [string]
+      --input         input key=value; JSON values are parsed, other values stay strings     [array]
+      --retry-failed  retry failed nodes when resuming                     [boolean] [default: true]
+      --reason        why this run should stop                                              [string]
+      --json          print the structured response                       [boolean] [default: false]
+      --username      server username (or VECTOR_SERVER_USERNAME)                           [string]
+      --password      server password (prefer VECTOR_SERVER_PASSWORD)                       [string]"
+`;
+
 exports[`vector CLI help-text snapshots every documented command emits stable help text: vector plugin --help 1`] = `
 "vector plugin <module>
 
@@ -856,31 +909,4 @@ Options:
       --print-logs  print logs to stderr                                                   [boolean]
       --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
       --pure        run without external plugins                                           [boolean]"
-`;
-
-exports[`vector CLI help-text snapshots every documented command emits stable help text: vector workflow --help 1`] = `
-"vector workflow <action> [target]
-
-validate workflows or manage runs (separate from memory workflow insights)
-
-Positionals:
-  action        [string] [required] [choices: "saved", "validate", "list", "show", "resume", "stop"]
-  target  workflow name/file for validate; run ID for show, resume or stop                  [string]
-
-Options:
-  -h, --help          show help                                                            [boolean]
-  -v, --version       show version number                                                  [boolean]
-      --print-logs    print logs to stderr                                                 [boolean]
-      --log-level     log level                 [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure          run without external plugins                                         [boolean]
-      --attach        owning server URL; omit for offline file validation                   [string]
-  -s, --session       parent session ID for list, show, resume or stop                      [string]
-      --dir           workspace directory on the attached server                            [string]
-      --file          replacement workflow JSON file for resume                             [string]
-      --input         input key=value; JSON values are parsed, other values stay strings     [array]
-      --retry-failed  retry failed nodes when resuming                     [boolean] [default: true]
-      --reason        why this run should stop                                              [string]
-      --json          print the structured response                       [boolean] [default: false]
-      --username      server username (or VECTOR_SERVER_USERNAME)                           [string]
-      --password      server password (prefer VECTOR_SERVER_PASSWORD)                       [string]"
 `;

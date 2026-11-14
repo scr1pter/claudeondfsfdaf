@@ -56,6 +56,7 @@ import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { ConfigLocalV1 } from "@vectordevai/core/v1/config/local"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
+import { ConnectConfig } from "@/connect/config"
 
 // Custom merge function that concatenates array fields instead of replacing them
 // Keep remeda's deep conditional merge type out of hot config-loading paths; TS profiling showed it dominates here.
@@ -105,6 +106,11 @@ export function projectExecutableConfig(config: Info, trusted: boolean, base: In
     const research = repositoryResearch(next.research, base.research)
     if (research) next.research = research
     else delete next.research
+  }
+  if (next.connect) {
+    const connect = ConnectConfig.repositoryConnect(next.connect, base.connect)
+    if (connect) next.connect = connect
+    else delete next.connect
   }
   if (!trusted) {
     const permission = authorityNarrowingPermission(next.permission)
@@ -1899,7 +1905,8 @@ const layer = Layer.effect(
     })
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
-      function* (ctx: InstanceContext) {
+      function* (current: InstanceContext) {
+        const ctx = yield* Effect.promise(() => ConfigPaths.canonicalScope(current))
         const auth = yield* authSvc.all().pipe(Effect.orDie)
         const managed = ConfigManaged.read()
         const projectFiles = Flag.VECTOR_DISABLE_PROJECT_CONFIG
@@ -1964,10 +1971,17 @@ const layer = Layer.effect(
           ...localAgentConfig,
           ...(tuiConfig?.project ? [tuiConfig.path] : []),
         ]
-        const captureTrustSnapshot = () =>
-          WorkspaceTrust.snapshot(trustWorkspace, trustInputs).catch((cause) =>
-            WorkspaceTrust.unavailableSnapshot(trustWorkspace, cause),
-          )
+        const captureTrustSnapshot = async () => {
+          try {
+            const captured = await WorkspaceTrust.snapshot(trustWorkspace, trustInputs)
+            const latest = await ConfigPaths.canonicalScope(current)
+            if (latest.directory !== ctx.directory || latest.worktree !== ctx.worktree)
+              throw new Error("The configuration scope changed while its trusted inputs were captured.")
+            return captured
+          } catch (cause) {
+            return WorkspaceTrust.unavailableSnapshot(trustWorkspace, cause)
+          }
+        }
         const existingTrustSnapshot = yield* Effect.promise(captureTrustSnapshot)
         const snapshotFailure = WorkspaceTrust.unavailableReason(existingTrustSnapshot)
         if (snapshotFailure) {

@@ -45,6 +45,30 @@ import type {
   ConfigUpdateData,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  ConnectCancelData,
+  ConnectCancelErrors,
+  ConnectCancelResponses,
+  ConnectDirectoryReviewData,
+  ConnectDirectoryReviewErrors,
+  ConnectDirectoryReviewResponses,
+  ConnectDismissData,
+  ConnectDismissErrors,
+  ConnectDismissResponses,
+  ConnectGetData,
+  ConnectGetErrors,
+  ConnectGetResponses,
+  ConnectListData,
+  ConnectListErrors,
+  ConnectListResponses,
+  ConnectRegisterData,
+  ConnectRegisterErrors,
+  ConnectRegisterResponses,
+  ConnectReviewData,
+  ConnectReviewErrors,
+  ConnectReviewResponses,
+  ConnectRunsData,
+  ConnectRunsErrors,
+  ConnectRunsResponses,
   EventSubscribeData,
   EventSubscribeErrors,
   EventSubscribeResponses,
@@ -3578,6 +3602,110 @@ export class Memory extends HeyApiClient {
   }
 }
 
+export class Connect extends HeyApiClient {
+  /**
+   * List connected tools
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ConnectListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ConnectListResponses, ConnectListErrors, ThrowOnError>({
+      url: "/experimental/connect",
+      ...options,
+    })
+  }
+
+  /**
+   * List connected tool runs
+   */
+  public runs<ThrowOnError extends boolean = false>(options?: Options<ConnectRunsData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ConnectRunsResponses, ConnectRunsErrors, ThrowOnError>({
+      url: "/experimental/connect/runs",
+      ...options,
+    })
+  }
+
+  /**
+   * Get a connected tool run
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ConnectGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ConnectGetResponses, ConnectGetErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Review changes in a conversation
+   */
+  public review<ThrowOnError extends boolean = false>(options: Options<ConnectReviewData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectReviewResponses, ConnectReviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/connect",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Review the selected directory
+   */
+  public directoryReview<ThrowOnError extends boolean = false>(
+    options?: Options<ConnectDirectoryReviewData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ConnectDirectoryReviewResponses,
+      ConnectDirectoryReviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/connect/review",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a connected tool run
+   */
+  public cancel<ThrowOnError extends boolean = false>(options: Options<ConnectCancelData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectCancelResponses, ConnectCancelErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/cancel",
+      ...options,
+    })
+  }
+
+  /**
+   * Bring desktop findings into a conversation
+   */
+  public register<ThrowOnError extends boolean = false>(options?: Options<ConnectRegisterData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ConnectRegisterResponses, ConnectRegisterErrors, ThrowOnError>({
+      url: "/experimental/connect/findings",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Dismiss findings from an owner action
+   */
+  public dismiss<ThrowOnError extends boolean = false>(options: Options<ConnectDismissData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectDismissResponses, ConnectDismissErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/dismiss",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
 export class Project extends HeyApiClient {
   /**
    * List all projects
@@ -5224,7 +5352,7 @@ export class Provider2 extends HeyApiClient {
   }
 }
 
-export class Connect extends HeyApiClient {
+export class Connect2 extends HeyApiClient {
   /**
    * Connect with key
    *
@@ -5341,9 +5469,9 @@ export class Integration extends HeyApiClient {
     })
   }
 
-  private _connect?: Connect
-  get connect(): Connect {
-    return (this._connect ??= new Connect({ client: this.client }))
+  private _connect?: Connect2
+  get connect(): Connect2 {
+    return (this._connect ??= new Connect2({ client: this.client }))
   }
 
   private _attempt?: Attempt
@@ -5973,6 +6101,11 @@ export class VectorClient extends HeyApiClient {
   private _memory?: Memory
   get memory(): Memory {
     return (this._memory ??= new Memory({ client: this.client }))
+  }
+
+  private _connect?: Connect
+  get connect(): Connect {
+    return (this._connect ??= new Connect({ client: this.client }))
   }
 
   private _project?: Project

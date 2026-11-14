@@ -1,5 +1,6 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Config } from "@/config/config"
 import { ConfigAgent } from "@/config/agent"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
@@ -15,6 +16,7 @@ import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
+import PROMPT_CONNECT_FIX from "./prompt/connect-fix.txt"
 import PROMPT_DEBUG from "./prompt/debug.txt"
 import PROMPT_DISTILL from "./prompt/distill.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
@@ -327,6 +329,8 @@ const layer = Layer.effect(
           vector_cloud_database: "ask",
           vector_cloud_environment: "ask",
           vector_cloud_hosting: "ask",
+          connect_write: "ask",
+          connect_model: "ask",
           external_directory: {
             "*": "ask",
             ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
@@ -459,6 +463,13 @@ const layer = Layer.effect(
           )
         }
 
+        // The connected-tools fix child (CW-07): the defaults, the user's rules, then its fixed part, which comes last.
+        // `requester` is the build agent's rules (final once the config below is applied): the child reads no more.
+        const connectFix = (rules: PermissionV1.Rule[], requester: PermissionV1.Rule[]) =>
+          Permission.merge(defaults, rules, ConnectPolicy.fixAgentRules({ user: rules, requester }))
+        const connectFixDescription =
+          "Fixes chosen VectorScope findings in its own isolated worktree, for connected tools."
+
         const agents: Record<string, Info> = {
           build: {
             name: "build",
@@ -548,6 +559,18 @@ const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+          },
+          // Fixes chosen VectorScope findings in its own worktree, for connected tools. Hidden and native, so only
+          // connect launches it (the task tool refuses a model); it is rebuilt after the config below.
+          [ConnectPolicy.FIX_AGENT]: {
+            name: ConnectPolicy.FIX_AGENT,
+            description: connectFixDescription,
+            permission: connectFix(user, Permission.merge(defaults, user)),
+            prompt: PROMPT_CONNECT_FIX,
+            options: {},
+            mode: "subagent",
+            native: true,
+            hidden: true,
           },
           explore: {
             name: "explore",
@@ -831,6 +854,39 @@ const layer = Layer.effect(
             ...Permission.fromConfig(cfg.agent?.[name]?.permission ?? {}),
             ...userCeiling(name),
           ])
+        }
+        // No config unhides the fix child or puts a rule after its fixed part; its own rules and the ceiling only narrow.
+        // Nor does any config pick its model, prompt, steps or options (a trusted project's included): it runs on its
+        // parent's model, as the task tool picks it, under the prompt that frames the findings as data. It reads as
+        // the build agent does, now that the build agent's own config and ceiling are applied.
+        if (agents[ConnectPolicy.FIX_AGENT])
+          agents[ConnectPolicy.FIX_AGENT] = {
+            name: ConnectPolicy.FIX_AGENT,
+            description: connectFixDescription,
+            permission: connectFix(
+              [
+                ...user,
+                ...Permission.fromConfig(cfg.agent?.[ConnectPolicy.FIX_AGENT]?.permission ?? {}),
+                ...userCeiling(ConnectPolicy.FIX_AGENT),
+              ],
+              agents.build?.permission ?? Permission.merge(defaults, user),
+            ),
+            prompt: PROMPT_CONNECT_FIX,
+            options: {},
+            mode: "subagent",
+            native: true,
+            hidden: true,
+          }
+        // Only connect launches the fix child, naming it in `invokedAgents`, which passes this deny: no agent's own task
+        // call starts it, and the task tool never lists it as one to pick. Only where task may launch it, as for the
+        // research judge below, so a deny for this one agent is never the last word on task for an agent with none.
+        for (const [name, item] of Object.entries(agents)) {
+          if (name === ConnectPolicy.FIX_AGENT) continue
+          if (Permission.evaluate("task", ConnectPolicy.FIX_AGENT, item.permission).action === "deny") continue
+          item.permission = Permission.merge(
+            item.permission,
+            Permission.fromConfig({ task: { [ConnectPolicy.FIX_AGENT]: "deny" } }),
+          )
         }
 
         // The research tools are the research agents' alone, and so are the researcher and the judge: no other agent,

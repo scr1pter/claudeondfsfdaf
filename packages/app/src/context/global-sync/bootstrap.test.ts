@@ -51,11 +51,11 @@ function directoryState() {
 describe("bootstrapDirectory", () => {
   test("directory overlays cannot mutate the owner-global policy or share its nested config objects", async () => {
     const [globalConfig] = createStore<Config>({
-      experimental: { vectorscope: false },
+      experimental: { vectorscope: false, disable_paste_summary: false },
       agent: { vectorscope: { model: "global/reviewer", disable: true } },
     })
     const client = heldClient({
-      experimental: { vectorscope: true },
+      experimental: { vectorscope: true, disable_paste_summary: true },
       agent: { vectorscope: { model: "repository/reviewer", disable: false } },
     })
     const [store, setStore] = directoryState()
@@ -88,8 +88,10 @@ describe("bootstrapDirectory", () => {
     await until(() => store.status === "complete")
     expect(store.status).toBe("complete")
     expect(store.config.experimental?.vectorscope).toBe(true)
+    expect(store.config.experimental?.disable_paste_summary).toBe(true)
     expect(store.config.agent?.vectorscope).toEqual({ model: "repository/reviewer", disable: false })
     expect(globalConfig.experimental?.vectorscope).toBe(false)
+    expect(globalConfig.experimental?.disable_paste_summary).toBe(false)
     expect(globalConfig.agent?.vectorscope).toEqual({ model: "global/reviewer", disable: true })
     queryClient.clear()
   })

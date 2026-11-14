@@ -119,6 +119,7 @@ const CapabilitiesResponse = Schema.Struct({
   vectorscopeSettings: Schema.optional(Schema.Boolean),
   vectorscopeRuns: Schema.optional(Schema.Boolean),
   vectorscopeReviewMemoryControls: Schema.optional(Schema.Boolean),
+  connections: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "ExperimentalCapabilities" })
 
 const ToolIDs = Schema.Array(Schema.String).annotate({ identifier: "ToolIDs" })

@@ -15,6 +15,7 @@ import { TaskManager } from "@/task/manager"
 import { WorkflowOwner } from "@/orchestration/owner"
 import { ReviewOwner } from "@/review/owner"
 import { ReviewMemoryOwner } from "@/review/memory-owner"
+import { ConnectOwner } from "@/connect/owner"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -121,6 +122,7 @@ import { instanceHandlers } from "./handlers/instance"
 import { localHandlers } from "./handlers/local"
 import { mcpHandlers } from "./handlers/mcp"
 import { memoryHandlers } from "./handlers/memory"
+import { connectHandlers } from "./handlers/connect"
 import { permissionHandlers } from "./handlers/permission"
 import { projectHandlers } from "./handlers/project"
 import { projectCopyHandlers } from "./handlers/project-copy"
@@ -197,6 +199,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     localHandlers,
     mcpHandlers,
     memoryHandlers,
+    connectHandlers,
     projectHandlers,
     projectCopyHandlers,
     ptyHandlers,
@@ -295,6 +298,7 @@ const app = LayerNode.group([
   WorkflowOwner.node,
   ReviewOwner.node,
   ReviewMemoryOwner.node,
+  ConnectOwner.node,
   TaskNotify.node,
   TaskLimits.node,
   TaskRecovery.node,

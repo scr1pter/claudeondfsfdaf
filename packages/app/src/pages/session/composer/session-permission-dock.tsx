@@ -3,6 +3,7 @@ import type { PermissionRequest } from "@vectordevai/sdk/v2"
 import { Button } from "@vectordevai/ui/button"
 import { DockPrompt } from "@vectordevai/session-ui/dock-prompt"
 import { Icon } from "@vectordevai/ui/icon"
+import { connectConsentDetails } from "@/features/connect/consent"
 import { useLanguage } from "@/context/language"
 import { cloudPermissionScope, permissionStatements } from "./cloud-permission-scope"
 import { canAlwaysAllowPermission } from "@/context/permission-policy"
@@ -75,6 +76,17 @@ export function SessionPermissionDock(props: {
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-hint">{toolDescription()}</div>
         </div>
+      </Show>
+
+      <Show when={connectConsentDetails(props.request)}>
+        {(details) => (
+          <div data-slot="permission-row">
+            <span data-slot="permission-spacer" aria-hidden="true" />
+            <div data-slot="permission-hint" data-component="connect-permission-details">
+              {details()}
+            </div>
+          </div>
+        )}
       </Show>
 
       <Show when={workflow()}>

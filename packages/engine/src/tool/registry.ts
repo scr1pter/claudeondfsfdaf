@@ -86,6 +86,8 @@ import { ResearchNoteTool } from "./research-note"
 import { ResearchReportTool } from "./research-report"
 import { ResearchBrowserTool } from "./research-browser"
 import { ResearchTool } from "./research"
+import { ConnectTool, beforeCommitDescription } from "./connect"
+import { ConnectHub } from "@/connect/hub"
 
 // Which research tool each research agent is offered (section 5.3). The agents' permissions say the same; offering
 // them only here keeps every other agent's tool list, and its provider cache, as it was.
@@ -178,6 +180,7 @@ const layer = Layer.effect(
     const researchreport = yield* ResearchReportTool
     const researchbrowser = yield* ResearchBrowserTool
     const researchtool = yield* ResearchTool
+    const connecttool = yield* ConnectTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -317,6 +320,7 @@ const layer = Layer.effect(
           researchreport: Tool.init(researchreport),
           researchbrowser: Tool.init(researchbrowser),
           research: Tool.init(researchtool),
+          connect: Tool.init(connecttool),
         })
 
         return {
@@ -357,6 +361,7 @@ const layer = Layer.effect(
             // needs the desktop browser.
             tool.researchbrowser,
             tool.research,
+            ...(flags.experimentalConnect ? [tool.connect] : []),
           ],
           task: tool.task,
           taskSchema: JSON.stringify(tool.task.jsonSchema),
@@ -396,6 +401,7 @@ const layer = Layer.effect(
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const builtin = yield* InstanceState.get(state)
       const researchSetting = (yield* config.get()).research?.tool
+      const connectSetting = (yield* config.get()).connect
       // A research agent is offered its own tools and nothing else, whatever a session's or the user's rules allow:
       // no edit, shell, plugin or custom tool reaches Deep research (RC1).
       const own = Agent.researchTools(input.agent.name)
@@ -407,6 +413,9 @@ const layer = Layer.effect(
         // The build agent researches as a tool on its own requests unless the user turned that off; the session
         // runtime's size decides the rest when the tool runs.
         if (tool.id === ResearchTool.id) return input.agent.name === "build" && researchSetting !== "off"
+        // Connected tools on: the built-in to build alone, and a custom or plugin tool named connect to nobody.
+        if (tool.id === ConnectTool.id && flags.experimentalConnect)
+          return input.agent.name === "build" && !builtin.custom.includes(tool)
 
         const usePatch =
           input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
@@ -423,7 +432,10 @@ const layer = Layer.effect(
           // from in-place plugin edits without mutating the cached builtin schema.
           const initialSchema = tool === builtin.task ? structuredClone(tool.jsonSchema) : tool.jsonSchema
           const output = {
-            description: tool.description,
+            description:
+              tool.id === ConnectTool.id && flags.experimentalConnect
+                ? beforeCommitDescription(tool.description, connectSetting)
+                : tool.description,
             parameters: tool.parameters,
             jsonSchema: initialSchema,
           }
@@ -592,6 +604,7 @@ export const node = LayerNode.make({
     SessionFork.node,
     // The task tool isolates through it (Effect.serviceOption); without it every isolation request is refused.
     TaskIsolation.node,
+    ConnectHub.node,
     locationServiceMapNode,
   ],
 })

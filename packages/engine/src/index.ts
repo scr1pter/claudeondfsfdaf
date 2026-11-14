@@ -30,6 +30,7 @@ import { PrCommand } from "./cli/cmd/pr"
 import { ReviewCommand } from "./cli/cmd/review"
 import { SessionCommand } from "./cli/cmd/session"
 import { TasksCommand } from "./cli/cmd/tasks"
+import { ConnectedCommand } from "./cli/cmd/connected"
 import { WorkflowCommand } from "./cli/cmd/workflow"
 import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
@@ -149,6 +150,7 @@ const cli = yargs(args)
   .command(ReviewCommand)
   .command(SessionCommand)
   .command(TasksCommand)
+  .command(ConnectedCommand)
   .command(WorkflowCommand)
   .command(PluginCommand)
   .command(DbCommand)

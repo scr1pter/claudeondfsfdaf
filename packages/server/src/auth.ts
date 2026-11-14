@@ -198,6 +198,13 @@ export function isOwnerOnlyRoute(method: string, route: string) {
   if (route === "/local" || route.startsWith("/local/")) return true
   // The held prompt files are paths in the owner's home, and approving them loads what an agent may have written there.
   if (route === "/config/prompt-trust" || route.startsWith("/config/prompt-trust/")) return true
+  // Connected tools expose repository findings and can start work: every method requires the owner.
+  if (
+    route === "/experimental/connect" ||
+    route.startsWith("/experimental/connect/") ||
+    /^\/experimental\/session\/[^/]+\/connect$/.test(route)
+  )
+    return true
   if (route.startsWith("/experimental/project/") && route.includes("/copy")) return true
   // Creating a worktree runs the project's start command and an extra startup command from the request, and removing
   // or resetting one discards the owner's work in a directory outside the guest's workspace.

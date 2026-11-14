@@ -4,6 +4,7 @@ name: VectorScope owner review memory UI
     branches:
       - build-scope-owner
       - build-scope-joined
+      - build-candidate
 permissions:
   contents: read
 env:

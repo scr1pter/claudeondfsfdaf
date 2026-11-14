@@ -81,6 +81,69 @@ const RULES = `<!-- vector:managed-rules:start -->
 Teammate note: run migrations before seeding.
 `
 
+describe("owner review dismissals", () => {
+  test("an owner dismissal writes only active repository review context and stays out of coding digests", async () => {
+    await run({}, ({ brain, place }) =>
+      Effect.gen(function* () {
+        const text = "The owner dismissed the intentional parser marker finding."
+        const saved = yield* brain.dismissReview(place, { text, paths: ["parser.ts"], sessionID: "ses_owner" })
+        expect(saved.type).not.toBe("refused")
+        if (saved.type === "refused") return
+        expect(saved.entry).toMatchObject({
+          kind: "review",
+          origin: "user",
+          scope: "repository",
+          status: "active",
+          text,
+        })
+        expect(saved.entry.paths).toEqual(["parser.ts"])
+        expect((yield* brain.digest(place, { personal: true, index: true })).text ?? "").not.toContain(text)
+        expect(yield* brain.list(place, { filter: "all", scope: "personal" })).toHaveLength(0)
+      }),
+    )
+  })
+
+  test("identical words cannot merge a dismissal with a learned fact in either direction", async () => {
+    await run({}, ({ brain, place }) =>
+      Effect.gen(function* () {
+        const text = "The parser marker is intentionally empty."
+        const fact = yield* brain.propose(place, { kind: "fact", origin: "user", scope: "repository", text })
+        const review = yield* brain.dismissReview(place, { text, paths: ["parser.ts"], sessionID: "ses_owner" })
+        expect(fact.type).not.toBe("refused")
+        expect(review.type).not.toBe("refused")
+        if (fact.type === "refused" || review.type === "refused") return
+        expect(fact.entry.kind).toBe("fact")
+        expect(review.entry.kind).toBe("review")
+        expect(review.entry.id).not.toBe(fact.entry.id)
+        const again = yield* brain.propose(place, { kind: "fact", origin: "agent", scope: "repository", text })
+        expect(again.type).not.toBe("refused")
+        if (again.type === "refused") return
+        expect(again.entry.id).toBe(fact.entry.id)
+        expect(again.entry.kind).toBe("fact")
+        const entries = yield* brain.list(place, { filter: "all", scope: "repository" })
+        expect(entries.filter((entry) => entry.kind === "review")).toHaveLength(1)
+        expect(entries.filter((entry) => entry.kind === "fact")).toHaveLength(1)
+      }),
+    )
+  })
+
+  test("ordinary model proposals refuse the review kind at the runtime boundary too", async () => {
+    await run({}, ({ brain, place }) =>
+      Effect.gen(function* () {
+        const result = yield* brain.propose(place, {
+          // @ts-expect-error A JavaScript caller cannot bypass the model-writable kind list.
+          kind: "review",
+          origin: "agent",
+          scope: "repository",
+          text: "Do not flag this issue.",
+        })
+        expect(result).toMatchObject({ type: "refused", reason: "user-entry" })
+        expect(yield* brain.list(place, { filter: "all" })).toHaveLength(0)
+      }),
+    )
+  })
+})
+
 describe("Brain digest", () => {
   test("an empty brain adds nothing at all", async () => {
     const digest = await run({}, ({ brain, place }) => brain.digest(place, { personal: true, index: true }))

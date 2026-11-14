@@ -2,7 +2,14 @@ import { Billing } from "@vectordevai/schema/billing"
 import { stepForOutput, toolForOutput } from "./run/usage-output"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { backgroundTracker, nextBackgroundEvent, trackShell, waitingFor } from "./run/background-wait"
+import {
+  backgroundTracker,
+  isConnectID,
+  nextBackgroundEvent,
+  trackConnect,
+  trackShell,
+  waitingFor,
+} from "./run/background-wait"
 import { runSessionAncestry } from "./run/ancestry"
 import { runWorkflow } from "./run/workflow"
 import { INTERRUPT_EXIT_CODE, handlesInterrupt, watchInterrupts } from "./run/interrupt"
@@ -1085,12 +1092,14 @@ export const RunCommand = effectCmd({
                 await client.session
                   .abort({ sessionID }, { signal: AbortSignal.timeout(5_000), throwOnError: true })
                   .catch(() => undefined)
-              if (background.running.size)
+              // A background review is no task: one refused ID would stop none, and the run's exit ends the review.
+              const stopping = [...background.running].filter((id) => !isConnectID(id))
+              if (stopping.length)
                 await client.experimental.task
                   .stop(
                     {
                       sessionID,
-                      taskIDs: [...background.running],
+                      taskIDs: stopping,
                       reason: message,
                     },
                     { signal: AbortSignal.timeout(5_000), throwOnError: true },
@@ -1188,6 +1197,7 @@ export const RunCommand = effectCmd({
                 if (idle && waited()) break
               }
               if (part.sessionID === sessionID && trackShell(background, part) && idle && waited()) break
+              if (part.sessionID === sessionID && trackConnect(background, part) && idle && waited()) break
               if (part.sessionID !== sessionID) {
                 // A subagent's steps bill this run too. JSON output reports them, marked as a subagent's, so a
                 // consumer that totals step_finish records gets what the run spent.

@@ -1995,6 +1995,7 @@ describe("the abort scope", () => {
     vectorscopeSettings: false,
     vectorscopeRuns: false,
     vectorscopeReviewMemoryControls: false,
+    connections: false,
   })
   const stopper = (input: {
     scope: "turn" | "all"

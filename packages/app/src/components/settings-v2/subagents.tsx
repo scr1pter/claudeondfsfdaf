@@ -1,6 +1,7 @@
 import "@/features/background-tasks/background-tasks.css"
 import { For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
+import { ConnectedTools } from "@/features/connect/connected-tools"
 import type { Config } from "@vectordevai/sdk/v2/client"
 import { Button } from "@vectordevai/ui/button"
 import { useDialog } from "@vectordevai/ui/context/dialog"
@@ -172,7 +173,7 @@ function DialogStopRunningWork(props: {
   )
 }
 
-export function SettingsSubagentsV2() {
+export function SettingsSubagentsV2(props: { directory?: string }) {
   const serverSync = useServerSync()
   const language = useLanguage()
   const dialog = useDialog()
@@ -506,6 +507,18 @@ export function SettingsSubagentsV2() {
           </p>
         </div>
       </div>
+      <Show when={capabilities().connections}>
+        <ConnectedTools
+          directory={props.directory}
+          config={serverSync().globalConfig()}
+          confirm={confirmSave}
+          save={(patch) =>
+            serverSync()
+              .updateConfig(patch)
+              .then(() => undefined)
+          }
+        />
+      </Show>
     </section>
   )
 }
