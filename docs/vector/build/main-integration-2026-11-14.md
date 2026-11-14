@@ -80,8 +80,8 @@ lineage, spend or cancellation assertion was relaxed to hide the failure.
 - `integration-runtime-boundaries.md` records the remaining production composition and credential-authority contracts.
   Connected adapters currently register VectorScope; source for Hands/GitHub does not automatically register them as
   connected members. Those registrations require their declared lifecycle, cancellation, privacy and budget contracts.
-- The Signature design specification is present. The Mac redesign implementation is not represented by an unpushed local
-  checkout; the updated master plan schedules its desktop implementation after source integration.
+- The Signature design specification is present. The updated master plan schedules its desktop implementation after
+  feature integration; this source assembly does not claim that redesign is implemented.
 
 The production UI baseline completed successfully in run `43623921815`, job `132535820126`, using exact source
 `2f88021845bd5fc74ea001d96729b4fcfb2524fa` and Node 24.15.0. All nine navigation measurements (three scenarios, three
