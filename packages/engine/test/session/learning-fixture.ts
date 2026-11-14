@@ -212,17 +212,20 @@ export const setup = Effect.fn("learning.setup")(function* (
   const llm = yield* TestLLMServer
   const fs = yield* FSUtil.Service
   const file = path.join(dir, "vector.json")
+  // Keep the same regular-file check on Windows without requiring a Unix `test` executable on PATH.
+  const check = (file: string) =>
+    `bun -e "process.exit(require('node:fs').statSync('${file}', {throwIfNoEntry:false})?.isFile() ? 0 : 1)"`
   yield* fs.writeWithDirs(file, JSON.stringify({ ...providerConfig(llm.url, input.model), ...input.config }))
   yield* fs.writeWithDirs(
     path.join(dir, "package.json"),
     JSON.stringify({
       name: "learning",
       scripts: {
-        typecheck: "test -f src/fixed.ts",
-        lint: "test -f src/linted.ts",
-        "test:unit": "test -f src/tested.ts",
-        verify: "test -f src/verified.ts",
-        "build:release": "test -f src/released.ts",
+        typecheck: check("src/fixed.ts"),
+        lint: check("src/linted.ts"),
+        "test:unit": check("src/tested.ts"),
+        verify: check("src/verified.ts"),
+        "build:release": check("src/released.ts"),
       },
     }),
   )

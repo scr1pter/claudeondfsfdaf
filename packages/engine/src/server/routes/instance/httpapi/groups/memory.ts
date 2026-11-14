@@ -100,6 +100,10 @@ export const MemorySettings = Schema.Struct({
   skills: BrainSchema.SkillLearning,
   /** When a model may word a skill's draft: never, only with Vector Local on (the default), or with any model. */
   skillDrafter: BrainSchema.SkillDrafter,
+  /** Explicit personal consent for Codium helpers; absent on engines without this capability. */
+  codiumHelpers: Schema.optional(BrainSchema.CodiumHelpers),
+  /** Whether the owner may ask a model to propose records from documents. */
+  distillation: Schema.optional(Schema.Boolean),
   /** Workflow insights: apply learned defaults (the default), only record runs, or neither. */
   workflow: BrainSchema.WorkflowLearning,
   /** Try a setting cheaper by construction on one request in ten, while it has too few runs to decide. */
@@ -124,6 +128,8 @@ export const MemorySettingsPayload = Schema.Struct({
   modelLearner: Schema.optional(MemoryModelLearner),
   skills: Schema.optional(BrainSchema.SkillLearning),
   skillDrafter: Schema.optional(BrainSchema.SkillDrafter),
+  codiumHelpers: Schema.optional(BrainSchema.CodiumHelpers),
+  distillation: Schema.optional(Schema.Boolean),
   workflow: Schema.optional(BrainSchema.WorkflowLearning),
   workflowExplore: Schema.optional(Schema.Boolean),
 })
@@ -218,6 +224,10 @@ export const MemoryWorkflowArm = Schema.Struct({
   /** Mean dollars over priced runs; absent when no run's cost is known. */
   costUsd: Schema.optional(Schema.Finite),
   pricedWeight: Schema.Finite,
+  /** Codium across all observed steps, including helpers on a different provider. */
+  codium: Schema.optional(Schema.Literals(["only", "mixed"])),
+  /** Some own spend is unpriced beside any known own-dollar average. */
+  ownUnpriced: Schema.optional(Schema.Literal(true)),
   tokens: Schema.optional(Schema.Finite),
   lastAt: Schema.Finite,
 }).annotate({ identifier: "MemoryWorkflowArm" })
@@ -280,6 +290,45 @@ export const MemoryImportResult = Schema.Struct({
   /** Entries past the 500 one import brings in. */
   over: Schema.Finite,
 }).annotate({ identifier: "MemoryImportResult" })
+
+/** One memory file of a Brain Vault backup: the `vector-memory` JSON of the person's own memory or a repository's. */
+export const MemoryBackupFile = Schema.Struct({
+  path: Schema.String,
+  section: Schema.Literals(["memory", "skills", "insights"]),
+  /** The export JSON. */
+  text: Schema.String,
+  /** The repository's id, or "" for the person's own memory. */
+  repository: Schema.String,
+  /** Where that repository was last opened on this computer. */
+  worktree: Schema.optional(Schema.String),
+}).annotate({ identifier: "MemoryBackupFile" })
+
+export const MemoryBackup = Schema.Struct({
+  files: Schema.Array(MemoryBackupFile),
+}).annotate({ identifier: "MemoryBackup" })
+
+export const MemoryRestorePayload = Schema.Struct({
+  section: Schema.optional(Schema.Literals(["memory", "skills", "insights"])),
+  /** A memory file of the person's own vault, opened with its key: the `vector-memory` JSON, at most 2 MB. */
+  text: Schema.String,
+  /** The repository it came from, or "" for the person's own memory. */
+  repository: Schema.String,
+  worktree: Schema.optional(Schema.String),
+})
+
+export const MemoryRestoreResult = Schema.Struct({
+  /** Entries brought back, and of them those in use, pinned, and waiting for review as they were. */
+  restored: Schema.Finite,
+  active: Schema.Finite,
+  pinned: Schema.Finite,
+  waiting: Schema.Finite,
+  /** Entries already in memory here, left as they are. */
+  known: Schema.Finite,
+  /** Entries refused: forgotten here, a secret, or past what may wait for review. */
+  refused: Schema.Finite,
+  /** Documents the file names, which a restore leaves out (their files are the person's to add again). */
+  documents: Schema.Finite,
+}).annotate({ identifier: "MemoryRestoreResult" })
 
 export const MemoryTidy = Schema.Struct({
   merged: Schema.Finite,
@@ -464,7 +513,7 @@ export const MemoryDocumentDetail = Schema.Struct({
   history: Schema.Array(BrainSchema.DocumentEvent),
   /** Runs in the last 30 days whose answers cited or opened one of its cards, and how they ended. */
   usage: BrainSchema.DocumentUsage,
-  /** Whether "Find more with a model…" is on (VECTOR_KNOWLEDGE_DISTILL); absent from an engine without it. */
+  /** Whether document distillation is on; absent from an engine without it. */
   distill: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "MemoryDocumentDetail" })
 
@@ -503,7 +552,7 @@ const DistillReason = Schema.Literals([
 ])
 
 export const MemoryDistillEstimate = Schema.Struct({
-  /** VECTOR_KNOWLEDGE_DISTILL is set. */
+  /** Document distillation is enabled in personal settings. */
   enabled: Schema.Boolean,
   /** "provider/model". */
   model: Schema.optional(Schema.String),
@@ -518,6 +567,14 @@ export const MemoryDistillEstimate = Schema.Struct({
   lowUsd: Schema.optional(Schema.Finite),
   highUsd: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "MemoryDistillEstimate" })
+
+export const MemoryBootstrap = Schema.Struct({
+  type: Schema.Literal("ready"),
+  queued: Schema.Finite,
+  pending: Schema.Finite,
+  maxTokens: Schema.Finite,
+  documents: Schema.Array(Schema.Struct({ id: Schema.String, title: Schema.String, estimate: MemoryDistillEstimate })),
+}).annotate({ identifier: "MemoryBootstrap" })
 
 export const MemoryDistillPayload = Schema.Struct({
   model: Schema.optional(Schema.String),
@@ -853,6 +910,30 @@ export const MemoryApi = HttpApi.make("memory")
               "Read an export (Markdown or JSON) back in. Every preference, term, decision, lesson and fact it holds lands waiting for your approval, so a changed file cannot put memory in use; rules stay in their files. What you forgot is not imported again.",
           }),
         ),
+        HttpApiEndpoint.get("backup", `${root}/backup`, {
+          query: WorkspaceRoutingQuery,
+          success: described(MemoryBackup, "This computer's memory as Brain Vault backup files"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.backup",
+            summary: "Memory for a Brain Vault backup",
+            description:
+              "Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.",
+          }),
+        ),
+        HttpApiEndpoint.post("restore", `${root}/restore`, {
+          query: WorkspaceRoutingQuery,
+          payload: MemoryRestorePayload,
+          success: described(MemoryRestoreResult, "What the restore brought back"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.restore",
+            summary: "Restore memory from your Brain Vault",
+            description:
+              "Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.",
+          }),
+        ),
         HttpApiEndpoint.post("tidy", `${root}/tidy`, {
           query: WorkspaceRoutingQuery,
           success: described(MemoryTidy, "What tidying changed"),
@@ -1141,6 +1222,19 @@ export const MemoryApi = HttpApi.make("memory")
               "The original file as it was added, as an attachment, only while the repository keeps originals. The copy is not redacted.",
           }),
         ),
+        HttpApiEndpoint.post("bootstrap", `${root}/bootstrap`, {
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Struct({ model: Schema.optional(Schema.String) }),
+          success: described(MemoryBootstrap, "A local scan and bounded document suggestions preview"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.bootstrap.prepare",
+            summary: "Prepare a repository Brain bootstrap",
+            description:
+              "Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.",
+          }),
+        ),
         HttpApiEndpoint.get("distillEstimate", `${root}/documents/:documentID/distill`, {
           params: { documentID: DocumentID },
           query: MemoryDistillQuery,
@@ -1165,7 +1259,7 @@ export const MemoryApi = HttpApi.make("memory")
             identifier: "memory.distill.run",
             summary: "Find more with a model",
             description:
-              "Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.",
+              "Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.",
           }),
         ),
         HttpApiEndpoint.get("records", `${root}/records`, {

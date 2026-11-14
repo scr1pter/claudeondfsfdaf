@@ -1,0 +1,23 @@
+// Vector Remote's relay (Codium build WP A39, contract §6.1): one Worker and one Durable Object per account.
+// Nothing here is a secret. The owner sets these once with `wrangler secret put` (owner-actions/remote.md), never in
+// this file and never from a workflow:
+//   TICKET_PUBLIC_KEYS  base64url raw Ed25519 public keys, comma-separated (the key that verifies the tickets the API
+//                       signs with VECTOR_REMOTE_TICKET_SIGNING_KEY; two during a rotation)
+//   INTERNAL_SECRET     the same value as the API's VECTOR_HOSTED_INTERNAL_SECRET (at least 32 characters)
+//   ACCOUNT_KEY         a random key of at least 32 characters that names each account's Durable Object; keep it
+//                       stable, because changing it starts every account's relay over with no paired devices
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vector-remote-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "ACCOUNT_RELAY", "class_name": "AccountRelay" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountRelay"] }],
+  // The Worker's own kill flag: key "kill" set to "1" turns the relay off (read on every connection and alarm).
+  // Replace the id with the REMOTE_FLAGS namespace the owner creates (owner step 11); this placeholder matches no
+  // namespace, so a deploy that still carries it fails instead of writing anywhere.
+  "kv_namespaces": [{ "binding": "REMOTE_FLAGS", "id": "00000000000000000000000000000000" }]
+}

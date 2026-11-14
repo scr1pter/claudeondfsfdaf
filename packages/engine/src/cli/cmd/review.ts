@@ -426,6 +426,17 @@ export function executeLocalReview<RunR, ModelR>(
           ...(options.context?.identity ? { identity: options.context.identity } : {}),
         })
       : undefined
+    // The panel's judge (WP A35); on Vector Codium the runner uses the plan's panel judge when judgeModel is unset.
+    const judge =
+      config.panel && config.judgeModel
+        ? yield* deps.resolveModel({
+            trigger: "local",
+            exact: config.judgeModel,
+            env,
+            ...evidence,
+            ...(options.context?.identity ? { identity: options.context.identity } : {}),
+          })
+        : undefined
     const modelName = `${model.providerID}/${model.modelID}`
     if (options.checks) {
       const start = target.kind === "branch" ? range.mergeBase : yield* branchStart(git, root, range.head, base)
@@ -535,6 +546,7 @@ export function executeLocalReview<RunR, ModelR>(
       config,
       model,
       ...(triage ? { triage } : {}),
+      ...(judge ? { judge } : {}),
       ...(options.checks ? { checks: true } : {}),
       knownPath,
       onProgress: (event) => {
@@ -550,7 +562,7 @@ export function executeLocalReview<RunR, ModelR>(
           notes: [...result.notes, "Some changed files were not reviewed because this conversation cannot read them."],
         }
       : result
-    const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify")
+    const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
     if (!reviewers.some((entry) => entry.status !== "failed")) {
       const detail = (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no report").replace(
         /[.\s]+$/,

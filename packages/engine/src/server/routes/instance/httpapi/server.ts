@@ -15,6 +15,9 @@ import { TaskManager } from "@/task/manager"
 import { WorkflowOwner } from "@/orchestration/owner"
 import { ReviewOwner } from "@/review/owner"
 import { ReviewMemoryOwner } from "@/review/memory-owner"
+import { PlaybookClient } from "@/orchestration/playbooks"
+import { HostedFollow } from "@/hosted/follow"
+import { CloudBrain } from "@/brain/run-bundle"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -296,6 +299,9 @@ const app = LayerNode.group([
   ReviewOwner.node,
   ReviewMemoryOwner.node,
   TaskNotify.node,
+  PlaybookClient.node,
+  HostedFollow.node,
+  CloudBrain.node,
   TaskLimits.node,
   TaskRecovery.node,
   TaskAttention.node,

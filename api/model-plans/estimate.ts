@@ -1,3 +1,4 @@
+import "../_lib/hosted-run.js"
 import { handleModelPlanEstimate } from "../_lib/model-plan-estimate.js"
 import type { ApiRequest, ApiResponse } from "../_lib/http.js"
 

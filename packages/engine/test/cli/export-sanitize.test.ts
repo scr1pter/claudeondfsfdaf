@@ -46,8 +46,20 @@ function message(id: string, providerID: string, billing?: "codium") {
   }
 }
 
-function archive(input: { tokensOwnOnly?: boolean; codiumSteps?: number; messages?: unknown[] } = {}) {
+function archive(
+  input: {
+    tokensOwnOnly?: boolean
+    codiumSteps?: number
+    messages?: unknown[]
+    metadata?: Record<string, unknown>
+    ancillaryUsage?: unknown[]
+    privacy?: "owner-only"
+    guestInput?: true
+  } = {},
+) {
   return Schema.decodeUnknownSync(SessionArchive.Legacy)({
+    ...(input.privacy ? { privacy: input.privacy } : {}),
+    ...(input.guestInput ? { guestInput: input.guestInput } : {}),
     info: {
       id: "ses_export",
       slug: "export",
@@ -64,9 +76,26 @@ function archive(input: { tokensOwnOnly?: boolean; codiumSteps?: number; message
       cost: 0.12,
       subagentCost: 0.04,
       ...(input.codiumSteps === undefined ? {} : { codiumSteps: input.codiumSteps, subagentCodiumSteps: 0 }),
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
     },
     messages: input.messages ?? [message("msg_codium", "vector-plan", "codium"), message("msg_own", "lmstudio")],
+    ...(input.ancillaryUsage === undefined ? {} : { ancillaryUsage: input.ancillaryUsage }),
   })
+}
+
+// A child session's lifecycle record, as SubagentLifecycle.settle writes it: the session totals copied at completion.
+function lifecycle(proof: { tokensOwnOnly?: boolean }) {
+  return {
+    subagent: {
+      title: "child",
+      agent: "general",
+      status: "completed",
+      usage: { cost: 0.04, tokens: tokens(987654), total: 987686, toolUses: 2, steps: 3, codiumSteps: 1, ...proof },
+    },
+    // Keys outside the lifecycle record are the caller's own metadata, not Vector's accounting.
+    usage: { tokens: 7 },
+    unrelated: { label: "kept", usage: { tokens: 8 } },
+  }
 }
 
 describe("sanitizeLegacy Codium usage", () => {
@@ -157,6 +186,63 @@ describe("sanitizeLegacy Codium usage", () => {
     expect(sanitized.info.directory).not.toBe(source.info.directory)
     expect(JSON.stringify(sanitized)).not.toContain("Private source text")
     expect(JSON.stringify(sanitized)).not.toContain("/private/repo")
+  })
+
+  test.each([
+    ["a forged true proof on a proven session", { tokensOwnOnly: true }, true, tokens(123)],
+    ["a forged true proof on an unproven session", { tokensOwnOnly: true }, false, undefined],
+    ["an unproven record holding flagless Codium tokens", { tokensOwnOnly: false }, false, undefined],
+    ["a record written before the proof existed", {}, false, undefined],
+  ])("a lifecycle record's aggregate tokens never reach a sanitized export: %s", (_, proof, sessionProof, expected) => {
+    const source = archive({ tokensOwnOnly: sessionProof, metadata: lifecycle(proof) })
+    const before = structuredClone(source)
+    const sanitized = sanitizeLegacy(source)
+    expect(sanitized.info.metadata).toEqual({
+      subagent: {
+        title: "child",
+        agent: "general",
+        status: "completed",
+        usage: { cost: 0.04, toolUses: 2, steps: 3, codiumSteps: 1 },
+      },
+      usage: { tokens: 7 },
+      unrelated: { label: "kept", usage: { tokens: 8 } },
+    })
+    expect(JSON.stringify(sanitized)).not.toContain("987654")
+    expect(JSON.stringify(sanitized)).not.toContain("987686")
+    expect(JSON.stringify(sanitized.info.metadata)).not.toContain("tokensOwnOnly")
+    expect(source).toEqual(before)
+    // Only the session's own proof keeps its aggregate.
+    expect(sanitized.info.tokens).toEqual(expected)
+  })
+
+  test("a session without metadata gains no metadata key", () => {
+    expect("metadata" in sanitizeLegacy(archive()).info).toBe(false)
+  })
+
+  test("ancillary usage stays out, so Codium title and memory tokens never reach a sanitized export", () => {
+    const source = archive({
+      privacy: "owner-only",
+      guestInput: true,
+      ancillaryUsage: [
+        {
+          timestamp: 1,
+          sessionID: "ses_export",
+          usageID: "evt_export_title",
+          purpose: "title",
+          model: { id: "deepseek", providerID: "vector-plan" },
+          unpriced: true,
+          billing: "codium",
+          tokens: tokens(987654),
+        },
+      ],
+    })
+    expect(source.ancillaryUsage).toHaveLength(1)
+    const before = structuredClone(source)
+    const sanitized = sanitizeLegacy(source)
+    expect(sanitized).toMatchObject({ privacy: "owner-only", guestInput: true })
+    expect(sanitized).not.toHaveProperty("ancillaryUsage")
+    expect(JSON.stringify(sanitized)).not.toContain("987654")
+    expect(source).toEqual(before)
   })
 })
 

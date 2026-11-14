@@ -22,6 +22,8 @@ export async function commandGate(input: {
   const opts = input.options
   const command = String(opts._[0] ?? "")
   const active = !opts.help && !opts.version
+  if (active && command === "vault" && ["backup", "restore", "forget"].includes(String(opts._[1] ?? "")))
+    await Effect.runPromise(CliOwnerGate.refuse("change Brain Vault backups or restore memory"))
   if (
     active &&
     ((command === "workflow" && opts.action === "resume") || (command === "run" && opts.workflow !== undefined))

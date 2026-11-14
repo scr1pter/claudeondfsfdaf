@@ -1,0 +1,41 @@
+{
+  "kind": "synthetic-ui-completion-diagnostics-v1",
+  "sourceRevision": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+  "runID": "release113-02098b2b-windows-completion-20261109b",
+  "qualification": "Raw local synthetic-browser diagnostic captures, not performance qualification or desktop acceptance.",
+  "artifacts": [
+    {
+      "path": "child.trace.json.gz",
+      "compression": "gzip; lossless byte-for-byte round trip verified",
+      "rawBytes": 25956295,
+      "rawSha256": "bd863442d47a52bb6ea2ecb89e59114f7c2fc4e06862c12e5b61e95ddbcce171",
+      "compressedBytes": 1470966,
+      "compressedSha256": "22d68873f7f7dc0b8027a8fb24696c39141bf7c6110eb98ec574919864a48854",
+      "events": 50396
+    },
+    {
+      "path": "unvisited.trace.json.gz",
+      "compression": "gzip; lossless byte-for-byte round trip verified",
+      "rawBytes": 31016776,
+      "rawSha256": "568ff9af331939003f68e2b004b1d42c4c9f5f4d453a3ea36818311fffa1a043",
+      "compressedBytes": 1700364,
+      "compressedSha256": "25c1c0c59d33d09dff3d9f6a0e08f13657935cbe078581f7fe123b9ca7d1b238",
+      "events": 54513
+    },
+    {
+      "path": "new-session.trace.json.gz",
+      "compression": "gzip; lossless byte-for-byte round trip verified",
+      "rawBytes": 25483680,
+      "rawSha256": "13667f8c119eb71e44ef34934bf9813b0403f0e9a02fb2f2e3543491393f88dc",
+      "compressedBytes": 1413161,
+      "compressedSha256": "148203c8aff18779290e8f9ac052df8f4c283280fbde99ef124426be615d0424",
+      "events": 48564
+    },
+    {
+      "path": "console.log.gz",
+      "rawBytes": 15461,
+      "rawSha256": "fc9d48e5a4dcb49ce5ee6542eae5cdb419f5e50c9b45fd4f9bdf0b4d00e44e52",
+      "compressedSha256": "ea18488308c58d268cf0a465eff75d25f8f3bee46129cfdb3166fa6d3798421f"
+    }
+  ]
+}

@@ -44,6 +44,7 @@
     "@happy-dom/global-registrator": "20.0.11",
     "@vectordevai/app": "workspace:*",
     "@vectordevai/core": "workspace:*",
+    "@vectordevai/relay": "workspace:*",
     "@vectordevai/ui": "workspace:*",
     "@sentry/solid": "catalog:",
     "@sentry/vite-plugin": "catalog:",

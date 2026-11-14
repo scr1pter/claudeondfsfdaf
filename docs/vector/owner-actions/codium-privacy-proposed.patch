@@ -1,0 +1,30 @@
+# Proposed Codium privacy additions, retained for owner/legal review at A60.
+# Not an approved policy or new effective date/hash. Base: 4e7ce1ef0; source: 23a37c0b3.
+diff --git a/packages/web/src/pages/legal/privacy.astro b/packages/web/src/pages/legal/privacy.astro
+index 8e27e487d..ea5824ba1 100644
+--- a/packages/web/src/pages/legal/privacy.astro
++++ b/packages/web/src/pages/legal/privacy.astro
+@@ -54,6 +54,23 @@ export const prerender = true
+       selected model. Deleting local memory does not delete a copy already sent to a provider, copied into
+       conversation history, or included in a backup.
+     </p>
++    <p>
++      <strong>Brain helpers and optional transfers.</strong> Learned skills, workflow insights, and document records
++      are stored locally by default. The optional skill drafter can send one run's commands, file names, and a short
++      redacted error excerpt to your selected model provider when you allow it. In builds offering Codium Brain
++      helpers, a separate opt-in permits bounded excerpts from corrections, skill drafts, and selected document
++      sections to be sent through Codium to a qualified model with zero data retention. A subscription does not
++      enable that permission. Document suggestions require the document setting and an explicit request; Bootstrap
++      previews the documents and model before you confirm. Suggestions remain available for your review.
++    </p>
++    <p>
++      Brain attachment to GitHub runs started by the owner from the desktop and encrypted Brain Vault backup are
++      separate opt-in features, available only when the installed build and service offer their controls. Choosing an
++      attachment sends the selected context to that GitHub run. Choosing Vault sends an encrypted backup to the
++      selected backup service. Neither follows automatically from subscribing or allowing Codium Brain helpers.
++      Turning a helper off prevents new requests from that helper; it does not withdraw information already sent
++      to a model provider, GitHub run, or backup service.
++    </p>
+     <p>
+       <strong>Dictation.</strong> With microphone permission, desktop dictation processes recorded audio on
+       your computer using a local Whisper model. The model is downloaded and cached; its hosting service

@@ -1,6 +1,7 @@
 import { afterAll, expect } from "bun:test"
 import { Effect } from "effect"
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Session } from "@/session/session"
 import { Instruction } from "../../src/session/instruction"
 import { calls, output, plan, runtime, send, setup } from "../lib/research"
@@ -92,6 +93,61 @@ it.instance(
       ])
       expect(detail?.run.status).toBe("done")
       expect(detail?.report).toContain("Heat pumps in cold climates")
+      expect(guard.outside()).toEqual([])
+    }),
+  90_000,
+)
+
+// Label plan §3.2: a report whose run spent no dollars has no Spend line, also when every counted step ran on Vector
+// Codium. Codium's destination is fixed, so this server cannot stand in for it: the run begins here with a Codium step
+// the guard counted, and the lead's own steps on the free local test model add no dollars.
+it.instance(
+  "a run that spent no dollars beside its Codium steps saves a report with no Spend line",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* Session.Service
+      const spend = yield* SpendGuard.Service
+      const session = yield* sessions.create({ title: "Research", permission: allow })
+      const article = web.url("article", "/")
+      yield* test.llm.tool("research_plan", plan())
+      yield* test.llm.tool("research_read", { url: article })
+      yield* test.llm.tool("research_note", {
+        subquestion: "What did field studies measure?",
+        claim: "The study followed 412 homes through two winters.",
+        source: "S1",
+        quote: "The study followed 412 homes through two winters.",
+      })
+      yield* test.llm.tool("research_report", {
+        title: "Heat pumps in cold climates",
+        answer: "A field study followed 412 homes through two winters [N1].",
+        sections: [{ heading: "What was measured", body: "The study followed 412 homes [N1]." }],
+        open_questions: [],
+      })
+      yield* test.llm.text("Done.")
+      yield* spend.begin(session.id)
+      yield* spend.record(session.id, {
+        costKind: "codium",
+        contextTokens: 1_000,
+        cachedTokens: 0,
+        continues: true,
+        tools: [],
+        patched: false,
+      })
+      yield* send({ sessionID: session.id, agent: "research", text: `Research heat pump savings: ${article}` })
+
+      const run = yield* spend.snapshot(session.id)
+      expect(run?.spentUsd).toBe(0)
+      expect(run?.codiumSteps).toBe(1)
+      const notes = yield* calls(session.id, "research_note")
+      const runID = notes[0]?.state.status === "completed" ? (notes[0].state.metadata.runID as string) : ""
+      const store = yield* ResearchStore.Service
+      const instruction = yield* Instruction.Service
+      const report = (yield* store.get(yield* instruction.place(), runID))?.report ?? ""
+      const method = report.slice(report.indexOf("## Method"))
+      expect(method).toStartWith("## Method")
+      expect(method).not.toContain("- Spend:")
+      expect(report).not.toContain("Codium")
       expect(guard.outside()).toEqual([])
     }),
   90_000,

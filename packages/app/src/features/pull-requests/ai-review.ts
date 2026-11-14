@@ -74,6 +74,7 @@ import {
 import { buildCreateReviewPayload } from "@vectordevai/core/review/github-payload"
 import {
   buildFinalizePrompt,
+  buildJudgePrompt,
   buildReviewPrompt,
   buildSecurityPrompt,
   buildVerifyPrompt,
@@ -92,6 +93,7 @@ import {
   type VerifyResult,
 } from "@vectordevai/core/review/schema"
 import { changedSymbols } from "@vectordevai/core/review/symbols"
+import { checkedLabs, checkedLine, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
 import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
 import {
   SEVERITIES,
@@ -182,6 +184,9 @@ export type ReviewModel = {
   // What model evidence (VS-07) reads, when the catalog lists it: the catalog status and a free model's data policy.
   status?: string
   freeModel?: ModelSubject["freeModel"]
+  // WP A35: the lab Vector Codium's listing states, and the entry's parts in the plan's review pair.
+  lab?: string
+  review?: readonly string[]
 }
 
 // in-place: every changed file in the checkout already is the pull request's version. rebuilt: the pull request's
@@ -439,6 +444,8 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
                   },
                 }
               : {}),
+            ...(model.codium?.lab ? { lab: model.codium.lab } : {}),
+            ...(model.codium?.review?.length ? { review: model.codium.review } : {}),
           }
         }),
     )
@@ -785,17 +792,33 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   // The first of these that is connected, as one list would pick: review.json's model, the agent's, a fallback.
   const configured = pickReviewModel([config.model], catalog)
   const agentModel = configured ? undefined : pickReviewModel(input.preferredModels ?? [], catalog)
-  const model = configured ?? agentModel ?? fallbackReviewModel(catalog)
+  const chosen = configured ?? agentModel ?? fallbackReviewModel(catalog)
   // review.json's cheaper model runs the review and security passes; the double-check stays on the review model.
   const named = config.triageModel ? pickReviewModel([config.triageModel], catalog) : undefined
-  const triage = named && model && modelName(named) !== modelName(model) ? named : undefined
-  if (!model)
+  if (!chosen)
     throw new Error(
       catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
-        ? "Vectorscope runs on Vector Codium only when you choose it, since it spends your credits. Choose a Codium model for your agent, or set model in .vector/review.json."
+        ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
         : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
     )
-  const refusal = [model, ...(triage ? [triage] : [])]
+  // WP A35: on Vector Codium without a triageModel the review runs the plan's review pair, a same-lab pair runs one
+  // pass, and the panel adds a judge from a third lab (review.json's judgeModel, or the plan's panel judge).
+  const panelJudge = config.panel && config.judgeModel ? pickReviewModel([config.judgeModel], catalog) : undefined
+  const pair = chosen.providerID === ModelPlanStatus.PROVIDER_ID && !named
+  const role = (name: string) =>
+    catalog.find((item) => item.providerID === ModelPlanStatus.PROVIDER_ID && item.review?.includes(name))
+  const picked = reviewModels({
+    model: chosen,
+    ...(named ? { triage: named } : {}),
+    ...(panelJudge ? { judge: panelJudge } : {}),
+    panel: config.panel,
+    ...(pair ? { codium: { triage: role("triage"), confirm: role("confirm"), panelJudge: role("panelJudge") } } : {}),
+    auto: chosen.providerID === ModelPlanStatus.PROVIDER_ID && chosen.modelID === ModelPlanStatus.AUTO_ID,
+  })
+  const model = picked.model
+  const triage = picked.triage
+  const judge = picked.judge
+  const refusal = [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])]
     .map((item) => (item.context ? contextRefusal(modelName(item), item.context) : undefined))
     .find(Boolean)
   if (refusal) throw new Error(refusal)
@@ -971,8 +994,41 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           rules,
           stop: stop.promise,
         })
+  // The panel's judge (WP A35): a model from a third lab makes the final call on each candidate once the check
+  // finished, with the first pass's claim and the check's verdict in front of it. Its verdict stands where it gave one.
+  const judgeText =
+    judge && verify?.status === "ok" && candidates.length
+      ? buildJudgePrompt({
+          trust: checkout.trust,
+          head,
+          ...(pr ? {} : { uncommitted: true }),
+          candidates,
+          checks: verify.verdicts,
+          headFiles: verifyHeadFiles(review, heads, candidates),
+        })
+      : ""
+  if (judgeText && judge) status(`Asking ${modelName(judge)} for the panel's final call…`)
+  const judged = !judgeText
+    ? undefined
+    : stop.stopped()
+      ? ({ status: "skipped", verdicts: [], usage: NO_USAGE } satisfies VerifyRun)
+      : await runVerify({
+          client,
+          directory,
+          parentID: input.parentID,
+          onSession: (sessionID) => input.onProgress?.({ type: "session", sessionID, costKind: judge!.costKind }),
+          title: `${REVIEW_SESSION_TITLE_PREFIX}${subject} · judge`,
+          internal: "vectorscope.judge",
+          scope,
+          text: judgeText,
+          model: judge,
+          rules,
+          stop: stop.promise,
+        })
   stop.dispose()
-  const verdicts = new Map((verify?.verdicts ?? []).map((entry) => [entry.id, entry.verdict]))
+  const candidateIds = new Set(candidates.map((finding) => finding.id))
+  const finalCall = judged?.status === "ok" ? judged.verdicts.filter((entry) => candidateIds.has(entry.id)) : []
+  const verdicts = new Map([...(verify?.verdicts ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
   // After a triage pass only what the review model confirmed is shown: a finding above a nit that it rejected, gave
   // no verdict for, or never saw because the double-check stopped or failed is left out.
   const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triage !== undefined).map((finding) => finding.id))
@@ -1061,7 +1117,11 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     if (fix) fixes[finding.id] = fix
   }
 
-  const finished = [...runs, ...(verify ? [{ ...verify, name: "verify" as const }] : [])]
+  const finished = [
+    ...runs,
+    ...(verify ? [{ ...verify, name: "verify" as const }] : []),
+    ...(judged ? [{ ...judged, name: "judge" as const }] : []),
+  ]
   const messages = finished
     .flatMap((run) => run.usage.messages)
     .filter((message) => message.role === "assistant" && !message.forked)
@@ -1078,9 +1138,9 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       ),
     ),
   ]
-  const chosen = triage ? [triage, model] : [model]
+  const models = [...(triage ? [triage] : []), model, ...(judge ? [judge] : [])]
   const both =
-    triage && ownModels.length > 1 && ownModels.every((identity) => chosen.some((item) => modelName(item) === identity))
+    triage && ownModels.length > 1 && ownModels.every((identity) => models.some((item) => modelName(item) === identity))
   const used =
     codium && !own.length && identities.length
       ? identities.join(" + ")
@@ -1088,7 +1148,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         ? usage.provider && usage.model
           ? `${usage.provider}/${usage.model}`
           : both
-            ? chosen
+            ? models
                 .map(modelName)
                 .filter((name) => ownModels.includes(name))
                 .join(" + ")
@@ -1146,6 +1206,14 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       ]
     })
   })
+  // WP A35: how many labs checked what this review shows, for the "Checked by a second lab" line.
+  const labs = checkedLabs({
+    model,
+    ...(triage ? { triage } : {}),
+    ...(judge ? { judge } : {}),
+    verified: verify?.status === "ok",
+    judged: judged?.status === "ok",
+  })
   return {
     ...summary,
     checkout,
@@ -1169,13 +1237,18 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           ...(usage?.partial ? { partial: true } : {}),
           kind,
           model: used,
+          ...(labs ? { labs } : {}),
         }
       : undefined,
     durationMs: now() - started,
     specialists: runs.map(({ name, status, sessionID, detail }) => ({ name, status, sessionID, detail })),
-    sessions: [...runs, ...(verify ? [verify] : [])].flatMap((run) => (run.sessionID ? [run.sessionID] : [])),
+    sessions: [...runs, ...(verify ? [verify] : []), ...(judged ? [judged] : [])].flatMap((run) =>
+      run.sessionID ? [run.sessionID] : [],
+    ),
     banners: partialBanners(runs, timeoutMs),
     notes: [
+      ...picked.notes,
+      ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
       ...verifyNotes,
       ...(config.triageModel && !triage && !named
         ? [
@@ -1183,7 +1256,17 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           ]
         : []),
       ...(config.modelEvidence === "warn"
-        ? evidenceNotes({ config, model, configured, agentModel, triage, served: new Set(identities), input })
+        ? evidenceNotes({
+            config,
+            model,
+            chosen,
+            configured,
+            agentModel,
+            triage,
+            named,
+            served: new Set(identities),
+            input,
+          })
         : []),
     ],
     context: {
@@ -1218,27 +1301,38 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 function evidenceNotes(context: {
   config: ReviewConfig
   model: ReviewModel
+  // The model the settings below picked, before Vector Codium's review pair (WP A35) may have put another in its place.
+  chosen: ReviewModel
   configured: ReviewModel | undefined
   agentModel: ReviewModel | undefined
   triage: ReviewModel | undefined
+  named: ReviewModel | undefined
   served: ReadonlySet<string>
   input: Pick<ReviewRunInput, "now" | "certificates">
 }): string[] {
-  const { config, model, configured, agentModel, triage } = context
+  const { config, model, chosen, configured, agentModel, triage, named } = context
   const missing = config.model && !configured ? config.model : undefined
+  const pair: ModelSubject["choice"] = {
+    explicit: false,
+    setting: "Vector Codium's review pair",
+    unset: `no triageModel is set in ${REVIEW_CONFIG_PATH}`,
+  }
   // The agent's model may be one the person chose for reviews (agent.review.model) or their agent's last pick, and the
   // list does not say which, so the note says only what review.json left unset.
-  const choice: ModelSubject["choice"] = configured
-    ? { explicit: true, setting: `model in ${REVIEW_CONFIG_PATH}` }
-    : missing
-      ? undefined
-      : agentModel
-        ? { explicit: false, setting: "your agent's model", unset: `no model is set in ${REVIEW_CONFIG_PATH}` }
-        : {
-            explicit: false,
-            setting: model.costKind === "free" ? "the first connected free model" : "the first connected model",
-            unset: `no model is set in ${REVIEW_CONFIG_PATH} and none of your agent's models is connected`,
-          }
+  const choice: ModelSubject["choice"] =
+    modelName(model) !== modelName(chosen)
+      ? pair
+      : configured
+        ? { explicit: true, setting: `model in ${REVIEW_CONFIG_PATH}` }
+        : missing
+          ? undefined
+          : agentModel
+            ? { explicit: false, setting: "your agent's model", unset: `no model is set in ${REVIEW_CONFIG_PATH}` }
+            : {
+                explicit: false,
+                setting: model.costKind === "free" ? "the first connected free model" : "the first connected model",
+                unset: `no model is set in ${REVIEW_CONFIG_PATH} and none of your agent's models is connected`,
+              }
   return [
     ...(missing
       ? [
@@ -1250,7 +1344,14 @@ function evidenceNotes(context: {
       assessReview({
         review: subjectOf(model, choice),
         ...(triage
-          ? { triage: subjectOf(triage, { explicit: true, setting: `triageModel in ${REVIEW_CONFIG_PATH}` }) }
+          ? {
+              triage: subjectOf(
+                triage,
+                named && modelName(named) === modelName(triage)
+                  ? { explicit: true, setting: `triageModel in ${REVIEW_CONFIG_PATH}` }
+                  : pair,
+              ),
+            }
           : {}),
         scope: evidenceScope({ adapter: "desktop", config, ...(triage ? { triage: modelName(triage) } : {}) }),
         served: [...context.served],
@@ -1554,6 +1655,8 @@ async function runVerify(input: {
   parentID?: string
   onSession: (sessionID: string) => void
   title: string
+  // The hidden session's name: the check, or the panel's judge (WP A35).
+  internal?: "vectorscope.verify" | "vectorscope.judge"
   text: string
   scope: Scope
   model?: ReviewModel
@@ -1566,7 +1669,7 @@ async function runVerify(input: {
       directory,
       title: input.title,
       permission: input.rules,
-      internal: "vectorscope.verify",
+      internal: input.internal ?? "vectorscope.verify",
       ...(input.parentID ? { parentID: input.parentID } : {}),
     })
     .catch(() => undefined)
@@ -2308,7 +2411,12 @@ function desktopSummaryBody(outcome: ReviewOutcomeLite, url?: string, inlinePost
 
 // The model and what the review cost, in the 1.2 wording, then how long it took.
 export function reviewFooter(outcome: Pick<ReviewOutcomeLite, "cost" | "durationMs">) {
-  return [outcome.cost ? costWording(outcome.cost) : undefined, formatDuration(outcome.durationMs)]
+  return [
+    outcome.cost ? costWording(outcome.cost) : undefined,
+    // WP A35: a first pass checked by another lab's model, or the panel's three labs; own keys included.
+    checkedLine(outcome.cost?.labs),
+    formatDuration(outcome.durationMs),
+  ]
     .filter(Boolean)
     .join(" · ")
 }

@@ -137,6 +137,9 @@ export type LearnSettings = {
   readonly modelLearner: ModelLearner
   readonly skills: BrainSchema.SkillLearning
   readonly skillDrafter: BrainSchema.SkillDrafter
+  readonly codiumHelpers: BrainSchema.CodiumHelpers
+  /** Absent until chosen, allowing the legacy development flag to remain a fallback. */
+  readonly distillation?: boolean
   readonly workflow: BrainSchema.WorkflowLearning
   readonly workflowExplore: boolean
 }
@@ -461,6 +464,8 @@ export interface Interface {
     readonly modelLearner?: ModelLearner
     readonly skills?: BrainSchema.SkillLearning
     readonly skillDrafter?: BrainSchema.SkillDrafter
+    readonly codiumHelpers?: BrainSchema.CodiumHelpers
+    readonly distillation?: boolean
     readonly workflow?: BrainSchema.WorkflowLearning
     readonly workflowExplore?: boolean
   }) => Effect.Effect<LearnSettings>
@@ -1329,6 +1334,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       modelLearner: row?.model_learner ?? "local-only",
       skills: row?.skill_learning ?? "review",
       skillDrafter: row?.skill_drafter ?? "local-only",
+      codiumHelpers: row?.codium_helpers ?? "ask",
+      ...(row?.knowledge_distill == null ? {} : { distillation: row.knowledge_distill }),
       workflow: row?.workflow_learning ?? "apply",
       workflowExplore: row?.workflow_explore ?? false,
     } satisfies LearnSettings
@@ -1340,6 +1347,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     modelLearner?: ModelLearner
     skills?: BrainSchema.SkillLearning
     skillDrafter?: BrainSchema.SkillDrafter
+    codiumHelpers?: BrainSchema.CodiumHelpers
+    distillation?: boolean
     workflow?: BrainSchema.WorkflowLearning
     workflowExplore?: boolean
   }) {
@@ -1350,6 +1359,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       model_learner: change.modelLearner ?? current.modelLearner,
       skill_learning: change.skills ?? current.skills,
       skill_drafter: change.skillDrafter ?? current.skillDrafter,
+      codium_helpers: change.codiumHelpers ?? current.codiumHelpers,
+      ...(change.distillation === undefined ? {} : { knowledge_distill: change.distillation }),
       workflow_learning: change.workflow ?? current.workflow,
       workflow_explore: change.workflowExplore ?? current.workflowExplore,
     }

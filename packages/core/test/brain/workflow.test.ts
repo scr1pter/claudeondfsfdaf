@@ -71,6 +71,20 @@ const advise = (
     ...patch,
   })
 
+test("Auto compares complete Codium arms by private relative usage and proven outcomes", () => {
+  const codium = { providerID: "vector-plan", costUsd: undefined, costKinds: { codium: 4 }, unpricedSteps: 4 }
+  const base = many(80, { ...codium, modelID: "middle", codiumUnits: 1000 })
+  const cheap = many(80, { ...codium, modelID: "floor", codiumUnits: 700 })
+  const pick = (rows: BrainWorkflow.Observation[]) => BrainWorkflow.autoSuggestions(BrainWorkflow.stats(rows, NOW))
+  expect(pick([...base, ...cheap])).toEqual([{ instead: "middle", model: "floor", saving: 0.30000000000000004 }])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, partial: true }))])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, codiumUnits: undefined }))])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, costKinds: { codium: 3, unknown: 1 } }))])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, outcome: "fail" as const }))])).toEqual([])
+  expect(pick([...base, ...cheap.slice(0, 5)])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, effort: "default" }))])).toEqual([])
+})
+
 describe("BrainWorkflow.stats", () => {
   test("weighs runs by age, bounds the pass rate from below and counts the share that was checked", () => {
     const [arm] = BrainWorkflow.stats(
@@ -106,6 +120,26 @@ describe("BrainWorkflow.stats", () => {
       NOW,
     )
     expect(left.map((arm) => arm.rows)).toEqual([2])
+  })
+
+  test("records Codium across all steps and runs, including helpers under an own-key parent", () => {
+    const stats = (...rows: BrainWorkflow.Observation[]) => BrainWorkflow.stats(rows, NOW)[0]!
+    expect(stats(obs())).not.toHaveProperty("codium")
+    expect(stats(obs({ costKinds: { priced: 4, codium: 0 } }))).not.toHaveProperty("codium")
+    expect(stats(obs({ costUsd: undefined, costKinds: { codium: 4 } }))).toMatchObject({
+      codium: "only",
+      tokens: 1000,
+    })
+    expect(stats(obs({ costUsd: undefined, costKinds: { priced: 2, codium: 2 } })).codium).toBe("mixed")
+    expect(stats(obs(), obs({ costUsd: undefined, costKinds: { priced: 2, codium: 2 } }))).toMatchObject({
+      codium: "mixed",
+      ownUnpriced: true,
+      costUsd: 1,
+    })
+    expect(stats(obs(), obs({ costUsd: undefined, costKinds: { codium: 4 } }))).not.toHaveProperty("ownUnpriced")
+    expect(stats(obs(), obs({ costUsd: undefined, costKinds: { codium: 4 } })).codium).toBe("mixed")
+    expect(stats(obs({ providerID: "vector-plan", costUsd: undefined, costKinds: {} })).codium).toBe("only")
+    expect(stats(obs({ costUsd: undefined, costKinds: {} }))).not.toHaveProperty("codium")
   })
 })
 
@@ -143,6 +177,70 @@ describe("BrainWorkflow.advise", () => {
       "Thorough work here passed 10 of 10 checked runs at default effort (avg $0.41) against 8 of 10 at high (avg $1.00).",
     )
     expect(BrainWorkflow.explain(advice)).toBe(advice.reason)
+  })
+
+  test("Codium explanations hide inclusive token averages while keeping the internal effort measurements", () => {
+    for (const costKinds of [{ codium: 4 }, { priced: 2, codium: 2 }]) {
+      const unpriced = { costUsd: undefined, costKinds }
+      const advice = advise([
+        ...runs(10, 8, unpriced),
+        ...runs(10, 10, {
+          ...unpriced,
+          effort: "default",
+          tokens: { input: 500, output: 0, reasoning: 0, cacheRead: 0 },
+        }),
+      ])!
+      expect(advice.effort).toBe("default")
+      expect(advice.basis.chosen.tokens).toBe(500)
+      expect(advice.basis.instead.tokens).toBe(1000)
+      expect(advice.reason).not.toContain("tokens")
+      expect(advice.reason).not.toContain("$")
+      expect(advice.reason).toContain("priced" in costKinds ? "(unknown + Codium)" : "(Codium)")
+    }
+  })
+
+  test("combining comparison arms preserves Codium provenance and known own-dollar averages", () => {
+    const advice = advise([
+      ...runs(10, 8),
+      ...runs(10, 10, { effort: "default", costUsd: 0.41 }),
+      ...runs(10, 10, {
+        effort: "default",
+        subagents: 1,
+        subagentModel: "parent",
+        costUsd: undefined,
+        costKinds: { codium: 4 },
+      }),
+    ])!
+    expect(advice.basis.chosen.codium).toBe("mixed")
+    expect(advice.reason).toContain("(avg $0.41 + Codium)")
+    expect(advice.reason).not.toContain("tokens")
+    expect(advice.reason).toContain("at high (avg $1.00)")
+    const mixed = advise([
+      ...runs(10, 8),
+      ...runs(10, 10, { effort: "default", costUsd: 0.41 }),
+      ...runs(10, 10, {
+        effort: "default",
+        subagents: 1,
+        subagentModel: "parent",
+        costUsd: undefined,
+        costKinds: { codium: 3, unknown: 1 },
+      }),
+    ])!
+    expect(mixed.basis.chosen.ownUnpriced).toBe(true)
+    expect(mixed.reason).toContain("(avg $0.41 + unknown + Codium)")
+  })
+
+  test("historical advice on a Codium provider does not print its retained tokens or dollar placeholder", () => {
+    const [stats] = BrainWorkflow.stats([obs({ providerID: "vector-plan" })], NOW)
+    expect(stats).not.toHaveProperty("codium")
+    const reason = BrainWorkflow.explain({
+      effortTier: "thorough",
+      source: "learned",
+      basis: { chosen: stats!, instead: stats! },
+    })
+    expect(reason).toContain("(Codium)")
+    expect(reason).not.toContain("tokens")
+    expect(reason).not.toContain("$")
   })
 
   test("only Thorough's effort moves, never upward, and nothing adds subagents", () => {
@@ -328,6 +426,11 @@ describe("BrainWorkflow store", () => {
           place,
           obs({ requestID: "msg_local", costUsd: 3, costKinds: { priced: 2, local: 1 } }),
         )
+        for (const kind of ["free", "plan"] as const)
+          yield* setup.workflow.record(
+            place,
+            obs({ requestID: `msg_${kind}`, costUsd: 0, costKinds: { [kind]: 2, codium: 2 }, unpricedSteps: 4 }),
+          )
         return yield* rows(setup)
       }),
     )
@@ -345,6 +448,8 @@ describe("BrainWorkflow store", () => {
       subagent_models: { "p/small": 1 },
     })
     expect(result.find((row) => row.request_id === "msg_local")?.cost_usd).toBeNull()
+    expect(result.find((row) => row.request_id === "msg_free")?.cost_usd).toBeNull()
+    expect(result.find((row) => row.request_id === "msg_plan")?.cost_usd).toBeNull()
   })
 
   test("keeps a year and 2,000 runs per repository, records nothing when off, and advises only in apply mode", async () => {

@@ -321,6 +321,7 @@ export type UserMessage = {
   executionMode?: "normal" | "fast"
   size?: TaskSizeChoice
   judge?: TaskJudgeMode
+  secondOpinion?: boolean
 }
 
 export type ProviderAuthError = {
@@ -3024,6 +3025,10 @@ export type TaskApiError = {
   message: string
 }
 
+export type AccountWorkApiError = {
+  message: string
+}
+
 export type WorkflowApiError = {
   code: "invalid" | "busy" | "not_found" | "running" | "disabled" | "forbidden" | "limit"
   message: string
@@ -3859,6 +3864,28 @@ export type MemoryImportResult = {
   over: number
 }
 
+export type MemoryBackupFile = {
+  path: string
+  section: "memory" | "skills" | "insights"
+  text: string
+  repository: string
+  worktree?: string
+}
+
+export type MemoryBackup = {
+  files: Array<MemoryBackupFile>
+}
+
+export type MemoryRestoreResult = {
+  restored: number
+  active: number
+  pinned: number
+  waiting: number
+  known: number
+  refused: number
+  documents: number
+}
+
 export type MemoryTidy = {
   merged: number
   promoted: number
@@ -3882,6 +3909,8 @@ export type MemorySkillLearning = "review" | "auto" | "off"
 
 export type MemorySkillDrafter = "off" | "local-only" | "always"
 
+export type MemoryCodiumHelpers = "ask" | "on" | "off"
+
 export type MemoryWorkflowLearning = "apply" | "observe" | "off"
 
 export type MemorySettings = {
@@ -3892,6 +3921,8 @@ export type MemorySettings = {
   modelLearner: MemoryModelLearner
   skills: MemorySkillLearning
   skillDrafter: MemorySkillDrafter
+  codiumHelpers?: MemoryCodiumHelpers
+  distillation?: boolean
   workflow: MemoryWorkflowLearning
   workflowExplore: boolean
 }
@@ -3961,6 +3992,8 @@ export type MemoryWorkflowArm = {
   checkedShare: number
   costUsd?: number
   pricedWeight: number
+  codium?: "only" | "mixed"
+  ownUnpriced?: true
   tokens?: number
   lastAt: number
 }
@@ -4296,6 +4329,18 @@ export type MemoryDistillEstimate = {
   costKind?: CostKind
   lowUsd?: number
   highUsd?: number
+}
+
+export type MemoryBootstrap = {
+  type: "ready"
+  queued: number
+  pending: number
+  maxTokens: number
+  documents: Array<{
+    id: string
+    title: string
+    estimate: MemoryDistillEstimate
+  }>
 }
 
 export type MemoryDistillResult = {
@@ -6993,6 +7038,8 @@ export type ModelCodium = {
     default: string
     ceiling: string
   }
+  judge?: string
+  review?: Array<"triage" | "confirm" | "panelJudge">
 }
 
 export type TaskStatus = "queued" | "running" | "waiting_on_user" | "completed" | "failed" | "stopped"
@@ -12941,6 +12988,253 @@ export type ExperimentalTaskBridgeReceiptResponses = {
 export type ExperimentalTaskBridgeReceiptResponse =
   ExperimentalTaskBridgeReceiptResponses[keyof ExperimentalTaskBridgeReceiptResponses]
 
+export type ExperimentalBrainPreviewData = {
+  body?: {
+    includeBrain: true
+    publicRepository: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/brain/run-bundle/preview"
+}
+
+export type ExperimentalBrainPreviewErrors = {
+  /**
+   * AccountWorkApiError | InvalidRequestError
+   */
+  400: AccountWorkApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalBrainPreviewError = ExperimentalBrainPreviewErrors[keyof ExperimentalBrainPreviewErrors]
+
+export type ExperimentalBrainPreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    path: "brain/bundle.json"
+    base64url: string
+    sha256: string
+    bytes: number
+    entries: number
+    skills: number
+  }
+}
+
+export type ExperimentalBrainPreviewResponse =
+  ExperimentalBrainPreviewResponses[keyof ExperimentalBrainPreviewResponses]
+
+export type ExperimentalBrainImportProposalsData = {
+  body?: {
+    path: "brain/proposals.json"
+    base64url: string
+    sha256: string
+    publicRepository: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/brain/run-proposals/import"
+}
+
+export type ExperimentalBrainImportProposalsErrors = {
+  /**
+   * AccountWorkApiError | InvalidRequestError
+   */
+  400: AccountWorkApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalBrainImportProposalsError =
+  ExperimentalBrainImportProposalsErrors[keyof ExperimentalBrainImportProposalsErrors]
+
+export type ExperimentalBrainImportProposalsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    proposed: number
+    known: number
+    refused: number
+    over: number
+  }
+}
+
+export type ExperimentalBrainImportProposalsResponse =
+  ExperimentalBrainImportProposalsResponses[keyof ExperimentalBrainImportProposalsResponses]
+
+export type ExperimentalPlaybooksListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workflow/playbooks"
+}
+
+export type ExperimentalPlaybooksListErrors = {
+  /**
+   * AccountWorkApiError | InvalidRequestError
+   */
+  400: AccountWorkApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalPlaybooksListError = ExperimentalPlaybooksListErrors[keyof ExperimentalPlaybooksListErrors]
+
+export type ExperimentalPlaybooksListResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    name: string
+    version: string
+    sha256: string
+    installed: boolean
+    current: boolean
+  }>
+}
+
+export type ExperimentalPlaybooksListResponse =
+  ExperimentalPlaybooksListResponses[keyof ExperimentalPlaybooksListResponses]
+
+export type ExperimentalPlaybooksInstallData = {
+  body?: {
+    name: string
+    version: string
+    sha256: string
+    replace?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workflow/playbooks/install"
+}
+
+export type ExperimentalPlaybooksInstallErrors = {
+  /**
+   * AccountWorkApiError | InvalidRequestError
+   */
+  400: AccountWorkApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalPlaybooksInstallError =
+  ExperimentalPlaybooksInstallErrors[keyof ExperimentalPlaybooksInstallErrors]
+
+export type ExperimentalPlaybooksInstallResponses = {
+  /**
+   * Success
+   */
+  200: {
+    name: string
+    version: string
+  }
+}
+
+export type ExperimentalPlaybooksInstallResponse =
+  ExperimentalPlaybooksInstallResponses[keyof ExperimentalPlaybooksInstallResponses]
+
+export type ExperimentalHostedJobsData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/hosted-jobs"
+}
+
+export type ExperimentalHostedJobsErrors = {
+  /**
+   * AccountWorkApiError | InvalidRequestError
+   */
+  400: AccountWorkApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalHostedJobsError = ExperimentalHostedJobsErrors[keyof ExperimentalHostedJobsErrors]
+
+export type ExperimentalHostedJobsResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    id: string
+    title?: string
+    delivered: boolean
+  }>
+}
+
+export type ExperimentalHostedJobsResponse = ExperimentalHostedJobsResponses[keyof ExperimentalHostedJobsResponses]
+
+export type ExperimentalHostedAttachData = {
+  body?: {
+    jobID: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/hosted-jobs"
+}
+
+export type ExperimentalHostedAttachErrors = {
+  /**
+   * AccountWorkApiError | InvalidRequestError
+   */
+  400: AccountWorkApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalHostedAttachError = ExperimentalHostedAttachErrors[keyof ExperimentalHostedAttachErrors]
+
+export type ExperimentalHostedAttachResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    title?: string
+    delivered: boolean
+  }
+}
+
+export type ExperimentalHostedAttachResponse =
+  ExperimentalHostedAttachResponses[keyof ExperimentalHostedAttachResponses]
+
 export type ExperimentalWorkflowSavedData = {
   body?: never
   path?: never
@@ -15320,6 +15614,75 @@ export type MemoryImportResponses = {
 
 export type MemoryImportResponse = MemoryImportResponses[keyof MemoryImportResponses]
 
+export type MemoryBackupData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/backup"
+}
+
+export type MemoryBackupErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryBackupError = MemoryBackupErrors[keyof MemoryBackupErrors]
+
+export type MemoryBackupResponses = {
+  /**
+   * This computer's memory as Brain Vault backup files
+   */
+  200: MemoryBackup
+}
+
+export type MemoryBackupResponse = MemoryBackupResponses[keyof MemoryBackupResponses]
+
+export type MemoryRestoreData = {
+  body?: {
+    section?: "memory" | "skills" | "insights"
+    text: string
+    repository: string
+    worktree?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/restore"
+}
+
+export type MemoryRestoreErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryRestoreError = MemoryRestoreErrors[keyof MemoryRestoreErrors]
+
+export type MemoryRestoreResponses = {
+  /**
+   * What the restore brought back
+   */
+  200: MemoryRestoreResult
+}
+
+export type MemoryRestoreResponse = MemoryRestoreResponses[keyof MemoryRestoreResponses]
+
 export type MemoryTidyData = {
   body?: never
   path?: never
@@ -15400,6 +15763,8 @@ export type MemorySettingsUpdateData = {
     modelLearner?: MemoryModelLearner
     skills?: MemorySkillLearning
     skillDrafter?: MemorySkillDrafter
+    codiumHelpers?: MemoryCodiumHelpers
+    distillation?: boolean
     workflow?: MemoryWorkflowLearning
     workflowExplore?: boolean
   }
@@ -16173,6 +16538,40 @@ export type MemoryDocumentsFileResponses = {
 }
 
 export type MemoryDocumentsFileResponse = MemoryDocumentsFileResponses[keyof MemoryDocumentsFileResponses]
+
+export type MemoryBootstrapPrepareData = {
+  body?: {
+    model?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/bootstrap"
+}
+
+export type MemoryBootstrapPrepareErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryBootstrapPrepareError = MemoryBootstrapPrepareErrors[keyof MemoryBootstrapPrepareErrors]
+
+export type MemoryBootstrapPrepareResponses = {
+  /**
+   * A local scan and bounded document suggestions preview
+   */
+  200: MemoryBootstrap
+}
+
+export type MemoryBootstrapPrepareResponse = MemoryBootstrapPrepareResponses[keyof MemoryBootstrapPrepareResponses]
 
 export type MemoryDistillEstimateData = {
   body?: never
@@ -18485,6 +18884,7 @@ export type SessionPromptData = {
     budget?: RunBudget
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
+    secondOpinion?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -18997,6 +19397,7 @@ export type SessionPromptAsyncData = {
     budget?: RunBudget
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
+    secondOpinion?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -19048,6 +19449,7 @@ export type SessionCommandData = {
     budget?: RunBudget
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
+    secondOpinion?: boolean
     parts?: Array<{
       id?: string
       type: "file"

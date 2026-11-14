@@ -255,6 +255,23 @@ vector github review --pr 482 --dry-run</code><button class="doc-cmd-copy" type=
             the desktop panel list what each pass spent when a review has more than one pass.
           </p>
 
+          <h3 id="second-lab">Checked by a second lab</h3>
+          <p>
+            When the first pass and the check run on models from two different labs and the check finishes, the
+            summary's footer says <strong>Checked by a second lab</strong>. Vector reads each model's lab from its
+            vendor; when it can't tell, the footer says nothing about labs. On Vector Codium, a review without a
+            <code>triageModel</code> runs your plan's review pair: the first pass on one lab's model and the check on
+            another lab's. If the two would come from the same lab, the review runs one pass and says so.
+          </p>
+          <p>
+            Set <code>panel</code> to true in <code>.vector/review.json</code> for a three-lab panel: once the check
+            finishes, a judge from a third lab makes the final call on each finding it looked at, and the footer says
+            <strong>Checked by three labs</strong>. The judge is <code>judgeModel</code>, or on Vector Codium your
+            plan's panel judge. The panel needs a first pass, a check and a judge from three labs; without them the
+            review runs without the judge and says why. The judge works within the same step and time limits as the
+            check. Both the panel and the footer line work with your own keys too.
+          </p>
+
           <h3 id="noise-control">Noise control</h3>
           <p>
             Selection is where a review stops being a wall of text. A finding below <code>minConfidence</code> (0.7) or

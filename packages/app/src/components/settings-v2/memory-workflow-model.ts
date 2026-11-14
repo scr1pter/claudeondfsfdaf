@@ -2,6 +2,8 @@
 // For each size, the effort, subagent split and subagent model the build agent ran with in this repository, how often
 // their checks passed, and what they cost. Learned defaults only ever make work cheaper.
 
+import { Billing } from "@vectordevai/schema/billing"
+
 export type WorkflowTier = "chat" | "light" | "standard" | "thorough"
 export type WorkflowMode = "apply" | "observe" | "off"
 
@@ -24,6 +26,8 @@ export type WorkflowArmStats = {
   checkedShare: number
   costUsd?: number
   pricedWeight: number
+  codium?: "only" | "mixed"
+  ownUnpriced?: true
   tokens?: number
   lastAt: number
 }
@@ -152,8 +156,14 @@ export function passRate(stats: Pick<WorkflowArmStats, "passRate" | "signal">) {
   return `${Math.round(stats.passRate * stats.signal)} of ${Math.round(stats.signal)} (${Math.round(stats.passRate * 100)}%)`
 }
 
-/** Average dollars over priced runs. A run with an unpriced step has no cost, which is unknown, never $0. */
-export function cost(stats: Pick<WorkflowArmStats, "costUsd">) {
-  if (stats.costUsd === undefined) return "unknown"
-  return `$${stats.costUsd.toFixed(2)}`
+/** Average own dollars over priced runs; Codium has no dollar or token figure. */
+export function cost(
+  stats: Pick<WorkflowArmStats, "costUsd" | "codium" | "ownUnpriced"> & Partial<Pick<WorkflowArmStats, "arm">>,
+) {
+  const codium = stats.codium ?? (Billing.isCodium(stats.arm?.providerID) ? "only" : undefined)
+  if (codium === "only") return "Codium"
+  const own = stats.costUsd === undefined ? "unknown" : `$${stats.costUsd.toFixed(2)}`
+  return codium === "mixed"
+    ? `${own}${stats.costUsd !== undefined && stats.ownUnpriced ? " + unknown" : ""} + Codium`
+    : own
 }

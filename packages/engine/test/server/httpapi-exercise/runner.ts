@@ -246,6 +246,7 @@ function withContext<A, E>(
             run(modules.Worktree.Service.use((svc) => svc.remove({ directory })).pipe(Effect.ignore)),
           llmText: (value, options) => Effect.suspend(() => llm().text(value, options)),
           llmWait: (count) => Effect.suspend(() => llm().wait(count)),
+          llmCalls: () => Effect.suspend(() => llm().calls),
           tuiRequest: (request) => Effect.sync(() => modules.Tui.submitTuiRequest(request)),
         }
         yield* trace(options, scenario, `${label} seed start`)

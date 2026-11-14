@@ -12,8 +12,10 @@ import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { VaultMemory } from "@/brain/vault-memory"
 import { ResearchExport } from "@vectordevai/core/research/export"
 import { Git } from "@/git"
+import { Project } from "@/project/project"
 import { Instruction } from "@/session/instruction"
 import { SessionDistill } from "@/session/distill"
 import { SessionPosting } from "@/session/posting"
@@ -60,6 +62,17 @@ const SKILL_ENTRY = "That is a learned skill. Change learned skills in Settings 
 /** A file over 1 MB, or a PDF over 20 pages, costs less remembered than sent with a message. */
 const REMEMBER_INSTEAD = { bytes: 1024 * 1024, pages: 20 }
 
+function workflowArm(stats: BrainWorkflow.ArmStats): BrainWorkflow.ArmStats {
+  return BrainWorkflow.displayStats(stats)
+}
+
+function workflowAdvice(advice: BrainWorkflow.Advice): BrainWorkflow.Advice {
+  return {
+    ...advice,
+    basis: { chosen: workflowArm(advice.basis.chosen), instead: workflowArm(advice.basis.instead) },
+  }
+}
+
 export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (handlers) =>
   Effect.gen(function* () {
     const brain = yield* Brain.Service
@@ -70,6 +83,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const research = yield* ResearchStore.Service
     const sessions = yield* Session.Service
     const git = yield* Git.Service
+    const projects = yield* Project.Service
     const skills = yield* BrainSkill.Service
     const workflow = yield* BrainWorkflow.Service
     const learned = yield* LearnedSkill.Service
@@ -178,6 +192,31 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       return yield* BrainExport.importText({ brain, skills, place: yield* instruction.place(), text: ctx.payload.text })
     })
 
+    // Brain Vault (WP A45): the desktop app encrypts these files on this computer before a backup, and restores the
+    // files it opened with the vault's key. Like every memory route, both are the owner's own (guests get 403).
+    const backup = Effect.fn("MemoryHttpApi.backup")(function* () {
+      return { files: (yield* VaultMemory.files({ instruction, brain, knowledge, projects, skills, workflow })).files }
+    })
+
+    const restoreMemory = Effect.fn("MemoryHttpApi.restore")(function* (ctx: {
+      payload: { text: string; repository: string; worktree?: string; section?: "memory" | "skills" | "insights" }
+    }) {
+      if (ctx.payload.text.length > IMPORT_CHARS)
+        return yield* refused("Vector restores at most 2 MB at a time.", "limit")
+      const done = yield* VaultMemory.restore({ instruction, brain, skills }, ctx.payload)
+      if (done.unreadable)
+        return yield* refused("This backup needs a newer version of Vector. Update Vector, then restore it.", "version")
+      return {
+        restored: done.restored,
+        active: done.active,
+        pinned: done.pinned,
+        waiting: done.waiting,
+        known: done.known,
+        refused: done.refused,
+        documents: done.documents,
+      }
+    })
+
     const tidy = Effect.fn("MemoryHttpApi.tidy")(function* () {
       const report = yield* brain.consolidate(yield* instruction.place(), { force: true })
       return {
@@ -191,7 +230,11 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
 
     const settingsOf = Effect.fnUntraced(function* (place: Brain.Place) {
       const learn = yield* brain.learnSettings()
-      return { ...learn, ...(yield* knowledge.settings(place)) }
+      return {
+        ...learn,
+        distillation: learn.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL,
+        ...(yield* knowledge.settings(place)),
+      }
     })
 
     const settings = Effect.fn("MemoryHttpApi.settings")(function* () {
@@ -207,6 +250,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
         modelLearner?: Brain.ModelLearner
         skills?: BrainSchema.SkillLearning
         skillDrafter?: BrainSchema.SkillDrafter
+        codiumHelpers?: BrainSchema.CodiumHelpers
+        distillation?: boolean
         workflow?: BrainSchema.WorkflowLearning
         workflowExplore?: boolean
       }
@@ -218,6 +263,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
         ...(ctx.payload.modelLearner ? { modelLearner: ctx.payload.modelLearner } : {}),
         ...(ctx.payload.skills ? { skills: ctx.payload.skills } : {}),
         ...(ctx.payload.skillDrafter ? { skillDrafter: ctx.payload.skillDrafter } : {}),
+        ...(ctx.payload.codiumHelpers ? { codiumHelpers: ctx.payload.codiumHelpers } : {}),
+        ...(ctx.payload.distillation === undefined ? {} : { distillation: ctx.payload.distillation }),
         ...(ctx.payload.workflow ? { workflow: ctx.payload.workflow } : {}),
         ...(ctx.payload.workflowExplore === undefined ? {} : { workflowExplore: ctx.payload.workflowExplore }),
       }
@@ -317,7 +364,16 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     })
 
     const insights = Effect.fn("MemoryHttpApi.workflow")(function* () {
-      return yield* workflow.insights(yield* instruction.place())
+      const insights = yield* workflow.insights(yield* instruction.place())
+      return {
+        ...insights,
+        tiers: insights.tiers.map((tier) => ({
+          ...tier,
+          arms: tier.arms.map(workflowArm),
+          ...(tier.advice ? { advice: workflowAdvice(tier.advice) } : {}),
+          ...(tier.wouldAdvise ? { wouldAdvise: workflowAdvice(tier.wouldAdvise) } : {}),
+        })),
+      }
     })
 
     const resetWorkflow = Effect.fn("MemoryHttpApi.resetWorkflow")(function* (ctx: {
@@ -526,7 +582,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
         ...(detail.diff ? { diff: detail.diff } : {}),
         history: detail.history,
         usage: detail.usage,
-        distill: Flag.VECTOR_KNOWLEDGE_DISTILL,
+        distill: (yield* brain.learnSettings()).distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL,
       }
     })
 
@@ -600,6 +656,12 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     })
 
     // What a model would read of a document for suggestions, and what that may cost; nothing is sent.
+    const bootstrap = Effect.fn("MemoryHttpApi.bootstrap")(function* (ctx: { payload: { model?: string } }) {
+      const result = yield* distiller.bootstrap(yield* instruction.place(), ctx.payload.model)
+      if (result.type === "refused") return yield* refused(result.message, result.reason)
+      return result
+    })
+
     const distillEstimate = Effect.fn("MemoryHttpApi.distillEstimate")(function* (ctx: {
       params: { documentID: string }
       query: { model?: string; maxTokens?: number }
@@ -855,6 +917,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       .handle("removeDocument", removeDocument)
       .handle("documentPage", documentPage)
       .handle("documentFile", documentFile)
+      .handle("bootstrap", bootstrap)
       .handle("distillEstimate", distillEstimate)
       .handle("distill", distill)
       .handle("records", records)
@@ -876,5 +939,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       .handle("eraseSession", eraseSession)
       .handle("export", exportMemory)
       .handle("import", importMemory)
+      .handle("backup", backup)
+      .handle("restore", restoreMemory)
   }),
 )

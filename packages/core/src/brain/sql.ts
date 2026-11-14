@@ -236,6 +236,8 @@ export const BrainStateTable = sqliteTable("brain_state", {
   // defaults apply, and exploration is off.
   skill_learning: text().$type<BrainSchema.SkillLearning>(),
   skill_drafter: text().$type<BrainSchema.SkillDrafter>(),
+  codium_helpers: text().$type<BrainSchema.CodiumHelpers>(),
+  knowledge_distill: integer({ mode: "boolean" }),
   workflow_learning: text().$type<BrainSchema.WorkflowLearning>(),
   workflow_explore: integer({ mode: "boolean" }),
 })
@@ -396,6 +398,8 @@ export const BrainWorkflowRunTable = sqliteTable(
     signal: text().$type<"recovered" | "judged" | "judge-fail" | "check-fail">(),
     // Unknown unless every step of the run was priced; unknown is never zero.
     cost_usd: real(),
+    // Relative catalog-weighted usage, only when every recorded step ran on Codium with a known weight.
+    codium_units: real(),
     cost_kinds: text({ mode: "json" }).$type<Partial<Record<CostKind, number>>>().notNull(),
     steps: integer().notNull(),
     unpriced_steps: integer().notNull(),

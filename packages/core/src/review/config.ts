@@ -198,6 +198,8 @@ const FIELDS: Record<PlainKey, Field> = {
   timeoutMinutes: number({ min: 1, max: 120 }),
   model,
   triageModel: model,
+  panel: bool,
+  judgeModel: model,
   nits: bool,
   paths,
 }

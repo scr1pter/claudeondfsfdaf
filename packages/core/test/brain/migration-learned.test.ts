@@ -133,7 +133,7 @@ describe("Brain learned-skills migrations", () => {
     const entries = db.query("SELECT id, kind, status FROM brain_entry").all()
     const state = db
       .query(
-        "SELECT learning, model_learner, skill_learning, skill_drafter, workflow_learning, workflow_explore FROM brain_state",
+        "SELECT learning, model_learner, skill_learning, skill_drafter, workflow_learning, workflow_explore, codium_helpers, knowledge_distill FROM brain_state",
       )
       .all()
     db.close()
@@ -144,6 +144,8 @@ describe("Brain learned-skills migrations", () => {
       "20261210000000_learned_skills",
       "20261211000000_workflow",
       "20261212000000_research_claims",
+      "20261213000000_codium_brain",
+      "20261214000000_codium_workflow",
       "20261216000000_review_memory",
       "20261217000000_review_memory_scope",
       "20261218000000_review_memory_source",
@@ -158,6 +160,8 @@ describe("Brain learned-skills migrations", () => {
         skill_drafter: null,
         workflow_learning: null,
         workflow_explore: null,
+        codium_helpers: null,
+        knowledge_distill: null,
       },
     ])
   })
@@ -166,7 +170,7 @@ describe("Brain learned-skills migrations", () => {
     await using tmp = await tmpdir()
     const file = path.join(tmp.path, "brain.db")
     // That build ran the first two review memory migrations under their ids before Codium's Brain migrations took
-    // 20261213 and 20261214, and never had the source table.
+    // 20261213 and 20261214, and never had Codium's migrations or the source table.
     const earlier = (migration: DatabaseMigration.Migration, id: string) => ({ id, up: migration.up })
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -213,7 +217,9 @@ describe("Brain learned-skills migrations", () => {
     db.close()
     expect(migrations.slice(migrations.indexOf("20261212000000_research_claims"))).toEqual([
       "20261212000000_research_claims",
+      "20261213000000_codium_brain",
       "20261213000000_review_memory",
+      "20261214000000_codium_workflow",
       "20261214000000_review_memory_scope",
       "20261216000000_review_memory",
       "20261217000000_review_memory_scope",

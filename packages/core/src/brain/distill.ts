@@ -10,7 +10,7 @@ import { BrainLexical } from "./lexical"
 import { BrainScan } from "./scan"
 import { BrainSchema } from "./schema"
 
-// Quote-locked distillation (opt-in, behind VECTOR_KNOWLEDGE_DISTILL): a model the user chose reads the sections where
+// Quote-locked distillation (opt-in in Settings > Memory): a model the user chose reads the sections where
 // Vector's rules found little, and suggests records. A suggestion is kept only when its quote is the document's own
 // words, found again in a passage that was sent, and the quote says everything its text says; the record then quotes
 // the document's span, never the model's copy of it. Kept suggestions wait for the user as proposed records. Nothing
@@ -39,6 +39,9 @@ export const HELPER = "brain.distill"
 
 /** Tokens the request carries beside the sections: the helper's instructions, the output schema and the wrapper. */
 export const OVERHEAD = 1_200
+
+/** One explicit repository bootstrap is at most four document requests and 30,000 section tokens in total. */
+export const BOOTSTRAP = { documents: 4, input: 7_500 } as const
 
 /** Output tokens the low end of an estimate assumes. */
 const LIKELY_OUTPUT = 500
@@ -105,7 +108,7 @@ export function refusal(input: {
   if (!input.enabled)
     return {
       reason: "off",
-      message: "Finding more with a model is off. Start Vector with VECTOR_KNOWLEDGE_DISTILL=1 to turn it on.",
+      message: "Finding more with a model is off. Turn on document distillation in Settings > Memory to use it.",
     }
   if (input.guest)
     return { reason: "guest", message: "Only the owner can ask a model to read a document, never a session a guest is in." }
