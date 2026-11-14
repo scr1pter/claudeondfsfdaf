@@ -1,8 +1,10 @@
 import path from "path"
 import os from "os"
 import { randomBytes, randomUUID } from "crypto"
-import { mkdir, readFile, rm, stat, utimes, writeFile } from "fs/promises"
+// The module object, not named imports, so the lock's file calls can be replaced in tests (spyOn) to inject errors.
+import fs from "fs/promises"
 import { Hash } from "./hash"
+import { LockFs } from "./lock-fs"
 import { Effect } from "effect"
 
 export type FlockGlobal = {
@@ -114,9 +116,65 @@ export namespace Flock {
     return performance.timeOrigin + mono()
   }
 
+  // Runs one file operation, retrying an error that clears by itself (LockFs.isTransient) for a short window, with the
+  // same delays as effect-flock.ts.
+  async function retryTransient<T>(run: () => Promise<T>) {
+    const start = mono()
+    let delay = LockFs.TRANSIENT_BASE_DELAY_MS
+    while (true) {
+      try {
+        return await run()
+      } catch (err) {
+        if (!LockFs.isTransient(err) || mono() - start >= LockFs.TRANSIENT_WINDOW_MS) throw err
+        await sleep(delay)
+        delay = LockFs.nextDelay(delay)
+      }
+    }
+  }
+
+  /**
+   * Recursive delete. A path that is already gone counts as removed, and an error that clears by itself is retried for
+   * a short window. Any other error, or one that does not clear, is thrown: a lock dir left behind makes every other
+   * process wait until it turns stale.
+   */
+  async function removeDir(target: string) {
+    try {
+      await retryTransient(() => fs.rm(target, { recursive: true, force: true }))
+    } catch (err) {
+      if (!LockFs.isGone(err)) throw err
+    }
+  }
+
+  /**
+   * Atomic mkdir — returns true if created, false if it already exists. An error that clears by itself is retried for
+   * a short window; any other error, or one that does not clear, is thrown.
+   */
+  async function exclusiveMkdir(dir: string) {
+    try {
+      await retryTransient(() => fs.mkdir(dir, { mode: 0o700 }))
+      return true
+    } catch (err) {
+      if (LockFs.isExists(err)) return false
+      throw err
+    }
+  }
+
+  /** Write with exclusive create — throws an error naming the lock dir and the failure if it fails. */
+  async function exclusiveWrite(file: string, content: string, lockDir: string, name: string) {
+    try {
+      await fs.writeFile(file, content, { flag: "wx" })
+    } catch (cause) {
+      const removal = await removeDir(lockDir).then(
+        () => undefined,
+        (error: unknown) => ({ error }),
+      )
+      throw new Error(LockFs.compromised(lockDir, LockFs.writeFailed(name, cause, removal)), { cause })
+    }
+  }
+
   async function stats(file: string) {
     try {
-      return await stat(file)
+      return await fs.stat(file)
     } catch (err) {
       const errCode = code(err)
       if (errCode === "ENOENT" || errCode === "ENOTDIR") return
@@ -150,35 +208,26 @@ export namespace Flock {
     const metaPath = path.join(lockDir, "meta.json")
     const heartbeatPath = path.join(lockDir, "heartbeat")
 
-    try {
-      await mkdir(lockDir, { mode: 0o700 })
-    } catch (err) {
-      if (code(err) !== "EEXIST") {
-        throw err
-      }
-
+    if (!(await exclusiveMkdir(lockDir))) {
       if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
         return { acquired: false }
       }
 
       const breakerPath = lockDir + ".breaker"
+      let claimed: boolean
       try {
-        await mkdir(breakerPath, { mode: 0o700 })
+        claimed = await exclusiveMkdir(breakerPath)
       } catch (claimErr) {
-        const errCode = code(claimErr)
-        if (errCode === "EEXIST") {
-          const breaker = await stats(breakerPath)
-          if (breaker && wall() - breaker.mtimeMs > opts.staleMs) {
-            await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
-          }
-          return { acquired: false }
-        }
-
-        if (errCode === "ENOENT" || errCode === "ENOTDIR") {
-          return { acquired: false }
-        }
-
+        if (LockFs.isGone(claimErr)) return { acquired: false }
         throw claimErr
+      }
+
+      if (!claimed) {
+        const breaker = await stats(breakerPath)
+        if (breaker && wall() - breaker.mtimeMs > opts.staleMs) {
+          await removeDir(breakerPath)
+        }
+        return { acquired: false }
       }
 
       try {
@@ -187,19 +236,13 @@ export namespace Flock {
           return { acquired: false }
         }
 
-        await rm(lockDir, { recursive: true, force: true })
+        await removeDir(lockDir)
 
-        try {
-          await mkdir(lockDir, { mode: 0o700 })
-        } catch (retryErr) {
-          const errCode = code(retryErr)
-          if (errCode === "EEXIST" || errCode === "ENOTEMPTY") {
-            return { acquired: false }
-          }
-          throw retryErr
+        if (!(await exclusiveMkdir(lockDir))) {
+          return { acquired: false }
         }
       } finally {
-        await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
+        await removeDir(breakerPath)
       }
     }
 
@@ -210,15 +253,8 @@ export namespace Flock {
       createdAt: new Date().toISOString(),
     }
 
-    await writeFile(heartbeatPath, "", { flag: "wx" }).catch(async () => {
-      await rm(lockDir, { recursive: true, force: true })
-      throw new Error("Lock acquired but heartbeat already existed (possible compromise).")
-    })
-
-    await writeFile(metaPath, JSON.stringify(meta, null, 2), { flag: "wx" }).catch(async () => {
-      await rm(lockDir, { recursive: true, force: true })
-      throw new Error("Lock acquired but meta.json already existed (possible compromise).")
-    })
+    await exclusiveWrite(heartbeatPath, "", lockDir, "heartbeat")
+    await exclusiveWrite(metaPath, JSON.stringify(meta, null, 2), lockDir, "meta.json")
 
     let timer: NodeJS.Timeout | undefined
 
@@ -227,7 +263,7 @@ export namespace Flock {
       // Heartbeat prevents long critical sections from being evicted as stale.
       timer = setInterval(() => {
         const t = new Date()
-        void utimes(heartbeatPath, t, t).catch(() => undefined)
+        void fs.utimes(heartbeatPath, t, t).catch(() => undefined)
       }, intervalMs)
       timer.unref?.()
     }
@@ -238,7 +274,8 @@ export namespace Flock {
         timer = undefined
       }
 
-      const current = await readFile(metaPath, "utf8")
+      const current = await fs
+        .readFile(metaPath, "utf8")
         .then((raw) => {
           const parsed = JSON.parse(raw)
           if (!parsed || typeof parsed !== "object") return {}
@@ -261,7 +298,9 @@ export namespace Flock {
         throw new Error("Refusing to release: lock token mismatch (not the owner).")
       }
 
-      await rm(lockDir, { recursive: true, force: true })
+      await removeDir(lockDir).catch((cause: unknown) => {
+        throw new Error(LockFs.notRemoved(lockDir, cause), { cause })
+      })
     }
 
     return {
@@ -317,7 +356,7 @@ export namespace Flock {
     }
     const dir = input.dir ?? root()
 
-    await mkdir(dir, { recursive: true })
+    await fs.mkdir(dir, { recursive: true })
     const lockfile = path.join(dir, Hash.fast(key) + ".lock")
     const lock = await acquireLockDir(
       lockfile,
