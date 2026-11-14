@@ -532,6 +532,25 @@
       "failed": 0,
       "passed": 13
     },
-    "hostedAppSuite": "pending current-source CI verification"
+    "hostedAppSuite": {
+      "source": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
+      "run": 43560764334,
+      "job": 132344208614,
+      "conclusion": "success",
+      "runtime": "Bun 1.3.14+0d9b296af; Node v24.22.2; hosted Linux",
+      "logBytes": 153117,
+      "logSha256": "8d7f6567a02a8baf5809f2689e003b2a595bd582f56822c4757da14751d9a54a",
+      "nodeHarnessPassed": 13,
+      "perFileInvocations": 244,
+      "filesPassed": 244,
+      "filesFailed": 0,
+      "browserConditionUnitSuite": {
+        "files": 18,
+        "passed": 83,
+        "failed": 0,
+        "assertions": 218
+      },
+      "qualification": "Actual downloaded job log confirms exact-once full per-file app inventory and final 244/244 summary, followed by the browser-condition unit suite. No failed child was retried. Remaining broad PR and final packaged helper/Main pin verifiers are pending; not hardware, signing or release proof."
+    }
   }
 }
