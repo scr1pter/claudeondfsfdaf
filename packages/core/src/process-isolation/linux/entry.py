@@ -872,7 +872,7 @@ def keeper(scratch):
     keeper_marker("capabilities")
     assert_capabilities_dropped()
     keeper_marker("environment")
-    require(set(os.environ) <= {"PATH", "HOME", "LC_ALL", "LC_CTYPE"})
+    keeper_environment(dict(os.environ), scratch, os.getcwd())
     keeper_marker("ready-write")
     write_json(scratch + "/keeper-ready.json", {
         "v": 1, "pid": os.getpid(), "uid": os.getuid(), "gid": os.getgid(),
@@ -880,6 +880,12 @@ def keeper(scratch):
     }, 0o600)
     while True:
         signal.pause()
+
+
+def keeper_environment(environment, scratch, cwd):
+    canonical(scratch)
+    require(set(environment) <= {"PATH", "HOME", "PWD", "LC_ALL", "LC_CTYPE"} and
+            environment.get("PWD") == scratch and cwd == scratch)
 
 
 def keeper_marker(stage):

@@ -26,7 +26,7 @@ PURE = {
     "require", "integer", "exact", "canonical", "object_identity", "construction_namespace",
     "filesystem", "json_digest", "digest_value", "mask_records", "mount_field", "mount_path", "parse_mount_table",
     "beneath", "hidden", "refuse_mask_aliases", "require_private_mounts", "require_known_mask_origins",
-    "require_capture_closure", "keeper_log_stage",
+    "require_capture_closure", "keeper_log_stage", "keeper_environment",
 }
 CONSTANTS = {"HOST_TEMP", "MASKS"}
 SELECTED = [node for node in TREE.body if
@@ -40,7 +40,7 @@ SAFE_CALLS = PURE | {"RuntimeError", "type", "len", "all", "any", "ord", "chr", 
 SAFE_MODULE_CALLS = {"os.major", "os.minor", "os.path.normpath", "os.path.relpath", "os.path.join",
                      "hashlib.sha256", "json.dumps", "re.sub", "re.fullmatch", "stat.S_ISDIR", "stat.S_ISREG"}
 SAFE_METHODS = {"encode", "startswith", "endswith", "rstrip", "values", "count", "isascii", "isdigit", "split", "items", "decode",
-                "splitlines", "index", "append", "add", "hexdigest"}
+                "splitlines", "index", "append", "add", "hexdigest", "get"}
 for node in SELECTED:
     if isinstance(node, ast.FunctionDef):
         if (node.decorator_list or node.returns or any(argument.annotation for argument in node.args.args) or
@@ -374,6 +374,40 @@ class OriginClosureTests(unittest.TestCase):
                 NATIVE["require_known_mask_origins"](value, candidate, set())
 
 
+class KeeperEnvironmentTests(unittest.TestCase):
+    def test_bwrap_pwd_and_actual_cwd_match_the_same_canonical_scratch(self):
+        scratch = "/mnt/vector-agent-sandbox/tool-scratch"
+        for environment in (
+            {"PWD": scratch},
+            {"PWD": scratch, "PATH": "/usr/bin:/bin", "HOME": scratch, "LC_ALL": "C", "LC_CTYPE": "C.UTF-8"},
+            {"PWD": scratch, "PATH": "existing-value-contract", "HOME": "existing-value-contract"},
+        ):
+            original = copy.deepcopy(environment)
+            with self.subTest(environment=environment):
+                self.assertIsNone(NATIVE["keeper_environment"](environment, scratch, scratch))
+                self.assertEqual(environment, original)
+
+    def test_missing_wrong_or_aliased_pwd_cwd_and_unknown_names_are_refused(self):
+        scratch = "/mnt/vector-agent-sandbox/tool-scratch"
+        cases = (
+            ({}, scratch, scratch),
+            ({"PWD": ""}, scratch, scratch),
+            ({"PWD": "/tmp"}, scratch, scratch),
+            ({"PWD": scratch + "/"}, scratch, scratch),
+            ({"PWD": scratch}, scratch, None),
+            ({"PWD": scratch}, scratch, "/tmp"),
+            ({"PWD": scratch}, scratch, scratch + "/"),
+            ({"PWD": scratch + "/"}, scratch + "/", scratch + "/"),
+            ({"PWD": "relative"}, "relative", "relative"),
+        )
+        for environment, target, cwd in cases:
+            with self.subTest(environment=environment, scratch=target, cwd=cwd), self.assertRaises(RuntimeError):
+                NATIVE["keeper_environment"](environment, target, cwd)
+        for name in ("LD_PRELOAD", "GITHUB_TOKEN", "VECTOR_PRIVATE", "UNKNOWN"):
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                NATIVE["keeper_environment"]({"PWD": scratch, name: "never-forward"}, scratch, scratch)
+
+
 class KeeperLogTests(unittest.TestCase):
     def test_only_exact_ordered_lf_markers_return_fixed_stages(self):
         prefix = b"VECTOR_NATIVE_KEEPER_STAGE "
@@ -529,7 +563,7 @@ class SourceStructureTests(unittest.TestCase):
         guard_expressions = (
             "require(os.getuid() == os.getgid() == 0 and os.getgroups() == [])",
             "assert_capabilities_dropped()",
-            "require(set(os.environ) <= {'PATH', 'HOME', 'LC_ALL', 'LC_CTYPE'})",
+            "keeper_environment(dict(os.environ), scratch, os.getcwd())",
         )
         for index, expression in enumerate(guard_expressions):
             guard = keeper.body[index * 2 + 1]
