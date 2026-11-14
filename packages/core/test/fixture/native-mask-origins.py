@@ -27,7 +27,7 @@ PURE = {
     "filesystem", "json_digest", "digest_value", "mask_records", "mount_field", "mount_path", "parse_mount_table",
     "beneath", "hidden", "refuse_mask_aliases", "require_private_mounts", "require_known_mask_origins",
     "require_capture_closure", "keeper_log_stage", "keeper_environment", "keeper_log_classification",
-    "keeper_info_progress", "keeper_failure_stage",
+    "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage",
 }
 CONSTANTS = {"HOST_TEMP", "MASKS"}
 SELECTED = [node for node in TREE.body if
@@ -537,6 +537,31 @@ class KeeperDiagnosticTests(unittest.TestCase):
             with self.subTest(data=data):
                 self.assertEqual(classify(data), "invalid")
 
+    def test_destination_diagnostics_name_only_exact_fixed_targets(self):
+        targets = (
+            ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
+            ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+        )
+        targets += tuple((kind, container + suffix)
+                         for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox",
+                                           b"/home/vector-agent-sandbox")
+                         for kind, suffix in (("checkout", b"/checkout"), ("scratch", b"/tool-scratch")))
+        for prefix in (b"bwrap: Can't mkdir ", b"bwrap: Can't mkdir parents for "):
+            for kind, target in targets:
+                with self.subTest(prefix=prefix, kind=kind, target=target):
+                    data = prefix + target + b": Permission denied synthetic-private-token\xff\n"
+                    result = NATIVE["keeper_log_classification"](data)
+                    self.assertEqual(result, "bwrap-destination-" + kind)
+                    self.assertNotIn("/", result)
+                    self.assertNotIn("private", result)
+                    self.assertEqual(NATIVE["keeper_log_classification"](
+                        prefix + target + b"-private: Permission denied\n"), "bwrap-destination")
+                    self.assertEqual(NATIVE["keeper_log_classification"](
+                        prefix + target + b"/private: Permission denied\n"), "bwrap-destination")
+        self.assertEqual(NATIVE["keeper_destination_stage"](b"/owner/private"), "bwrap-destination")
+        self.assertEqual(NATIVE["keeper_destination_stage"]("private"), "bwrap-destination")
+        self.assertEqual(NATIVE["keeper_destination_stage"](b"x" * 65537), "bwrap-destination")
+
     def test_info_progress_accepts_only_bounded_child_creation_with_known_namespace_ids(self):
         progress = NATIVE["keeper_info_progress"]
         self.assertEqual(progress(b""), "empty")
@@ -578,6 +603,10 @@ class KeeperDiagnosticTests(unittest.TestCase):
             "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
             "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
             "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
+            "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
+            "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
+            "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
+            "bwrap-destination-scratch",
             "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec",
         )
         stages = []
@@ -587,8 +616,8 @@ class KeeperDiagnosticTests(unittest.TestCase):
                     stage = NATIVE["keeper_failure_stage"](outcome, log, info)
                     self.assertEqual(stage, f"prepare-keeper-{outcome}-log-{log}-info-{info}")
                     stages.append(stage)
-        self.assertEqual(len(stages), 162)
-        self.assertEqual(len(set(stages)), 162)
+        self.assertEqual(len(stages), 222)
+        self.assertEqual(len(set(stages)), 222)
         for values in (
             ("exit", "empty", "empty"), ("child-exit-log-empty", "empty", "empty"),
             ("timeout", "phase-network", "empty"), ("child-exit", "bwrap-private", "empty"),
@@ -760,7 +789,7 @@ class SourceStructureTests(unittest.TestCase):
         forbidden = {"capture_mount_namespace", "supported_mask_sources", "validate_source_view", "validate_masks",
                      "mount_table", "parse_mount_table", "refuse_mask_aliases", "require_known_mask_origins",
                      "require_capture_closure", "wait_keeper", "read_keeper_diagnostic", "keeper_log_classification",
-                     "keeper_info_progress", "keeper_failure_stage"}
+                     "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage"}
         for function in ("cleanup", "read_state", "mask_records"):
             for name in forbidden:
                 self.assertFalse(calls(function, name), (function, name))

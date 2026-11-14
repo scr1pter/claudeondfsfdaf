@@ -206,6 +206,9 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
       "bwrap-root-tmpfs",
         "bwrap-source",
         "bwrap-destination",
+        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].map(
+          (target) => `bwrap-destination-${target}`,
+        ),
         "bwrap-bind",
         "bwrap-remount",
         "bwrap-proc",
@@ -217,8 +220,8 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
       ["empty", "child-created", "invalid"].map((info) => `prepare-keeper-${outcome}-log-${log}-info-${info}`),
     ),
   )
-  expect(stages).toHaveLength(162)
-  expect(new Set(stages).size).toBe(162)
+  expect(stages).toHaveLength(222)
+  expect(new Set(stages).size).toBe(222)
   for (const stage of stages) {
     const timeout = stage.startsWith("prepare-keeper-timeout-")
     const entry: GithubIsolation.FailureRecord = {

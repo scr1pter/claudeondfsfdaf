@@ -63,3 +63,20 @@ Both stale Python expectations are corrected; no native prepare ran in that
 dispatch. A local request to execute only its pure diagnostic class was refused
 by the fixture's CI-only gate before tests or native initialization. That gate
 was left intact; the correction awaits a fresh bounded hosted dispatch.
+
+The corrected single-cell run
+[43620478356](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43620478356)
+at `c12c144e` passed all 30 pure-policy cases and both installed Node/Bun metadata
+preflights. Actual prepare then refused with
+`prepare-keeper-child-exit-log-bwrap-destination-info-child-created` (exit 1).
+Cleanup proof remained refused. This establishes a bubblewrap destination
+construction error, not the target responsible or a successful keeper launch.
+
+The next diagnostic source narrows that category only to the ABI's ten fixed
+destination kinds (mask roots, checkout/scratch and device/proc roots). Exact
+known targets can yield a closed label; other paths retain the generic category
+and never appear in output. The 37-log/222-stage product is checked consistently
+in the Python source/fixture and native TypeScript decoder. AST parsing and
+static vocabulary agreement pass; the new target-classification test and actual
+prepare still require the next bounded hosted cell. Runtime construction and
+cleanup behavior remain unchanged.

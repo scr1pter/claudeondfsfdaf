@@ -913,6 +913,25 @@ def keeper_log_stage(data):
     return markers[-1].decode("ascii") if markers else None
 
 
+def keeper_destination_stage(data):
+    # Only fixed ABI destinations are named. No caller path or error prose leaves the private log.
+    if type(data) is not bytes or len(data) > 65536:
+        return "bwrap-destination"
+    prefixes = (b"bwrap: Can't mkdir ", b"bwrap: Can't mkdir parents for ")
+    targets = (
+        ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
+        ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+    )
+    for kind, target in targets:
+        if any(data.startswith(prefix + target + b": ") for prefix in prefixes):
+            return "bwrap-destination-" + kind
+    for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox", b"/home/vector-agent-sandbox"):
+        for kind, suffix in (("checkout", b"/checkout"), ("scratch", b"/tool-scratch")):
+            if any(data.startswith(prefix + container + suffix + b": ") for prefix in prefixes):
+                return "bwrap-destination-" + kind
+    return "bwrap-destination"
+
+
 def keeper_log_classification(data):
     if type(data) is not bytes or len(data) > 65536:
         return "invalid"
@@ -955,7 +974,7 @@ def keeper_log_classification(data):
                 continue
             if not line.endswith(b"\n") or fatal is not None:
                 return "invalid"
-            fatal = category
+            fatal = keeper_destination_stage(body) if category == "bwrap-destination" else category
     return fatal if fatal is not None else "phase-" + phase if phase is not None else "no-marker"
 
 
@@ -1015,7 +1034,11 @@ def keeper_failure_stage(outcome, log, info):
                     "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
                     "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
                     "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
-                    "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec") and
+                    "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
+                    "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
+                    "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
+                    "bwrap-destination-scratch", "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot",
+                    "bwrap-exec") and
             info in ("empty", "child-created", "invalid"))
     return "prepare-keeper-" + outcome + "-log-" + log + "-info-" + info
 

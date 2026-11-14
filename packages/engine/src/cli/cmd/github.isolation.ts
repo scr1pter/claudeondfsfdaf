@@ -171,6 +171,9 @@ const FAILURE_STAGES = {
         "bwrap-root-tmpfs",
         "bwrap-source",
         "bwrap-destination",
+        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].map(
+          (target) => `bwrap-destination-${target}`,
+        ),
         "bwrap-bind",
         "bwrap-remount",
         "bwrap-proc",
