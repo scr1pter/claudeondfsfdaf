@@ -15,6 +15,9 @@ on:
       - packages/core/src/session/store.ts
       - packages/core/src/session/runner/index.ts
       - packages/core/test/session/memory-fence*.test.ts
+      - packages/engine/src/session/llm.ts
+      - packages/engine/test/session/llm-memory-fence.test.ts
+      - packages/engine/test/session/llm.test.ts
       - packages/core/src/database/migration/**
       - packages/core/src/database/migration.gen.ts
       - packages/core/src/database/schema.gen.ts
@@ -77,3 +80,9 @@ jobs:
       - name: Check Engine consumers
         working-directory: packages/engine
         run: bun typecheck
+      - name: Check deferred model history refusal with loopback vendors
+        working-directory: packages/engine
+        run: bun test test/session/llm-memory-fence.test.ts --timeout 60000
+      - name: Check ordinary model wire and usage compatibility
+        working-directory: packages/engine
+        run: bun test test/session/llm.test.ts --timeout 60000
