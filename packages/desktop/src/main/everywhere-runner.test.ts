@@ -89,6 +89,110 @@ test("an editing job uses the lower computer cap and a runner-owned skipped-CI p
   expect((await f.ledger.inspect()).jobs).toHaveLength(0)
 })
 
+test("a lost settle acknowledgement retries the identical published result without another push", async () => {
+  const f = fixture()
+  const attempts: Settle[] = []
+  await createEverywhereRunner({ ...f.deps, jobs: { ...f.deps.jobs, settle: async (result) => {
+    attempts.push(structuredClone(result))
+    if (attempts.length < 3) throw new Error("Fixture acknowledgement lost")
+  } } }).offer("fixture-offer")
+  expect(attempts).toHaveLength(3)
+  expect(attempts.every((result) => JSON.stringify(result) === JSON.stringify(attempts[0]))).toBe(true)
+  expect(attempts[0]).toMatchObject({ outcome: "changes", headSha: "c".repeat(40), prUrl: "https://github.com/acme/app/pull/4" })
+  expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
+  expect((await f.ledger.inspect()).pending).toEqual([])
+})
+
+test("failed publication delivery is durable, releases capacity and recovers only the same changes result", async () => {
+  const f = fixture()
+  const attempts: Settle[] = []
+  const runner = createEverywhereRunner({ ...f.deps, jobs: { ...f.deps.jobs, settle: async (result) => {
+    attempts.push(structuredClone(result))
+    throw new Error("Fixture service unavailable")
+  } } })
+  expect(await runner.offer("fixture-offer")).toBe(true)
+  const state = await f.ledger.inspect()
+  expect(attempts).toHaveLength(3)
+  expect(state.jobs).toEqual([])
+  expect(state.pending).toEqual([attempts[0]!])
+  expect(await runner.offer("same-job-must-not-restart")).toBe(false)
+  const created = f.calls.filter((call) => call.kind === "create").length
+  await createEverywhereRunner(f.deps).recover()
+  expect(f.results).toEqual([attempts[0]!])
+  expect(f.results[0]?.outcome).toBe("changes")
+  expect(f.calls.filter((call) => call.kind === "create")).toHaveLength(created)
+  expect((await f.ledger.inspect()).pending).toEqual([])
+})
+
+test("deadline expiry during an admitted push cannot abort the publishing git signal or replace its result", async () => {
+  const f = fixture()
+  const signals: AbortSignal[] = []
+  f.git.push = async () => {
+    f.calls.push({ kind: "push" })
+    await f.tick(5 * 60_000)
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+    return true
+  }
+  await createEverywhereRunner({ ...f.deps, git: (_, __, signal) => { signals.push(signal); return f.git } }).offer("fixture-offer")
+  expect(signals).toHaveLength(2)
+  expect(f.results).toHaveLength(1)
+  expect(f.results[0]?.outcome).toBe("changes")
+})
+
+test("a deadline reached while journaling still prevents admission of the remote push", async () => {
+  const f = fixture()
+  await createEverywhereRunner({ ...f.deps, ledger: { ...f.ledger, remember: async (result) => {
+    await f.ledger.remember(result)
+    await f.tick(5 * 60_000)
+  } } }).offer("fixture-offer")
+  expect(f.calls.some((call) => call.kind === "push")).toBe(false)
+  expect(f.results[0]?.outcome).toBe("held")
+  expect((await f.ledger.inspect()).pending).toEqual([])
+})
+
+test("an ambiguous push failure reports uncertainty and never claims no changes were published", async () => {
+  const f = fixture()
+  f.git.push = async () => { throw new Error("Fixture remote accepted then disconnected") }
+  await createEverywhereRunner(f.deps).offer("fixture-offer")
+  expect(f.results).toHaveLength(1)
+  expect(f.results[0]).toMatchObject({ outcome: "held", headSha: "c".repeat(40) })
+  expect(f.results[0]?.summary).toContain("Publication was not confirmed")
+  expect(f.results[0]?.summary).not.toContain("without publishing")
+  expect(f.calls.some((call) => call.kind === "open-pr")).toBe(false)
+})
+
+test("publication is refused when its pre-push receipt cannot be persisted", async () => {
+  const f = fixture()
+  await createEverywhereRunner({ ...f.deps, ledger: { ...f.ledger, remember: async () => { throw new Error("Fixture disk unavailable") } } }).offer("fixture-offer")
+  expect(f.calls.some((call) => call.kind === "push")).toBe(false)
+  expect(f.results[0]?.outcome).toBe("failed")
+})
+
+test("a post-push journal error still delivers only the confirmed changes result", async () => {
+  const f = fixture()
+  let writes = 0
+  await createEverywhereRunner({ ...f.deps, ledger: { ...f.ledger, remember: async (result) => {
+    if (++writes > 1) throw new Error("Fixture disk failed after push")
+    await f.ledger.remember(result)
+  } } }).offer("fixture-offer")
+  expect(f.results).toHaveLength(1)
+  expect(f.results[0]?.outcome).toBe("changes")
+  expect(f.results[0]?.headSha).toBe("c".repeat(40))
+})
+
+test("a release acknowledgement failure cannot leave an in-memory active slot stuck", async () => {
+  const f = fixture()
+  let releases = 0
+  const runner = createEverywhereRunner({ ...f.deps, ledger: { ...f.ledger, release: async (jid) => {
+    await f.ledger.release(jid)
+    if (++releases === 1) throw new Error("Fixture release acknowledgement lost")
+  } } })
+  expect(await runner.offer("fixture-offer")).toBe(true)
+  expect(await runner.offer("fixture-retry")).toBe(true)
+  expect(f.calls.filter((call) => call.kind === "claim")).toHaveLength(2)
+})
+
 test("unattended rules deny shell, terminals, connect and unknown tools even with user allow", () => {
   const rules = unattendedRules([{ permission: "*", pattern: "*", action: "allow" }])
   expect(rules[0]).toEqual({ permission: "*", pattern: "*", action: "deny" })

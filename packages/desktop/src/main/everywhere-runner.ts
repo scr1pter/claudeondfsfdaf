@@ -115,6 +115,20 @@ export function createEverywhereRunner(deps: RunnerDeps) {
   const now = deps.now ?? Date.now
   const active = new Map<string, AbortController>()
 
+  async function deliver(result: Settle, journaled = false) {
+    // JobsClient has a ten-second request bound. An acknowledgement loss must replay this
+    // exact result, never substitute a contradictory terminal outcome.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await deps.jobs.settle(result)
+        if (journaled) await deps.ledger.acknowledge(result).catch(() => deps.log?.("Vector everywhere could not clear an acknowledged publication receipt."))
+        return true
+      } catch { /* The same lease and payload are safe to retry. */ }
+    }
+    deps.log?.("Vector everywhere could not acknowledge a job result.")
+    return false
+  }
+
   async function run(jid: string, settings: RunnerSettings, controller: AbortController) {
     let job: EverywhereJob | undefined
     let session: string | undefined
@@ -122,6 +136,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
     let stopTimer: () => void = () => undefined
     let outcome: Outcome = "failed"
     let settled = false
+    let publication: Settle | undefined
     const needs = new Set<string>()
     const abort = async (reason: Outcome) => {
       outcome = reason
@@ -269,12 +284,37 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         const current = await deps.settings()
         const mapped = current.projects.some((item) => item.directory === project.directory && item.repository.toLowerCase() === project.repository.toLowerCase())
         if (!headSha || !settings.push || !current.enabled || !current.push || !current.modelAllowed || !mapped || current.localMode || job.repository.shared || now() >= deadline || controller.signal.aborted || !await report("pushing", true) || !await deps.privateRepository(job).catch(() => false)) outcome = "held"
-        else if (await git.push(snapshot, placed.directory, branch)) {
-          const prUrl = await deps.openPr({ job: { ...job, task }, branch, base: project.base, summary, held: staged.held.length }).catch(() => undefined)
-          await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "changes", summary, branch, headSha, files: staged.files, checks: "skipped", ...(prUrl ? { prUrl } : {}) })
-          settled = true
-          return
-        } else outcome = "held"
+        else {
+          // Persist before crossing the remote side-effect boundary. A process crash or
+          // ambiguous transport failure can then never recover as "nothing published".
+          const uncertain: Settle = { jid, lease: job.lease.id, outcome: "held", summary: "Publication was not confirmed. Check the remote branch before retrying this task.", branch, headSha, files: staged.files, checks: "skipped" }
+          await deps.ledger.remember(uncertain)
+          publication = uncertain
+          if (controller.signal.aborted || now() >= deadline) {
+            await deps.ledger.acknowledge(uncertain)
+            publication = undefined
+            outcome = "held"
+          } else {
+            // The job's deadline may stop generation, but must not interrupt a push
+            // already admitted. The git executor retains its own 60-second bound.
+            const publishingGit = deps.git(project.directory, project.repository, new AbortController().signal)
+            if (!await publishingGit.push(snapshot, placed.directory, branch)) {
+              await deps.ledger.acknowledge(uncertain)
+              publication = undefined
+              outcome = "held"
+            } else {
+              publication = { jid, lease: job.lease.id, outcome: "changes", summary, branch, headSha, files: staged.files, checks: "skipped" }
+              await deps.ledger.remember(publication)
+              const prUrl = await deps.openPr({ job: { ...job, task }, branch, base: project.base, summary, held: staged.held.length }).catch(() => undefined)
+              if (prUrl) {
+                publication = { ...publication, prUrl }
+                await deps.ledger.remember(publication)
+              }
+              settled = await deliver(publication, true)
+              return
+            }
+          }
+        }
       }
       await deps.jobs.settle({ jid, lease: job.lease.id, outcome, summary, branch, checks: "skipped" })
       settled = true
@@ -283,13 +323,17 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       if (controller.signal.aborted && outcome === "failed") outcome = "cancelled"
       controller.abort()
       if (session && engine) await engine.abort(session).catch(() => undefined)
-      if (job && !settled) await deps.jobs.settle({ jid, lease: job.lease.id, outcome, summary: "The unattended job ended without publishing changes." }).catch(() => undefined)
+      if (job && !settled) {
+        if (publication) settled = await deliver(publication, true)
+        else await deliver({ jid, lease: job.lease.id, outcome, summary: "The unattended job ended without publishing changes." })
+      }
     } finally {
       stopTimer()
       controller.abort()
       if (session && engine) await engine.abort(session).catch(() => undefined)
-      await deps.ledger.release(jid)
-      active.delete(jid)
+      try { await deps.ledger.release(jid) }
+      catch { deps.log?.("Vector everywhere could not release a local job reservation.") }
+      finally { active.delete(jid) }
     }
   }
 
@@ -308,9 +352,14 @@ export function createEverywhereRunner(deps: RunnerDeps) {
     },
     stop() { for (const controller of active.values()) controller.abort() },
     async recover() {
-      for (const job of (await deps.ledger.inspect()).jobs) {
-        if (job.lease) await deps.jobs.settle({ jid: job.jid, lease: job.lease, outcome: "interrupted", summary: "Vector restarted during this unattended job. No continuation was started." }).catch(() => undefined)
-        await deps.ledger.release(job.jid)
+      const state = await deps.ledger.inspect()
+      for (const result of state.pending) await deliver(result, true)
+      for (const job of state.jobs) {
+        try {
+          if (job.lease && !state.pending.some((result) => result.jid === job.jid)) await deliver({ jid: job.jid, lease: job.lease, outcome: "interrupted", summary: "Vector restarted during this unattended job. No continuation was started." })
+        } finally {
+          await deps.ledger.release(job.jid).catch(() => deps.log?.("Vector everywhere could not release a local job reservation."))
+        }
       }
     },
   }

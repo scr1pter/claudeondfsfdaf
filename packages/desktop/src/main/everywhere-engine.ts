@@ -35,6 +35,23 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+async function responseText(response: Response, limit: number) {
+  if (!response.body) return ""
+  const reader = response.body.getReader()
+  const buffer = new Uint8Array(limit)
+  let bytes = 0
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) break
+      if (bytes + next.value.byteLength > limit) throw new Error("The local engine response is too large")
+      buffer.set(next.value, bytes)
+      bytes += next.value.byteLength
+    }
+    return new TextDecoder().decode(buffer.subarray(0, bytes))
+  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock() }
+}
+
 export function createEverywhereEngine(input: {
   readonly url: string
   readonly directory: string
@@ -55,8 +72,7 @@ export function createEverywhereEngine(input: {
       headers: { authorization: input.authorization, ...(body === undefined ? {} : { "content-type": "application/json" }), ...(guest ? { "x-vector-guest-request": "1" } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body) })
     if (!response.ok) throw new Error("The local Everywhere engine request failed")
-    const text = await response.text()
-    if (text.length > 2 * 1024 * 1024) throw new Error("The local engine response is too large")
+    const text = await responseText(response, 2 * 1024 * 1024)
     return text ? JSON.parse(text) : undefined
   }
   const id = (value: string) => {
@@ -86,16 +102,23 @@ export function createEverywhereEngine(input: {
         while (true) {
           const next = await reader.read()
           if (next.done) return
-          pending = (pending + decoder.decode(next.value, { stream: true })).replace(/\r\n/g, "\n")
-          if (pending.length > 1024 * 1024) throw new Error("An engine event is too large")
-          let end: number
-          while ((end = pending.indexOf("\n\n")) >= 0) {
-            const frame = pending.slice(0, end)
-            pending = pending.slice(end + 2)
-            const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n")
-            if (!data) continue
-            const value: unknown = JSON.parse(data)
-            if (record(value) && typeof value.type === "string" && record(value.properties)) yield { type: value.type, properties: value.properties }
+          // Network chunks can contain many complete events. Bound one frame, not the
+          // aggregate chunk, and feed large chunks incrementally to bound retained text.
+          for (let offset = 0; offset < next.value.byteLength; offset += 32 * 1024) {
+            pending = (pending + decoder.decode(next.value.subarray(offset, offset + 32 * 1024), { stream: true })).replace(/\r\n/g, "\n")
+            let end: number
+            while ((end = pending.indexOf("\n\n")) >= 0) {
+              if (end > 8 * 1024 * 1024) throw new Error("An engine event is too large")
+              const frame = pending.slice(0, end)
+              pending = pending.slice(end + 2)
+              const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n")
+              if (!data) continue
+              const value: unknown = JSON.parse(data)
+              if (record(value) && typeof value.type === "string" && record(value.properties)) yield { type: value.type, properties: value.properties }
+            }
+            // Patch events can repeat a diff in multiple fields. They are larger than
+            // ordinary status events, but still have a finite per-frame ceiling.
+            if (pending.length > 8 * 1024 * 1024) throw new Error("An engine event is too large")
           }
         }
       } finally { await reader.cancel().catch(() => undefined); reader.releaseLock() }

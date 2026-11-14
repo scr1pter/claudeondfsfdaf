@@ -47,3 +47,64 @@ test("engine endpoints cannot redirect the owner authorization to an outside hos
   for (const url of ["https://127.0.0.1", "http://example.com", "http://user:pass@127.0.0.1", "http://127.0.0.1?remote=1"])
     expect(() => createEverywhereEngine({ url, directory: "/fixture", authorization: "fixture" })).toThrow()
 })
+
+function streamedEngine(chunks: readonly Uint8Array[]) {
+  let reads = 0
+  let cancelled = false
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks[reads++]
+      if (chunk) controller.enqueue(chunk)
+      else controller.close()
+    },
+    cancel() { cancelled = true },
+  }, { highWaterMark: 0 })
+  const fetcher = Object.assign(async () => new Response(body), { preconnect: () => undefined }) as typeof fetch
+  const engine = createEverywhereEngine({ url: "http://127.0.0.1", directory: "/fixture", authorization: "fixture", fetcher })
+  return { engine, reads: () => reads, cancelled: () => cancelled }
+}
+
+test("REST response size is bounded in bytes while streaming and overflow cancels unread content", async () => {
+  const encoded = new TextEncoder().encode(JSON.stringify([{ info: { role: "assistant" }, parts: [{ type: "text", text: "€".repeat(750_000) }] }]))
+  const f = streamedEngine([encoded.subarray(0, 1024 * 1024), encoded.subarray(1024 * 1024), new Uint8Array(1024 * 1024)])
+  await expect(f.engine.summary("ses_fixture")).rejects.toThrow("response is too large")
+  expect(f.reads()).toBe(2)
+  expect(f.cancelled()).toBe(true)
+})
+
+test("one large network chunk containing many bounded events is decoded frame by frame", async () => {
+  const frame = `data: ${JSON.stringify({ type: "fixture.event", properties: { text: "x".repeat(3000) } })}\r\n\r\n`
+  const f = streamedEngine([new TextEncoder().encode(frame.repeat(500))])
+  let count = 0
+  for await (const event of f.engine.events(new AbortController().signal, () => undefined)) {
+    expect(event.type).toBe("fixture.event")
+    count++
+  }
+  expect(count).toBe(500)
+})
+
+test("a patch event larger than the old aggregate cap still allows the final idle event", async () => {
+  const patch = { type: "message.part.updated", properties: { part: { sessionID: "ses_fixture", type: "tool", tool: "apply_patch", state: { input: "x".repeat(1500_000), output: "x".repeat(1500_000) } } } }
+  const idle = { type: "session.status", properties: { sessionID: "ses_fixture", status: { type: "idle" } } }
+  const f = streamedEngine([new TextEncoder().encode(`data: ${JSON.stringify(patch)}\n\ndata: ${JSON.stringify(idle)}\n\n`)])
+  const types: string[] = []
+  for await (const event of f.engine.events(new AbortController().signal, () => undefined)) types.push(event.type)
+  expect(types).toEqual(["message.part.updated", "session.status"])
+})
+
+test("an oversized individual event fails closed and cancels the stream before later frames", async () => {
+  const frame = new TextEncoder().encode(`data: ${JSON.stringify({ type: "permission.asked", properties: { id: "per_fixture", payload: "x".repeat(8 * 1024 * 1024) } })}\n\n`)
+  const f = streamedEngine([frame, new TextEncoder().encode('data: {"type":"session.status","properties":{}}\n\n')])
+  const consume = async () => { for await (const _ of f.engine.events(new AbortController().signal, () => undefined)) throw new Error("An oversized authority event was admitted") }
+  await expect(consume()).rejects.toThrow("event is too large")
+  expect(f.reads()).toBe(1)
+  expect(f.cancelled()).toBe(true)
+})
+
+test("event decoding preserves UTF-8 and CRLF delimiters across network chunk boundaries", async () => {
+  const frame = new TextEncoder().encode('data: {"type":"fixture.event","properties":{"text":"€"}}\r\n\r\n')
+  const f = streamedEngine(Array.from(frame, (value) => new Uint8Array([value])))
+  const events: unknown[] = []
+  for await (const event of f.engine.events(new AbortController().signal, () => undefined)) events.push(event)
+  expect(events).toEqual([{ type: "fixture.event", properties: { text: "€" } }])
+})

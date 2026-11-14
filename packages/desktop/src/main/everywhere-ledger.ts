@@ -1,11 +1,11 @@
-import { JOB_ID_PATTERN, RANDOM_ID_PATTERN } from "@vectordevai/schema/everywhere"
+import { JOB_ID_PATTERN, RANDOM_ID_PATTERN, decodeSettle, type Settle } from "@vectordevai/schema/everywhere"
 import { constants } from "node:fs"
 import { mkdir, open, rename, rm } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import path from "node:path"
 
 export type InFlight = { readonly jid: string; readonly startedAt: number; readonly lease?: string; readonly sessionID?: string }
-export type RunnerLedger = { readonly day: string; readonly count: number; readonly jobs: readonly InFlight[]; readonly offers: Readonly<Record<string, number>> }
+export type RunnerLedger = { readonly day: string; readonly count: number; readonly jobs: readonly InFlight[]; readonly offers: Readonly<Record<string, number>>; readonly pending?: readonly Settle[] }
 
 /** Storage is outside every job worktree. VE-21 supplies the private atomic file adapter. */
 export function createLedger(input: {
@@ -19,23 +19,24 @@ export function createLedger(input: {
     tail = result.then(() => undefined, () => undefined)
     return result
   }
-  async function load(): Promise<RunnerLedger> {
+  async function load(): Promise<RunnerLedger & { readonly pending: readonly Settle[] }> {
     const day = new Date(input.now()).toISOString().slice(0, 10)
     const raw = await input.read()
-    if (raw === undefined) return { day, count: 0, jobs: [], offers: {} }
+    if (raw === undefined) return { day, count: 0, jobs: [], offers: {}, pending: [] }
     if (typeof raw !== "object" || raw === null) throw new Error("Everywhere ledger is unavailable")
     const state = raw as Partial<RunnerLedger>
     if (typeof state.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(state.day) || !Number.isSafeInteger(state.count) || state.count! < 0 || !Array.isArray(state.jobs) || typeof state.offers !== "object" || state.offers === null) throw new Error("Everywhere ledger is invalid")
     if (state.jobs.some((job) => !JOB_ID_PATTERN.test(job.jid) || !Number.isSafeInteger(job.startedAt) || job.startedAt < 0 || (job.lease !== undefined && !RANDOM_ID_PATTERN.test(job.lease)) || (job.sessionID !== undefined && !/^ses[A-Za-z0-9_]+$/.test(job.sessionID)))) throw new Error("Everywhere ledger is invalid")
+    if (state.pending !== undefined && (!Array.isArray(state.pending) || state.pending.length > 32 || state.pending.some((result) => !decodeSettle(result).ok) || new Set(state.pending.map((result) => result.jid)).size !== state.pending.length)) throw new Error("Everywhere ledger is invalid")
     const offers = Object.fromEntries(Object.entries(state.offers).filter(([id, expires]) => RANDOM_ID_PATTERN.test(id) && Number.isSafeInteger(expires) && expires > input.now()))
-    return { day, count: state.day === day ? state.count! : 0, jobs: state.jobs, offers }
+    return { day, count: state.day === day ? state.count! : 0, jobs: state.jobs, offers, pending: state.pending ?? [] }
   }
   return {
     inspect: () => serial(load),
     reserve: (jid: string, caps: { atOnce: number; perDay: number }) => serial(async () => {
       if (!JOB_ID_PATTERN.test(jid)) return false
       const state = await load()
-      if (!Number.isInteger(caps.atOnce) || caps.atOnce < 1 || !Number.isInteger(caps.perDay) || caps.perDay < 1 || state.jobs.length >= caps.atOnce || state.count >= caps.perDay || state.jobs.some((job) => job.jid === jid)) return false
+      if (!Number.isInteger(caps.atOnce) || caps.atOnce < 1 || !Number.isInteger(caps.perDay) || caps.perDay < 1 || state.jobs.length >= caps.atOnce || state.count >= caps.perDay || state.jobs.some((job) => job.jid === jid) || state.pending.length >= 32 || state.pending.some((result) => result.jid === jid)) return false
       await input.write({ ...state, count: state.count + 1, jobs: [...state.jobs, { jid, startedAt: input.now() }] })
       return true
     }),
@@ -47,6 +48,18 @@ export function createLedger(input: {
     release: (jid: string) => serial(async () => {
       const state = await load()
       await input.write({ ...state, jobs: state.jobs.filter((job) => job.jid !== jid) })
+    }),
+    remember: (result: Settle) => serial(async () => {
+      const checked = decodeSettle(result)
+      if (!checked.ok) throw new Error("Invalid Everywhere result")
+      const state = await load()
+      const previous = state.pending.find((item) => item.jid === result.jid)
+      if (!state.jobs.some((job) => job.jid === result.jid && job.lease === result.lease) || (previous && previous.lease !== result.lease) || (!previous && state.pending.length >= 32)) throw new Error("Everywhere result has no reservation")
+      await input.write({ ...state, pending: [...state.pending.filter((item) => item.jid !== result.jid), checked.value] })
+    }),
+    acknowledge: (result: Settle) => serial(async () => {
+      const state = await load()
+      await input.write({ ...state, pending: state.pending.filter((item) => item.jid !== result.jid || item.lease !== result.lease) })
     }),
     useOnce: (id: string, expiresAt: number) => serial(async () => {
       const state = await load()
