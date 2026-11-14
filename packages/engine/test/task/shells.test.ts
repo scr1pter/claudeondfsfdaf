@@ -10,6 +10,7 @@ import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -494,6 +495,10 @@ describe("background shell commands", () => {
       ).toBe(ShellJobs.SUBAGENT_REFUSAL)
       expect(ShellJobs.refusal({ subagent: false, enabled: false })).toBe(ShellJobs.DISABLED_REFUSAL)
       expect(ShellJobs.refusal({ subagent: false, enabled: true })).toBeUndefined()
+      // The Windows holder bypasses the shared launcher, so a hosted agent run refuses it before any row or slot.
+      expect(ShellJobs.isolationRefusal({ platform: "win32", required: true })).toBe(ProcessIsolation.REFUSAL)
+      expect(ShellJobs.isolationRefusal({ platform: "win32", required: false })).toBeUndefined()
+      expect(ShellJobs.isolationRefusal({ platform: "linux", required: true })).toBeUndefined()
 
       const tool = yield* (yield* ShellTool).init()
       const asked: string[] = []

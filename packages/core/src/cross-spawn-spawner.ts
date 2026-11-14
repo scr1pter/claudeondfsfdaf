@@ -292,16 +292,27 @@ export const make = Effect.gen(function* () {
   }
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
+    Effect.try({
+      // A refused isolation plan is a spawn error the caller can report, not a defect.
+      try: () =>
+        ProcessIsolation.launch(command.command, command.args, {
+          cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
+          shell: opts.shell,
+          env: opts.env,
+        }),
+      catch: (error) => toPlatformError("spawn", toError(error), command),
+    }).pipe(Effect.flatMap((isolated) => start(command, opts, isolated)))
+
+  const start = (
+    command: ChildProcess.StandardCommand,
+    opts: NodeChildProcess.SpawnOptions,
+    isolated: ReturnType<typeof ProcessIsolation.launch>,
+  ) =>
     Effect.callback<
       readonly [NodeChildProcess.ChildProcess, ExitSignal, ReturnType<typeof captureOutput>, OwnedProcess.Control?],
       PlatformError.PlatformError
     >((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const isolated = ProcessIsolation.launch(command.command, command.args, {
-        cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
-        shell: opts.shell,
-        env: opts.env,
-      })
       const proc = launch(isolated.file, isolated.args, { ...opts, shell: isolated.shell })
       // Bun resumes stdio at native exit, before a delayed Effect reader can attach.
       // Pipe immediately into bounded streams; retain backpressure until consumed.
@@ -331,10 +342,13 @@ export const make = Effect.gen(function* () {
         spawned = true
         resume(Effect.succeed([proc, signal, captured, owned]))
       })
-      return Effect.sync(() => {
-        proc.kill("SIGTERM")
-        captured.dispose()
-      })
+      // Interrupted before the spawn event: an owned command's whole group stops, as it would on release.
+      return owned
+        ? Effect.promise(owned.stop).pipe(Effect.asVoid, Effect.ensuring(Effect.sync(captured.dispose)))
+        : Effect.sync(() => {
+            proc.kill("SIGTERM")
+            captured.dispose()
+          })
     })
 
   const killGroup = (

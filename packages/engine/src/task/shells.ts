@@ -8,6 +8,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { OwnedProcess } from "@vectordevai/core/owned-process"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { TaskSize } from "@vectordevai/core/task-size"
 import { BackgroundJob } from "@/background/job"
@@ -86,6 +87,14 @@ export function timeoutRefusal(timeout: number | undefined) {
   if (!(timeout > 0)) return TIMEOUT_POSITIVE_REFUSAL
   if (timeout > MAX_TIMEOUT) return TIMEOUT_REFUSAL
   return undefined
+}
+
+/**
+ * Why a hosted GitHub agent may not start a background command on Windows: the holder spawns PowerShell itself and
+ * never reaches ProcessIsolation.launch, which refuses every hosted launch off Linux. Nothing when it may.
+ */
+export function isolationRefusal(input: { platform: NodeJS.Platform; required: boolean }) {
+  return input.platform === "win32" && input.required ? ProcessIsolation.REFUSAL : undefined
 }
 
 export type StartInput = {
@@ -449,7 +458,8 @@ const layer = Layer.effect(
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const refused =
         refusal({ subagent: session.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
-        timeoutRefusal(input.timeout)
+        timeoutRefusal(input.timeout) ??
+        isolationRefusal({ platform: process.platform, required: ProcessIsolation.required() })
       if (refused) return yield* Effect.die(new Error(refused))
       if (input.process._tag !== "StandardCommand")
         return yield* Effect.die(new Error("A background command must be one prepared shell process."))
