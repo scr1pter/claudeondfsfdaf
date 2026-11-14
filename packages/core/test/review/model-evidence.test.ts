@@ -47,6 +47,9 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // edits there. It joins here when the job first calls guardedTeamPatterns, as BrainCode joins with VS-25b wiring.
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
+  "packages/engine/src/connect/hub.ts",
+  "packages/engine/src/connect/adapters/vectorscope.ts",
+  "packages/core/src/connect/policy.ts",
   "packages/engine/src/review/run.ts",
   "packages/engine/src/review/read-authority.ts",
   "packages/engine/src/review/service.ts",
