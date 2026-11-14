@@ -15,9 +15,18 @@ enum class UserInputFailure {
   none, runtime_events, runtime_observations, runtime_timer, native_owner, native_generation,
   native_events, native_thread, native_class, native_window, native_routes_query, native_routes_existing,
   native_register, native_readback, native_ready_timeout, native_status, native_failed, native_wait,
-  native_route_lost, native_quit, service_start, service_closed, count
+  native_route_lost, native_quit, service_start, service_closed,
+  native_readback_query, native_readback_mouse_missing, native_readback_keyboard_missing,
+  native_readback_mouse_target, native_readback_keyboard_target, native_readback_devnotify_both,
+  native_readback_devnotify_mouse, native_readback_devnotify_keyboard, native_readback_mouse_flags,
+  native_readback_keyboard_flags, native_readback_closed, count
 };
 std::wstring_view user_input_failure_stage(UserInputFailure)noexcept;
+struct UserInputRouteReadback {
+  bool query_ok=false,closed=false,mouse_present=false,keyboard_present=false,mouse_target=false,keyboard_target=false;
+  DWORD mouse_flags=0,keyboard_flags=0;
+};
+UserInputFailure user_input_route_failure(const UserInputRouteReadback&)noexcept;
 struct UserInputSetupStatus {
   UserInputSetupState state=UserInputSetupState::needs_calibration;
   bool mouse=false,keyboard=false;

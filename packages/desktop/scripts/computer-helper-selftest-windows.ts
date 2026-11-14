@@ -278,6 +278,17 @@ export const WINDOWS_NATIVE_STAGES = [
   "input-listener-native-quit",
   "input-start-service",
   "input-listener-service-closed",
+  "input-readback-query",
+  "input-readback-mouse-missing",
+  "input-readback-keyboard-missing",
+  "input-readback-mouse-target",
+  "input-readback-keyboard-target",
+  "input-readback-devnotify-both",
+  "input-readback-devnotify-mouse",
+  "input-readback-devnotify-keyboard",
+  "input-readback-mouse-flags",
+  "input-readback-keyboard-flags",
+  "input-readback-closed",
 ] as const
 export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
 export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]

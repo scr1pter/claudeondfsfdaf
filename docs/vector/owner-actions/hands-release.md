@@ -38,6 +38,8 @@ Reset remains disabled until its helper-only, no-administrator behavior is verif
 
 Use a normal user session with real UAC enabled and Vector running without administrator rights.
 
+Before these checks, open **Settings › Vector Hands** and choose **Start calibration** under **Verify takeover detection**. Move the real mouse or touchpad pointer, then press and release the same **Shift** key. Require **Mouse delivery: Verified**, **Keyboard delivery: Verified**, and **Calibrated — listener healthy**; wait for any **Checking listener health…** message to finish. Verify that incomplete gestures, injected input or listener health alone cannot complete calibration. Listener health checks the current listener, input routes and context; it does not continuously prove hardware delivery. Calibration must leave a paused run paused: explicitly choose **Finish** to enable Hands during setup or **Resume** for an existing run. Repeat after a helper/listener restart and exercise readiness loss during a run; configurations that cannot calibrate stay unavailable.
+
 1. Exercise actual UAC secure desktop and an elevated app: both must hand off without capture/input. Also check a consent prompt configured on the ordinary desktop.
 2. Verify a non-default/inaccessible input desktop, locked session, changed user/logon context and capture denial stop action truthfully.
 3. Run actual pointer/Unicode/layout/drag/hold, Stop/takeover, helper crash and guardian recovery tests. Confirm synthetic input does not count as physical input and genuine hardware input revokes before further action.

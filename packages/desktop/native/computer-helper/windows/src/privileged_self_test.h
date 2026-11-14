@@ -21,7 +21,7 @@ inline constexpr std::array<std::wstring_view, 17> windows_privileged_checks{
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
   L"capture-isolated-window-worker", L"input-listener-health"};
-inline constexpr std::array<std::wstring_view, 188> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 199> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -81,7 +81,11 @@ inline constexpr std::array<std::wstring_view, 188> windows_privileged_stages{
   L"input-start-native-class", L"input-start-native-window", L"input-start-native-routes-query", L"input-start-native-routes-existing",
   L"input-start-native-register", L"input-start-native-readback", L"input-start-native-ready-timeout", L"input-start-native-status",
   L"input-listener-native-failed", L"input-listener-native-wait", L"input-listener-native-route-lost", L"input-listener-native-quit",
-  L"input-start-service", L"input-listener-service-closed"};
+  L"input-start-service", L"input-listener-service-closed",
+  L"input-readback-query", L"input-readback-mouse-missing", L"input-readback-keyboard-missing",
+  L"input-readback-mouse-target", L"input-readback-keyboard-target", L"input-readback-devnotify-both",
+  L"input-readback-devnotify-mouse", L"input-readback-devnotify-keyboard", L"input-readback-mouse-flags",
+  L"input-readback-keyboard-flags", L"input-readback-closed"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",

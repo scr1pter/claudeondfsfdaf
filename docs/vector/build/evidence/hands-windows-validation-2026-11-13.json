@@ -7,7 +7,7 @@
   "ownerApprovedW9": true,
   "w9": {
     "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
-    "nativeGroups": 50,
+    "nativeGroups": 51,
     "nativeExecution": "At 6f53a6ec native units passed; passive listener setup failed on two VMs. New closed startup diagnostics pending.",
     "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
     "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
@@ -86,7 +86,7 @@
     "selftestWrapper": {
       "passed": 48,
       "failed": 0,
-      "assertions": 1089
+      "assertions": 1111
     },
     "scope": "Serial provider-free named files and package typechecks only; no native or owner desktop execution."
   },
@@ -120,5 +120,16 @@
     "baselineStopArtifact": 14095032090,
     "baselineStopArchiveSha256": "b4633f89a04391260ee0928f45f05dda3745b3daf0508c53a352f594029fb454",
     "qualification": "Overall successful job does not erase failed diagnostic rows. Closed startup diagnostics pending; no startup budget or admission change."
+  },
+  "nativeD883Observation": {
+    "revision": "d883e2d78adfae311665e2215389ce876f8b964b",
+    "run": 43548977935,
+    "baselineJob": 132307024765,
+    "failure": "privileged.input-listener-health: input-start-native-readback / assertion_failed",
+    "isolated": "36 passed / 2 failed / 10 skipped",
+    "artifact": 14095777103,
+    "artifactBytes": 876,
+    "archiveSha256": "00d0f58d472e9a1fce9e419cc079ab0272fef05be68ef678d1f958c6f339d102",
+    "followup": "Closed route readback classification only; no acceptance or deadline change. 51 native pure groups pending."
   }
 }

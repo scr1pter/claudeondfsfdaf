@@ -46,6 +46,17 @@ export const prerender = true
     Windows may show a yellow capture border around an approved window while Vector reads it separately from other apps.
   </p>
   <p>
+    On Windows, open <strong>Settings › {Hands.NAME}</strong> and choose <strong>Start calibration</strong> under
+    <strong>Verify takeover detection</strong>. Move your real mouse or touchpad pointer, then press and release the
+    same <strong>Shift</strong> key. Wait until <strong>Mouse delivery</strong> and <strong>Keyboard delivery</strong>
+    both show <strong>Verified</strong> and the status reads <strong>Calibrated — listener healthy</strong>. If
+    <strong>Checking listener health…</strong> appears, wait for it to finish. Calibration checks observed delivery
+    without saving key history. Later checks verify listener health; they do not continuously prove hardware delivery.
+    Choose <strong>Finish</strong> to enable {Hands.NAME} during setup or <strong>Resume</strong> for a paused task.
+    Calibration never resumes a task automatically. If detection becomes unavailable, follow the setup instructions
+    before resuming.
+  </p>
+  <p>
     Ad-hoc macOS builds are labelled <strong>Preview</strong>. A helper update may cause macOS to ask for access again.
     Only use <strong>Reset and ask again</strong> if Vector offers it; the availability of that button depends on
     verification for your release. Changing an app's verified identity can also require a fresh app approval.

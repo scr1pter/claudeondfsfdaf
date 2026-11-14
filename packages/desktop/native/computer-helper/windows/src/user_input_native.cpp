@@ -285,12 +285,15 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
       catch (...) { fail(); }
     }
   }
-  bool own_routes(HWND hwnd) noexcept {
+  UserInputFailure route_failure(HWND hwnd,bool include_closed=false) noexcept {
+    UserInputRouteReadback value;value.closed=include_closed && closed.load();
+    if(value.closed)return user_input_route_failure(value);
     const auto actual=routes();
-    constexpr DWORD expected=RIDEV_INPUTSINK|RIDEV_DEVNOTIFY;
-    return actual && actual->have_mouse && actual->have_keyboard && actual->mouse==hwnd && actual->keyboard==hwnd &&
-      actual->mouse_flags==expected && actual->keyboard_flags==expected;
+    value.query_ok=actual.has_value();
+    if(actual){value.mouse_present=actual->have_mouse;value.keyboard_present=actual->have_keyboard;value.mouse_target=actual->mouse==hwnd;value.keyboard_target=actual->keyboard==hwnd;value.mouse_flags=actual->mouse_flags;value.keyboard_flags=actual->keyboard_flags;}
+    return user_input_route_failure(value);
   }
+  bool own_routes(HWND hwnd) noexcept {return route_failure(hwnd)==UserInputFailure::none;}
   void retire_routes(HWND hwnd) noexcept {
     const auto actual=routes();
     if (!actual) { registration_poisoned.store(true); return; }
@@ -328,7 +331,8 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
       did_register=RegisterRawInputDevices(devices,static_cast<UINT>(std::size(devices)),static_cast<UINT>(sizeof(RAWINPUTDEVICE)))!=FALSE;
       if (did_register) registered.store(true);
       if (!did_register) reject(UserInputFailure::native_register);
-      if (closed.load() || !own_routes(hwnd)) reject(UserInputFailure::native_readback);
+      const auto readback=route_failure(hwnd,true);
+      if (readback!=UserInputFailure::none) reject(readback);
       alive.store(true); SetEvent(ready_event.get());
       const HANDLE waits[]={stop_event.get(),health_event.get()};
       while (!closed.load()) {

@@ -90,8 +90,29 @@ std::wstring_view user_input_failure_stage(UserInputFailure failure)noexcept {
     L"input-start-native-class",L"input-start-native-window",L"input-start-native-routes-query",L"input-start-native-routes-existing",
     L"input-start-native-register",L"input-start-native-readback",L"input-start-native-ready-timeout",L"input-start-native-status",
     L"input-listener-native-failed",L"input-listener-native-wait",L"input-listener-native-route-lost",L"input-listener-native-quit",
-    L"input-start-service",L"input-listener-service-closed"};
+    L"input-start-service",L"input-listener-service-closed",
+    L"input-readback-query",L"input-readback-mouse-missing",L"input-readback-keyboard-missing",
+    L"input-readback-mouse-target",L"input-readback-keyboard-target",L"input-readback-devnotify-both",
+    L"input-readback-devnotify-mouse",L"input-readback-devnotify-keyboard",L"input-readback-mouse-flags",
+    L"input-readback-keyboard-flags",L"input-readback-closed"};
   const auto index=static_cast<size_t>(failure);return index<stages.size()?stages[index]:std::wstring_view{};
+}
+
+UserInputFailure user_input_route_failure(const UserInputRouteReadback& value)noexcept {
+  if(value.closed)return UserInputFailure::native_readback_closed;
+  if(!value.query_ok)return UserInputFailure::native_readback_query;
+  if(!value.mouse_present)return UserInputFailure::native_readback_mouse_missing;
+  if(!value.keyboard_present)return UserInputFailure::native_readback_keyboard_missing;
+  if(!value.mouse_target)return UserInputFailure::native_readback_mouse_target;
+  if(!value.keyboard_target)return UserInputFailure::native_readback_keyboard_target;
+  constexpr DWORD expected=RIDEV_INPUTSINK|RIDEV_DEVNOTIFY;
+  if(value.mouse_flags==expected && value.keyboard_flags==expected)return UserInputFailure::none;
+  // Classification only: missing DEVNOTIFY remains a refusal, with every other bit exact.
+  if(value.mouse_flags==RIDEV_INPUTSINK && value.keyboard_flags==RIDEV_INPUTSINK)return UserInputFailure::native_readback_devnotify_both;
+  if(value.mouse_flags==RIDEV_INPUTSINK && value.keyboard_flags==expected)return UserInputFailure::native_readback_devnotify_mouse;
+  if(value.keyboard_flags==RIDEV_INPUTSINK && value.mouse_flags==expected)return UserInputFailure::native_readback_devnotify_keyboard;
+  if(value.mouse_flags!=expected)return UserInputFailure::native_readback_mouse_flags;
+  return UserInputFailure::native_readback_keyboard_flags;
 }
 
 std::optional<UserInputChord> parse_user_input_chord(std::wstring_view value) {
