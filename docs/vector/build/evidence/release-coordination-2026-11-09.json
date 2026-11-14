@@ -266,5 +266,19 @@
       "hints": 184
     },
     "scope": "Standard coordinator-worktree push hook; not a Hands checkout Turbo/native build or a full release qualification."
+  },
+  "windowsConstantExtractionFollowUp20261113": {
+    "parentRevision": "0c4a0dbd499bfeba61c02f46c3cc2cd5af88bf7f",
+    "cause": "release-113-multiagent-docs.test.ts read engine number constants with a pattern that required LF right after the value. In a Windows checkout with CRLF line endings, MAX_RUNNING (and the later constants in the same test) did not match.",
+    "repair": "Accept an optional carriage return before the line feed. No assertion, product copy or feature code changed.",
+    "localCheck": {
+      "platform": "macOS arm64, with the engine task sources that test reads as text (limits, note-window, attention, shells; isolation too after the repair) converted to CRLF, then restored",
+      "command": "packages/web: bun test --timeout 30000 test/release-113-multiagent-docs.test.ts",
+      "beforeRepair": "10 passed, 1 failed (MAX_RUNNING is not a number constant in its file)",
+      "afterRepairCrlf": "11 passed, 0 failed",
+      "afterRepairLf": "11 passed, 0 failed, 554 assertions"
+    },
+    "fileUrlIssue": "The other recorded Windows issue, the release-copy.test.ts file-URL ENOENT, was repaired in f9773571 (windowsReleaseCopyFollowUp).",
+    "qualification": "CI runs the website release copy tests on Linux only, so no Windows CI run exercises these files. No full website-suite pass is claimed."
   }
 }

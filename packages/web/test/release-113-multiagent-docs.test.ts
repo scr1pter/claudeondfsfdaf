@@ -65,9 +65,10 @@ function section(page: string, id: string, level = "h2") {
   return page.slice(start, end === -1 ? undefined : end)
 }
 
-// A number constant as its engine source writes it, for modules this package does not depend on.
+// A number constant as its engine source writes it, for modules this package does not depend on. A Windows checkout
+// may end its lines with CRLF.
 function constant(source: string, name: string) {
-  const found = new RegExp(`export const ${name} = ([\\d_ *]+)\\n`).exec(source)
+  const found = new RegExp(`export const ${name} = ([\\d_ *]+)\\r?\\n`).exec(source)
   if (!found) throw new Error(`${name} is not a number constant in its file`)
   return found[1]!
     .replaceAll("_", "")
