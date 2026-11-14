@@ -23,6 +23,7 @@ import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { Project } from "@vectordevai/core/project"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { ReviewSessionFenceTable } from "@vectordevai/core/review/request.sql"
 import { ReviewRequestTable } from "@vectordevai/core/review/request.sql"
@@ -274,7 +275,37 @@ const authenticated = <A>(effect: Effect.Effect<A>, headers?: HeadersInit) =>
     ),
   )
 
-describe("Engine review memory authority and erase-before-delete boundary", () => {
+test.skipIf(process.platform !== "win32")(
+  "Windows refuses a valid review-memory repository before pinned helper or model admission",
+  async () => {
+    await using directory = await tmpdir({ git: true })
+    expect((await fs.stat(path.join(directory.path, ".git"))).isDirectory()).toBe(true)
+    expect(await fs.realpath(directory.path)).toBe(directory.path)
+    // Check the actual platform refusal before the adapter can open a pinned
+    // directory or start its metadata helper. No substitute identity is supplied.
+    await expect(ReadOnlyGit.metadataHead(directory.path)).rejects.toMatchObject({
+      code: "READ_ONLY_GIT_UNAVAILABLE",
+      reason: "this host has no pinned-directory adapter",
+    })
+    let admitted = false
+    const result = await Effect.runPromise(
+      ReviewMemoryScope.git(directory.path).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            admitted = true
+          }),
+        ),
+        Effect.result,
+      ),
+    )
+    expect(Result.isFailure(result) ? result.failure : undefined).toBeInstanceOf(ReviewMemoryScope.Refused)
+    expect(admitted).toBe(false)
+  },
+)
+
+// These eight cases require the real Linux pinned-directory identity adapter.
+const linux = describe.skipIf(process.platform !== "linux")
+linux("Engine review memory authority and erase-before-delete boundary (Linux)", () => {
   test("same-store directories/worktrees preserve exact source provenance while a same-ProjectID clone cannot inherit it", async () => {
     await run((setup) =>
       Effect.gen(function* () {
