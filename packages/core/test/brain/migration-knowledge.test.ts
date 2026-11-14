@@ -27,6 +27,10 @@ import {
   BrainPostingTable,
   BrainRecordTable,
   BrainReviewTable,
+  BrainReviewMemoryTable,
+  BrainReviewMemoryScopeStateTable,
+  BrainReviewMemorySourceTable,
+  BrainReviewMemoryStateTable,
   BrainSectionTable,
   BrainSkillListingTable,
   BrainSkillTable,
@@ -70,6 +74,10 @@ const TABLES: readonly SQLiteTable[] = [
   BrainVectorTable,
   BrainJobTable,
   BrainReviewTable,
+  BrainReviewMemoryTable,
+  BrainReviewMemoryScopeStateTable,
+  BrainReviewMemorySourceTable,
+  BrainReviewMemoryStateTable,
   BrainCodeFileTable,
   BrainCodeSymbolTable,
   BrainCodeLiteralTable,
@@ -169,6 +177,9 @@ describe("Brain knowledge migration", () => {
       { id: "20261210000000_learned_skills" },
       { id: "20261211000000_workflow" },
       { id: "20261212000000_research_claims" },
+      { id: "20261213000000_review_memory" },
+      { id: "20261214000000_review_memory_scope" },
+      { id: "20261215000000_review_memory_source" },
     ])
     // What was learned before private memory existed is not private.
     expect(entries).toEqual([{ id: "m1a2b3", private: 0 }])

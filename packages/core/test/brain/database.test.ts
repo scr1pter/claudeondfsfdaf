@@ -92,6 +92,7 @@ describe("BrainDatabase", () => {
         { id: "20261212000000_research_claims" },
         { id: "20261213000000_review_memory" },
         { id: "20261214000000_review_memory_scope" },
+        { id: "20261215000000_review_memory_source" },
       ],
       state: [{ repository_id: "repo-1" }],
     })
