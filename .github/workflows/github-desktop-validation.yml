@@ -2,7 +2,7 @@ name: GitHub desktop browser validation
 "on":
   push:
     branches:
-      - build-integrate
+      - main
   workflow_dispatch: {}
 permissions:
   contents: read
