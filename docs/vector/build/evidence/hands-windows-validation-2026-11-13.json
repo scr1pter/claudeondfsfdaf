@@ -1150,7 +1150,51 @@
         "skipReason": "The product does not support Hands on Linux; the preceding test asserts that actual state.",
         "qualification": "The full Hands journey did not run on Linux."
       },
-      "arm64": "skipped in this PR; independent preview core matrix recorded separately"
+      "arm64": "skipped in this PR; independent preview core matrix recorded separately",
+      "windowsBrowser": {
+        "job": 132343890119,
+        "logBytes": 109909,
+        "logSha256": "e343b7c69bf58548cae7f4cbcff935e1ea455f91c7e43f8a0edfb9157a10bcfe",
+        "conclusion": "success",
+        "passed": 355,
+        "flaky": 1,
+        "skipped": 1,
+        "unrecoveredFailures": 0,
+        "flakyCase": "regression/cloud-home-only.spec.ts:10 Vector Cloud opens from Home, and a task's view has no Cloud controls",
+        "flakyInitialFailure": "After Cloud navigation, #vector-launch expected count 0, received 1 within the existing 10000 ms assertion. Passed on the existing automatic retry #1.",
+        "skippedCase": "regression/remote-tab-busy.spec.ts:12 tab busy indicator reflects the tab server's own session status",
+        "skipSourceReason": "The redesigned workspace intentionally keeps session switching in the project sidebar instead of a second global session tab strip. Existing source-level test.skip.",
+        "publicViewer": {
+          "passed": 5,
+          "failed": 0
+        },
+        "manualReruns": 0,
+        "qualification": "Full scripted Chromium suite includes all five corrected Hands cases. Preserve unrelated cloud case as flaky, not an unqualified retry-free pass. No real hardware calibration proof."
+      },
+      "linuxUnit": {
+        "job": 132343890206,
+        "conclusion": "success",
+        "logBytes": 1062409,
+        "logSha256": "fc5a81ef4076c0ba4c62d0e5073d939d53de7b357500a1b3a37cfdcccac0e639",
+        "nodeHarnessPassed": 13,
+        "perFileAppInvocations": 244,
+        "distinctAppFiles": 244,
+        "appFilesPassed": 244,
+        "appFilesFailed": 0,
+        "browserConditionUnitSuite": {
+          "passed": 83,
+          "files": 18
+        },
+        "turboTasks": {
+          "successful": 8,
+          "total": 8
+        },
+        "followingGates": [
+          "desktop computer-use tests",
+          "HttpApi exerciser gates"
+        ],
+        "qualification": "Actual full integrated PR log independently confirms app containment. Existing unrelated suite skips remain skips; this is not real hardware, final package, signing or release proof."
+      }
     },
     "unsignedArtifactsOnlyPreview": {
       "run": 43560764334,
@@ -1271,7 +1315,61 @@
           "qualification": "Both architecture manifests match this actual digest/toolchain; do not substitute the earlier 60300433 digest."
         }
       },
-      "remaining": "Mac OS matrix, remaining broad tests/build smokes and final macOS/Windows/Linux package verifiers, including the separate final ARM64 actual packed Main/helper verifier."
+      "remaining": "Remaining broad tests/build smokes and final macOS/Windows/Linux package verifiers, including the separate final ARM64 actual packed Main/helper verifier. Native ARM64/Intel/Mac26 core matrix passed within these reported scopes.",
+      "macIntelCore": {
+        "job": 132350256389,
+        "logBytes": 34350,
+        "logSha256": "8d855b1cfebb1ccb6327099fb00dc54ff523e3d956602bb047148c1239ebc822",
+        "conclusion": "success",
+        "artifact": 14101361549,
+        "archiveBytes": 1003,
+        "archiveSha256": "b5937704a7b6762d906f6348724341fc6a7c24debafab37fc1b94902454193f0",
+        "reports": [
+          {
+            "name": "computer-darwin-matrix.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        ]
+      },
+      "mac26Core": {
+        "job": 132350256394,
+        "logBytes": 32602,
+        "logSha256": "41b45362df5571001233baface6ffdfe431f5cb6c4808d065c3d51116316ab22",
+        "conclusion": "success",
+        "artifact": 14100714781,
+        "archiveBytes": 1000,
+        "archiveSha256": "b969db07473277e351e74c55749c12a9287498146147d93f7cd4cde5c0d80360",
+        "reports": [
+          {
+            "name": "computer-darwin-matrix.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        ]
+      }
     },
     "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."
   }
