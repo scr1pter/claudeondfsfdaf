@@ -66,7 +66,8 @@ lineage, spend or cancellation assertion was relaxed to hide the failure.
   bubblewrap's inaccessible host-temp destination before keeper startup; cleanup proof remained refused. It is not an
   isolation pass. No mask or cleanup policy was relaxed to make that run green.
 - The legal branch contains live consent/version/page changes, despite its historical "docs-only" label. Those proposals
-  require the owner's legal review; the current deployed terms and consent date are preserved.
+  are archived under `owner-actions/proposals/codium-legal` per the owner's 14 November decision; the current deployed
+  terms, consent date and active policy tests are preserved. The archive is review material and is not built or published.
 - Provider/payment acceptance, platform app registration, protected secrets, code signing, release publication and live
   company deployments remain separate owner-controlled gates.
 - V27 encrypted session save/restore and attestation, later VectorScope executors and connected automatic repair remain

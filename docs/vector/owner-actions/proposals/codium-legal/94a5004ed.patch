@@ -1,0 +1,831 @@
+diff --git a/api/_lib/codium-consent.ts b/api/_lib/codium-consent.ts
+index 512e02cc1fa95f2c389f422a5ead6c107060faff..8357c11c06f6bf1c4fb1bbab45d55fe1defb8ee9 100644
+--- a/api/_lib/codium-consent.ts
++++ b/api/_lib/codium-consent.ts
+@@ -1,8 +1,11 @@
+ import { ApiError } from "./http.js"
+ import { modelPlanStripe } from "./model-plan-stripe.js"
+ 
+-/** Checkout is the consent boundary; a return URL never counts as proof of agreement. */
+-export const CODIUM_TERMS_DATE = "2026-10-28"
++/**
++ * Checkout is the consent boundary; a return URL never counts as proof of agreement. The terms date is the terms page's
++ * effective date (test/codium-legal.test.ts), so the billing record names the terms a subscriber accepted.
++ */
++export const CODIUM_TERMS_DATE = "2026-11-02"
+ export const CODIUM_CHECKOUT_CONSENT =
+   "I agree to the [Codium terms](https://vectordev.ai/legal/terms#codium) and ask Vector to start my plan now. If I withdraw within 14 days I pay for what I used."
+ 
+diff --git a/packages/web/src/components/marketing/LegalPage.astro b/packages/web/src/components/marketing/LegalPage.astro
+index cfea9ca32deef97951a035227f8e5481b80417aa..3b401d5a8eebdd7b2254a8451843a285adf7787b 100644
+--- a/packages/web/src/components/marketing/LegalPage.astro
++++ b/packages/web/src/components/marketing/LegalPage.astro
+@@ -39,7 +39,7 @@ const { title, description, eyebrow, updated = "August 4, 2026" } = Astro.props
+   .legal-page header > span { margin-top: 18px; display: block; color: var(--muted); font-size: 10px; }
+   .legal-page article { padding: 56px 0; }
+   .legal-page article section { padding: 0 0 38px; }
+-  .legal-page article #codium { scroll-margin-top: 100px; }
++  .legal-page article [id] { scroll-margin-top: 100px; }
+   .legal-page article h2 { margin: 0 0 13px; color: var(--ink); font-size: 20px; font-weight: 590; }
+   .legal-page article h3 { margin: 24px 0 8px; color: rgba(245,242,248,.86); font-size: 14px; font-weight: 590; }
+   .legal-page article p, .legal-page article li { color: var(--muted-strong); font-size: 13px; line-height: 1.75; }
+diff --git a/packages/web/src/pages/legal/privacy.astro b/packages/web/src/pages/legal/privacy.astro
+index 8e27e487ded8250f2da14f00aa61cb0afe10fba1..9250115e1e598b274de3b16775b94ed08947b431 100644
+--- a/packages/web/src/pages/legal/privacy.astro
++++ b/packages/web/src/pages/legal/privacy.astro
+@@ -7,7 +7,7 @@ export const prerender = true
+   eyebrow="Privacy"
+   title="Privacy Policy"
+   description="How Vector handles account information, local work, AI requests, connected services, diagnostics, and usage counts."
+-  updated="October 28, 2026"
++  updated="November 2, 2026"
+ >
+   <section>
+     <h2>1. Scope and contact</h2>
+@@ -114,9 +114,9 @@ export const prerender = true
+     </p>
+     <p id="codium">
+       <strong>Vector Codium.</strong> When you choose a Vector Codium model, your request content goes from Vector
+-      to Vector's gateway on vectordev.ai, which Vercel hosts. The gateway checks your sign-in, your Codium plan or
+-      purchased credits and the credits held for your requests still running, then forwards the request to
+-      OpenRouter on a key Vector holds for your account, not a key of your own. Each request asks OpenRouter to route
++      to Vector's gateway on vectordev.ai, which Vercel hosts. The gateway checks your sign-in, your Codium plan and its
++      limits, and the usage held for your requests still running, then forwards the request to OpenRouter on a key
++      Vector holds for your account, not a key of your own. Each request asks OpenRouter to route
+       it only to endpoints OpenRouter records as zero data retention, meaning the provider does not store prompts or
+       outputs, and to deny data collection; this relies on OpenRouter's records and the providers' published
+       policies, not an independent audit. If no such endpoint is available for the model, the request fails; it is
+@@ -144,8 +144,8 @@ export const prerender = true
+       <li>
+         <strong>Metadata.</strong> OpenRouter keeps metadata about every request, such as the model, token counts
+         and latency, but not its content. The key Vector holds for your account is named with your Vector account
+-        identifier and, for a monthly plan, your Stripe subscription identifier and billing-period start, so
+-        OpenRouter can link that metadata to your Vector account. With each request the gateway also sends OpenRouter
++        identifier, your Stripe subscription identifier and the start of your billing period, so OpenRouter can link
++        that metadata to your Vector account. With each request the gateway also sends OpenRouter
+         a one-way hash of your Vector account identifier, not your email address or name.
+       </li>
+       <li>
+@@ -154,14 +154,97 @@ export const prerender = true
+         that Vector runs itself, so no other OpenRouter service receives the request.
+       </li>
+     </ul>
+-    <p>
+-      For Codium, Vector keeps a billing record in its server-side data store: your Stripe customer, subscription
+-      and billing-period identifiers, your top-up purchases, and the encrypted OpenRouter key for your account with
+-      its credit limit. The credits held for a request in progress are kept for about eleven minutes at most. To
+-      buy, Vector creates a Stripe customer with your email address and your Vector account identifier; Stripe
+-      processes your payment details, which Vector never receives, and keeps the payment records. Deleting your
+-      Vector account closes open Codium checkouts, cancels active Codium subscriptions and disables your Codium
+-      keys; the billing record is kept, marked closed, as section 12 describes.
++    <p id="codium-billing">
++      <strong>Codium billing record.</strong> Vector Codium is sold as monthly plans only. For each subscriber, Vector
++      keeps a billing record in its server-side data store, which Upstash hosts: your Stripe customer, subscription,
++      invoice and charge identifiers; your plan and billing period; your consent to the Codium terms, with the date of
++      the terms you accepted; a summary of your plan's current state, such as its status, limits, renewal date and any
++      scheduled change; payment-risk flags, such as open disputes and fraud warnings; and the encrypted OpenRouter key
++      for your account with its spending limit. To buy, Vector creates a Stripe customer with your email address and
++      your Vector account identifier; Stripe processes your payment details, which Vector never receives, and keeps the
++      payment records.
++    </p>
++    <p id="codium-counters">
++      To apply your plan's limits, Vector also keeps short-lived counters in the same data store, keyed by your account
++      identifier or a one-way hash of it: the usage held for requests in progress, for about eleven minutes at most;
++      your requests in progress and per-minute counts; each agent run's usage, for three days; and daily and per-period
++      totals, including counts of plan features such as agent time, until 40 days after the billing period ends. The
++      daily totals also produce your usage history and forecast. These counters hold usage figures and counts, never
++      request content.
++    </p>
++    <p id="codium-github">
++      <strong>GitHub agents on Codium.</strong> When you connect a repository so that Vector's GitHub agent can use your
++      plan, Vector records that the repository's numeric identifier is bound to your Vector account, until the binding
++      is removed. For each run, Vector records its run identifier, the GitHub event that started it, the GitHub login or
++      numeric user identifier of the person who started it, kept for 90 days, and when the run started and stopped. The
++      run itself executes in GitHub Actions under the repository owner's GitHub account. Its logs are GitHub's records,
++      under GitHub's terms and privacy statement, and on a public repository anyone can read them. Files a run keeps
++      between sessions are stored as Actions artifacts of that repository, which GitHub keeps under the repository's
++      retention settings and which people with access to the repository's Actions can download.
++    </p>
++    <p id="roadmap-votes">
++      <strong>Roadmap votes.</strong> If your plan includes roadmap voting, Vector stores your ballot for each quarter,
++      and any nomination you make, with your account identifier and the plan you had when you voted. Results are
++      published only as totals, after the vote closes and once at least 20 ballots are counted. Ballots and nominations
++      are deleted with your account.
++    </p>
++    <div id="vault" data-where-available="vault">
++      <p>
++        <strong>Brain Vault (where available).</strong> Brain Vault backs up your Vector memory and learned skills. The
++        desktop application encrypts each backup on your computer, with a key protected by your recovery code, before
++        uploading it to storage Vector runs on Cloudflare. Vector never receives your recovery code, the key in a form
++        it can use, or the unencrypted content, so it cannot read your backups or restore them if you lose your recovery
++        code. Vector stores the encrypted pieces, their sizes, the dates of your backup versions and how much of your
++        quota you use. Versions older than 30 days are removed, except the newest. If your plan ends, your vault becomes
++        read-only for 30 days, with a notice in the application and by email, and is then deleted; deleting your
++        account deletes it. If you back up to your own GitHub repository instead, encrypted backups go to that private
++        repository and nothing goes to Vector.
++      </p>
++    </div>
++    <div id="remote" data-where-available="remote alerts">
++      <p>
++        <strong>Vector Remote and phone alerts (where available).</strong> Vector Remote connects your phone to the
++        Vector desktop application through a relay that Vector runs on Cloudflare. The phone and the computer encrypt
++        what they exchange end to end, so the relay passes only data it cannot read. Vector stores the devices you pair,
++        with an identifier, a public key, the name shown in Settings and when each was paired and last connected, and
++        counts connection time to apply fair-use limits. Approvals sent from your phone are confirmed with a passkey that
++        your desktop checks. If you turn on phone alerts, Vector stores up to ten push subscriptions from your browsers
++        and sends alerts through the push service of your browser's maker, such as Apple, Google or Mozilla. Alerts
++        Vector's server sends carry only a title, never your prompts, code or output; alerts your desktop sends are
++        encrypted end to end, so neither Vector nor the push service can read them. You can revoke a device or turn
++        alerts off at any time, and deleting your account deletes these records.
++      </p>
++    </div>
++    <div id="hosted-computer" data-where-available="computer overnight">
++      <p>
++        <strong>Cloud computer (where available).</strong> A cloud computer Vector runs for you holds on its disk the
++        files, repositories, downloads and output of your jobs, and its browser holds sign-ins and site data during a
++        job. Vercel runs the computer, and Cloudflare stores its recordings. Vector records the screen while a job runs so
++        you can see what happened; recordings are visible only to you and kept for 30 days. Nothing is recorded while you
++        have taken over control. The browser profile is wiped after each job. The disk is kept between jobs for the
++        period your plan lists and, after your plan ends, for 14 days so you can download your files, then deleted; while
++        a payment dispute is open it is kept until the dispute closes, and it is deleted 30 days after a dispute is lost.
++        Vector also keeps session records: when each session started and stopped, its size, the time it used, and job
++        reports with their links and results. Zero data retention covers the model requests your jobs make, not the
++        computer's disk, its recordings or the websites it visits.
++      </p>
++    </div>
++    <div id="production-checks" data-where-available="on-call release-guard ship-desk">
++      <p>
++        <strong>Production checks (where available).</strong> If you use On Call, Release Guard or Ship Desk, Vector
++        stores the production URLs and domains you add and how each domain was verified; check results, kept as changes
++        of state and hourly totals; the deployment and pull request events GitHub sends for repositories where you
++        installed Vector's GitHub App, such as the repository, environment, commit and status; incidents; and Ship Desk
++        cards with their checks, the reviewing model's verdict and before-and-after screenshots. Checks run on
++        Cloudflare and request only the URLs you add, on domains you verified. Screenshots are stored on Cloudflare,
++        visible only to you, for 30 or 90 days depending on your plan.
++      </p>
++    </div>
++    <p id="codium-deletion">
++      Deleting your Vector account cancels active Codium subscriptions, closes open Codium checkouts and disables your
++      Codium keys, then erases your Codium records and the records of the plan features described above. Only
++      pseudonymous ledger lines, which record charges against an identifier rather than your name or email address,
++      are kept, as section 12 describes; Stripe keeps its own payment records.
+     </p>
+     <p id="training">
+       <strong>Training.</strong> Vector does not use your prompts, code, or model output to train any model, including
+@@ -297,6 +380,13 @@ export const prerender = true
+       Resend delivers the report to our support mailbox. Email you send directly also becomes support
+       correspondence. Avoid including credentials or unnecessary confidential information.
+     </p>
++    <p id="report-tracking">
++      To tell you when a problem you reported is fixed, Vector keeps a record of each bug report for 180 days: a random
++      report identifier, when the report arrived, its status and, if you sent it while signed in, a one-way hash of your
++      account identifier and your plan's tag. The record never contains the text of your report. The desktop
++      application keeps the identifiers and short titles of your reports on your computer, and release notes list fixed
++      reports only by a hash of their identifiers.
++    </p>
+   </section>
+ 
+   <section>
+@@ -348,6 +438,11 @@ export const prerender = true
+       streaks; and your average and longest task time. The command-line tool sends these with a random install
+       identifier that Vector does not store, because its counts are kept against your account.
+     </p>
++    <p id="codium-usage-counts">
++      Vector Codium use is left out of these model-use totals. From the first desktop and command-line releases that
++      sell Vector Codium plans, Codium token totals, cost and Codium model identifiers are not sent, while activity
++      counts, such as chats completed, active days and streaks, still include Codium work.
++    </p>
+     <p>
+       Usage counts never include prompts, code, file names or paths, model output, provider keys or
+       credentials, IP addresses, or user agents. They are stored in Vector's Supabase service as one record per
+@@ -429,14 +524,41 @@ export const prerender = true
+     <p>
+       Local data remains until removed through application controls or from the relevant files, subject to
+       local cleanup and backups. Account records are retained while needed to provide access
+-      and resolve account issues. Records of earlier purchases, and the Codium billing records described in
+-      section 4, are retained as required by law, including for tax, accounting, fraud, and dispute obligations. Payment records of those purchases are held by our
++      and resolve account issues. Records of earlier purchases are retained as required by law, including for tax,
++      accounting, fraud, and dispute obligations. Payment records of purchases are held by our
+       payment processor, Stripe, and kept only as the law requires. Support records and diagnostic or operational logs are retained according to
+-      their troubleshooting and security purpose and applicable provider settings. Usage counts and download
+-      records are kept for about 13 months. We consider the type of
++      their troubleshooting and security purpose and applicable provider settings. We consider the type of
+       record, whether the account or issue is active, legal retention requirements, and unresolved disputes
+-      when deciding retention. No single deletion period applies to every category.
++      when deciding retention. No single deletion period applies to every category. These periods apply:
+     </p>
++    <ul id="retention">
++      <li>
++        Codium billing records: while your account exists; deleting it erases them, except pseudonymous ledger lines,
++        which are kept as the law requires for tax, accounting, fraud, and dispute obligations.
++      </li>
++      <li>
++        Codium usage held for a request in progress: about eleven minutes at most. Each agent run's usage: three days.
++        Daily and per-period Codium counters: until 40 days after the billing period ends.
++      </li>
++      <li>
++        GitHub agents on Codium: repository bindings until removed; the GitHub login or identifier that started a run:
++        90 days.
++      </li>
++      <li>Bug report records: 180 days.</li>
++      <li>Roadmap ballots and nominations: until your account is deleted.</li>
++      <li>Usage counts and download records: about 13 months.</li>
++      <li data-where-available="vault">
++        Brain Vault (where available): backup versions for 30 days, keeping the newest; after a plan ends, 30 days
++        read-only, then deleted.
++      </li>
++      <li data-where-available="computer overnight">
++        Cloud computer (where available): recordings for 30 days; disks for the period your plan lists, and for 14 days
++        after a plan ends.
++      </li>
++      <li data-where-available="on-call release-guard ship-desk">
++        Production checks (where available): screenshots for 30 or 90 days, depending on your plan.
++      </li>
++    </ul>
+     <p>
+       Providers may process information outside your country, with different privacy laws. Locations and
+       transfer arrangements depend on the provider and service configuration. Contact us for information
+diff --git a/packages/web/src/pages/legal/terms.astro b/packages/web/src/pages/legal/terms.astro
+index ec92c1877b8b3697d68e70de22f605d532b4f3d0..2f35ce79cf7c656d9de767c9891acac48fd6bcfb 100644
+--- a/packages/web/src/pages/legal/terms.astro
++++ b/packages/web/src/pages/legal/terms.astro
+@@ -7,7 +7,7 @@ export const prerender = true
+   eyebrow="Terms"
+   title="Terms of Service"
+   description="The agreement for Vector accounts, software, and connected services."
+-  updated="October 28, 2026"
++  updated="November 2, 2026"
+ >
+   <section>
+     <h2>1. This agreement</h2>
+@@ -37,43 +37,131 @@ export const prerender = true
+   </section>
+ 
+   <section id="codium">
+-    <h2>3. Cost</h2>
++    <h2>3. Cost and Vector Codium plans</h2>
+     <p>
+-      Vector is free to download and use. Optional Vector Codium purchases provide credits for the coding
+-      models offered through Codium. Services you connect through your own accounts, including model
+-      providers, external agents and hosting, may charge you separately under their own terms. Free models
+-      are subject to quotas, rate limits and availability; continued free access is not guaranteed.
++      Vector is free to download and use. Vector Codium is an optional monthly plan that gives you coding models
++      through Vector without provider keys of your own, with the plan features listed for each plan at
++      <a href="/codium">vectordev.ai/codium</a>. Services you connect through your own accounts, including model
++      providers, external agents and hosting, may charge you separately under their own terms. Free models are subject
++      to quotas, rate limits and availability; continued free access is not guaranteed.
+     </p>
+     <p>
+-      When Codium purchases are available, the purchase screen shows the price, the usage it includes as Codium
+-      credits or usage estimates, and whether the purchase is a monthly subscription or a one-time top-up. Any applicable
+-      taxes and the total payable are shown before payment. Monthly subscriptions renew automatically at the
+-      disclosed price until canceled. You can cancel through account billing before renewal; cancellation
+-      stops future renewals and leaves access to the remainder of the paid period. Monthly credits expire at
+-      the end of that period and do not roll over. One-time top-ups do not renew, and unused purchased credits
+-      carry forward separately from your subscription. There are no automatic top-ups or overage charges.
++      Before you pay, the checkout page shows the plan, its monthly price, any applicable taxes and the total payable.
++      Stripe processes payments for Vector.
+     </p>
++
++    <h3 id="codium-plans">Monthly plans</h3>
++    <p>
++      Vector Codium is sold as monthly plans only. There are no top-ups and no overage charges: Vector never charges
++      you for usage beyond your plan's price. Your plan renews automatically each month at the price shown at checkout
++      until you cancel. You can cancel at any time in your account; cancelling stops future renewals, and you keep your
++      plan until the end of the period you have paid for.
++    </p>
++    <p>
++      An upgrade to a higher plan starts a new monthly period on the day you upgrade and is charged in full at the
++      higher plan's price. The unused usage of your current month carries into that new period only, and ends at its
++      renewal. A downgrade starts at your next renewal; until then you keep your current plan.
++    </p>
++    <p>
++      If a payment fails, Vector Codium and your plan's features pause until the payment succeeds. A failed payment
++      does not extend the month: the period still ends on its original date. If payment is still not made after
++      Stripe's retries, your plan ends. A full refund of a payment, or a dispute of it, ends what that payment bought.
++      If a payment is reported as possibly fraudulent, Vector may refund it and end the plan. Access is suspended while
++      a payment is disputed or flagged as possibly fraudulent.
++    </p>
++    <p>
++      New Max and Ultra subscriptions, including upgrades to them from Plus or Pro, start with reduced limits for a
++      short period, such as fewer cloud computer hours or, if the first payment was not confirmed through your bank's
++      authentication, less of the month's usage in the first days. The plan page describes these starting limits.
++      Records of purchases are retained as required by law.
++    </p>
++
++    <h3 id="codium-models">Models and limits</h3>
++    <p>
++      Models, usage and limits differ by plan and are listed at <a href="/codium">vectordev.ai/codium</a>. A model may
++      be temporarily unavailable, and Vector may replace a model with a comparable one. Vector does not
++      reduce the usage, models or limits included in a month you have paid for. Changes to plan prices, or to the usage,
++      models or limits a plan includes, will be communicated before they apply, with an opportunity to cancel and any
++      consent required by law, and apply from your next renewal after the notice.
++    </p>
++
++    <h3 id="codium-usage">Usage</h3>
+     <p>
+-      Codium credits measure usage of Codium's models; they are not a promise of a fixed number of tokens,
+-      requests, completed tasks or successful results. Usage figures, such as estimated tokens or typical tasks, are
+-      estimates, not commitments.
+-      Actual consumption varies with the selected model, input and output, reasoning, conversation history,
+-      repeated repository context, tool use and the number of agents or model calls. Large tasks and parallel agents
+-      can consume credits quickly. Your displayed balance may lag requests still being processed. Review usage
+-      and model selection in your account and supervise automated work. Access pauses when the available
+-      allowance cannot cover a request; additional use requires available credits or a new purchase you authorize.
++      Your plan's usage is shown only as a whole-number percentage of the month, and Codium work is labelled
++      “Codium” instead of with token counts or prices. The percentage may lag requests still being processed. Usage
++      does not roll over: what is left when a period ends expires with it, and only an upgrade carries unused usage, as
++      described above. Some plans also have a daily limit, a share of the month that can be used in one day (UTC).
++      Usage is not a promise of a number of tokens, requests, completed tasks or successful results.
+     </p>
+     <p>
+-      To the extent permitted by law, accurately metered usage is not refundable solely because credits ran out
+-      sooner than expected, an estimate differed from actual usage, or AI output did not complete your task.
+-      This does not excuse incorrect charges, duplicate billing or a failure to provide purchased credits.
+-      Contact us about suspected errors so we can investigate and correct confirmed billing errors. Any refund,
+-      cancellation, service guarantee or other consumer right required by applicable law continues to apply.
+-      Credits have no cash value and are not transferable, except where applicable law requires otherwise.
++      How fast usage goes depends on the selected model, input and output, reasoning, conversation history, repeated
++      repository context, tool use and the number of agents or model calls. Large tasks and parallel agents can use it
++      quickly. Review usage and model selection in your account and supervise automated work. When the month's usage is
++      used up, Vector Codium stops until your plan renews; when a day's share is used up on a plan with a daily limit,
++      it stops until the next UTC day. Your own keys and free models keep working.
++    </p>
++    <p>
++      To the extent permitted by law, accurately metered usage is not refundable solely because your usage ran out
++      sooner than expected, an estimate differed from actual usage, or AI output did not complete your task. This does
++      not excuse incorrect charges, duplicate billing or a failure to provide the plan you paid for. Contact us about
++      suspected errors so we can investigate and correct confirmed billing errors. Any refund, cancellation, service
++      guarantee or other consumer right required by applicable law continues to apply. Usage has no cash value and is
++      not transferable, except where applicable law requires otherwise.
++    </p>
++
++    <h3 id="codium-coming">Items tagged “Coming”</h3>
++    <p>
++      Vector Velocity is in development and is not part of what any subscription buys today. If it launches, we intend
++      to offer it only on Max and Ultra. We don't promise that it will launch, or when. The same applies to every item
++      tagged “Coming” on Vector's pages: it is not part of what any subscription buys today, and we don't promise that
++      it will launch, or when.
++    </p>
++
++    <h3 id="codium-github">GitHub agents on Codium</h3>
++    <p>
++      For runs of Vector's GitHub agent on your plan, Vector sells only Codium model access inside runs in your own
++      repository, on your own Actions minutes. Runs execute under your GitHub account and GitHub's terms, and GitHub
++      bills the Actions minutes they use. Runs may do only that repository's software work, such as fixing, reviewing,
++      testing or maintaining its code. Anyone with write, maintain or admin access to a repository you connect to your
++      plan can start runs that use your plan. Agent time is measured by Vector from Codium requests, not from GitHub's
++      minutes. Vector's GitHub agent also works without a plan, with your own model key stored as a repository secret.
++    </p>
++
++    <div id="codium-hosted" data-where-available="computer overnight">
++      <h3>Cloud computer (where available)</h3>
++      <p>
++        Where your plan includes a cloud computer that Vector runs for you, the time it runs counts toward your month's
++        usage and toward your plan's cloud computer hours, including jobs you queue to run overnight. Vector may stop or
++        pause a session, for example when it reaches its time limit, sits idle, or is used against these Terms. Do not
++        use it for cryptocurrency mining, spam, scraping a website against that site's terms, solving CAPTCHAs or
++        bypassing bot checks; Vector hands sign-in fields and CAPTCHAs to you. The browser profile is wiped after each
++        job. The computer's disk is kept between jobs for the period your plan lists. After your plan ends, Vector tells
++        you, keeps the disk for 14 days so you can download your files, and then deletes it.
++      </p>
++    </div>
++
++    <div id="codium-ops" data-where-available="on-call release-guard ship-desk">
++      <h3>Production checks (where available)</h3>
++      <p>
++        Where your plan includes On Call, Release Guard or Ship Desk, Vector checks only domains you have verified.
++        Vector's GitHub App writes to a repository only where that repository opts in with a
++        <code>.vector/ops.json</code> file, and then only to open pull requests automatically, such as one that reverts a
++        release. Vector never merges a pull request; you decide whether to merge. On Call is Vector's agent, not a person.
++        Vector makes no uptime, availability or response-time promise for your sites or for these checks, and a check or
++        alert can be late or missed.
++      </p>
++    </div>
++
++    <h3 id="codium-consent">Starting your plan, withdrawal and founding members</h3>
++    <p>
++      When you subscribe, you ask Vector to start your plan immediately. Where the law gives you a right to withdraw
++      from the contract within 14 days, as in the European Union, you can still withdraw within 14 days of subscribing
++      by contacting us, but you pay for what you used before you withdrew, and we refund the rest of that payment.
+     </p>
+     <p>
+-      Changes to subscription prices or renewal allowances will be communicated before they apply, with an
+-      opportunity to cancel and any consent required by law. Records of purchases are retained as required by law.
++      If you subscribed as a founding member, your price won't go up while you stay subscribed. If you change plans, you
++      pay the new plan's current price. Founding members on Plus and Pro also get 10% more usage; this does not apply to
++      Max or Ultra. Founding membership ends when your subscription ends.
+     </p>
+   </section>
+ 
+@@ -180,8 +268,11 @@ export const prerender = true
+       evade security or usage controls; or disrupt our services or connected providers. Model services, including
+       OpenRouter, screen requests for child sexual abuse material and may report it to the authorities as the law
+       requires. Do not share CLI tokens
+-      or account credentials, or misrepresent another person's identity or your authority. Software restrictions remain
+-      subject to applicable law and the rights granted by third-party open-source licenses.
++      or account credentials, or misrepresent another person's identity or your authority. Do not use Vector's services,
++      or a computer Vector runs for you, for cryptocurrency mining, spam, scraping a website against that site's terms,
++      solving CAPTCHAs or bypassing bot checks. Do not use GitHub agents for work unrelated to the repository they run
++      in. Software restrictions remain subject to applicable law and the rights granted by third-party open-source
++      licenses.
+     </p>
+     <p>
+       Notwithstanding general software or control restrictions, LGPL-covered components and combined works
+diff --git a/test/codium-legal.test.ts b/test/codium-legal.test.ts
+index b12030eb42f63529aa394271d1d284dd511920ca..5b740648ee3b93f86e0033a4581d2400f4a60aad 100644
+--- a/test/codium-legal.test.ts
++++ b/test/codium-legal.test.ts
+@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test"
+ import { createHash } from "node:crypto"
+ import path from "node:path"
+ import { CODIUM_CHECKOUT_CONSENT, CODIUM_TERMS_DATE } from "../api/_lib/codium-consent"
++import { PERK_IDS } from "../packages/schema/src/codium-entitlements"
+ 
+ // Contract invariant H8: the legal pages change only in a release commit that bumps their dates. Each page is pinned
+ // here by its effective date, so editing a page without moving it to a new, pinned date fails. WP A30 drafts the
+-// Vector Codium terms and privacy changes on the codium-legal branch, which adds their checks to this file; A60's
+-// release commit merges it, sets both pages and CODIUM_TERMS_DATE to the release date and pins the new hashes.
++// Vector Codium terms and privacy changes (contract §7.2) on the codium-legal branch, with their checks below; A60's
++// release commit merges it after the legal read, sets both pages and CODIUM_TERMS_DATE to the release date, leaves out
++// each "where available" block whose perk is not listed at launch, and pins the new hashes.
+ 
+ const root = path.join(import.meta.dir, "..")
+ const PAGES = {
+@@ -15,13 +17,18 @@ const PAGES = {
+ } as const
+ type Page = keyof typeof PAGES
+ 
+-/** sha256 of each page's source (LF line endings) at each effective date it carried. One hash per date. */
++/**
++ * sha256 of each page's source (LF line endings) at each effective date it carried. One hash per date. November 2,
++ * 2026 is the A30 draft for the legal read, not a published version: A60 replaces it with the release date.
++ */
+ const PINNED: Record<Page, Record<string, string>> = {
+   terms: {
+     "October 28, 2026": "05491512221a30ef76b175cad4c7d78628530fce91b448a92a92ec0747d144c1",
++    "November 2, 2026": "c9b093706ae1bb5c5dd40a6602996580c8c0a83d91b631501b88967de5a63f51",
+   },
+   privacy: {
+     "October 28, 2026": "fcf0280dd3d0b34d008cd18f6084ec143821c1d1a33d7499db0a54fad350e26e",
++    "November 2, 2026": "a074a11e187f3f0c56dcc80e60a27beb059c94806d164a274c3f39c9a8fd9b47",
+   },
+ }
+ 
+@@ -136,3 +143,337 @@ describe("links into the legal pages", () => {
+     expect(broken).toEqual([])
+   })
+ })
++
++/** The markup an anchor names: an h3 runs to the next h3, div or the section's end; a block element to its close. */
++function block(text: string, id: string) {
++  const open = new RegExp(`<(h3|div|p|ul|li|section)\\b[^>]*\\bid="${id}"[^>]*>`).exec(text)
++  if (!open) throw new Error(`No element has id="${id}"`)
++  const rest = text.slice(open.index + open[0].length)
++  if (open[1] !== "h3") return rest.slice(0, rest.indexOf(`</${open[1]}>`))
++  const end = rest.search(/<h3\b|<div\b|<\/section>/)
++  return end < 0 ? rest : rest.slice(0, end)
++}
++
++/** Visible text: tags dropped and whitespace collapsed. */
++const plain = (html: string) =>
++  html
++    .replace(/<[^>]+>/g, " ")
++    .replace(/\s+/g, " ")
++    .trim()
++const textOf = (page: Page, id: string) => plain(block(source[page], id))
++const between = (text: string, from: string, to: string) =>
++  text.slice(text.indexOf(from), text.indexOf(to, text.indexOf(from)))
++
++// Promises the copy guards (H2, H3) never allow, here or anywhere else.
++const NEVER = [/\bexclusive\b/i, /\bevery (?:PR|pull request)\b/i, /24\/7/, /\bSLA\b/, /\bunlimited\b/i, /@vector\b/i]
++
++describe("Vector Codium terms (contract §7.2, drafted by A30)", () => {
++  const section = plain(block(source.terms, "codium"))
++
++  test("§3 is retitled and holds every Codium anchor", () => {
++    expect(source.terms).toContain('<section id="codium">\n    <h2>3. Cost and Vector Codium plans</h2>')
++    for (const id of [
++      "codium-plans",
++      "codium-models",
++      "codium-usage",
++      "codium-coming",
++      "codium-github",
++      "codium-hosted",
++      "codium-ops",
++      "codium-consent",
++    ])
++      expect(block(source.terms, "codium")).toContain(`id="${id}"`)
++    // Anchors the site already links to stay where they were.
++    for (const id of ["free-models", "codium-data"]) expect(anchors(source.terms).has(id)).toBe(true)
++  })
++
++  test("what §3 keeps from the earlier text", () => {
++    for (const phrase of [
++      "Vector is free to download and use.",
++      "may charge you separately under their own terms",
++      "continued free access is not guaranteed",
++      "any applicable taxes and the total payable",
++      "will be communicated before they apply, with an opportunity to cancel and any consent required by law",
++      "Records of purchases are retained as required by law.",
++      "accurately metered usage is not refundable solely because your usage ran out sooner than expected",
++      "correct confirmed billing errors",
++      "Usage has no cash value and is not transferable",
++    ])
++      expect(section).toContain(phrase)
++  })
++
++  test("plans: monthly only, renewal, upgrades, downgrades, failed payments, refunds, disputes and the ramp", () => {
++    const text = textOf("terms", "codium-plans")
++    for (const pattern of [
++      /sold as monthly plans only/,
++      /no top-ups and no overage charges/,
++      /renews automatically each month/,
++      /cancel at any time .*keep your plan until the end of the period you have paid for/,
++      /upgrade .*starts a new monthly period on the day you upgrade and is charged in full/,
++      /unused usage of your current month carries into that new period only/,
++      /downgrade starts at your next renewal/,
++      /If a payment fails, Vector Codium and your plan's features pause/,
++      /does not extend the month/,
++      /after Stripe's retries, your plan ends/,
++      /full refund of a payment, or a dispute of it, ends what that payment bought/,
++      /possibly fraudulent, Vector may refund it and end the plan/,
++      /suspended while a payment is disputed or flagged/,
++      /New Max and Ultra subscriptions.* start with reduced limits for a short period/,
++    ])
++      expect(text).toMatch(pattern)
++  })
++
++  test("models, usage and limits", () => {
++    const models = textOf("terms", "codium-models")
++    expect(models).toMatch(/differ by plan and are listed at vectordev\.ai\/codium/)
++    expect(models).toMatch(/temporarily unavailable/)
++    expect(models).toMatch(/replace a model with a comparable one/)
++    expect(models).toMatch(/does not reduce the usage, models or limits included in a month you have paid for/)
++    expect(models).toMatch(/apply from your next renewal after the notice/)
++    const usage = textOf("terms", "codium-usage")
++    expect(usage).toMatch(/shown only as a whole-number percentage/)
++    expect(usage).toMatch(/labelled “Codium” instead of with token counts or prices/)
++    expect(usage).toMatch(/may lag/)
++    expect(usage).toMatch(/does not roll over/)
++    expect(usage).toMatch(/daily limit/)
++    expect(usage).toMatch(/not a promise of a number of tokens, requests, completed tasks or successful results/)
++    expect(usage).toMatch(/Your own keys and free models keep working/)
++  })
++
++  test("Coming: the Velocity clause word for word, and the same for every item tagged Coming (H2)", () => {
++    const text = textOf("terms", "codium-coming")
++    expect(text).toContain(
++      "Vector Velocity is in development and is not part of what any subscription buys today. If it launches, we intend to offer it only on Max and Ultra. We don't promise that it will launch, or when.",
++    )
++    expect(text).toMatch(/The same applies to every item tagged “Coming”/)
++    expect(block(source.terms, "codium-coming")).not.toContain("<a")
++    for (const banned of [
++      /\bavailable\b/i,
++      /\bincluded\b/i,
++      /\bfree\b/i,
++      /guarantee/i,
++      /\bsoon\b/i,
++      /\bquarter\b/i,
++      new RegExp(`\\b(?:${MONTHS.join("|")})\\b`),
++      /\b20\d\d\b/,
++      /\d\s*B\b|parameter/i,
++      /built on|based on/i,
++      /OpenAI|Anthropic|Google|DeepSeek|Moonshot|Kimi|Meta|Llama|Mistral|Qwen|Alibaba|Zhipu|GLM/,
++    ])
++      expect(text).not.toMatch(banned)
++  })
++
++  test("GitHub agents: model access only, in your own repository, on your own Actions minutes (H4)", () => {
++    const text = textOf("terms", "codium-github")
++    expect(text).toMatch(
++      /sells only Codium model access inside runs in your own repository, on your own Actions minutes/,
++    )
++    expect(text).toMatch(/under your GitHub account and GitHub's terms, and GitHub bills the Actions minutes/)
++    expect(text).toMatch(/only that repository's software work/)
++    expect(text).toMatch(/Anyone with write, maintain or admin access to a repository you connect/)
++    expect(text).toMatch(/measured by Vector from Codium requests, not from GitHub's minutes/)
++    expect(text).toMatch(/also works without a plan, with your own model key stored as a repository secret/)
++    expect(text).not.toMatch(/hosted|compute|cloud hours|cloud capacity|our cloud/i)
++  })
++
++  test("cloud computer and production checks are where-available blocks with their own rules", () => {
++    const hosted = textOf("terms", "codium-hosted")
++    expect(hosted).toMatch(/counts toward your month's usage/)
++    expect(hosted).toMatch(/Vector may stop or pause a session/)
++    for (const use of [/mining/, /spam/, /scraping a website against that site's terms/, /CAPTCHAs/, /bot checks/])
++      expect(hosted).toMatch(use)
++    expect(hosted).toMatch(/browser profile is wiped after each job/)
++    expect(hosted).toMatch(/keeps the disk for 14 days so you can download your files, and then deletes it/)
++    // Cloud computer copy never mentions GitHub or Actions (H4).
++    expect(hosted).not.toMatch(/GitHub|\bActions\b/)
++    const ops = textOf("terms", "codium-ops")
++    expect(ops).toMatch(/checks only domains you have verified/)
++    expect(ops).toMatch(/only to open pull requests automatically/)
++    expect(ops).toMatch(/Vector never merges a pull request/)
++    expect(ops).toMatch(/On Call is Vector's agent, not a person/)
++    expect(ops).toMatch(/no uptime, availability or response-time promise/)
++  })
++
++  test("consent: an immediate start, 14-day withdrawal and the founding lock, as checkout says", () => {
++    const text = textOf("terms", "codium-consent")
++    expect(text).toMatch(/ask Vector to start your plan immediately/)
++    expect(text).toMatch(/withdraw within 14 days of subscribing .*you pay for what you used before you withdrew/)
++    expect(text).toMatch(/your price won't go up while you stay subscribed/)
++    expect(text).toMatch(/If you change plans, you pay the new plan's current price/)
++    expect(text).toMatch(
++      /Founding members on Plus and Pro also get 10% more usage; this does not apply to Max or Ultra/,
++    )
++    expect(text).toMatch(/Founding membership ends when your subscription ends/)
++    // The checkout text a subscriber agrees to says the same thing.
++    expect(CODIUM_CHECKOUT_CONSENT).toContain("ask Vector to start my plan now")
++    expect(CODIUM_CHECKOUT_CONSENT).toContain("If I withdraw within 14 days I pay for what I used.")
++  })
++
++  test("acceptable use adds mining, spam, scraping, CAPTCHAs and agent work unrelated to the repository", () => {
++    const text = plain(between(source.terms, "<h2>8. Acceptable use</h2>", "</section>"))
++    for (const use of [
++      /cryptocurrency mining/,
++      /spam/,
++      /scraping a website against that site's terms/,
++      /solving CAPTCHAs or bypassing bot checks/,
++      /GitHub agents for work unrelated to the repository they run in/,
++    ])
++      expect(text).toMatch(use)
++  })
++
++  test("§3 has no credits, top-ups, amounts or banned promises", () => {
++    const rest = section.replace(/\bno top-ups\b/g, "")
++    for (const banned of [
++      /credit/i,
++      /top-?ups?/i,
++      /purchased/i,
++      /one-time/i,
++      /\$\s?\d/,
++      /\d[\d,.]*\s*[KM]?\s+tokens/i,
++      ...NEVER,
++    ])
++      expect(rest).not.toMatch(banned)
++  })
++})
++
++describe("Vector Codium privacy changes (contract §7.2, drafted by A30)", () => {
++  const codium = plain(between(source.privacy, 'id="codium"', 'id="training"'))
++
++  test("every new section has its anchor, and the old ones stay", () => {
++    for (const id of [
++      "codium",
++      "codium-retention",
++      "codium-billing",
++      "codium-counters",
++      "codium-github",
++      "roadmap-votes",
++      "vault",
++      "remote",
++      "hosted-computer",
++      "production-checks",
++      "codium-deletion",
++      "report-tracking",
++      "codium-usage-counts",
++      "retention",
++      "training",
++      "included-models",
++    ])
++      expect(anchors(source.privacy).has(id)).toBe(true)
++  })
++
++  test("the Codium part has no top-ups, credits, purchased credits or amounts", () => {
++    for (const banned of [/top-?ups?/i, /credit/i, /purchased/i, /\$\s?\d/]) expect(codium).not.toMatch(banned)
++  })
++
++  test("billing record, short-lived counters and deletion", () => {
++    const billing = textOf("privacy", "codium-billing")
++    expect(billing).toMatch(/sold as monthly plans only/)
++    expect(billing).toMatch(/Stripe customer, subscription, invoice and charge identifiers/)
++    expect(billing).toMatch(/your plan and billing period/)
++    expect(billing).toMatch(/consent to the Codium terms, with the date of the terms you accepted/)
++    expect(billing).toMatch(/summary of your plan's current state/)
++    const counters = textOf("privacy", "codium-counters")
++    expect(counters).toMatch(/about eleven minutes at most/)
++    expect(counters).toMatch(/until 40 days after the billing period ends/)
++    expect(counters).toMatch(/never request content/)
++    const deletion = textOf("privacy", "codium-deletion")
++    expect(deletion).toMatch(/erases your Codium records/)
++    expect(deletion).toMatch(/Only pseudonymous ledger lines/)
++  })
++
++  test("GitHub run records, report records, ballots and usage check-ins", () => {
++    const github = textOf("privacy", "codium-github")
++    expect(github).toMatch(
++      /repository's numeric identifier is bound to your Vector account, until the binding is removed/,
++    )
++    expect(github).toMatch(/run identifier, the GitHub event that started it/)
++    expect(github).toMatch(/GitHub login or numeric user identifier of the person who started it, kept for 90 days/)
++    expect(github).toMatch(/when the run started and stopped/)
++    expect(github).toMatch(/logs are GitHub's records/)
++    expect(github).toMatch(/on a public repository anyone can read them/)
++    expect(github).toMatch(/Actions artifacts/)
++    const reports = textOf("privacy", "report-tracking")
++    expect(reports).toMatch(/for 180 days/)
++    expect(reports).toMatch(/never contains the text of your report/)
++    expect(textOf("privacy", "roadmap-votes")).toMatch(/Ballots and nominations are deleted with your account/)
++    const counts = textOf("privacy", "codium-usage-counts")
++    expect(counts).toMatch(/Codium token totals, cost and Codium model identifiers are not sent/)
++    expect(counts).toMatch(/activity counts.* still include Codium work/)
++  })
++
++  test("where-available paragraphs: Vault, Remote, cloud computer and production checks", () => {
++    const vault = textOf("privacy", "vault")
++    expect(vault).toMatch(/encrypts each backup on your computer/)
++    expect(vault).toMatch(/Vector never receives your recovery code/)
++    expect(vault).toMatch(/read-only for 30 days/)
++    const remote = textOf("privacy", "remote")
++    expect(remote).toMatch(/relay/)
++    expect(remote).toMatch(/encrypt what they exchange end to end/)
++    expect(remote).toMatch(/devices you pair/)
++    expect(remote).toMatch(/push subscriptions/)
++    expect(remote).toMatch(/carry only a title/)
++    const hosted = textOf("privacy", "hosted-computer")
++    expect(hosted).toMatch(/recordings are visible only to you and kept for 30 days/)
++    expect(hosted).toMatch(/Nothing is recorded while you have taken over control/)
++    expect(hosted).toMatch(/Vercel runs the computer, and Cloudflare stores its recordings/)
++    expect(hosted).toMatch(/Zero data retention covers the model requests your jobs make, not the computer's disk/)
++    expect(hosted).not.toMatch(/GitHub|\bActions\b/)
++    const checks = textOf("privacy", "production-checks")
++    expect(checks).toMatch(/production URLs and domains/)
++    expect(checks).toMatch(/check results/)
++    expect(checks).toMatch(/deployment and pull request events/)
++    expect(checks).toMatch(/screenshots/)
++    expect(checks).toMatch(/for 30 or 90 days depending on your plan/)
++  })
++
++  test("§12 lists the retention periods", () => {
++    const list = textOf("privacy", "retention")
++    for (const period of [/eleven minutes/, /three days/, /40 days/, /90 days/, /180 days/, /about 13 months/])
++      expect(list).toMatch(period)
++  })
++
++  test("no banned promise in the Codium paragraphs", () => {
++    for (const banned of NEVER) expect(codium).not.toMatch(banned)
++  })
++})
++
++describe("where-available blocks (published only once their perk is listed)", () => {
++  /** Each element marked data-where-available, with the text up to its closing tag (they do not nest). */
++  const blocks = (page: Page) =>
++    [...source[page].matchAll(/<(\w+)\b[^>]*\bdata-where-available="([^"]*)"[^>]*>/g)].map((match) => {
++      const rest = source[page].slice(match.index + match[0].length)
++      return {
++        id: /\bid="([^"]+)"/.exec(match[0])?.[1],
++        perks: match[2]!.split(" "),
++        text: plain(rest.slice(0, rest.indexOf(`</${match[1]}>`))),
++      }
++    })
++
++  test("each names perks from the listing, so A60 can keep exactly the listed ones", () => {
++    const known = new Set<string>(PERK_IDS)
++    for (const page of Object.keys(PAGES) as Page[])
++      for (const entry of blocks(page)) {
++        expect(entry.perks.length).toBeGreaterThan(0)
++        for (const perk of entry.perks) expect(known.has(perk)).toBe(true)
++      }
++  })
++
++  test("the services not built yet are where-available blocks, and each says so", () => {
++    expect(blocks("terms").map((entry) => entry.id)).toEqual(["codium-hosted", "codium-ops"])
++    const privacy = blocks("privacy")
++    expect(privacy.filter((entry) => entry.id).map((entry) => entry.id)).toEqual([
++      "vault",
++      "remote",
++      "hosted-computer",
++      "production-checks",
++    ])
++    // §12's retention list repeats the same three services, without anchors.
++    expect(privacy.filter((entry) => !entry.id).map((entry) => entry.perks.join(" "))).toEqual([
++      "vault",
++      "computer overnight",
++      "on-call release-guard ship-desk",
++    ])
++    for (const page of Object.keys(PAGES) as Page[])
++      for (const entry of blocks(page)) expect(entry.text).toMatch(/^[^.]{0,80}\(where available\)/)
++  })
++})
+diff --git a/test/no-topups.test.ts b/test/no-topups.test.ts
+index 575bdd83a7de505f22ec488f9a97e4a5e272f560..4c8501f88b58c5b832ade3f822044fa3f8aef575 100644
+--- a/test/no-topups.test.ts
++++ b/test/no-topups.test.ts
+@@ -81,14 +81,6 @@ const FILES: { file: string | RegExp; reason: string }[] = [
+     reason: "Shipped release notes keep the words they shipped with.",
+   },
+   { file: "packages/web/public/changelog.json", reason: "Shipped release notes keep the words they shipped with." },
+-  {
+-    file: "packages/web/src/pages/legal/terms.astro",
+-    reason: "Legal pages change only in A60's release commit (H8); A30 drafts the replacement on codium-legal.",
+-  },
+-  {
+-    file: "packages/web/src/pages/legal/privacy.astro",
+-    reason: "Legal pages change only in A60's release commit (H8); A30 drafts the replacement on codium-legal.",
+-  },
+ ]
+ 
+ /** Phrases allowed anywhere. A line passes when nothing matching the search is left once these are taken out. */

@@ -1,0 +1,11 @@
+{
+  "sourceCommit": "94a5004ed4cb5742842befc2a553718f6c69e2d0",
+  "sourceBase": "986a8096078bb1c91605f4ec769c3cc4dfc95fea",
+  "sourceBranchTip": "fd4db7f47",
+  "ownerDecisionDate": "2026-11-14",
+  "status": "archived-proposal-not-active",
+  "ownerDecision": "Preserve current policies and archive the proposed changes for review",
+  "patch": "94a5004ed.patch",
+  "patchSHA256": "910cb50fc487f4f0b85c8e562d06637faeb238364afb90fbe46732013d76ed04",
+  "changesActivePolicies": false
+}
