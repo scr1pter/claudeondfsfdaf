@@ -30,3 +30,15 @@ test("an isolation planning refusal is a typed spawn error and never launches th
     await fs.rm(directory, { recursive: true, force: true })
   }
 }, 15_000)
+
+test("fixed metadata and Git helpers refuse required isolation before inspecting or spawning", async () => {
+  const input = fileURLToPath(new URL("../fixture/fixed-helper-isolation.ts", import.meta.url))
+  const child = Bun.spawn([process.execPath, "--no-env-file", input, input], { stdout: "pipe", stderr: "pipe" })
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(stdout)).toEqual({ identity: true, git: true })
+}, 15_000)

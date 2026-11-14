@@ -1,4 +1,5 @@
 import { DirectoryIdentityReader } from "./directory-identity"
+import { ProcessIsolation } from "./process-isolation"
 export * as ReadOnlyGit from "./read-only-git"
 
 import { constants } from "node:fs"
@@ -562,6 +563,8 @@ async function makeCommands(
         let stderrTail = ""
         let stderrReason: ReturnType<typeof commandReason> | "none" = "none"
         let timer: ReturnType<typeof setTimeout> | undefined
+        // The fixed verifier must not bypass required tool isolation. It remains unavailable until adapted.
+        requireValue(!ProcessIsolation.required(), "Git inspection cannot bypass required process isolation")
         const child = spawn(DirectoryIdentityReader.PYTHON, ["-I", "-S", "-c", PROCESS_SOURCE, file, ...args], {
           cwd: directory,
           env,
@@ -1206,6 +1209,7 @@ function relative(file: string) {
 
 /** A scoped private Git view for the entire review collection; callers still enforce their own file/read policy. */
 export async function open(input: Input, options?: { signal?: AbortSignal }): Promise<Repository> {
+  requireValue(!ProcessIsolation.required(), "Git inspection cannot bypass required process isolation")
   const opening = performance.now() + INTEGRITY.opening
   requireValue(!options?.signal?.aborted, "Git snapshot was cancelled")
   requireValue(process.platform === "linux", "this host has no pinned-directory adapter")

@@ -272,6 +272,7 @@ describe("credentials", () => {
         "VECTOR_GITHUB_SESSION_PROOF",
         "HOME",
         "RUNNER_TEMP",
+        "TMPDIR",
       ].sort(),
     )
     expect(new Set(allow).size).toBe(allow.length)

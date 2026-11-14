@@ -6,6 +6,7 @@ import { Cause, Context, Effect, Layer, Schema, Scope } from "effect"
 import { ModelV2 } from "./model"
 import { ProviderV2 } from "./provider"
 import { State } from "./state"
+import { ProcessIsolation } from "./process-isolation"
 
 type SDK = any
 
@@ -159,6 +160,7 @@ export const locationLayer = Layer.effect(
       update: (hooks: ((event: Event) => Effect.Effect<void> | void)[]) => void,
     ) =>
       Effect.fn("AISDK.hook")(function* (callback: (event: Event) => Effect.Effect<void> | void) {
+        ProcessIsolation.assertExternalValueAllowed(callback)
         const scope = yield* Scope.Scope
         let active = true
         update([...hooks(), callback])
@@ -171,13 +173,23 @@ export const locationLayer = Layer.effect(
         return { dispose }
       })
 
-    const run = Effect.fnUntraced(function* <Event>(
+    const run = Effect.fnUntraced(function* <Event extends SDKEvent | LanguageEvent>(
       hooks: readonly ((event: Event) => Effect.Effect<void> | void)[],
       event: Event,
     ) {
       for (const hook of hooks) {
+        ProcessIsolation.assertExternalValueAllowed(hook)
         const result = hook(event)
         if (Effect.isEffect(result)) yield* result
+        if (ProcessIsolation.isExternalCode(hook)) {
+          ProcessIsolation.assertExternalCodeAllowed()
+          // Source participation taints even an unchanged earlier SDK or an option-only modification.
+          ProcessIsolation.markExternalCode(event)
+          ProcessIsolation.markExternalCode(event.model)
+          ProcessIsolation.markExternalCode(event.options)
+          ProcessIsolation.markExternalCode(event.sdk)
+          if ("language" in event) ProcessIsolation.markExternalCode(event.language)
+        }
       }
       return event
     })
@@ -196,9 +208,13 @@ export const locationLayer = Layer.effect(
       runSDK: (event) => run(sdkHooks, event),
       runLanguage: (event) => run(languageHooks, event),
       language: Effect.fn("AISDK.language")(function* (model) {
+        ProcessIsolation.assertExternalValueAllowed(model)
         const key = `${model.providerID}/${model.id}/${model.request.variant ?? "default"}`
         const existing = languages.get(key)
-        if (existing) return existing
+        if (existing) {
+          ProcessIsolation.assertExternalValueAllowed(existing)
+          return existing
+        }
         if (model.api.type !== "aisdk")
           return yield* new InitError({
             providerID: model.providerID,
@@ -219,13 +235,19 @@ export const locationLayer = Layer.effect(
             providerID: model.providerID,
             cause: new Error("No AISDK provider plugin returned an SDK"),
           })
+        ProcessIsolation.assertExternalValueAllowed(sdk)
         sdks.set(sdkKey, sdk)
         const result = yield* service.runLanguage({ model, sdk, options }).pipe(initError(model.providerID))
-        const language = yield* Effect.sync(() => result.language ?? sdk.languageModel(model.api.id)).pipe(
-          initError(model.providerID),
-        )
-        languages.set(key, language)
-        return language
+        const language = yield* Effect.sync(() => {
+          ProcessIsolation.assertExternalValueAllowed(sdk)
+          ProcessIsolation.assertExternalValueAllowed(result.language)
+          return result.language ?? sdk.languageModel(model.api.id)
+        }).pipe(initError(model.providerID))
+        if (ProcessIsolation.isExternalCode(sdk)) ProcessIsolation.markExternalCode(language)
+        ProcessIsolation.assertExternalValueAllowed(language)
+        const guarded = ProcessIsolation.guardExternalObject(language)
+        languages.set(key, guarded)
+        return guarded
       }),
     })
     return service

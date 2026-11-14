@@ -8,6 +8,8 @@ import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "./github.secrets"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { GithubSessionProof } from "./github.session-proof"
+import { GithubIsolation } from "./github.isolation"
+import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
 
 const execute = promisify(execFile)
 const USER = GithubAgents.SANDBOX_USER
@@ -28,10 +30,26 @@ const State = z
     gid: z.number().int().positive().optional(),
     prepared: z.boolean(),
     isolatedTools: z.boolean().optional(),
+    nativeRequired: z.literal(true).optional(),
+    native: z.custom<GithubIsolation.State>(GithubIsolation.validState).optional(),
   })
   .strict()
 type State = z.infer<typeof State>
 type Env = Readonly<Record<string, string | undefined>>
+
+function nativeState(state: State) {
+  const native = GithubIsolation.parseState(state.native)
+  if (
+    state.sudo ||
+    !state.nativeRequired ||
+    !state.created ||
+    native.uid !== state.uid ||
+    native.gid !== state.gid ||
+    native.container !== state.container
+  )
+    throw refused()
+  return native
+}
 
 function refused() {
   return new Error("The GitHub agent sandbox could not verify its isolation or cleanup. The run is refused.")
@@ -229,6 +247,26 @@ async function verifyContainer(container: string, ready = false) {
     throw refused()
 }
 
+async function engineScope(state: State, cwd: string, proofFile?: string): Promise<ProcessIsolation.EngineScope> {
+  if (!state.uid || !state.gid || AGENT_HOME !== ProcessIsolation.ENGINE_HOME) throw refused()
+  await verifyContainer(state.container, true)
+  const scope = { container: state.container, cwd, ...(proofFile ? { proofFile } : {}) }
+  const directories = ProcessIsolation.engineWritableDirectories(scope)
+  const canonical = (await sudo(["/usr/bin/realpath", "-e", "--", ...directories])).stdout.trim().split("\n")
+  if (canonical.length !== directories.length || canonical.some((directory, index) => directory !== directories[index]))
+    throw refused()
+  const metadata = (await sudo(["/usr/bin/stat", "--format=%u:%g:%a:%F", "--", ...directories])).stdout
+    .trim()
+    .split("\n")
+  if (metadata.length !== directories.length) throw refused()
+  for (const [index, line] of metadata.entries()) {
+    const [uid, gid, mode, type] = line.split(":")
+    if (Number(uid) !== state.uid || Number(gid) !== state.gid || type !== "directory" || (index > 0 && mode !== "700"))
+      throw refused()
+  }
+  return scope
+}
+
 async function placeholder(workspace: string, create = false) {
   if (create)
     await fs.mkdir(workspace, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
@@ -304,6 +342,7 @@ export function sandboxEnvironment(
     ].join(path.delimiter),
     HOME: absolute(locations.home),
     RUNNER_TEMP: absolute(locations.temporary),
+    TMPDIR: absolute(locations.temporary),
     GITHUB_EVENT_PATH: absolute(locations.event),
     VECTOR_SECRET_CHANNEL: "stdin",
     ...(locations.toolIsolation ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: locations.toolIsolation } : {}),
@@ -390,10 +429,19 @@ export async function copyBundleFile(
 
 export async function prepare(env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
+  const native = GithubIsolation.enabled()
   const selected = mode(env)
   if (env.RUNNER_ENVIRONMENT !== "github-hosted") throw refused()
+  if (env.VECTOR_AGENT_SUDO !== "1" && native) LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
   const workspace = await checkout(env)
   if ((await command("/usr/bin/id", ["-u", USER], [0, 1])).code === 0) throw refused()
+  if (
+    await fs.lstat(AGENT_HOME).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw refused()
+      return undefined
+    })
+  )
+    throw refused()
   await validateCheckoutTree(workspace)
   const container = await stagingContainer(workspace)
   const staged = path.join(container, "checkout")
@@ -405,6 +453,7 @@ export async function prepare(env: Env = process.env) {
     mode: selected,
     sudo: env.VECTOR_AGENT_SUDO === "1",
     prepared: false,
+    ...(env.VECTOR_AGENT_SUDO !== "1" && native ? { nativeRequired: true as const } : {}),
   }
   // Record cleanup authority before creating the container or moving the checkout.
   await writeState(env, state, true)
@@ -448,7 +497,7 @@ export async function prepare(env: Env = process.env) {
     String(state.uid),
     "-g",
     String(state.gid),
-    `${AGENT_HOME}/tmp`,
+    ...ProcessIsolation.ENGINE_PRIVATE_DIRECTORIES,
   ])
   await sudo(["/usr/bin/chown", "-hR", `${state.uid}:${state.gid}`, "--", staged])
   await sudo(["/usr/bin/systemctl", "stop", "docker.socket", "docker.service"])
@@ -499,14 +548,24 @@ export async function prepare(env: Env = process.env) {
   if (groups !== String(state.gid)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/sudo", "-n", "true"], [0, 1])).code !== (state.sudo ? 0 : 1)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
-  // Without the bubblewrap floor (ProcessIsolation.FLOOR) there is no namespace to verify; the engine applies the
-  // kernel path guard and native loader refusal to its tools instead.
-  if (!state.sudo && ProcessIsolation.FLOOR) {
+  if (!state.sudo && native) {
+    // Persist native intent before any root installation or native child exists. Never downgrade an intent.
+    const adapter = GithubIsolation.fromBuild(env.RUNNER_TEMP)
+    if (state.uid === undefined || state.gid === undefined) throw refused()
+    state.native = adapter.intent({ uid: state.uid, gid: state.gid, container })
+    await writeState(env, state)
+    state.native = await adapter.prepare(nativeState(state))
+    state.isolatedTools = true
+  } else if (!state.sudo && ProcessIsolation.FLOOR) {
     ProcessIsolation.assertBinary()
     const engineProbe = await sudo(
       [
         ProcessIsolation.BINARY,
-        ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
+        ...ProcessIsolation.engineArguments(
+          asAgent[0]!,
+          [...asAgent.slice(1), "/bin/true"],
+          await engineScope(state, container),
+        ),
       ],
       [0, 1],
     )
@@ -558,7 +617,9 @@ export function preparedFor(
       state.created &&
       state.uid &&
       state.gid &&
-      (state.sudo || !floor || state.isolatedTools) &&
+      (state.sudo ||
+        !(floor || state.nativeRequired || state.native || GithubIsolation.enabled()) ||
+        state.isolatedTools) &&
       state.workspace === run.workspace &&
       state.mode === run.mode,
   )
@@ -570,12 +631,14 @@ export function engineLaunch(
   workspace: string,
   sudo: boolean,
   floor = ProcessIsolation.FLOOR,
+  scope?: ProcessIsolation.EngineScope,
 ) {
+  if (!sudo && floor && (!scope || scope.cwd !== workspace)) throw refused()
   return [
     "-n",
     ...(sudo || !floor
       ? inner
-      : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace)]),
+      : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), scope!)]),
   ]
 }
 
@@ -603,6 +666,7 @@ async function executable(name: string, env: Env) {
 
 export async function run(args: readonly string[], env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
+  const native = GithubIsolation.enabled()
   mode(env)
   if (!args.length || args.some((value) => value.includes("\0"))) throw refused()
   const workspace = await checkout(env)
@@ -611,6 +675,11 @@ export async function run(args: readonly string[], env: Env = process.env) {
   const hosted = env.RUNNER_ENVIRONMENT === "github-hosted"
   const state = hosted ? await readState(env) : undefined
   if (hosted && !preparedFor(state, { workspace, mode: env.VECTOR_MODE })) throw refused()
+  if (hosted && !state!.sudo && (state!.nativeRequired || state!.native || native)) {
+    await GithubIsolation.fromBuild(env.RUNNER_TEMP).validate(nativeState(state!))
+    LinuxIsolation.assertUnmaskedRuntime(node)
+    LinuxIsolation.assertUnmaskedRuntime(binary)
+  }
   if (
     hosted &&
     ((await fs.readFile("/proc/sys/kernel/core_pattern", "utf8")).trim() !== "/dev/null" ||
@@ -642,7 +711,6 @@ export async function run(args: readonly string[], env: Env = process.env) {
     ...(hosted && state!.mode === "codium" && !state!.sudo ? { sessionProof: true as const } : {}),
   })
   clean.GITHUB_WORKSPACE = working
-  const channel = await secretChannel(env)
   const proofPath =
     hosted && state!.mode === "codium" ? path.join(stateDirectory(env), "session-proof.json") : undefined
   if (proofPath) {
@@ -651,8 +719,48 @@ export async function run(args: readonly string[], env: Env = process.env) {
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600,
     )
-    await file.close()
+    try {
+      const info = await file.stat()
+      if (
+        !info.isFile() ||
+        info.uid !== process.getuid?.() ||
+        info.nlink !== 1 ||
+        (info.mode & 0o777) !== 0o600 ||
+        info.size !== 0
+      )
+        throw refused()
+    } finally {
+      await file.close()
+    }
+    await privateDirectory(stateDirectory(env))
+    for (const access of ["-r", "-w"])
+      if (
+        (
+          await sudo(
+            [
+              "/usr/bin/setpriv",
+              `--reuid=${state!.uid}`,
+              `--regid=${state!.gid}`,
+              "--clear-groups",
+              "--no-new-privs",
+              "--",
+              "/usr/bin/test",
+              access,
+              proofPath,
+            ],
+            [0, 1],
+          )
+        ).code !== 1
+      )
+        throw refused()
   }
+  const scope = hosted && !state!.sudo ? await engineScope(state!, workspace, proofPath) : undefined
+  if (scope) {
+    ProcessIsolation.assertEngineExecutable(binary, scope)
+    ProcessIsolation.assertEngineExecutable(node, scope)
+  }
+  // Capture the credential channel only after every writable exception and the private proof file is verified.
+  const channel = await secretChannel(env)
   const launcher = hosted ? "/usr/bin/sudo" : binary
   const inner = hosted
     ? [
@@ -685,7 +793,9 @@ export async function run(args: readonly string[], env: Env = process.env) {
         ...args.slice(1),
       ]
     : args.slice(1)
-  const arguments_ = !hosted ? inner : engineLaunch(inner, workspace, state!.sudo)
+  const arguments_ = !hosted
+    ? inner
+    : engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope)
   return new Promise<number>((resolve, reject) => {
     const child = spawn(launcher, arguments_, {
       // GNU env changes to the staged directory only after setpriv. A mode-0700 checkout is owned by the agent.
@@ -715,7 +825,10 @@ export async function run(args: readonly string[], env: Env = process.env) {
 
 export async function finish(env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
+  const native = GithubIsolation.enabled()
   mode(env)
+  if (env.RUNNER_ENVIRONMENT === "github-hosted" && env.VECTOR_AGENT_SUDO !== "1" && native)
+    LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
   let cancelled = false
   const interrupt = () => {
     cancelled = true
@@ -735,7 +848,7 @@ export async function finish(env: Env = process.env) {
     const workspace = checkoutPath(env)
     if (state && state.workspace !== workspace) throw refused()
     if (state && !state.created) {
-      if (state.prepared || state.uid || state.gid) throw refused()
+      if (state.prepared || state.uid || state.gid || state.native || state.nativeRequired) throw refused()
       // No move or user creation preceded this phase. Never inspect/copy/remove another operation's container.
       await fs.rm(stateDirectory(env), { recursive: true })
       return
@@ -743,8 +856,15 @@ export async function finish(env: Env = process.env) {
     const container = state?.container
     let quarantine = workspace
     let cleanupAllowed = false
-    let isolationError: unknown
+    // Native cleanup seals traversal, stops UID processes BEFORE its broker, then verifies the fixed receipt.
+    // On failure do not quarantine, copy, remove state or use the legacy UID loop as an artifact fallback.
+    const nativeReceipt = state?.native
+      ? await GithubIsolation.fromBuild(env.RUNNER_TEMP).cleanup(nativeState(state))
+      : undefined
+    const nativeMissing = Boolean(state && !state.sudo && (state.nativeRequired || native) && !state.native)
+    let isolationError: unknown = nativeMissing || nativeReceipt?.artifactsAllowed === false ? refused() : undefined
     try {
+      if (nativeMissing) throw refused()
       if (hosted) {
         if (!container || (!state?.created && (state?.prepared || state?.uid))) throw refused()
         quarantine = path.join(container, "cleanup", "checkout")
@@ -783,10 +903,13 @@ export async function finish(env: Env = process.env) {
       isolationError = error
     }
     // The original workspace was replaced before agent launch. Post actions never regain an agent-written tree.
-    let stopped = !hosted
+    let stopped = !hosted || nativeReceipt !== undefined
     try {
       if (hosted) {
-        if (!state?.uid || !state.gid) {
+        if (nativeReceipt) {
+          if (!cancelled && !isolationError && (await fs.lstat(quarantine).catch(() => undefined)))
+            await prepareBundle(path.join(quarantine, GithubAgents.BUNDLE_DIR))
+        } else if (!state?.uid || !state.gid) {
           if (state?.prepared) throw refused()
           stopped = true
         } else {
@@ -821,13 +944,15 @@ export async function finish(env: Env = process.env) {
         }
     } finally {
       const removed = await (
-        hosted
-          ? !state?.created
-            ? Promise.resolve()
-            : cleanupAllowed
-              ? sudo(["/usr/bin/rm", "-rf", "--", container!])
-              : Promise.reject(refused())
-          : fs.rm(workspace, { recursive: true, force: true })
+        nativeMissing
+          ? Promise.reject(refused())
+          : hosted
+            ? !state?.created
+              ? Promise.resolve()
+              : cleanupAllowed
+                ? sudo(["/usr/bin/rm", "-rf", "--", container!])
+                : Promise.reject(refused())
+            : fs.rm(workspace, { recursive: true, force: true })
       ).then(
         () => true,
         () => false,

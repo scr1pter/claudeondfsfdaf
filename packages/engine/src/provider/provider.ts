@@ -1,4 +1,5 @@
 import { GithubSecrets } from "@/cli/cmd/github.secrets"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import {
   activeOAuthApproval,
   pluginCredentialAllowed,
@@ -305,7 +306,9 @@ function fitted(
   return Object.assign(wrapped, {
     doGenerate: async (options: LanguageModelV3CallOptions) => {
       const release = await acquire(options)
-      return Promise.resolve(language.doGenerate(clamp(options))).finally(release)
+      return Promise.resolve()
+        .then(() => language.doGenerate(clamp(options)))
+        .finally(release)
     },
     doStream: async (options: LanguageModelV3CallOptions) => {
       const held = await acquire(options)
@@ -315,10 +318,12 @@ function fitted(
         held()
       }
       options.abortSignal?.addEventListener("abort", release, { once: true })
-      const result = await Promise.resolve(language.doStream(clamp(options))).catch((error: unknown) => {
-        release()
-        throw error
-      })
+      const result = await Promise.resolve()
+        .then(() => language.doStream(clamp(options)))
+        .catch((error: unknown) => {
+          release()
+          throw error
+        })
       return { ...result, stream: releasing(result.stream, release) }
     },
   })
@@ -1932,6 +1937,7 @@ const layer = Layer.effect(
 
         // load plugins first so config() hook runs before reading cfg.provider
         const plugins = yield* plugin.list()
+        for (const hook of plugins) ProcessIsolation.assertExternalValueAllowed(hook)
 
         // Runtime consent markers cannot be supplied by project/global config or plugin config hooks.
         for (const provider of Object.values(cfg.provider ?? {}))
@@ -1956,6 +1962,7 @@ const layer = Layer.effect(
         }
 
         for (const hook of plugins) {
+          ProcessIsolation.assertExternalValueAllowed(hook)
           const p = hook.provider
           const models = p?.models
           if (!p || !models) continue
@@ -1979,7 +1986,9 @@ const layer = Layer.effect(
               : undefined
 
           provider.models = yield* Effect.promise(async () => {
+            ProcessIsolation.assertExternalValueAllowed(hook)
             const next = await models(toPublicInfo(provider), { auth: pluginAuth })
+            ProcessIsolation.assertExternalValueAllowed(hook)
             return Object.fromEntries(
               Object.entries(next).map(([id, model]) => [
                 id,
@@ -2138,23 +2147,32 @@ const layer = Layer.effect(
 
         // plugin auth loader - database now has entries for config providers
         for (const plugin of plugins) {
+          ProcessIsolation.assertExternalValueAllowed(plugin)
           if (!plugin.auth) continue
           const providerID = ProviderV2.ID.make(plugin.auth.provider)
           if (!isProviderAllowed(providerID)) continue
 
           const stored = yield* auth.get(providerID).pipe(Effect.orDie)
+          ProcessIsolation.assertExternalValueAllowed(plugin)
           if (!stored) continue
           if (!providerCredentialAllowed(providerID, stored, userProviders.has(providerID))) continue
           if (!plugin.auth.loader) continue
           const provider = getDatabase(providerID)
           if (!provider) continue
 
-          const options = yield* Effect.promise(() =>
-            plugin.auth!.loader!(
+          const options = yield* Effect.promise(async () => {
+            ProcessIsolation.assertExternalValueAllowed(plugin)
+            const result = await plugin.auth!.loader!(
               () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
               toPublicInfo(provider),
-            ),
-          )
+            )
+            ProcessIsolation.assertExternalValueAllowed(plugin)
+            if (ProcessIsolation.isExternalCode(plugin) && result) {
+              ProcessIsolation.markExternalCode(result)
+              ProcessIsolation.markExternalCode(result.fetch)
+            }
+            return result
+          })
           const opts = options ?? {}
           const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
           mergeProvider(providerID, patch)
@@ -2322,7 +2340,7 @@ const layer = Layer.effect(
         ]
         for (const notice of unavailable) yield* Effect.logWarning(notice.message)
 
-        return {
+        const result = {
           models: languages,
           providers,
           unavailable,
@@ -2341,6 +2359,10 @@ const layer = Layer.effect(
           modelLoaders,
           varsLoaders,
         }
+        // A cached state can retain callbacks/options through merges, even when the selected SDK label is bundled.
+        return plugins.some((hook) => ProcessIsolation.isExternalCode(hook))
+          ? ProcessIsolation.markExternalCode(result)
+          : result
       }),
     )
 
@@ -2368,7 +2390,7 @@ const layer = Layer.effect(
       if (JSON.stringify(policy) === JSON.stringify(s.local) && s.revision === holds.revision()) return s
       yield* InstanceState.invalidate(state)
       return yield* InstanceState.get(state)
-    })
+    }).pipe(Effect.tap((value) => Effect.sync(() => ProcessIsolation.assertExternalValueAllowed(value))))
 
     // A plan bought, a sign-in or a sign-out must not require restarting the local engine.
     const refreshCodium = Effect.fn("Provider.refreshCodium")(function* (options?: ModelPlans.CatalogOptions) {
@@ -2406,6 +2428,8 @@ const layer = Layer.effect(
 
     async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
       try {
+        ProcessIsolation.assertExternalValueAllowed(s)
+        if (!Object.hasOwn(BUNDLED_PROVIDERS, model.api.npm)) ProcessIsolation.assertExternalCodeAllowed()
         const provider = s.providers[model.providerID]
         if (model.providerID === planID) {
           const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible")
@@ -2479,6 +2503,7 @@ const layer = Layer.effect(
         }
         const options = { ...provider.options }
         const credential = await runtimeBridge.promise(auth.get(model.providerID).pipe(Effect.orDie))
+        ProcessIsolation.assertExternalValueAllowed(s)
         const consentID = credential?.type !== "wellknown" ? credential?.metadata?.vector_plugin_oauth : undefined
         const consent = typeof consentID === "string" ? activeOAuthApproval(model.providerID, consentID) : undefined
         if (consentID && (!consent || !pluginCredentialAllowed(model.providerID, credential!)))
@@ -2537,9 +2562,13 @@ const layer = Layer.effect(
           }),
         )
         const existing = s.sdk.get(key)
-        if (existing) return existing
+        if (existing) {
+          ProcessIsolation.assertExternalValueAllowed(existing)
+          return existing
+        }
 
         const customFetch = options["fetch"]
+        ProcessIsolation.assertExternalValueAllowed(customFetch)
         const hosted =
           ModelSlots.server(
             typeof options["preconnect"] === "string" ? options["preconnect"] : baseURL,
@@ -2564,6 +2593,8 @@ const layer = Layer.effect(
         delete options["forwards"]
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
+          ProcessIsolation.assertExternalValueAllowed(s)
+          ProcessIsolation.assertExternalValueAllowed(customFetch)
           const fetchFn = customFetch ?? fetch
           const opts = { ...init }
           const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
@@ -2660,7 +2691,11 @@ const layer = Layer.effect(
                 // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
                 timeout: false,
               },
-              fetchFn,
+              (target, request) => {
+                ProcessIsolation.assertExternalValueAllowed(s)
+                ProcessIsolation.assertExternalValueAllowed(customFetch)
+                return fetchFn(target, request)
+              },
             )
               .then(
                 (response) => {
@@ -2682,17 +2717,23 @@ const layer = Layer.effect(
           return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl, deadlines)
         }
 
-        const bundledLoader = BUNDLED_PROVIDERS[model.api.npm]
+        const bundledLoader = Object.hasOwn(BUNDLED_PROVIDERS, model.api.npm)
+          ? BUNDLED_PROVIDERS[model.api.npm]
+          : undefined
         if (bundledLoader) {
           const factory = await bundledLoader()
+          ProcessIsolation.assertExternalValueAllowed(s)
           const loaded = factory({
             name: model.providerID,
             ...options,
           })
+          if (ProcessIsolation.isExternalCode(s)) ProcessIsolation.markExternalCode(loaded)
+          ProcessIsolation.assertExternalValueAllowed(loaded)
           s.sdk.set(key, loaded)
           return loaded as SDK
         }
 
+        ProcessIsolation.assertExternalCodeAllowed()
         const installedPath = await (async () => {
           if (model.api.npm.startsWith("file://")) {
             return model.api.npm
@@ -2707,13 +2748,17 @@ const layer = Layer.effect(
         // `installedPath` is a local entry path or an existing `file://` URL. Normalize
         // only path inputs so Node on Windows accepts the dynamic import.
         const importSpec = installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
+        ProcessIsolation.assertExternalCodeAllowed()
         const mod = await import(importSpec)
 
+        ProcessIsolation.assertExternalCodeAllowed()
         const fn = mod[Object.keys(mod).find((key) => key.startsWith("create"))!]
-        const loaded = fn({
-          name: model.providerID,
-          ...options,
-        })
+        const loaded = ProcessIsolation.markExternalCode(
+          fn({
+            name: model.providerID,
+            ...options,
+          }),
+        )
         s.sdk.set(key, loaded)
         return loaded as SDK
       } catch (e) {
@@ -2797,15 +2842,22 @@ const layer = Layer.effect(
     })
 
     const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
+      // A model cached before private-channel activation must not retain authority to execute an external SDK.
+      if (!Object.hasOwn(BUNDLED_PROVIDERS, model.api.npm)) ProcessIsolation.assertExternalCodeAllowed()
       const s = yield* providerState
       const envs = yield* env.all()
       const key = `${model.providerID}/${model.id}`
       const provider = s.providers[model.providerID]
+      const cached = s.models.get(key)
+      ProcessIsolation.assertExternalValueAllowed(cached)
       const language =
-        s.models.get(key) ??
+        cached ??
         (yield* EffectPromise.refineRejection(
           async () => {
             const sdk = await resolveSDK(model, s, envs)
+            ProcessIsolation.assertExternalValueAllowed(s)
+            if (!Object.hasOwn(BUNDLED_PROVIDERS, model.api.npm)) ProcessIsolation.assertExternalCodeAllowed()
+            ProcessIsolation.assertExternalValueAllowed(sdk)
             const loaded = s.modelLoaders[model.providerID]
               ? await s.modelLoaders[model.providerID](
                   sdk,
@@ -2817,8 +2869,12 @@ const layer = Layer.effect(
                   model,
                 )
               : sdk.languageModel(model.api.id)
-            s.models.set(key, loaded)
-            return loaded
+            if (ProcessIsolation.isExternalCode(sdk) || ProcessIsolation.isExternalCode(s))
+              ProcessIsolation.markExternalCode(loaded)
+            ProcessIsolation.assertExternalValueAllowed(loaded)
+            const guarded = ProcessIsolation.guardExternalObject(loaded)
+            s.models.set(key, guarded)
+            return guarded
           },
           (cause) =>
             cause instanceof NoSuchModelError
@@ -2827,7 +2883,7 @@ const layer = Layer.effect(
         ))
       const at = lineOf(model, s, envs)
       if (!at) return language
-      return fitted(language, {
+      const wrapped = fitted(language, {
         slots,
         origin: at.origin,
         permits: at.permits,
@@ -2835,6 +2891,8 @@ const layer = Layer.effect(
         context: at.hosted ? model.limit.context : 0,
         ceiling: at.hosted ? hostedCeiling(model, lanes.get(model)?.brief === true) : undefined,
       })
+      if (ProcessIsolation.isExternalCode(language)) ProcessIsolation.markExternalCode(wrapped)
+      return ProcessIsolation.guardExternalObject(wrapped)
     })
 
     // Where a model's requests wait, as getLanguage holds them and the session processor, Vectorscope and the

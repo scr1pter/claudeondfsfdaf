@@ -41,6 +41,7 @@ import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Git } from "@/git"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { ConfigDependencies } from "@/config/dependencies"
 import { InstallationLocal } from "@vectordevai/core/installation/version"
 import { PluginLoader } from "@/plugin/loader"
@@ -240,6 +241,7 @@ const layer = Layer.effect(
         const custom: Tool.Def[] = []
 
         function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
+          ProcessIsolation.assertExternalCodeAllowed()
           // Plugin tools still expose Zod args publicly; keep that compatibility
           // boxed at the registry boundary and give the LLM the original JSON Schema.
           // Normalize missing args to `{}` once — pre-1.14.49 the code was
@@ -250,7 +252,10 @@ const layer = Layer.effect(
           const zodParams = allZod ? z.object(args) : undefined
           const jsonSchema = zodParams ? zodJsonSchema(zodParams) : legacyJsonSchema(entries)
           const parameters = zodParams
-            ? Schema.declare<unknown>((u): u is unknown => zodParams.safeParse(u).success)
+            ? Schema.declare<unknown>((u): u is unknown => {
+                ProcessIsolation.assertExternalCodeAllowed()
+                return zodParams.safeParse(u).success
+              })
             : Schema.Unknown
           return {
             id,
@@ -259,6 +264,7 @@ const layer = Layer.effect(
             description: def.description,
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
+                ProcessIsolation.assertExternalCodeAllowed()
                 // Bridge the host's Effect-based `ask` into a Promise-returning
                 // function for the plugin to make sure context persists
                 const bridge = yield* EffectBridge.make()
@@ -269,14 +275,27 @@ const layer = Layer.effect(
                   directory: ctx.directory,
                   worktree: ctx.worktree,
                 }
-                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
+                const value = yield* Effect.promise(() => {
+                  ProcessIsolation.assertExternalCodeAllowed()
+                  return def.execute(args as any, pluginCtx)
+                })
+                ProcessIsolation.assertExternalCodeAllowed()
+                // The real output screen awaits audience policy before JSON.stringify. Keep its later traversal
+                // behind the same authority, including toJSON/then/ownKeys and nested metadata entry points.
+                const result =
+                  typeof value === "string"
+                    ? value
+                    : ProcessIsolation.guardExternalObject(ProcessIsolation.markExternalCode(value))
                 const output = typeof result === "string" ? result : result.output
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 // Private raw output is refused before truncation can save it to a file the model may read later.
                 if (toolCtx.assertOutput) yield* toolCtx.assertOutput(result)
+                ProcessIsolation.assertExternalCodeAllowed()
                 const info = yield* agent.get(toolCtx.agent)
+                ProcessIsolation.assertExternalCodeAllowed()
                 const out = yield* truncate.output(output, {}, info)
+                ProcessIsolation.assertExternalCodeAllowed()
                 return {
                   title: typeof result === "string" ? "" : (result.title ?? ""),
                   output: out.truncated ? out.content : output,
@@ -300,7 +319,8 @@ const layer = Layer.effect(
           }
         }
 
-        const dirs = yield* config.directories()
+        const dirs = ProcessIsolation.required() ? [] : yield* config.directories()
+        if (dirs.length) ProcessIsolation.assertExternalCodeAllowed()
         const matches = dirs.flatMap((dir) =>
           Glob.scanSync("{tool,tools}/*.{js,ts}", { cwd: dir, absolute: true, dot: true, symlink: true }),
         )
@@ -323,14 +343,16 @@ const layer = Layer.effect(
             yield* Effect.logWarning("Custom tool could not load", { path: match, error: String(loaded.error) })
             continue
           }
+          ProcessIsolation.assertExternalCodeAllowed()
           for (const [id, def] of Object.entries(loaded.value.mod)) {
             if (!isPluginTool(def)) continue
             custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
           }
         }
 
-        const plugins = yield* plugin.list()
+        const plugins = ProcessIsolation.required() ? [] : yield* plugin.list()
         for (const p of plugins) {
+          ProcessIsolation.assertExternalCodeAllowed()
           for (const [id, def] of Object.entries(p.tool ?? {})) {
             custom.push(fromPlugin(id, def))
           }
@@ -430,7 +452,9 @@ const layer = Layer.effect(
 
     const all: Interface["all"] = Effect.fn("ToolRegistry.all")(function* () {
       const s = yield* InstanceState.get(state)
-      return [...s.builtin, ...s.custom].filter((tool) => !actionsWithheld(tool.id)) as Tool.Def[]
+      return [...s.builtin, ...(ProcessIsolation.required() ? [] : s.custom)].filter(
+        (tool) => !actionsWithheld(tool.id),
+      ) as Tool.Def[]
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {

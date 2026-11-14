@@ -6,6 +6,7 @@ import { constants } from "node:fs"
 import fs, { type FileHandle } from "node:fs/promises"
 import path from "node:path"
 import { release } from "node:os"
+import { ProcessIsolation } from "./process-isolation"
 
 // One trusted system metadata read, not a caller-selected process capability. This port does not authenticate a
 // repository or a person. It returns no proof when the supported runtime, kernel bits or cleanup are unavailable.
@@ -696,6 +697,7 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
 
 /** A leased actual directory FD is the only input capability. Cancellation can refuse; it can never grant identity. */
 export function read(handle: FileHandle, signal?: AbortSignal): Promise<Info | undefined> {
+  if (ProcessIsolation.required()) return Promise.resolve(undefined)
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return Promise.resolve(undefined)
   const arch = process.arch === "x64" ? "x64" : "arm64"
   const expires = performance.now() + LIMIT.milliseconds,
@@ -742,6 +744,8 @@ export function read(handle: FileHandle, signal?: AbortSignal): Promise<Info | u
       check() // No await or queued callback separates this final check from the fixed spawn.
       const result = await new Promise<Buffer | undefined>((done) => {
         check()
+        // This fixed metadata helper has no qualified native adapter. Refuse before any process exists.
+        if (ProcessIsolation.required()) return done(undefined)
         const child = spawn(PYTHON, ["-I", "-S", "-c", SOURCE], {
           cwd: "/",
           env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },

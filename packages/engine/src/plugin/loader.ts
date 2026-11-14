@@ -20,6 +20,7 @@ import { ConfigPluginV1 } from "@vectordevai/core/v1/config/plugin"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import { LocalPluginSdk } from "@vectordevai/core/plugin/local-sdk"
 import { ConfigDependencies } from "@/config/dependencies"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
 export namespace PluginLoader {
   // A normalized plugin declaration derived from config before any filesystem or npm work happens.
@@ -105,7 +106,9 @@ export namespace PluginLoader {
     // First make sure the plugin exists locally, installing npm plugins on demand.
     let target = ""
     try {
+      ProcessIsolation.assertExternalCodeAllowed()
       target = await resolvePluginTarget(plan.spec, { unpinned: scope === "global" })
+      ProcessIsolation.assertExternalCodeAllowed()
     } catch (error) {
       return { ok: false, stage: "install", error }
     }
@@ -148,11 +151,15 @@ export namespace PluginLoader {
     let mod
     let oauthApprovals: OAuthApproval[] = []
     try {
+      ProcessIsolation.assertExternalCodeAllowed()
       const inspected = inspectOAuthPluginForLoad(row.entry, row.pkg?.dir)
       if (row.source === "file") {
         await ConfigDependencies.link(row.entry).catch(() => false)
       }
-      mod = await import(row.source === "file" ? await LocalPluginSdk.prepare(row.entry) : row.entry)
+      const entry = row.source === "file" ? await LocalPluginSdk.prepare(row.entry) : row.entry
+      ProcessIsolation.assertExternalCodeAllowed()
+      mod = await import(entry)
+      ProcessIsolation.assertExternalCodeAllowed()
       oauthApprovals = confirmOAuthPluginLoad(inspected)
     } catch (error) {
       if (row.source === "file" && errorMessage(error).includes(ConfigDependencies.packageName)) {

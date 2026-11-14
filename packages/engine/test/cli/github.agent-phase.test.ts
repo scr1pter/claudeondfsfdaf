@@ -43,7 +43,7 @@ import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionPrompt } from "../../src/session/prompt"
 import { Session } from "../../src/session/session"
 import { SessionID } from "../../src/session/schema"
-import { ref, runtime, setup } from "../lib/research"
+import { calls, output, ref, runtime, setup } from "../lib/research"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import {
@@ -449,14 +449,14 @@ describe("the agent phase's task", () => {
           ].join(";"),
         ).toString("base64")
         const shell = Shell.acceptable()
-        const command = [
+        const commandArgs = [
           process.execPath.replaceAll("\\", "/"),
           "-e",
           `eval(Buffer.from('${install}','base64').toString())`,
         ].map((value) => Shell.quote(shell, value))
-        expect(command.every((value) => value !== undefined)).toBe(true)
+        expect(commandArgs.every((value) => value !== undefined)).toBe(true)
         yield* test.llm.tool("bash", {
-          command: `${Shell.ps(shell) ? "& " : ""}${command.join(" ")}`,
+          command: `${Shell.ps(shell) ? "& " : ""}${commandArgs.join(" ")}`,
           description: "Tidy the readme",
         })
         yield* test.llm.text("Tidied the readme.")
@@ -489,6 +489,39 @@ describe("the agent phase's task", () => {
         })
         expect(bundle.patch).toContain("README.md")
         expect(bundle.summary?.body).toContain("README.md")
+        // Diagnose the real setup command without exposing its transcript, command, paths or environment.
+        const sessionLine = run.lines.find((line) => /^vector session ses_[a-f0-9]{12}[0-9A-Za-z]{14}$/.test(line))
+        if (!sessionLine) throw new Error("The setup command's session record is missing.")
+        const commands = yield* calls(SessionID.make(sessionLine.slice("vector session ".length)), "bash")
+        const command = commands.at(0)
+        const status = commands.length > 1 ? "unexpected-count" : (command?.state.status ?? "missing")
+        const exit =
+          command?.state.status === "completed" &&
+          typeof command.state.metadata.exit === "number" &&
+          Number.isSafeInteger(command.state.metadata.exit)
+            ? command.state.metadata.exit
+            : null
+        const selected = Shell.name(shell)
+        const text = output(command)
+        const diagnostic = {
+          platform: process.platform,
+          shell: ["bash", "sh", "dash", "ksh", "zsh", "pwsh", "powershell", "cmd"].includes(selected)
+            ? selected
+            : "other",
+          status,
+          exit,
+          reason:
+            status === "completed" && exit === 0
+              ? "ok"
+              : /touch[^\n]*(?:invalid|illegal|unrecognized|unsupported)\s+(?:option|argument)/i.test(text)
+                ? "touch-unsupported"
+                : /command not found|not recognized|CommandNotFoundException/i.test(text)
+                  ? "command-missing"
+                  : /(?:fatal|error):[^\n]*git|usage: git|git:[^\n]*(?:failed|error)/i.test(text)
+                    ? "git-command-failure"
+                    : "unknown",
+        }
+        expect(diagnostic).toEqual({ ...diagnostic, status: "completed", exit: 0, reason: "ok" })
         // The shell's config took, and no hook or fsmonitor ran.
         expect(yield* Effect.promise(() => git(test.dir, ["config", "--local", "core.hooksPath"]))).toBe(
           path.join(traps, "hooks"),

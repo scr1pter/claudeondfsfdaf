@@ -7,6 +7,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { $ } from "bun"
 import { createHash, randomBytes } from "node:crypto"
+import { spawn } from "node:child_process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -38,6 +39,7 @@ import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import {
   CHANNEL,
   RUN_ID,
+  VALUES,
   cleanup,
   cloudRecorder,
   codiumFakes,
@@ -401,8 +403,15 @@ describe("stop codes", () => {
             ])
             // The log has the reason line, and never the gateway's own words (P6).
             expect(lines, row).toContain(`error: ${stoppedLine(expected)}`)
+            // A session identifier is an opaque protocol field, not gateway text: random base62 bytes can spell buy.
+            const sessionLine = /^vector session ses_[a-f0-9]{12}[0-9A-Za-z]{14}$/
             expect(
-              lines.filter((line) => /fixture gateway|credits|\$9|buy/i.test(line)),
+              lines.filter((line) => sessionLine.test(line)),
+              row,
+            ).toHaveLength(1)
+            expect(lines.join("\n"), row).not.toContain("fixture gateway words: credits, plan, $9")
+            expect(
+              lines.filter((line) => !sessionLine.test(line) && /fixture gateway|credits|\$9|buy/i.test(line)),
               row,
             ).toEqual([])
           }
@@ -570,20 +579,12 @@ describe("writeBundle", () => {
       [...GithubAgents.BUNDLE_FILES, "scratch", "session.vsa", "stale", "tracked.txt"].sort(),
     )
     expect(await fs.readFile(path.join(repo.dir, "vector-out/session.vsa"), "utf8")).toBe("session\n")
-    const modes = await Promise.all(
-      GithubAgents.BUNDLE_FILES.map(
-        async (name) => (await fs.stat(path.join(repo.dir, "vector-out", name))).mode & 0o777,
-      ),
+    const files = await Promise.all(
+      GithubAgents.BUNDLE_FILES.map((name) => fs.lstat(path.join(repo.dir, "vector-out", name))),
     )
-    // Windows does not expose POSIX permission bits; the outputs must still be regular files.
-    expect(
-      await Promise.all(
-        GithubAgents.BUNDLE_FILES.map(async (name) =>
-          (await fs.lstat(path.join(repo.dir, "vector-out", name))).isFile(),
-        ),
-      ),
-    ).toEqual([true, true])
-    if (process.platform !== "win32") expect(modes).toEqual([0o600, 0o600])
+    expect(files.map((file) => file.isFile() && !file.isSymbolicLink())).toEqual([true, true])
+    // Windows reports its ACL-backed files as 0666; that is not evidence of POSIX owner-only permissions.
+    if (process.platform !== "win32") expect(files.map((file) => file.mode & 0o777)).toEqual([0o600, 0o600])
     await expectApplies(repo.dir, repo.base)
   })
 
@@ -595,7 +596,8 @@ describe("writeBundle", () => {
       "src/a.ts": "export const a = 1\n",
     })
     await fs.rm(path.join(repo.dir, ".github/old.yml"))
-    const marker = ".github/<!-- vector:rid 1 -->.yml"
+    const unsafeMarker = ".github/<!-- vector:rid 1 -->.yml"
+    const marker = process.platform === "win32" ? ".github/marker-1.yml" : unsafeMarker
     await put(repo.dir, {
       ".github/workflows/ci.yml": "on: [push, pull_request]\n",
       ".github/actions/x/action.yml": "runs: {}\n",
@@ -603,12 +605,16 @@ describe("writeBundle", () => {
       "src/a.ts": "export const a = 2\n",
     })
     const result = await bundle(repo.dir, repo.base)
-    // A name that would open a Vector marker stays in the patch and out of the list: publish recomputes heldBack.
-    expect(result.summary.heldBack).toEqual([
-      ".github/actions/x/action.yml",
-      ".github/old.yml",
-      ".github/workflows/ci.yml",
-    ])
+    // NTFS cannot create the marker's angle brackets/colon. The same unsafe list remains rejected on every host.
+    expect(GithubBundle.RunSummary.safeParse({ ...result.summary, heldBack: [unsafeMarker] }).success).toBe(false)
+    expect(result.summary.heldBack).toEqual(
+      [
+        ".github/actions/x/action.yml",
+        ...(process.platform === "win32" ? [marker] : []),
+        ".github/old.yml",
+        ".github/workflows/ci.yml",
+      ].sort(),
+    )
     const patch = (await written(repo.dir)).patch.toString()
     ;[...result.summary.heldBack, marker].forEach((name) => expect(patch).toContain(`diff --git a/${name} b/${name}`))
     await expectApplies(repo.dir, repo.base)
@@ -784,16 +790,72 @@ describe("writeBundle", () => {
     expect(await fs.exists(marker("hook-ran"))).toBe(false)
     expect(await fs.exists(marker("default-hook-ran"))).toBe(false)
     expect(await fs.exists(marker("fsmonitor-ran"))).toBe(false)
-    // One name=value per line; a value with a line break in it would only add a line that no allowed name matches.
-    const names = (await fs.readFile(marker("filter-env"), "utf8"))
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => line.slice(0, line.indexOf("=")))
+    // One name=value per line; inspect names only and never print captured values or paths on failure.
+    const capturedNames = async (file: string) => {
+      const info = await fs.lstat(file).catch(() => undefined)
+      if (!info?.isFile() || info.size <= 0 || info.size > 65_536)
+        throw new Error("The fixed filter environment receipt is missing or unbounded.")
+      const text = await fs.readFile(file, "utf8").catch(() => {
+        throw new Error("The fixed filter environment receipt could not be read.")
+      })
+      expect(VALUES.some((value) => text.includes(value))).toBe(false)
+      const names = text
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const at = line.indexOf("=")
+          if (at < 1) throw new Error("The fixed filter environment receipt is malformed.")
+          return line.slice(0, at)
+        })
+      expect(names.length > 0).toBe(true)
+      expect(
+        names.filter((name) => GithubAgents.SECRET_NAME_PATTERN.test(name) || /^(?:VECTOR|GITHUB)_/.test(name)),
+      ).toEqual([])
+      return names
+    }
+    const names = await capturedNames(marker("filter-env"))
     const allowed = new Set(["PATH", "HOME", "SYSTEMROOT", "LC_ALL", "PWD", "OLDPWD", "SHLVL", "_"])
-    expect(names.filter((name) => !allowed.has(name) && !name.startsWith("GIT_"))).toEqual([])
-    expect(
-      names.filter((name) => GithubAgents.SECRET_NAME_PATTERN.test(name) || /^(?:VECTOR|GITHUB)_/.test(name)),
-    ).toEqual([])
+    const addedNames = (values: string[]) =>
+      [...new Set(values.filter((name) => !allowed.has(name) && !name.startsWith("GIT_")))].sort()
+    if (process.platform === "win32") {
+      // Git for Windows/MSYS synthesizes platform variables below Git's supplied environment. Observe its exact
+      // names with an independent direct Git process, rather than granting guessed additions to production's map.
+      const control = await repository({ ".gitattributes": "control.txt filter=platform\n", "control.txt": "before\n" })
+      const captured = path.join(await scratch(), "filter-env")
+      await sh(control.dir, ["config", "filter.platform.clean", `printenv > '${captured}'; cat`])
+      await put(control.dir, { "control.txt": "after\n" })
+      const env = {
+        ...Object.fromEntries(
+          ["PATH", "HOME", "SYSTEMROOT"].flatMap((name) => {
+            const value = process.env[name]
+            return value === undefined ? [] : [[name, value]]
+          }),
+        ),
+        LC_ALL: "C",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ALLOW_PROTOCOL: "none",
+        GIT_NO_LAZY_FETCH: "1",
+        GIT_NO_REPLACE_OBJECTS: "1",
+      }
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(
+          "git",
+          ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "add", "--", "control.txt"],
+          { cwd: control.dir, env, stdio: "ignore", windowsHide: true, timeout: 5_000, killSignal: "SIGKILL" },
+        )
+        child.once("error", () => reject(new Error("The fixed direct Git environment control failed.")))
+        child.once("close", resolve)
+      })
+      expect(code).toBe(0)
+      // A size-changed tracked file forces the filter to run; its new marker and staged bytes prove passthrough.
+      const baseline = await capturedNames(captured)
+      expect(await sh(control.dir, ["show", ":control.txt"])).toBe("after\n")
+      expect(addedNames(names)).toEqual(addedNames(baseline))
+    } else {
+      expect(addedNames(names)).toEqual([])
+    }
     await expectApplies(repo.dir, repo.base)
   })
 
@@ -1109,6 +1171,7 @@ describe("writeBundle", () => {
       path.join(repo.dir, GithubAgents.BUNDLE_DIR),
       process.platform === "win32" ? "junction" : "dir",
     )
+    expect((await fs.lstat(path.join(repo.dir, GithubAgents.BUNDLE_DIR))).isSymbolicLink()).toBe(true)
     await expect(bundle(repo.dir, repo.base)).rejects.toThrow("Vector could not record the run's changes.")
     expect(await fs.readdir(outside)).toEqual([])
 

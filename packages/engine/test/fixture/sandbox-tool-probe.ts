@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
+import { constants } from "node:fs"
 import path from "node:path"
-import { spawn, execFile } from "node:child_process"
+import { spawn, execFile, type SpawnOptions } from "node:child_process"
 import { promisify } from "node:util"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
@@ -25,9 +26,130 @@ export async function probeToolProcesses() {
   process.env.VECTOR_BRAIN_EMBED = "off"
   process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
   process.env.VECTOR_PURE = "1"
+  const errorCode = (error: unknown) =>
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code.slice(0, 40)
+      : "UNKNOWN"
+  const nullDevice = {
+    stat: await fs.lstat("/dev/null").then(
+      (info) => ({
+        uid: info.uid,
+        gid: info.gid,
+        mode: (info.mode & 0o7777).toString(8),
+        rdev: info.rdev,
+        character: info.isCharacterDevice(),
+        symbolic: info.isSymbolicLink(),
+      }),
+      (error: unknown) => ({ error: errorCode(error) }),
+    ),
+    readAccess: await fs.access("/dev/null", constants.R_OK).then(
+      () => true,
+      (error: unknown) => errorCode(error),
+    ),
+    writeAccess: await fs.access("/dev/null", constants.W_OK).then(
+      () => true,
+      (error: unknown) => errorCode(error),
+    ),
+    openRead: await fs.open("/dev/null", constants.O_RDONLY).then(
+      async (file) => {
+        await file.close()
+        return true
+      },
+      (error: unknown) => errorCode(error),
+    ),
+    openWrite: await fs.open("/dev/null", constants.O_WRONLY).then(
+      async (file) => {
+        await file.close()
+        return true
+      },
+      (error: unknown) => errorCode(error),
+    ),
+  }
+  console.log(`Fixed null-device metadata: ${JSON.stringify(nullDevice)}`)
+  if (
+    !("character" in nullDevice.stat) ||
+    !nullDevice.stat.character ||
+    nullDevice.stat.rdev !== 259 ||
+    nullDevice.stat.symbolic ||
+    nullDevice.openRead !== true ||
+    nullDevice.openWrite !== true
+  )
+    throw new Error("The standard private null device is not usable as character device 1:3")
+  const controlNode = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
+  const originalSpawn = spawn
+  const describeOptions = (options: SpawnOptions) => ({
+    cwd: options.cwd === undefined ? null : String(options.cwd),
+    processCwd: process.cwd(),
+    shell: options.shell ?? null,
+    uid: options.uid ?? null,
+    gid: options.gid ?? null,
+    argv0: options.argv0 ?? null,
+    stdio: options.stdio,
+  })
+  async function control(stage: string, file = controlNode, mode: "inherit" | "pipe" | "ignore" | "ipc" = "ipc") {
+    const options: SpawnOptions = { stdio: mode === "ipc" ? ["ignore", "ignore", "pipe", "ipc"] : mode }
+    const args =
+      file === "/bin/true"
+        ? []
+        : mode === "ipc"
+          ? ["-e", 'process.send({kind:"fixed-control"});process.disconnect()']
+          : ["-e", "0"]
+    const child = spawn(file, args, options)
+    const observation: {
+      stage: string
+      executable: string
+      options: ReturnType<typeof describeOptions>
+      sameSpawn: boolean
+      acknowledged: boolean
+      error?: string
+      code?: number | null
+      signal?: string | null
+    } = {
+      stage,
+      executable: file,
+      options: describeOptions(options),
+      sameSpawn: spawn === originalSpawn,
+      acknowledged: false,
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL")
+        reject(new Error(`Fixed child execution control did not complete: ${JSON.stringify(observation)}`))
+      }, 5000)
+      child.on("error", (error: Error & { code?: string }) => {
+        observation.error = error.code ?? error.name
+      })
+      child.on("message", (value: unknown) => {
+        if (value && typeof value === "object" && "kind" in value && value.kind === "fixed-control")
+          observation.acknowledged = true
+      })
+      child.once("close", (code, signal) => {
+        clearTimeout(timer)
+        observation.code = code
+        observation.signal = signal
+        resolve()
+      })
+    })
+    console.log(`Fixed child execution control: ${JSON.stringify(observation)}`)
+    return observation
+  }
+  const direct = [
+    await control("true-inherited-stdio", "/bin/true", "inherit"),
+    await control("node-inherited-stdio", controlNode, "inherit"),
+    await control("node-piped-stdio", controlNode, "pipe"),
+    await control("node-ignored-stdio", controlNode, "ignore"),
+  ]
+  if (direct.some((item) => item.error || item.code !== 0))
+    throw new Error("An actual standard stdio execution control failed")
+  const beforeGuard = await control("before-strict-guard")
+  if (beforeGuard.error || beforeGuard.code !== 0 || !beforeGuard.acknowledged)
+    throw new Error("The actual pre-guard IPC stdio control failed")
   const { EgressGuard } = await import("@vectordevai/core/local-mode/guard")
   const network = EgressGuard.installStrict()
   try {
+    const afterGuard = await control("after-strict-guard")
+    if (afterGuard.error || afterGuard.code !== 0 || !afterGuard.acknowledged)
+      throw new Error("The strict guard broke the actual IPC stdio control")
     const { Effect, Layer, Cause, Exit } = await import("effect")
     const { LayerNode } = await import("@vectordevai/core/effect/layer-node")
     const { CrossSpawnSpawner } = await import("@vectordevai/core/cross-spawn-spawner")
@@ -73,6 +195,44 @@ export async function probeToolProcesses() {
       [[InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })]],
     )
     const node = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
+    const ancestors = [process.cwd()]
+    for (let parent = path.dirname(process.cwd()); ; parent = path.dirname(parent)) {
+      ancestors.push(parent)
+      if (parent === path.dirname(parent)) break
+    }
+    const executable = {
+      chosen: node,
+      stat: await fs.stat(node).then(
+        (info) => ({ uid: info.uid, gid: info.gid, mode: (info.mode & 0o7777).toString(8) }),
+        (error: unknown) => ({ error: errorCode(error) }),
+      ),
+      canonical: await fs.realpath(node).then(
+        (value) => ({ path: value }),
+        (error: unknown) => ({ error: errorCode(error) }),
+      ),
+      execute: await fs.access(node, constants.X_OK).then(
+        () => true,
+        (error: unknown) => errorCode(error),
+      ),
+      runtime: process.execPath,
+      cwd: process.cwd(),
+      uid: process.getuid?.(),
+      gid: process.getgid?.(),
+      traversal: await Promise.all(
+        ancestors.map(async (directory) => ({
+          directory,
+          stat: await fs.stat(directory).then(
+            (info) => ({ uid: info.uid, gid: info.gid, mode: (info.mode & 0o7777).toString(8) }),
+            (error: unknown) => ({ error: errorCode(error) }),
+          ),
+          execute: await fs.access(directory, constants.X_OK).then(
+            () => true,
+            (error: unknown) => errorCode(error),
+          ),
+        })),
+      ),
+    }
+    const dummyOptions: SpawnOptions = { stdio: ["ignore", "ignore", "pipe", "ipc"] }
     const dummy = spawn(
       node,
       [
@@ -94,26 +254,82 @@ export async function probeToolProcesses() {
     setInterval(()=>void privateValue,1000);
   `,
       ],
-      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      dummyOptions,
     )
+    let phase = "ready"
+    let probeError: unknown
+    const lifecycle: {
+      spawnError?: string
+      syscall?: string
+      path?: string
+      exit?: { code: number | null; signal: string | null }
+      closed: boolean
+      disconnected: boolean
+      term?: boolean
+      kill?: boolean
+    } = { closed: false, disconnected: false }
+    dummy.on("error", (error: Error & { code?: string; syscall?: string; path?: string }) => {
+      lifecycle.spawnError = error.code ?? error.name
+      lifecycle.syscall = error.syscall?.slice(0, 240)
+      lifecycle.path = error.path?.slice(0, 240)
+    })
+    dummy.once("close", () => {
+      lifecycle.closed = true
+    })
+    dummy.once("disconnect", () => {
+      lifecycle.disconnected = true
+    })
     let diagnostics = ""
     dummy.stderr!.on("data", (part: Buffer) => {
       diagnostics = (diagnostics + part.toString()).slice(-4096)
     })
-    const closed = new Promise<void>((resolve) => dummy.once("exit", () => resolve()))
+    const closed = new Promise<void>((resolve) =>
+      dummy.once("exit", (code, signal) => {
+        lifecycle.exit = { code, signal }
+        resolve()
+      }),
+    )
+    const details = () =>
+      JSON.stringify({
+        phase,
+        executable,
+        spawnOptions: describeOptions(dummyOptions),
+        sameSpawn: spawn === originalSpawn,
+        nullDevice,
+        controls: { direct, beforeGuard, afterGuard },
+        pid: dummy.pid,
+        connected: dummy.connected,
+        killed: dummy.killed,
+        ...lifecycle,
+        stderr: diagnostics
+          .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+          .replace(/[\r\n\t]+/g, " ")
+          .slice(-800),
+      })
     const message = (kind: string) =>
       new Promise<Record<string, unknown>>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          dummy.off("message", receive)
-          reject(new Error("Disposable engine did not acknowledge the probe"))
-        }, 5000)
-        const receive = (value: unknown) => {
-          if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== kind) return
+        const cleanup = () => {
           clearTimeout(timer)
           dummy.off("message", receive)
+          dummy.off("error", failed)
+          dummy.off("exit", failed)
+          dummy.off("disconnect", failed)
+        }
+        const failed = () => {
+          cleanup()
+          reject(new Error(`Disposable engine did not acknowledge ${kind}: ${details()}`))
+        }
+        const timer = setTimeout(failed, 5000)
+        const receive = (value: unknown) => {
+          if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== kind) return
+          cleanup()
           resolve(value as Record<string, unknown>)
         }
         dummy.on("message", receive)
+        dummy.once("error", failed)
+        dummy.once("exit", failed)
+        dummy.once("disconnect", failed)
+        if (lifecycle.spawnError || lifecycle.exit || lifecycle.disconnected) failed()
       })
     try {
       const ready = await message("ready")
@@ -124,6 +340,7 @@ export async function probeToolProcesses() {
         ready.opened !== false
       )
         throw new Error("The disposable engine is not a matching uninspected user process")
+      phase = "loader-positive-control"
       const loaderMarker = path.join(root, "loader-constructor")
       const loaderEnv = {
         LD_PRELOAD: "/opt/vector-probe-loader.so",
@@ -139,12 +356,14 @@ export async function probeToolProcesses() {
         await new Promise((resolve) => setTimeout(resolve, 10))
       if (!diagnostics.includes("Debugger listening"))
         throw new Error("The preload constructor did not signal the disposable target")
+      phase = "loader-inspector-close"
       const loaderClosed = message("close")
       dummy.send("close")
       if ((await loaderClosed).opened !== false)
         throw new Error("The disposable inspector did not close after its loader control")
       diagnostics = ""
       await fs.unlink(loaderMarker)
+      phase = "loader-refusals"
       const refusedLoader = (error: unknown) =>
         error instanceof Error && error.message.includes("native loader environment")
       if (!(await Process.run([node, "-e", "0"], { env: loaderEnv }).then(() => false, refusedLoader)))
@@ -173,12 +392,14 @@ export async function probeToolProcesses() {
         throw new Error("The shared Effect launcher accepted a native preload")
       if (await fs.stat(loaderMarker).catch(() => undefined))
         throw new Error("A refused native loader constructor executed")
+      phase = "loader-report"
       const loaderReport = message("report")
       dummy.send("report")
       if ((await loaderReport).opened !== false) throw new Error("A refused loader signalled the disposable engine")
       const signal = floor ? "'SIGUSR1'" : "0"
       const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),${signal});sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+      phase = "actual-shell-tool"
       const output = await Effect.runPromise(
         Effect.gen(function* () {
           const store = yield* InstanceStore.Service
@@ -229,6 +450,7 @@ export async function probeToolProcesses() {
           throw new Error(`The ${label} can reach or signal the disposable engine`)
       }
       assertBlocked(actual, "actual ShellTool")
+      phase = "actual-utility-launch"
       const utility = await Process.run(
         [
           node,
@@ -242,6 +464,7 @@ export async function probeToolProcesses() {
       assertBlocked(JSON.parse(utility.stdout.toString()), "shared utility launch")
       if (JSON.parse(utility.stdout.toString()).ordinary !== "ordinary environment positive control")
         throw new Error("The ordinary child environment was not preserved")
+      phase = "actual-lsp-launch"
       const lsp = LSPLaunch.spawn(node, ["-e", code, String(dummy.pid)])
       const lspOutput = new Promise<string>((resolve, reject) => {
         const parts: Buffer[] = []
@@ -256,6 +479,7 @@ export async function probeToolProcesses() {
       } finally {
         lsp.kill("SIGKILL")
       }
+      phase = "actual-mcp-launch"
       const transport = await localTransport({
         command: node,
         args: [
@@ -281,6 +505,7 @@ export async function probeToolProcesses() {
         clearTimeout(mcpTimer)
         await transport.close()
       }
+      phase = "actual-effect-launch"
       const backend = await Effect.runPromise(
         Effect.gen(function* () {
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -302,6 +527,7 @@ export async function probeToolProcesses() {
         if (opened && floor) throw new Error("The engine can still open its process filesystem")
         if (opened) engineProcHidden = false
       }
+      phase = "actual-file-tools"
       const alias = path.join(process.cwd(), "probe-process-alias")
       await fs.symlink("/proc/self/fd/3", alias)
       let permissionAsks = 0
@@ -363,16 +589,19 @@ export async function probeToolProcesses() {
         }).pipe(Effect.provide(layer), Effect.scoped, Effect.timeout("20 seconds")),
       )
       await fs.unlink(alias)
+      phase = "tool-inspector-report"
       const report = message("report")
       dummy.send("report")
       if ((await report).opened !== false) throw new Error("A tool activated the disposable engine inspector")
       // Positive control: the same-UID fixture parent can signal it; this proves the target/observer are operational.
+      phase = "parent-inspector-positive-control"
       dummy.kill("SIGUSR1")
       const until = Date.now() + 5000
       while (!diagnostics.includes("Debugger listening") && Date.now() < until)
         await new Promise((resolve) => setTimeout(resolve, 10))
       if (!diagnostics.includes("Debugger listening"))
         throw new Error("The inspector positive control did not activate")
+      phase = "active-inspector-guard"
       const guarded = message("guard")
       dummy.send("guard")
       const guard = await guarded
@@ -403,17 +632,29 @@ export async function probeToolProcesses() {
         dummyNode: ready.node,
         callerRuntime: process.versions.bun ? `bun-${process.versions.bun}` : `node-${process.versions.node}`,
       }
+    } catch (error) {
+      probeError = error
+      throw error
     } finally {
-      dummy.kill("SIGTERM")
-      const kill = setTimeout(() => dummy.kill("SIGKILL"), 1000)
+      lifecycle.term = dummy.kill("SIGTERM")
+      const kill = setTimeout(() => {
+        lifecycle.kill = dummy.kill("SIGKILL")
+      }, 1000)
       let timeout: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([
           closed,
           new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error("The disposable engine did not stop")), 2000)
+            timeout = setTimeout(() => reject(new Error(`The disposable engine did not stop: ${details()}`)), 2000)
           }),
         ])
+      } catch (cleanupError) {
+        if (probeError !== undefined)
+          throw new AggregateError(
+            [probeError, cleanupError],
+            "The disposable tool probe failed and its child cleanup was not proven",
+          )
+        throw cleanupError
       } finally {
         clearTimeout(kill)
         clearTimeout(timeout)

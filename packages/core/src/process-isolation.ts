@@ -1,8 +1,21 @@
 import fs from "node:fs"
 import path from "node:path"
+import { isMainThread } from "node:worker_threads"
+import { LinuxIsolation } from "./process-isolation/linux"
+import { LinuxIsolationBuild } from "./process-isolation/build"
+import { ProcessIsolationRuntime } from "./process-isolation/runtime"
 
 export const BINARY = "/usr/bin/bwrap"
 export const REFUSAL = "The GitHub run cannot isolate its tool processes. The command is refused."
+export const ENGINE_HOME = "/home/vector-agent"
+export const ENGINE_PRIVATE_DIRECTORIES = Object.freeze([
+  `${ENGINE_HOME}/.local/share/vector`,
+  `${ENGINE_HOME}/.local/state/vector`,
+  `${ENGINE_HOME}/.config/vector`,
+  `${ENGINE_HOME}/.cache/vector`,
+  `${ENGINE_HOME}/tmp/vector-agent`,
+])
+const ENGINE_CONTAINERS = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
 /**
  * Build-time selection of the bubblewrap tool floor: each tool in a fresh user, PID, IPC and UTS namespace with its own
  * proc, and the engine under an empty proc. This build holds it off. GitHub's ubuntu-24.04 image refuses an unconfined,
@@ -12,6 +25,8 @@ export const REFUSAL = "The GitHub run cannot isolate its tool processes. The co
  */
 export const FLOOR: boolean = false
 let enabled = false
+const externalCode = new WeakSet<object>()
+const guardedExternalCode = new WeakSet<object>()
 
 /** Called once by the actual private-channel loader. There is deliberately no lowering/reset API. */
 export function requireIsolation() {
@@ -26,6 +41,161 @@ export function required() {
   return enabled
 }
 
+/** Immutable implementation selection only; private-channel authority still comes exclusively from its loader. */
+export function nativeBuild() {
+  return Object.freeze({ enabled: LinuxIsolationBuild.enabled, entrySHA: LinuxIsolationBuild.entrySHA })
+}
+
+function assertNativeCompartment() {
+  // A Worker's module-local required flag cannot stand in for its holder's authority. Until a trusted bridge
+  // exists, native CI builds refuse process creation in that compartment even when its local flag is false.
+  if (LinuxIsolationBuild.enabled && !isMainThread) throw new LinuxIsolation.Unavailable()
+}
+
+export interface CommandOptions extends ProcessIsolationRuntime.Options {}
+export interface CommandPlan {
+  readonly file: string
+  readonly args: readonly string[]
+  readonly options: Readonly<{ cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean | string }>
+  readonly isolation: "plain" | "legacy" | "native"
+  readonly cancellation: "process-group" | "native-owner"
+}
+
+/** Additive only: the shared spawner is not migrated by this inactive Core foundation checkpoint. */
+export function commandPlan(file: string, args: readonly string[], options: CommandOptions): CommandPlan {
+  assertNativeCompartment()
+  if (!required() || !LinuxIsolationBuild.enabled) {
+    const selected = launch(file, args, options)
+    return Object.freeze({
+      file: selected.file,
+      args: Object.freeze([...selected.args]),
+      options: Object.freeze({ cwd: options.cwd, env: options.env, shell: selected.shell }),
+      isolation: required() ? "legacy" : "plain",
+      cancellation: "process-group",
+    })
+  }
+  assertLoaderEnvironment(options.env ?? process.env)
+  return ProcessIsolationRuntime.plan(LinuxIsolationBuild.entrySHA, file, args, options)
+}
+
+/** The actual private-channel loader makes this process-long authority monotonic; configuration cannot lower it. */
+export function assertExternalCodeAllowed() {
+  if (enabled) throw new Error("GitHub credential holders cannot load external executable modules.")
+}
+
+/** Restrictive provenance survives SDK/language caches; there is deliberately no unmark/reset operation. */
+export function markExternalCode<T>(value: T): T {
+  if (value !== null && (typeof value === "object" || typeof value === "function")) externalCode.add(value)
+  return value
+}
+
+export function isExternalCode(value: unknown) {
+  return value !== null && (typeof value === "object" || typeof value === "function") && externalCode.has(value)
+}
+
+export function assertExternalValueAllowed(value: unknown) {
+  if (isExternalCode(value)) assertExternalCodeAllowed()
+}
+
+/** Protect retained executable handles too, including metadata getters and methods captured before activation. */
+export function guardExternalObject<T extends object>(value: T): T {
+  if (!isExternalCode(value)) return value
+  assertExternalCodeAllowed()
+  if (guardedExternalCode.has(value)) return value
+  // Snapshot the language handle's shape with guarded accessors. This also preserves Proxy invariants when a
+  // consumer freezes the facade or the source model already has nonconfigurable methods/getters.
+  const prototype = Reflect.getPrototypeOf(value)
+  const target: T = Object.create(
+    prototype === null || prototype === Object.prototype ? prototype : guardExternalObject(markExternalCode(prototype)),
+  )
+  const methods = new WeakMap<object, (...args: unknown[]) => unknown>()
+  const read = (key: PropertyKey) => {
+    assertExternalCodeAllowed()
+    const item = Reflect.get(value, key, value)
+    if (typeof item !== "function") return item
+    const cached = methods.get(item)
+    if (cached) return cached
+    const method = (...args: unknown[]) => {
+      assertExternalCodeAllowed()
+      const result = Reflect.apply(item, value, args)
+      assertExternalCodeAllowed()
+      return result
+    }
+    methods.set(item, method)
+    return method
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)!
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get: () => read(key),
+      ...(("value" in descriptor ? descriptor.writable : descriptor.set)
+        ? {
+            set(this: object, next: unknown) {
+              assertExternalCodeAllowed()
+              // A compiled fitted model derives from this facade; assigning its wrappers must not overwrite the SDK.
+              if (this !== guarded) {
+                Object.defineProperty(this, key, { configurable: true, enumerable: true, writable: true, value: next })
+                return
+              }
+              if (!Reflect.set(value, key, next, value))
+                throw new TypeError(`Cannot assign model property ${String(key)}`)
+            },
+          }
+        : {}),
+    })
+  }
+  const guarded = new Proxy(target, {
+    get: (_target, key, receiver) => {
+      assertExternalCodeAllowed()
+      return Object.hasOwn(target, key) ? Reflect.get(target, key, receiver) : read(key)
+    },
+    has: (_target, key) => {
+      assertExternalCodeAllowed()
+      return Reflect.has(target, key)
+    },
+    ownKeys: () => {
+      assertExternalCodeAllowed()
+      return Reflect.ownKeys(target)
+    },
+    getOwnPropertyDescriptor: (_target, key) => {
+      assertExternalCodeAllowed()
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+    getPrototypeOf: () => {
+      assertExternalCodeAllowed()
+      return Reflect.getPrototypeOf(target)
+    },
+    set: (_target, key, next, receiver) => {
+      assertExternalCodeAllowed()
+      return Reflect.set(target, key, next, receiver)
+    },
+    deleteProperty: (_target, key) => {
+      assertExternalCodeAllowed()
+      return Reflect.deleteProperty(target, key)
+    },
+    defineProperty: (_target, key, descriptor) => {
+      assertExternalCodeAllowed()
+      return Reflect.defineProperty(target, key, descriptor)
+    },
+    setPrototypeOf: (_target, prototype) => {
+      assertExternalCodeAllowed()
+      return Reflect.setPrototypeOf(target, prototype)
+    },
+    isExtensible: () => {
+      assertExternalCodeAllowed()
+      return Reflect.isExtensible(target)
+    },
+    preventExtensions: () => {
+      assertExternalCodeAllowed()
+      return Reflect.preventExtensions(target)
+    },
+  })
+  guardedExternalCode.add(guarded)
+  return markExternalCode(guarded)
+}
+
 export function assertBinary() {
   if (process.platform !== "linux") throw new Error(REFUSAL)
   const info = fs.lstatSync(BINARY, { throwIfNoEntry: false })
@@ -33,13 +203,28 @@ export function assertBinary() {
     throw new Error(REFUSAL)
 }
 
-/** Files retain their existing Unix permissions. Only the trusted engine keeps a host PID; its proc mount is empty. */
-export function engineArguments(file: string, args: readonly string[], cwd: string) {
+export interface EngineScope {
+  /** Both paths come from the hosted runner's verified private state, never a repository or tool request. */
+  readonly cwd: string
+  readonly container: string
+  /** The runner's existing private 0600 regular file; the agent cannot reopen its pathname. */
+  readonly proofFile?: string
+}
+
+/** Only the exact checkout and fixed agent-private data roots are writable; proc stays empty and read-only. */
+export function engineArguments(file: string, args: readonly string[], scope: EngineScope) {
+  const directories = engineWritableDirectories(scope)
   return [
     "--die-with-parent",
-    "--bind",
+    "--ro-bind",
     "/",
     "/",
+    ...directories.flatMap((directory) => ["--bind", directory, directory]),
+    // Root opens FD3 after bwrap, then drops identity. This single file retains the runner's private DAC boundary.
+    ...(scope.proofFile ? ["--bind", scope.proofFile, scope.proofFile] : []),
+    // Ordinary binds are nodev; mount only bwrap's standard private devices, never the host /dev tree.
+    "--dev",
+    "/dev",
     "--tmpfs",
     "/proc",
     "--remount-ro",
@@ -52,11 +237,47 @@ export function engineArguments(file: string, args: readonly string[], cwd: stri
     "--cap-add",
     "CAP_DAC_OVERRIDE",
     "--chdir",
-    cwd,
+    scope.cwd,
     "--",
     file,
     ...args,
   ]
+}
+
+export function engineWritableDirectories(scope: EngineScope) {
+  if (
+    !ENGINE_CONTAINERS.includes(scope.container) ||
+    !path.posix.isAbsolute(scope.cwd) ||
+    path.posix.normalize(scope.cwd) !== scope.cwd ||
+    scope.cwd.includes("\0")
+  )
+    throw new Error(REFUSAL)
+  const directories = [`${scope.container}/checkout`, ...ENGINE_PRIVATE_DIRECTORIES]
+  if (scope.proofFile !== undefined) {
+    const proof = scope.proofFile
+    if (
+      !path.posix.isAbsolute(proof) ||
+      path.posix.normalize(proof) !== proof ||
+      proof.includes("\0") ||
+      path.posix.basename(proof) !== "session-proof.json" ||
+      path.posix.basename(path.posix.dirname(proof)) !== "vector-sandbox" ||
+      directories.some((directory) => proof === directory || proof.startsWith(directory + "/")) ||
+      proof === ENGINE_HOME ||
+      proof.startsWith(ENGINE_HOME + "/") ||
+      KERNEL.some((prefix) => proof === prefix || proof.startsWith(prefix + "/"))
+    )
+      throw new Error(REFUSAL)
+    if (process.platform === "linux") assertKernelPath(proof)
+  }
+  return directories
+}
+
+/** Neither the holder nor its interpreter may execute from a model-writable directory. */
+export function assertEngineExecutable(file: string, scope: EngineScope) {
+  if (!path.posix.isAbsolute(file) || path.posix.normalize(file) !== file || file.includes("\0"))
+    throw new Error(REFUSAL)
+  if (engineWritableDirectories(scope).some((directory) => file === directory || file.startsWith(directory + "/")))
+    throw new Error("The GitHub engine executable is inside a writable agent directory. The run is refused.")
 }
 
 export function argumentsForTool(file: string, args: readonly string[], cwd: string) {
@@ -69,6 +290,9 @@ export function argumentsForTool(file: string, args: readonly string[], cwd: str
     "--bind",
     "/",
     "/",
+    // Ordinary binds are nodev; mount only bwrap's standard private devices, never the host /dev tree.
+    "--dev",
+    "/dev",
     "--proc",
     "/proc",
     "--chdir",
@@ -92,7 +316,10 @@ export function decide(
   options: LaunchOptions,
   boundary: { guarded: boolean; floor: boolean },
 ) {
+  assertNativeCompartment()
   if (!boundary.guarded) return { file, args: [...args], shell: options.shell }
+  // Native builds may only launch through a typed commandPlan with its single cancellation owner.
+  if (LinuxIsolationBuild.enabled) throw new LinuxIsolation.Unavailable()
   assertLoaderEnvironment(options.env ?? process.env)
   // Hosted agents run on Linux only. Refusing elsewhere keeps every launcher, with or without the floor, in one rule.
   if (process.platform !== "linux") throw new Error(REFUSAL)

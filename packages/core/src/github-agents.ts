@@ -163,6 +163,8 @@ export const SANDBOX_ENV_ALLOW = [
   SESSION_PROOF_ENV,
   "HOME",
   "RUNNER_TEMP",
+  // The launcher always replaces this with its verified private temporary directory.
+  "TMPDIR",
 ] as const
 // Case-sensitive, as environment names are on Linux. Where names are case-insensitive (Windows), match the upper-cased
 // name.

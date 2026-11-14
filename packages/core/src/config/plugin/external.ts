@@ -21,6 +21,7 @@ import {
 } from "../../plugin/oauth-approval"
 import { oauthPluginContext } from "../../plugin/oauth"
 import { PluginPromise } from "../../plugin/promise"
+import { ProcessIsolation } from "../../process-isolation"
 
 const PluginModule = Schema.Struct({
   default: Schema.Union([
@@ -38,6 +39,75 @@ const PluginModule = Schema.Struct({
     }),
   ]),
 })
+
+type Host = Parameters<EffectPlugin["effect"]>[0]
+
+function externalCallback<Event>(callback: (event: Event) => Effect.Effect<void> | void) {
+  ProcessIsolation.assertExternalCodeAllowed()
+  return ProcessIsolation.markExternalCode((event: Event) =>
+    Effect.suspend(() => {
+      ProcessIsolation.assertExternalCodeAllowed()
+      const result = callback(event)
+      return Effect.isEffect(result) ? result : Effect.void
+    }).pipe(Effect.tap(() => Effect.sync(() => ProcessIsolation.assertExternalCodeAllowed()))),
+  )
+}
+
+/** Only the actual external-module loader hands out this restrictive host; compiled builtins keep their host. */
+function externalHost(host: Host): Host {
+  return {
+    ...host,
+    agent: { ...host.agent, transform: (callback) => host.agent.transform(externalCallback(callback)) },
+    aisdk: {
+      sdk: (callback) => host.aisdk.sdk(externalCallback(callback)),
+      language: (callback) => host.aisdk.language(externalCallback(callback)),
+    },
+    catalog: { ...host.catalog, transform: (callback) => host.catalog.transform(externalCallback(callback)) },
+    command: { ...host.command, transform: (callback) => host.command.transform(externalCallback(callback)) },
+    integration: {
+      ...host.integration,
+      transform: (callback) => host.integration.transform(externalCallback(callback)),
+    },
+    reference: { ...host.reference, transform: (callback) => host.reference.transform(externalCallback(callback)) },
+    skill: { ...host.skill, transform: (callback) => host.skill.transform(externalCallback(callback)) },
+    plugin: {
+      ...host.plugin,
+      add: (input) => {
+        ProcessIsolation.assertExternalCodeAllowed()
+        return host.plugin.add({
+          ...input,
+          effect: ProcessIsolation.markExternalCode((child) =>
+            Effect.suspend(() => {
+              ProcessIsolation.assertExternalCodeAllowed()
+              return input.effect(externalHost(child))
+            }),
+          ),
+        })
+      },
+    },
+  }
+}
+
+/** The actual V2 module boundary also protects direct/cached callers, before compatibility work or top-level code. */
+export async function loadExternalEntry(entrypoint: string, local: boolean) {
+  ProcessIsolation.assertExternalCodeAllowed()
+  const inspected = inspectOAuthPluginForLoad(entrypoint)
+  const target = local ? await LocalPluginSdk.prepare(entrypoint) : entrypoint
+  ProcessIsolation.assertExternalCodeAllowed()
+  const mod = await import(target)
+  ProcessIsolation.assertExternalCodeAllowed()
+  return {
+    mod,
+    approvals: confirmOAuthPluginLoad(inspected),
+    run: (host: Host) =>
+      Effect.suspend(() => {
+        ProcessIsolation.assertExternalCodeAllowed()
+        const value = Schema.decodeUnknownSync(PluginModule)(mod).default
+        const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
+        return plugin.effect(externalHost(host))
+      }),
+  }
+}
 
 export const Plugin = define({
   id: "config-plugin",
@@ -88,6 +158,7 @@ export const Plugin = define({
 
       for (const ref of configured) {
         yield* Effect.gen(function* () {
+          ProcessIsolation.assertExternalCodeAllowed()
           if (borrowedOAuthPlugin(ref.package)) return
           // The user's own config may follow a range or the latest release; a project must name an exact version.
           if (ref.project && !path.isAbsolute(ref.package) && !pinned(ref.package)) {
@@ -99,26 +170,23 @@ export const Plugin = define({
             : (yield* npm.addAs("npm-plugins", ref.package)).entrypoint
           if (!entrypoint || blockedPluginEntry(entrypoint)) return
 
-          const inspected = yield* Effect.sync(() => inspectOAuthPluginForLoad(entrypoint))
-          const target = path.isAbsolute(ref.package)
-            ? yield* Effect.promise(() => LocalPluginSdk.prepare(entrypoint))
-            : entrypoint
-          const mod = yield* Effect.promise(() => import(target))
-          const approvals = yield* Effect.sync(() => confirmOAuthPluginLoad(inspected))
-          const value = (yield* Schema.decodeUnknownEffect(PluginModule)(mod)).default
-          const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
+          const loaded = yield* Effect.promise(() => loadExternalEntry(entrypoint, path.isAbsolute(ref.package)))
+          ProcessIsolation.assertExternalCodeAllowed()
+          const value = (yield* Schema.decodeUnknownEffect(PluginModule)(loaded.mod)).default
+          ProcessIsolation.assertExternalCodeAllowed()
           yield* ctx.plugin.add({
-            id: plugin.id,
+            id: value.id,
             effect: (host) =>
               Effect.gen(function* () {
-                for (const approval of approvals) {
+                ProcessIsolation.assertExternalCodeAllowed()
+                for (const approval of loaded.approvals) {
                   const release = activateOAuthApproval(approval)
                   yield* Effect.addFinalizer(() => Effect.sync(release))
                   yield* Effect.logWarning(
                     `Approved OAuth plugin ${approval.plugin}@${approval.version} for ${approval.declaration.provider}. ${warning}`,
                   )
                 }
-                yield* plugin.effect({ ...oauthPluginContext(host, approvals), options: ref.options ?? {} })
+                yield* loaded.run({ ...oauthPluginContext(host, loaded.approvals), options: ref.options ?? {} })
               }),
           })
         }).pipe(Effect.ignoreCause)

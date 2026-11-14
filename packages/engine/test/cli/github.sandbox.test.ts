@@ -65,6 +65,7 @@ test("the sandbox environment excludes every credential and runner file command 
     GH_TOKEN: "fixture-gh-private",
     VECTOR_RUN_TOKEN: "fixture-run-private",
     NODE_OPTIONS: "--require=untrusted",
+    TMPDIR: "/tmp/inherited-host-temporary",
     UNLISTED_VALUE: "not-in-the-contract",
   }
   const clean = sandboxEnvironment(env, {
@@ -80,6 +81,8 @@ test("the sandbox environment excludes every credential and runner file command 
   expect(clean.MODEL).toBe(env.MODEL)
   expect(clean.VECTOR_SECRET_CHANNEL).toBe("stdin")
   expect(clean.HOME).toBe(f.directory)
+  expect(clean.TMPDIR).toBe(f.directory)
+  expect(Object.values(clean)).not.toContain(env.TMPDIR)
   const paths = clean.PATH!.split(path.delimiter)
   expect(paths[0]).toBe(path.join(f.directory, "node", "bin"))
   expect(paths).toContain(path.join(f.directory, "go", "bin"))
@@ -241,6 +244,7 @@ test("a run needs prepared private state, and only a floor build needs its verif
   const target = { workspace: state.workspace, mode: "codium" }
   expect(preparedFor(state, target, false)).toBe(true)
   expect(preparedFor(state, target, true)).toBe(false)
+  expect(preparedFor({ ...state, nativeRequired: true }, target, false)).toBe(false)
   expect(preparedFor({ ...state, isolatedTools: true }, target, true)).toBe(true)
   expect(preparedFor({ ...state, mode: "own-key", sudo: true }, { ...target, mode: "own-key" }, true)).toBe(true)
   for (const floor of [true, false]) {
@@ -257,14 +261,28 @@ test("a run needs prepared private state, and only a floor build needs its verif
 
 test("only a floor build wraps the engine in its empty-proc mount namespace", () => {
   const inner = ["/usr/bin/prlimit", "--core=0:0", "--", "/usr/bin/setpriv", "--no-new-privs", "--", "/bin/true"]
+  expect(() => engineLaunch(inner, "/runner/work/repo", false, true)).toThrow("refused")
   expect(engineLaunch(inner, "/runner/work/repo", false, false)).toEqual(["-n", ...inner])
   expect(engineLaunch(inner, "/runner/work/repo", true, true)).toEqual(["-n", ...inner])
-  expect(engineLaunch(inner, "/runner/work/repo", false, true)).toEqual([
+  expect(
+    engineLaunch(inner, "/runner/work/repo", false, true, {
+      container: "/mnt/vector-agent-sandbox",
+      cwd: "/runner/work/repo",
+    }),
+  ).toEqual([
     "-n",
     ProcessIsolation.BINARY,
-    ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), "/runner/work/repo"),
+    ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), {
+      container: "/mnt/vector-agent-sandbox",
+      cwd: "/runner/work/repo",
+    }),
   ])
-  const locations = { node: "/opt/node/bin/node", home: "/home/agent", temporary: "/home/agent/tmp", event: "/e.json" }
+  const locations = {
+    node: path.resolve("/opt/node/bin/node"),
+    home: path.resolve("/home/agent"),
+    temporary: path.resolve("/home/agent/tmp"),
+    event: path.resolve("/e.json"),
+  }
   const env = { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", VECTOR_MODE: "codium" }
   for (const boundary of ["pid", "guard"] as const)
     expect(
