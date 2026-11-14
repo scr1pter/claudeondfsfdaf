@@ -2,8 +2,6 @@ name: Vector cloud workspaces
 
 on:
   workflow_dispatch:
-  push:
-    branches: [cloud-workspaces]
   pull_request:
     paths:
       - "packages/cloud-workspaces/**"
