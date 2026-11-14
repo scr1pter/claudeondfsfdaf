@@ -90,12 +90,27 @@ describe("BrainDatabase", () => {
         { id: "20261210000000_learned_skills" },
         { id: "20261211000000_workflow" },
         { id: "20261212000000_research_claims" },
-        { id: "20261213000000_review_memory" },
-        { id: "20261214000000_review_memory_scope" },
+        { id: "20261216000000_review_memory" },
+        { id: "20261217000000_review_memory_scope" },
+        { id: "20261218000000_review_memory_source" },
       ],
       state: [{ repository_id: "repo-1" }],
     })
   }, 30_000)
+
+  test("Brain migrations run in strictly increasing id order, each with its own 14-digit prefix", () => {
+    const ids = BrainDatabase.migrations.map((migration) => migration.id)
+    const prefixes = ids.map((id) => /^(\d{14})_[a-z0-9_-]+$/.exec(id)?.[1])
+    expect(prefixes).not.toContain(undefined)
+    // Two branches that each add a migration must not share a prefix, and the list must run in the order ids sort.
+    expect(new Set(prefixes).size).toBe(ids.length)
+    expect(ids).toEqual(ids.toSorted())
+    for (const [index, prefix] of prefixes.entries())
+      if (index > 0) expect(Number(prefix)).toBeGreaterThan(Number(prefixes[index - 1]))
+    // A replaced id is an earlier spelling of the same migration, never one still in the list.
+    const replaced = BrainDatabase.migrations.flatMap((migration) => migration.replaces ?? [])
+    expect(replaced.filter((id) => ids.includes(id))).toEqual([])
+  })
 
   test("Brain.layerFor still opens a brain over its own file", async () => {
     await using tmp = await tmpdir()

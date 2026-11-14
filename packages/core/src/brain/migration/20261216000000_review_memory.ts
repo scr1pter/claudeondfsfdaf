@@ -3,7 +3,9 @@ import type { DatabaseMigration } from "../../database/migration"
 
 // A dedicated, initially empty review namespace. No existing personal/repository entry is promoted or copied.
 export default {
-  id: "20261213000000_review_memory",
+  id: "20261216000000_review_memory",
+  // Renumbered after Codium's Brain migrations; a brain.db from an earlier VectorScope build recorded the old id.
+  replaces: ["20261213000000_review_memory"],
   up(tx) {
     return Effect.gen(function* () {
       yield* tx.run(`CREATE TABLE brain_review_memory (

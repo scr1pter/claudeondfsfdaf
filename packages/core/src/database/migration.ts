@@ -13,6 +13,11 @@ const lock = Semaphore.makeUnsafe(1)
 export type Migration = {
   id: string
   up: (tx: Transaction) => Effect.Effect<void, unknown>
+  /**
+   * Earlier ids of this same migration. A database that completed any of them already holds this migration's changes,
+   * so it records this id without running `up`. The earlier rows stay, so an older build still sees them as done.
+   */
+  replaces?: readonly string[]
 }
 
 export function apply(db: Database) {
@@ -40,7 +45,7 @@ export function apply(db: Database) {
   )
 }
 
-export function applyOnly(db: Database, input: Migration[]) {
+export function applyOnly(db: Database, input: readonly Migration[]) {
   return Effect.gen(function* () {
     yield* db.run(
       sql`CREATE TABLE IF NOT EXISTS ${sql.identifier("migration")} (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`,
@@ -68,9 +73,10 @@ export function applyOnly(db: Database, input: Migration[]) {
 
     for (const migration of input) {
       if (completed.has(migration.id)) continue
+      const replaced = migration.replaces?.some((id) => completed.has(id)) ?? false
       yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          yield* migration.up(tx)
+          if (!replaced) yield* migration.up(tx)
           yield* tx.run(
             sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
           )
