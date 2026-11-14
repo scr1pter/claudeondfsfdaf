@@ -47,17 +47,14 @@ test("private native diagnostics project only strict operation, phase and error 
 })
 test("fixed mask predicate stages survive private projection without exposing host layout", () => {
   for (const stage of [
+    "prepare-construction-input",
+    "prepare-construction-private",
     "prepare-mask-os-chain",
     "prepare-mask-os-decode",
     "prepare-mask-os-version",
     "prepare-mask-runner-identity",
     "prepare-mask-mount-table",
-    "prepare-mask-nested",
-    "prepare-mask-home-nested",
-    "prepare-mask-tmp-nested",
-    "prepare-mask-var-tmp-nested",
-    "prepare-mask-run-nested",
-    "prepare-mask-host-temp-nested",
+    "prepare-mask-origins",
     "prepare-mask-home-target-owner",
     "prepare-mask-home-target-mode",
     "prepare-mask-tmp-target-type",
@@ -71,6 +68,7 @@ test("fixed mask predicate stages survive private projection without exposing ho
     "prepare-mask-host-temp-mount-present",
     "prepare-mask-host-temp-mount-device",
     "prepare-mask-aliases",
+    "prepare-broker-mask-proof",
   ]) {
     const entry = { ...failureRecord(), stage, class: "RuntimeError" as const, errno: null, exit: null }
     const transport: GithubIsolation.FailureRecord = {
@@ -95,6 +93,12 @@ test("mask diagnostic vocabulary rejects paths, invented predicates and wrong or
     "prepare-mask-host-temp-parent-private",
     "prepare-mask-tmp-target-mode",
     "prepare-mask-run-target-mode",
+    "prepare-mask-nested",
+    "prepare-mask-home-nested",
+    "prepare-mask-tmp-nested",
+    "prepare-mask-var-tmp-nested",
+    "prepare-mask-run-nested",
+    "prepare-mask-host-temp-nested",
     "prepare-mask-guest-nested",
     "prepare-mask-/run/private-nested",
     "prepare-mask-run-nested:private-value",
@@ -105,7 +109,7 @@ test("mask diagnostic vocabulary rejects paths, invented predicates and wrong or
   for (const origin of ["control", "client", "transport"])
     expect(
       GithubIsolation.decodeFailureRecords(
-        failureBytes({ ...entry, origin, stage: "prepare-mask-run-nested" }),
+        failureBytes({ ...entry, origin, stage: "prepare-mask-origins" }),
         "prepare",
       ),
     ).toEqual([])
@@ -348,6 +352,18 @@ function fixture() {
     broker: { pid: 102, start: "501", uid: 0, gid: 0 },
     socketIdentity: { device: 5, inode: 123 },
   }
+  const maskProof = {
+    v: 2 as const,
+    sourceDigest: "c".repeat(64),
+    constructionNamespace: {
+      mount: { device: 4, inode: 1012 },
+      parentMount: { device: 4, inode: 1010 },
+      user: { device: 4, inode: 1001 },
+      root: { device: 8, inode: 2 },
+    },
+    keeperNamespace: { device: publicSpec.devices.mnt, inode: publicSpec.namespaces.mnt },
+    protectedMountTargets: [...LinuxIsolation.MASKS, "/run/credentials"].sort(),
+  }
   const hooks: { reply?: (operation: string, result: unknown) => unknown; installed?: () => void } = {}
   const embedded = asset()
   const ports: GithubIsolation.Ports = {
@@ -399,7 +415,7 @@ function fixture() {
               socket: true,
               admission: true,
               masks: true,
-              protectedMountTargets: [...LinuxIsolation.MASKS],
+              maskProof,
             },
           }
         if (operation === "cleanup")
@@ -418,7 +434,7 @@ function fixture() {
     },
   }
   const adapter = GithubIsolation.create(ports)
-  return { adapter, embedded, ports, files, calls, operations, publicSpec, hooks }
+  return { adapter, embedded, ports, files, calls, operations, publicSpec, maskProof, hooks }
 }
 
 test("native selection is compile-time only and absent build bytes cannot activate a runtime path", () => {
@@ -461,9 +477,18 @@ test("fixed commands contain no source path fallback or inherited credentials an
     expect(call.args.slice(7, 12)).toEqual(["1002", "1002", scope.container, "a".repeat(32), f.embedded.sha256])
     expect(call.env).toEqual({ PATH: "/usr/bin:/bin", LC_ALL: "C" })
     expect(call.maxOutput).toBe(65_536)
+    expect(call.timeout).toBe(call.args[6] === "prepare" ? 50_000 : call.args[6] === "cleanup" ? 20_000 : 10_000)
     expect(call.args).not.toContain("/workspace/packages/core/src/process-isolation/linux/entry.py")
     expect(call.input).toBe(call.args[6] === "install" ? JSON.stringify(f.embedded) : "")
   }
+  const control = f.calls[0]?.args[5]
+  if (typeof control !== "string") throw new Error("No fixed native controller source")
+  expect(control).toContain("need(len(encoded) + 1 <= 40960)")
+  expect(control).toContain("need(len(probe.stdout) <= 40960)")
+  expect(control).toContain('json.loads(probe.stdout.decode("utf-8","strict"))')
+  expect(control).toContain('separators=(",",":"),ensure_ascii=False).encode("utf-8","strict")')
+  expect(control).toContain('evidence["sourceDigest"] == mask_sources["digest"]')
+  expect(control).toContain('evidence["constructionNamespace"] == mask_sources["namespace"]')
 })
 
 test("noncanonical, writable, wrong-owner and symlink ancestors refuse before any root execution", async () => {
@@ -600,7 +625,7 @@ test("structural adopted JSON alone cannot substitute for live process, namespac
           socket: true,
           admission: true,
           masks: true,
-          protectedMountTargets: [...LinuxIsolation.MASKS],
+          maskProof: f.maskProof,
           [missing]: false,
         },
       }
@@ -610,11 +635,142 @@ test("structural adopted JSON alone cannot substitute for live process, namespac
   }
 })
 
-test("positive live flags cannot hide an unsupported nested different-filesystem source", async () => {
+test("verified v2 nested mask evidence survives prepare and inspect while raw target arrays remain strict", async () => {
   const f = fixture()
   const ready = await f.adapter.prepare(f.adapter.intent(scope))
+  expect(f.maskProof.protectedMountTargets).toContain("/run/credentials")
+  expect(() => LinuxIsolation.assertMaskMountTargets(f.maskProof.protectedMountTargets)).toThrow(
+    LinuxIsolation.Unavailable,
+  )
+  expect(await f.adapter.validate(ready)).toEqual(ready)
+  expect(f.operations).toEqual(["install", "prepare", "inspect"])
+})
+
+test("positive live flags cannot replace exact v2 source evidence with malformed or outside target proof", async () => {
+  const proof = fixture().maskProof
+  for (const maskProof of [
+    null,
+    [...LinuxIsolation.MASKS],
+    { ...proof, v: 1 },
+    { ...proof, v: "2" },
+    { ...proof, sourceDigest: "C".repeat(64) },
+    { ...proof, sourceDigest: "c".repeat(63) },
+    { ...proof, sourceDigest: undefined },
+    { ...proof, digest: "d".repeat(64) },
+    { ...proof, approved: true },
+    { ...proof, protectedMountTargets: [...proof.protectedMountTargets, "/mnt/outside"].sort() },
+    { ...proof, protectedMountTargets: [...proof.protectedMountTargets, "/tmp/"].sort() },
+    { ...proof, protectedMountTargets: [...proof.protectedMountTargets, "/tmp"].sort() },
+    { ...proof, protectedMountTargets: proof.protectedMountTargets.filter((target) => target !== "/run") },
+    { ...proof, keeperNamespace: { ...proof.keeperNamespace, inode: 13 } },
+    { ...proof, keeperNamespace: { ...proof.keeperNamespace, device: 5 } },
+    { ...proof, constructionNamespace: { ...proof.constructionNamespace, mount: proof.keeperNamespace } },
+    { ...proof, constructionNamespace: { ...proof.constructionNamespace, parentMount: proof.keeperNamespace } },
+  ]) {
+    const f = fixture()
+    const ready = await f.adapter.prepare(f.adapter.intent(scope))
+    f.hooks.reply = (operation, result) =>
+      operation === "inspect" && result && typeof result === "object"
+        ? {
+            ...result,
+            live: {
+              keeper: true,
+              broker: true,
+              namespaces: true,
+              socket: true,
+              admission: true,
+              masks: true,
+              maskProof,
+            },
+          }
+        : result
+    await expect(f.adapter.validate(ready)).rejects.toThrow(LinuxIsolation.Unavailable)
+    expect(f.operations).toEqual(["install", "prepare", "inspect"])
+  }
+})
+
+test("ready evidence has no raw mount-target fallback or extra parallel authority field", async () => {
+  const proof = fixture().maskProof
+  for (const live of [
+    {
+      keeper: true,
+      broker: true,
+      namespaces: true,
+      socket: true,
+      admission: true,
+      masks: true,
+    },
+    {
+      keeper: true,
+      broker: true,
+      namespaces: true,
+      socket: true,
+      admission: true,
+      masks: true,
+      protectedMountTargets: [...LinuxIsolation.MASKS],
+    },
+    {
+      keeper: true,
+      broker: true,
+      namespaces: true,
+      socket: true,
+      admission: true,
+      masks: true,
+      maskProof: proof,
+      protectedMountTargets: [...LinuxIsolation.MASKS],
+    },
+  ]) {
+    const f = fixture()
+    const ready = await f.adapter.prepare(f.adapter.intent(scope))
+    f.hooks.reply = (operation, result) =>
+      operation === "inspect" && result && typeof result === "object" ? { ...result, live } : result
+    await expect(f.adapter.validate(ready)).rejects.toThrow()
+    expect(f.operations).toEqual(["install", "prepare", "inspect"])
+  }
+})
+
+test("v2 mask evidence binds the current public keeper namespace for each live receipt", async () => {
+  for (const matching of [false, true]) {
+    const f = fixture()
+    const ready = await f.adapter.prepare(f.adapter.intent(scope))
+    const updated = { ...f.publicSpec, namespaces: { ...f.publicSpec.namespaces, mnt: 14 } }
+    f.hooks.reply = (operation, result) =>
+      operation === "inspect" && result && typeof result === "object"
+        ? {
+            ...result,
+            public: updated,
+            live: {
+              keeper: true,
+              broker: true,
+              namespaces: true,
+              socket: true,
+              admission: true,
+              masks: true,
+              maskProof: matching
+                ? { ...f.maskProof, keeperNamespace: { device: updated.devices.mnt, inode: updated.namespaces.mnt } }
+                : f.maskProof,
+            },
+          }
+        : result
+    if (!matching) await expect(f.adapter.validate(ready)).rejects.toThrow(LinuxIsolation.Unavailable)
+    if (matching) expect(await f.adapter.validate(ready)).toEqual(ready)
+    expect(f.operations).toEqual(["install", "prepare", "inspect"])
+  }
+})
+
+test("bounded UTF-8 v2 evidence can exceed the former client limit without widening the outer receipt cap", async () => {
+  const f = fixture()
+  const maskProof = {
+    ...f.maskProof,
+    protectedMountTargets: [
+      ...f.maskProof.protectedMountTargets,
+      ...Array.from({ length: 8 }, (_, index) => `/tmp/p${index}-` + "λ".repeat(400)),
+    ].sort(),
+  }
+  expect(Buffer.byteLength(JSON.stringify(maskProof))).toBeGreaterThan(4096)
+  expect(Buffer.byteLength(JSON.stringify(maskProof))).toBeLessThanOrEqual(32_768)
   f.hooks.reply = (operation, result) =>
-    operation === "inspect" && result && typeof result === "object"
+    (operation === "prepare" || operation === "inspect") && result && typeof result === "object"
       ? {
           ...result,
           live: {
@@ -624,12 +780,13 @@ test("positive live flags cannot hide an unsupported nested different-filesystem
             socket: true,
             admission: true,
             masks: true,
-            protectedMountTargets: [...LinuxIsolation.MASKS, "/tmp/private"],
+            maskProof,
           },
         }
       : result
-  await expect(f.adapter.validate(ready)).rejects.toThrow(LinuxIsolation.Unavailable)
-  expect(f.operations).toEqual(["install", "prepare", "inspect"])
+  const ready = await f.adapter.prepare(f.adapter.intent(scope))
+  expect(await f.adapter.validate(ready)).toEqual(ready)
+  expect(f.calls.every((call) => call.maxOutput === 65_536)).toBe(true)
 })
 
 test("actual Sandbox rejects a required native run without intent and preserves its failed-before-intent fence", async () => {

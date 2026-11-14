@@ -10,6 +10,8 @@ on:
       - packages/engine/test/fixture/native-shell-ci/**
       - packages/core/src/directory-identity.ts
       - packages/core/src/process-isolation/**
+      - packages/core/test/process-isolation-linux.test.ts
+      - packages/core/test/fixture/native-mask-origins.py
       - packages/core/src/cross-spawn-spawner.ts
       - packages/engine/src/cli/cmd/github.isolation.ts
       - script/linux-isolation-asset.ts
@@ -71,6 +73,11 @@ jobs:
       - name: Check CI control policy
         working-directory: packages/engine
         run: bun test test/fixture/native-shell-ci/policy.test.ts
+      - name: Check actual pure protected-origin policy without executing the runtime asset
+        working-directory: packages/core
+        run: /usr/bin/python3 -I -S -B test/fixture/native-mask-origins.py
+        env:
+          CI: "true"
       - name: Compile all actual fixtures, guarded controller, Reader and worker with one native plugin
         id: build
         run: bun run packages/engine/test/fixture/native-shell-ci/build.ts --isolation-ci

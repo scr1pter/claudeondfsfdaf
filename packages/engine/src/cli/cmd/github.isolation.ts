@@ -107,6 +107,8 @@ const FAILURE_SIGNALS = [
 const FAILURE_STAGES = {
   entry: [
     "entry-start",
+    "prepare-construction-input",
+    "prepare-construction-private",
     "prepare-input",
     "prepare-masks",
     "prepare-mask-os-chain",
@@ -118,11 +120,10 @@ const FAILURE_STAGES = {
     "prepare-mask-runner-lookup",
     "prepare-mask-runner-identity",
     "prepare-mask-mount-table",
-    "prepare-mask-nested",
+    "prepare-mask-origins",
     "prepare-mask-aliases",
     // The fixed mask/step product carries no path or host metadata. Keep it aligned with entry.py.
     ...["home", "tmp", "var-tmp", "run", "host-temp"].flatMap((mask) => [
-      `prepare-mask-${mask}-nested`,
       ...[
         "target-stat",
         "target-type",
@@ -150,6 +151,7 @@ const FAILURE_STAGES = {
     "prepare-broker-start",
     "prepare-broker-ready",
     "prepare-broker-adopt",
+    "prepare-broker-mask-proof",
     "prepare-publish",
     "cleanup-input",
     "cleanup-quiesce",
@@ -576,7 +578,7 @@ request = json.loads(sys.stdin.buffer.read(65537).decode("utf-8","strict"))
 need(type(request) is dict and set(request) == {"public","maskSources"})
 public = native.validate_spec(request["public"])
 DIAGNOSTIC_STAGE = "client-masks"
-protected_targets = native.validate_masks(public["keeper"]["pid"],public["keeper"]["start"],public["uid"],public["gid"],request["maskSources"])
+mask_proof = native.validate_masks(public["keeper"]["pid"],public["keeper"]["start"],public["uid"],public["gid"],request["maskSources"])
 DIAGNOSTIC_STAGE = "client-capabilities"
 for capability in range(64):
     if native.LIBC.prctl(24, capability, 0, 0, 0) != 0:
@@ -595,9 +597,40 @@ try: native.require(len(descriptors) == 3)
 finally:
     for descriptor in descriptors.values(): os.close(descriptor)
 DIAGNOSTIC_STAGE = "client-output"
-print(json.dumps({"v":1,"event":"broker-live","nonce":public["nonce"],"masks":True,
-                  "protectedMountTargets":protected_targets}),flush=True)
+encoded = json.dumps({"v":1,"event":"broker-live","nonce":public["nonce"],"masks":True,
+                      "maskProof":mask_proof},separators=(",",":"),ensure_ascii=False).encode("utf-8","strict")
+need(len(encoded) + 1 <= 40960)
+sys.stdout.buffer.write(encoded + b"\n"); sys.stdout.buffer.flush()
 '''
+def mask_proof(value, public):
+    # Structural transport validation never grants authority: CLIENT produced this object only after
+    # digest-verified native source checks and broker admission, and ready() checks the current public spec.
+    need(type(value) is dict and set(value) ==
+         {"v","sourceDigest","constructionNamespace","keeperNamespace","protectedMountTargets"} and
+         type(value["v"]) is int and value["v"] == 2)
+    digest = value["sourceDigest"]
+    need(type(digest) is str and len(digest) == 64 and all(char in "0123456789abcdef" for char in digest))
+    construction = value["constructionNamespace"]
+    need(type(construction) is dict and set(construction) == {"mount","parentMount","user","root"})
+    for identity in (*construction.values(), value["keeperNamespace"]):
+        need(type(identity) is dict and set(identity) == {"device","inode"} and
+             all(type(item) is int and 0 < item <= 9007199254740991 for item in identity.values()))
+    keeper = value["keeperNamespace"]
+    need(construction["mount"] != construction["parentMount"] and
+         keeper == {"device":public["devices"]["mnt"],"inode":public["namespaces"]["mnt"]} and
+         keeper != construction["mount"] and keeper != construction["parentMount"] and
+         construction["user"] != {"device":public["devices"]["user"],"inode":public["namespaces"]["user"]})
+    targets = value["protectedMountTargets"]
+    parents = ("/home/vector-agent","/tmp","/var/tmp","/run","/home/runner/work/_temp")
+    need(type(targets) is list and len(targets) <= 64)
+    for target in targets:
+        need(type(target) is str and 0 < len(target.encode("utf-8","strict")) <= 4096 and
+             target.startswith("/") and os.path.normpath(target) == target and
+             not any(ord(char) < 32 or ord(char) == 127 for char in target) and
+             any(target == parent or target.startswith(parent + "/") for parent in parents))
+    need(targets == sorted(set(targets)) and all(parent in targets for parent in parents) and
+         len(json.dumps(value,separators=(",",":"),ensure_ascii=False).encode("utf-8","strict")) <= 32768)
+    return value
 def proc_text(pid, name, limit=65536):
     with open(f"/proc/{pid}/{name}","rb") as stream: data = stream.read(limit + 1)
     need(len(data) <= limit)
@@ -646,22 +679,24 @@ def live(public, mask_sources):
             DIAGNOSTIC_STAGE = "live-endpoint"
             endpoint(public)
             DIAGNOSTIC_STAGE = "live-client"
-            probe = subprocess.run([python,"-I","-S","-B","-c",CLIENT,asset_sha,operation],input=json.dumps({"public":public,"maskSources":mask_sources}).encode("ascii"),
+            probe = subprocess.run([python,"-I","-S","-B","-c",CLIENT,asset_sha,operation],input=json.dumps({"public":public,"maskSources":mask_sources},separators=(",",":"),ensure_ascii=False).encode("utf-8","strict"),
                                    stdout=subprocess.PIPE,stderr=sys.stderr,check=True,timeout=3,
                                    env=ENV,close_fds=True)
-            need(len(probe.stdout) <= 4096)
-            proof = json.loads(probe.stdout.decode("ascii","strict"))
-            need(type(proof) is dict and set(proof) == {"v","event","nonce","masks","protectedMountTargets"} and
+            need(len(probe.stdout) <= 40960)
+            proof = json.loads(probe.stdout.decode("utf-8","strict"))
+            need(type(proof) is dict and set(proof) == {"v","event","nonce","masks","maskProof"} and
                  proof["v"] == 1 and proof["event"] == "broker-live" and proof["nonce"] == public["nonce"] and
-                 proof["masks"] is True and type(proof["protectedMountTargets"]) is list and
-                 len(proof["protectedMountTargets"]) <= 64)
+                 proof["masks"] is True)
+            evidence = mask_proof(proof["maskProof"], public)
+            need(evidence["sourceDigest"] == mask_sources["digest"] and
+                 evidence["constructionNamespace"] == mask_sources["namespace"])
             DIAGNOSTIC_STAGE = "live-final"
             endpoint(public)
             identity(public["keeper"],uid,gid); identity(public["broker"],0,0)
             for fd in descriptors:
                 poll = select.poll(); poll.register(fd,select.POLLIN); need(not poll.poll(0))
             return {"keeper":True,"broker":True,"namespaces":True,"socket":True,"admission":True,"masks":True,
-                    "protectedMountTargets":proof["protectedMountTargets"]}
+                    "maskProof":evidence}
         finally:
             for fd in namespace_fds.values(): os.close(fd)
     finally:
@@ -745,8 +780,9 @@ try:
             proof = live(public, value["maskSources"])
             if operation == "prepare": installation["phase"] = "ready"; record(installation)
             DIAGNOSTIC_STAGE = "control-output"
-            print(json.dumps({"v":1,"event":"ready","installNonce":nonce,"assetSHA":asset_sha,"public":public,
-                              "live":proof}),flush=True)
+            encoded = json.dumps({"v":1,"event":"ready","installNonce":nonce,"assetSHA":asset_sha,"public":public,
+                                  "live":proof},separators=(",",":"),ensure_ascii=False).encode("utf-8","strict")
+            sys.stdout.buffer.write(encoded + b"\n"); sys.stdout.buffer.flush()
         else:
             need(installation["phase"] in ("preparing","ready"))
             DIAGNOSTIC_STAGE = "native-cleanup"
@@ -869,10 +905,9 @@ export function create(ports: Ports) {
       result.assetSHA !== state.assetSHA
     )
       refused()
-    exact(result.live, ["keeper", "broker", "namespaces", "socket", "admission", "masks", "protectedMountTargets"])
+    exact(result.live, ["keeper", "broker", "namespaces", "socket", "admission", "masks", "maskProof"])
     for (const key of ["keeper", "broker", "namespaces", "socket", "admission", "masks"])
       if (result.live[key] !== true) refused()
-    LinuxIsolation.assertMaskMountTargets(result.live.protectedMountTargets)
     const spec = LinuxIsolation.parseSpec(result.public)
     if (
       spec.container !== state.container ||
@@ -881,6 +916,7 @@ export function create(ports: Ports) {
       (state.phase === "ready" && spec.nonce !== state.namespaceNonce)
     )
       refused()
+    LinuxIsolation.parseMaskProof(result.live.maskProof, spec)
     return parseState({ ...state, phase: "ready", namespaceNonce: spec.nonce })
   }
   return Object.freeze({
