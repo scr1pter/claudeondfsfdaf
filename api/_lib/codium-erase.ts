@@ -1,5 +1,6 @@
 import { closeCloudWorkspaces, cloudWorkspacesConfigured } from "./cloud-workspaces.js"
 import { codiumKeyIn, codiumKeyMode, codiumKeyPrefix, codiumKeyRoot } from "./codium-keys.js"
+import { eraseCloudAgentsAccount } from "./cloud-agents-runs.js"
 import { eraseFounding } from "./codium-founding.js"
 import { notifyOwner } from "./codium-owner.js"
 import { forgetAccountOutbox } from "./codium-provision.js"
@@ -17,6 +18,7 @@ import {
 } from "./codium-tombstone.js"
 import { eraseAccountHosted } from "./hosted-crons.js"
 import { eraseAccountHostedJobs } from "./hosted-jobs.js"
+import { EVERYWHERE_ERASE_PART } from "./everywhere/erase.js"
 import { ApiError } from "./http.js"
 import { cancelModelPlanAccount, reconcileModelPlanAccount } from "./model-plan-account.js"
 import { stripeMode, type StripeMode } from "./model-plan-stripe.js"
@@ -209,8 +211,9 @@ export async function eraseAccountKeys(account: string, context: EraseContext) {
  * subscriptions, relay devices, the vault (its wrapped key first, its objects later by the vault cleanup), Done by
  * Morning's queue and recordings (before the cloud computer, whose session list it reads), computers and their saved
  * disks with the sessions and the ledger's store state, the ops records (monitors, domains, incidents, cards and their
- * images) with the ops Worker's data, the account's own Codium records, and last every other key that names the
- * account. The last two wait for every other part, because they delete the indexes those parts find their records by.
+ * images) with the ops Worker's data, GitHub bindings and run records, Everywhere's installations and jobs, the
+ * account's own Codium records, and last every other Codium key that names the account. The last two wait for every
+ * other part, because they delete the indexes those parts find their records by. Feature switches never skip erasure.
  */
 export const ERASE_PARTS: readonly ErasePart[] = [
   {
@@ -242,6 +245,17 @@ export const ERASE_PARTS: readonly ErasePart[] = [
   },
   { id: "ops", configured: storeConfigured, erase: (account, c) => eraseAccountOps(account, c.fetcher, c.now) },
   {
+    id: "cloud-agents",
+    configured: storeConfigured,
+    erase: (account, c) =>
+      eraseCloudAgentsAccount(account, async (command) => {
+        if (c.deadline !== undefined && Date.now() >= c.deadline)
+          throw new ApiError(503, "ACCOUNT_ERASE_PENDING", "The run-record cleanup did not finish in time.")
+        return persistentStore(command, c.fetcher)
+      }),
+  },
+  EVERYWHERE_ERASE_PART,
+  {
     id: "codium",
     configured: storeConfigured,
     requires: [
@@ -255,6 +269,8 @@ export const ERASE_PARTS: readonly ErasePart[] = [
       "overnight",
       "computer",
       "ops",
+      "cloud-agents",
+      "everywhere",
     ],
     erase: eraseCodiumRecords,
   },
@@ -265,8 +281,8 @@ const registeredParts: ErasePart[] = []
 const PART_ID = /^[a-z][a-z-]{0,31}$/
 
 /**
- * Adds a part another package owns, for records this module cannot reach by itself. The intended caller is the Codex
- * integration commit (WP A59), for the repository bindings and run records Codex keeps (contract §4.18). A registered
+ * Adds a part another package owns, for records this module cannot reach by itself. The integrated GitHub and
+ * Everywhere services already have permanent entries in ERASE_PARTS; later packages can extend that list here. A registered
  * part runs after the built-in service parts and before the account's own records, which wait for it, so a failure
  * keeps the identity and the cron retries it. Its id is what the tombstone and the owner's alert show. Returns a
  * function that removes it (for tests).

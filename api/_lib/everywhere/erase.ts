@@ -16,8 +16,8 @@ import { deleteKeys, everywhereStore, getValue, removeMembers, setMembers, type 
  * Every record is found through its index set (identity.ts writes the index before the record), so nothing scans the
  * store. Live jobs belong to the jobs module (VE-05, jobs.ts), which erases them through the `jobs` seam.
  *
- * R-C9: Codium's account deletion runs `EVERYWHERE_ERASE_PART` once codium-erase.ts imports this module and registers
- * it with `registerErasePart` (Codium's file, so the registration line is theirs).
+ * R-C9: Codium's account deletion includes `EVERYWHERE_ERASE_PART` in its canonical erase list, before its own
+ * records and keys. The request and the retry cron share that list, even with Everywhere switched off.
  */
 
 export type EraseReason = Exclude<(typeof ERASE_REASONS)[number], "unlinked">
@@ -264,7 +264,12 @@ export const EVERYWHERE_ERASE_PART = {
   id: "everywhere",
   configured: (): boolean => everywhereStoreConfigured(),
   erase: (account: string, context: CodiumEraseContext): Promise<void> => {
-    const store = everywhereStore(context.fetcher)
+    const upstream = everywhereStore(context.fetcher)
+    const store: Store = (command) => {
+      if (context.deadline !== undefined && Date.now() >= context.deadline)
+        return Promise.reject(new ApiError(503, "ACCOUNT_ERASE_PENDING", "The connector cleanup did not finish in time."))
+      return upstream(command)
+    }
     return eraseEverywhereAccount({ store, now: context.now, jobs: jobEraser(store, () => context.now) }, account)
   },
 } as const

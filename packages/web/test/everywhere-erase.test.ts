@@ -27,6 +27,7 @@ import {
 } from "../../../api/_lib/everywhere/identity"
 import { createJob, readJob, readJobBody } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
+import { ERASE_PARTS } from "../../../api/_lib/codium-erase"
 import { type Store } from "../../../api/_lib/everywhere/store"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { FakeStore, useKv, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
@@ -316,18 +317,10 @@ describe("erasing an account", () => {
     expect(everywhereStoreConfigured({})).toBe(false)
     expect(EVERYWHERE_ERASE_PART.configured()).toBe(true)
 
-    // A stand-in for Codium's loop (codium-erase.ts): skip a part that is not configured, else erase with the
-    // deletion's own fetcher and clock.
-    type CodiumPart = {
-      readonly id: string
-      readonly configured: () => boolean
-      readonly requires?: readonly string[]
-      readonly erase: (
-        account: string,
-        context: { fetcher: typeof fetch; now: number; deadline?: number },
-      ) => Promise<unknown>
-    }
-    const part: CodiumPart = EVERYWHERE_ERASE_PART
+    // Use the actual deletion registry: exporting an eraser alone must not make a disconnected service appear wired.
+    const part = ERASE_PARTS.find((value) => value.id === "everywhere")
+    expect(part).toBe(EVERYWHERE_ERASE_PART)
+    if (!part) throw new Error("Everywhere is not registered for account deletion")
     await world()
     const created = await createJob(ctx(), { platform: "slack", installation: SLACK, kind: "mention", sponsor: B,
       requester: { userId: "U0BBB2222", account: B }, repository: { id: 1, fullName: "acme/api", shared: false },

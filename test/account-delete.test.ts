@@ -52,6 +52,7 @@ import { incidentIndexKey, incidentKey } from "../api/_lib/ops-incidents"
 import { opsAccountsKey } from "../api/_lib/ops-accounts"
 import { opsHealthKey } from "../api/_lib/ops-health"
 import { runTokensRevokedKey } from "../api/_lib/codium-provisioners"
+import { everywhereKeys } from "../api/_lib/everywhere/keys"
 import { OPS_SETTINGS_SCRIPTS, opsSettingsKey } from "../api/_lib/ops-settings"
 import { accountTokensRevoked, revocationConfigured, revokeAccountTokens } from "../api/_lib/revocation"
 import { ballotsKey, nominationsKey, quartersKey, voterField } from "../api/_lib/roadmap"
@@ -230,6 +231,8 @@ function deletionEnvironment(overrides: Record<string, string | undefined> = {})
     VECTOR_OPS_SHARED_SECRET: "deletion-fixture-ops-secret-".padEnd(48, "o"),
     // The Worker is still asked to erase with the ops services turned off (ops-worker.ts `opsErasable`).
     VECTOR_OPS_ENABLED: undefined,
+    VECTOR_EVERYWHERE_ENABLED: "false",
+    VECTOR_GITHUB_BRAIN_ENABLED: "false",
     VECTOR_HOSTED_PROVIDER: undefined,
     VECTOR_HOSTED_ACCOUNT_SALT: "deletion-fixture-hosted-salt-".padEnd(48, "s"),
     CRON_SECRET: CRON,
@@ -305,6 +308,26 @@ function deletionWorld(): World {
   }
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
+    if (url.href.replace(/\/$/, "") === process.env.KV_REST_API_URL && init?.method === "POST") {
+      const command = (JSON.parse(String(init.body)) as (string | number)[]).map(String)
+      // This billing fixture has no GitHub bindings or Brain uploads. Their real Lua suites use disposable Redis;
+      // require the empty indexes here rather than silently accepting a populated service this fixture cannot erase.
+      if (command[0] === "EVAL" && command[3] === `vector:cloud-agents:brain:account:${ACCOUNT}`) {
+        expect(command[2]).toBe("2")
+        expect(command.slice(3)).toEqual([`vector:cloud-agents:brain:account:${ACCOUNT}`, `vector:cli-revoked:${ACCOUNT}`, ACCOUNT])
+        expect(fakes.store.members(command[3]!).size).toBe(0)
+        expect(fakes.store.get(command[4]!)).toBe("1")
+        fakes.store.remove(command[3]!)
+        fakes.store.commands.push(command.map(String))
+        return Response.json({ result: "OK" })
+      }
+      if (command[0] === "EVAL" && command[3] === `vector:cloud-agents:bindings:${ACCOUNT}`) {
+        expect(command[1]).toBe("return redis.call('SMEMBERS', KEYS[1])")
+        expect(fakes.store.members(command[3]!).size).toBe(0)
+        fakes.store.commands.push(command.map(String))
+        return Response.json({ result: [] })
+      }
+    }
     if (url.host === RELAY_HOST) {
       services.relay.push(url.pathname)
       return services.relayDown ? new Response("unavailable", { status: 503 }) : Response.json({ erased: true })
@@ -460,6 +483,8 @@ function leftovers(w: World) {
       if (rest.startsWith(`debits:${ACCOUNT}:`)) return { key: rest, kept: "ledger", ttl }
       // The run-token revocation mark, a security record that expires (35 days).
       if (rest === `runs:revoked-before:${ACCOUNT}`) return { key: rest, kept: "revocation mark", ttl }
+      if (rest === `vector:cli-revoked:${ACCOUNT}`) return { key: rest, kept: "account revocation", ttl }
+      if (rest === everywhereKeys.accountClosed(ACCOUNT)) return { key: rest, kept: "connector closure", ttl }
       return { key: rest, kept: undefined, ttl }
     })
 }
@@ -503,7 +528,7 @@ function deleteRoute(w: World, confirm = EMAIL, overrides: Parameters<typeof han
         clock: w.clock,
         // The revocation mark goes through Upstash's path-style REST call, which the fake store does not speak; its
         // own tests are above. Usage counts live in the usage database (api/_lib/usage.ts).
-        revoke: async () => true,
+        revoke: async () => markRevoked(w),
         forget: async () => true,
         verifyUser: async () => ({ id: ACCOUNT, email: EMAIL }),
         ...overrides,
@@ -518,11 +543,18 @@ function cronRoute(w: World, secret = CRON) {
       handleAccountDeletions(request, response, {
         fetcher: w.fetcher,
         clock: w.clock,
-        revoke: async () => true,
+        revoke: async () => markRevoked(w),
         forget: async () => true,
       }),
     { method: "GET", authorization: `Bearer ${secret}` },
   )
+}
+
+function markRevoked(w: World) {
+  const key = `vector:cli-revoked:${ACCOUNT}`
+  w.fakes.store.set(key, "1")
+  w.fakes.store.expires.set(key, w.clock() + 100 * DAY)
+  return true
 }
 
 describe("the tombstone (WP A57)", () => {
@@ -687,6 +719,8 @@ describe("running a deletion (WP A57)", () => {
       "overnight",
       "computer",
       "ops",
+      "cloud-agents",
+      "everywhere",
       "codium",
       "keys",
       "usage",
@@ -723,6 +757,8 @@ describe("running a deletion (WP A57)", () => {
       "vault",
       "overnight",
       "ops",
+      "cloud-agents",
+      "everywhere",
     ])
     expect(await readTombstone(ACCOUNT, w.fetcher)).toEqual({
       v: 1,
@@ -828,7 +864,7 @@ describe("running a deletion (WP A57)", () => {
     let fail = true
     const seen: string[] = []
     const unregister = registerErasePart({
-      id: "cloud-agents",
+      id: "extension",
       configured: () => true,
       erase: async (account) => {
         seen.push(account)
@@ -839,12 +875,12 @@ describe("running a deletion (WP A57)", () => {
       expect(() => registerErasePart({ id: "codium", configured: () => true, erase: async () => {} })).toThrow()
       expect(() => registerErasePart({ id: "Not An Id", configured: () => true, erase: async () => {} })).toThrow()
       const ids = eraseParts().map((part) => part.id)
-      expect(ids.slice(-3)).toEqual(["cloud-agents", "codium", "keys"])
-      expect(eraseParts().find((part) => part.id === "codium")?.requires).toContain("cloud-agents")
+      expect(ids.slice(-3)).toEqual(["extension", "codium", "keys"])
+      expect(eraseParts().find((part) => part.id === "codium")?.requires).toContain("extension")
       await markAccountDeleting(ACCOUNT, w.clock(), w.clock() + 5 * MINUTE, w.fetcher)
-      const step = { fetcher: w.fetcher, clock: w.clock, revoke: async () => true, forget: async () => true }
+      const step = { fetcher: w.fetcher, clock: w.clock, revoke: async () => markRevoked(w), forget: async () => true }
       const failed = await finishAccountDeletion(ACCOUNT, step)
-      expect(failed).toEqual({ state: "pending", stage: "erase", failed: ["cloud-agents", "codium", "keys"] })
+      expect(failed).toEqual({ state: "pending", stage: "erase", failed: ["extension", "codium", "keys"] })
       expect(w.services.identities).toEqual([])
       fail = false
       expect((await finishAccountDeletion(ACCOUNT, step)).state).toBe("deleted")
@@ -953,6 +989,55 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     setSystemTime()
   })
 
+  test.each(["cloud-agents", "everywhere"])("%s cleanup is required with the feature off and retries before identity deletion", async (service) => {
+    const base = deletionWorld()
+    await seedEverything(base)
+    const part = ERASE_PARTS.find((value) => value.id === service)
+    expect(part?.configured()).toBe(true)
+    expect(ERASE_PARTS.find((value) => value.id === "codium")?.requires).toContain(service)
+    let unavailable = true
+    let attempts = 0
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.href.replace(/\/$/, "") === process.env.KV_REST_API_URL && init?.method === "POST") {
+        const command = (JSON.parse(String(init.body)) as (string | number)[]).map(String)
+        const keys = command[0] === "EVAL" ? command.slice(3, 3 + Number(command[2])) : command.slice(1, 2)
+        if (keys.some((key) => key.startsWith(`vector:${service}:`))) {
+          attempts++
+          if (unavailable) return new Response(null, { status: 503 })
+        }
+      }
+      return base.fetcher(input, init)
+    }) as typeof fetch
+    const w: World = { ...base, fetcher }
+    const answer = await deleteRoute(w)
+    expect(answer.status).toBe(503)
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      stage: "erase", failed: [service, "codium", "keys"],
+    })
+    expect(w.services.identities).toEqual([])
+    expect(w.fakes.store.get(snapshotKey(ACCOUNT))).toBeDefined()
+    expect(attempts).toBeGreaterThan(0)
+    unavailable = false
+    advance(w, deletionRetryMs(1))
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, deleted: 1, pending: 0 })
+    expect(w.services.identities).toEqual([ACCOUNT])
+    expect(w.fakes.store.get(snapshotKey(ACCOUNT))).toBeUndefined()
+    expect(w.fakes.store.get(everywhereKeys.accountClosed(ACCOUNT))).toBe("closed")
+    expect(w.fakes.store.get(`vector:cli-revoked:${ACCOUNT}`)).toBe("1")
+  })
+
+  test("both indexed erasers honor the deletion deadline before sending another store request", async () => {
+    const w = deletionWorld()
+    for (const id of ["cloud-agents", "everywhere"]) {
+      const part = ERASE_PARTS.find((value) => value.id === id)
+      if (!part) throw new Error("Missing required account eraser")
+      const calls = w.fakes.store.commands.length
+      await expect(part.erase(ACCOUNT, { fetcher: w.fetcher, now: w.clock(), deadline: Date.now() - 1 })).rejects.toThrow()
+      expect(w.fakes.store.commands).toHaveLength(calls)
+    }
+  })
+
   test("the request erases everything, deletes the identity after the marker, and the follow-up pass finishes", async () => {
     const w = deletionWorld()
     await seedEverything(w)
@@ -1001,7 +1086,7 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(left.some((entry) => /^(meter|estimate|run|hosted:(pages|egress|jobs:night)):/.test(entry.key))).toBe(false)
     expect(left.find((entry) => entry.kept === "deletion due")).toBeUndefined()
     // Each of them lapses by itself.
-    expect(left.every((entry) => entry.ttl > 0)).toBe(true)
+    expect(left.every((entry) => entry.ttl > 0 || (entry.kept === "connector closure" && entry.ttl === -1))).toBe(true)
     // A late notification about the old subscription writes nothing back.
     await reconcileModelPlanAccount(ACCOUNT, w.fetcher, w.clock(), { source: "webhook" })
     expect(leftovers(w).filter((entry) => !entry.kept)).toEqual([])

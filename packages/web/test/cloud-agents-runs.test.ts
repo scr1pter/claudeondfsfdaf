@@ -23,6 +23,7 @@ import {
 } from "../../../api/_lib/cloud-agents-runs"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { persistentStore } from "../../../api/_lib/persistent-store"
+import { ERASE_PARTS } from "../../../api/_lib/codium-erase"
 import { githubAppFixture } from "./github-app-fixture"
 
 integrationTests()
@@ -381,6 +382,32 @@ function integrationTests() {
       ),
     ).toBe(0)
     expect(await listCloudRuns(f.account)).toEqual([])
+  })
+
+  test("the canonical account-deletion part erases bound runs through its own fetcher after revocation", async () => {
+    const f = await fixture()
+    const run = await f.start()
+    const other = await fixture()
+    const otherRun = await other.start()
+    const part = ERASE_PARTS.find((value) => value.id === "cloud-agents")
+    if (!part) throw new Error("Cloud agents are not registered for account deletion")
+    expect(part.configured()).toBe(true)
+    await expect(part.erase(f.account, { fetcher: fetch, now: f.now })).rejects.toMatchObject({ code: "ACCOUNT_REVOCATION_REQUIRED" })
+    expect((await listCloudRuns(f.account))[0]?.rid).toBe(run.rid)
+    await persistentStore(["SET", `vector:cli-revoked:${f.account}`, "1"])
+    let calls = 0
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls++
+      return fetch(input, init)
+    }) as typeof fetch
+    await part.erase(f.account, { fetcher, now: f.now, deadline: Date.now() + 30_000 })
+    expect(calls).toBeGreaterThan(0)
+    expect(await bindingFor(f.identity.repositoryId)).toBeUndefined()
+    expect(await redis.send("EXISTS", [`${prefix}run:${run.rid}`, `${prefix}run:${run.rid}:actor`])).toBe(0)
+    expect((await listCloudRuns(other.account))[0]?.rid).toBe(otherRun.rid)
+    expect(await bindingFor(other.identity.repositoryId)).toMatchObject({ account: other.account })
+    await part.erase(f.account, { fetcher, now: f.now, deadline: Date.now() + 30_000 })
+    await other.settle(otherRun)
   })
 
   test("binder-left privacy survives unbind and takeover, regardless of public visibility", async () => {
