@@ -90,9 +90,10 @@ the intervening fix and the refused sixth review. That actual private-Git path s
 
 Two POSIX terminal cases now create real parent/helper Session rows instead of only populating a display-lineage map.
 The terminal named file passed 16 cases / 63 assertions on Windows, with 39 POSIX cases explicitly skipped; the new
-lineage cases therefore remain Linux-CI requirements. The terminal-admission fixture also distinguishes the mandatory
-`unsandboxed_terminal` opening ask from typed commands' separate `unsandboxed_shell` ask. It registers no tests on
-Windows, so a zero exit from that local file is recorded as not run, not a pass.
+lineage cases therefore remain Linux-CI requirements. The terminal-admission fixture also pins the mandatory
+`unsandboxed_terminal` opening ask as the terminal's only sandbox-off ask: an admitted typed line asks exactly
+`terminal_input` and then the shell's own command ask, with no `unsandboxed_shell` or `unsandboxed_terminal` ask. It
+registers no tests on Windows, so a zero exit from that local file is recorded as not run, not a pass.
 
 The connected authority fixes preserve verified lexical root and subtree mappings. Real Windows junction tests first
 reproduced lost ASK/DENY and nonsecret preflight restrictions; they now pass without granting an unrelated parent or

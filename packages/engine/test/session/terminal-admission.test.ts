@@ -480,7 +480,7 @@ if (process.platform !== "win32")
           )
           expect(asked).toEqual([])
           const id = result(yield* call(SH)).metadata.id!
-          // Opening a terminal has its own mandatory ask; typed command lines retain the shell's separate ask below.
+          // Opening a terminal has its own mandatory ask, the only sandbox-off ask: typed lines then ask only as commands.
           expect(asked[0]).toEqual({ permission: "unsandboxed_terminal", patterns: [process.platform] })
           expect(asked.filter((item) => item.permission === "unsandboxed_terminal")).toHaveLength(1)
           asked.length = 0
@@ -490,9 +490,10 @@ if (process.platform !== "win32")
           expect(asked.map((item) => item.permission)).toEqual(["terminal_input"])
           asked.length = 0
           result(yield* call({ action: "type", id, text: "echo admitted", enter: true }))
-          expect(asked.map((item) => item.permission).slice(0, 2)).toEqual(["terminal_input", "unsandboxed_shell"])
-          expect(asked.filter((item) => item.permission === "unsandboxed_shell")).toHaveLength(1)
-          expect(asked.length).toBeGreaterThan(2)
+          expect(asked.map((item) => item.permission)).toEqual(["terminal_input", "bash"])
+          expect(
+            asked.filter((item) => item.permission === "unsandboxed_shell" || item.permission === "unsandboxed_terminal"),
+          ).toHaveLength(0)
         }),
       options,
     )
