@@ -12,6 +12,7 @@ import { Effect } from "effect"
 import { buildInlineBody } from "@vectordevai/core/review/format"
 import type { Finding } from "@vectordevai/core/review/types"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { Shell } from "@vectordevai/core/shell"
 import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 import { GithubRunCommand } from "../../src/cli/cmd/github"
 import {
@@ -418,7 +419,7 @@ describe("the agent phase's task", () => {
         // The edit comes only from the shell, which also points the repository's hooks and fsmonitor at scripts that
         // leave a marker, as an agent can. Every git command after it must run pinned (deviation V18b item 8).
         const traps = yield* Effect.promise(() => folder("vector-traps-"))
-        const trap = (name: string) => `#!/bin/sh\ntouch '${path.join(traps, `${name}-ran`)}'\n`
+        const trap = (name: string) => `#!/bin/sh\ntouch '${path.join(traps, `${name}-ran`).replaceAll("\\", "/")}'\n`
         yield* Effect.promise(async () => {
           await fs.mkdir(path.join(traps, "hooks"))
           const scripts = Object.fromEntries([
@@ -434,13 +435,27 @@ describe("the agent phase's task", () => {
             }),
           )
         })
+        // Execute the edit and real Git config installation through the actual shell tool on every OS.
+        // Encoding keeps JavaScript paths and quotes out of the shell's argument grammar.
+        const install = Buffer.from(
+          [
+            "const fs = require('node:fs')",
+            "const { execFileSync } = require('node:child_process')",
+            "fs.writeFileSync('README.md', '# Widgets\\n')",
+            "fs.utimesSync('NOTES.md', 1000000000, 1000000000)",
+            `execFileSync('git', ['config', 'core.hooksPath', ${JSON.stringify(path.join(traps, "hooks"))}])`,
+            `execFileSync('git', ['config', 'core.fsmonitor', ${JSON.stringify(path.join(traps, "fsmonitor"))}])`,
+          ].join(";"),
+        ).toString("base64")
+        const shell = Shell.acceptable()
+        const command = [
+          process.execPath.replaceAll("\\", "/"),
+          "-e",
+          `eval(Buffer.from('${install}','base64').toString())`,
+        ].map((value) => Shell.quote(shell, value))
+        expect(command.every((value) => value !== undefined)).toBe(true)
         yield* test.llm.tool("bash", {
-          command: [
-            "printf '# Widgets\\n' > README.md",
-            "touch -d @1000000000 NOTES.md",
-            `git config core.hooksPath '${path.join(traps, "hooks")}'`,
-            `git config core.fsmonitor '${path.join(traps, "fsmonitor")}'`,
-          ].join(" && "),
+          command: `${Shell.ps(shell) ? "& " : ""}${command.join(" ")}`,
           description: "Tidy the readme",
         })
         yield* test.llm.text("Tidied the readme.")
@@ -476,6 +491,9 @@ describe("the agent phase's task", () => {
         // The shell's config took, and no hook or fsmonitor ran.
         expect(yield* Effect.promise(() => git(test.dir, ["config", "--local", "core.hooksPath"]))).toBe(
           path.join(traps, "hooks"),
+        )
+        expect(yield* Effect.promise(() => git(test.dir, ["config", "--local", "core.fsmonitor"]))).toBe(
+          path.join(traps, "fsmonitor"),
         )
         expect((yield* Effect.promise(() => fs.readdir(traps))).sort()).toEqual(["fsmonitor", "hooks"])
         expect(guard.outside()).toEqual([])

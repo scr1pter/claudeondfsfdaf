@@ -126,6 +126,8 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/brain/embed-manifest.ts":
     "The embedding model's download addresses, which brain/embed.ts fetches as embedding-model.",
   "packages/core/src/config/migration.ts": SHOWN,
+  "packages/core/src/github-agents.ts":
+    "OIDC audience identifiers and the GitHub App installation URL validator; nothing here connects to them.",
   "packages/core/src/github-copilot/copilot-provider.ts": MODEL_API,
   "packages/core/src/model-plan-status.ts":
     "Codium's addresses; it sends with the transport its caller hands it, model-plans.ts's plans-catalog in the engine.",
@@ -150,9 +152,19 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/research/export.ts":
     "The Office Open XML namespace names a .docx export writes into the file; nothing connects to them.",
   "packages/core/src/review/format.ts": SHOWN,
+  "packages/core/src/review/workflow.ts":
+    "The GitHub App installation address used to validate a configured handle; nothing here connects to it.",
   "packages/core/src/session/runner/model.ts": MODEL_API,
+  "packages/engine/src/cli/cmd/github.agent.ts":
+    "A displayed run link and the API default for read-only clients; their requests pass through readOnlyFetch and github.shared.ts's labelled githubFetch.",
+  "packages/engine/src/cli/cmd/github.cloud.ts":
+    "Vector account endpoints sent through the supplied request transport; production uses github.shared.ts's githubFetch, which labels each request as github.",
   "packages/engine/src/cli/cmd/github.git.ts": GIT,
   "packages/engine/src/cli/cmd/github.review.ts": GIT,
+  "packages/engine/src/cli/cmd/github.run-helpers.ts":
+    "A compare link shown when GitHub refuses pull-request creation; nothing here connects to that address.",
+  "packages/engine/src/cli/cmd/github.session.ts":
+    "The GitHub artifact API's default origin; requests use only the explicit transport supplied by the caller.",
   "packages/engine/src/cli/cmd/pr.ts": GIT,
   "packages/engine/src/config/local-settings.ts":
     "Addresses vector local check asks Vector Local's decision about without connecting: a documentation address no network routes, and vectordev.ai.",

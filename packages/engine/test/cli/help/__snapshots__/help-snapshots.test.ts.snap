@@ -396,9 +396,13 @@ exports[`vector CLI help-text snapshots every documented command emits stable he
 manage GitHub agent
 
 Commands:
-  vector github install  install the GitHub agent
-  vector github run      run the GitHub agent
-  vector github review   review a pull request and post the results
+  vector github install           install the GitHub agent
+  vector github run               run the GitHub agent
+  vector github review            review a pull request and post the results
+  vector github mint              authorize a Codium GitHub Actions run
+  vector github bind              bind this GitHub Actions repository to Vector
+  vector github publish           publish a validated GitHub agent result
+  vector github sandbox <action>  isolate a GitHub Actions agent and collect its bundle
 
 Options:
   -h, --help        show help                                                              [boolean]
