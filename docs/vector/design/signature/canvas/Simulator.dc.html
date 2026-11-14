@@ -1,0 +1,1253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>iOS Simulator pane</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#B69FF7}a:hover{color:#D2C4FB}
+button,input,textarea{font:inherit;color:inherit;letter-spacing:inherit;margin:0}
+button{cursor:default;-webkit-tap-highlight-color:transparent}
+@keyframes vx-orbit{to{transform:rotate(360deg)}}
+@keyframes vx-in{from{opacity:0;transform:translateY(4px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes vxs-breath{0%,100%{opacity:1}50%{opacity:.55}}
+@keyframes vxs-glow{0%,100%{opacity:.72}50%{opacity:1}}
+@keyframes vxs-ripple{0%{width:8px;height:8px;opacity:1}9%{width:32px;height:32px;opacity:0}100%{width:32px;height:32px;opacity:0}}
+@keyframes vxs-slide{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}
+.vx-h{transition:background-color 160ms cubic-bezier(.4,0,1,1)}
+.vx-h:hover{transition-duration:100ms}
+[data-theme="dark"] .vx-h:hover{background-color:rgba(255,255,255,0.045)!important}
+[data-theme="dark"] .vx-h:active{background-color:rgba(255,255,255,0.11)!important}
+[data-theme] button:focus-visible,[data-theme] input:focus-visible,[data-theme] a:focus-visible,[data-theme] textarea:focus-visible{outline:2px solid #B69FF7;outline-offset:2px}
+[data-theme] .vx-row:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(182,159,247,0.85)!important}
+[data-theme="dark"] .vx-composer:focus-within{border-color:rgba(182,159,247,0.45)!important}
+[data-theme="dark"] textarea::placeholder,[data-theme="dark"] input::placeholder{color:#95929C;opacity:1}
+.vx-scroll{scrollbar-width:thin}
+[data-theme="dark"] .vx-scroll{scrollbar-color:rgba(255,255,255,0.14) transparent}
+.vx-pop{animation:vx-in 140ms cubic-bezier(.22,1,.36,1)}
+.vxs-mi:hover{color:#ECEBEF!important}
+.vxs-tool:hover{background-color:rgba(255,255,255,0.045)!important;border-color:rgba(255,255,255,0.06)!important;color:#ECEBEF!important}
+.vxs-ih:hover{color:#ECEBEF!important}
+.vxs-gh:hover{color:#ECEBEF!important}
+.vxs-pri:hover{background-color:#FFFFFF!important}
+.vxs-sec:hover{background-color:rgba(255,255,255,0.045)!important}
+.vxs-tint:hover{background-color:rgba(182,159,247,0.16)!important}
+.vxs-send:not(:disabled):hover{filter:brightness(1.1)}
+.vxs-model .vxs-mg{opacity:.7;transition:opacity 120ms}
+.vxs-model:hover .vxs-mg{opacity:1}
+.vxs-cc .vxs-cv{display:none!important}
+.vxs-cc:hover .vxs-cv,.vxs-cc:focus-visible .vxs-cv,.vxs-cc[aria-expanded="true"] .vxs-cv{display:grid!important}
+.vxs-um .vxs-umeta{opacity:0;transition:opacity 120ms}
+.vxs-um:hover .vxs-umeta,.vxs-um:focus-within .vxs-umeta{opacity:1}
+.vxs-thumb:hover{border-color:rgba(255,255,255,0.12)!important}
+.vxs-thumb .vxs-thx{opacity:0}
+.vxs-thumb:hover .vxs-thx,.vxs-thumb:focus-within .vxs-thx{opacity:1}
+.vxs-breath{animation:vxs-breath 1.6s ease-in-out infinite}
+.vxs-glow{animation:vxs-glow 2.8s ease-in-out infinite}
+.vxs-ripple{animation:vxs-ripple 2.4s cubic-bezier(.22,1,.36,1) infinite}
+.vxs-slide{animation:vxs-slide 1.3s cubic-bezier(.4,0,.2,1) infinite}
+.vxs-lr .vxs-lrx{opacity:0;transition:opacity 120ms}
+.vxs-lr:hover .vxs-lrx,.vxs-lr:focus-within .vxs-lrx{opacity:1}
+.vxs-lr:hover{background-color:rgba(255,255,255,0.03)}
+.vxs-dev:hover{filter:brightness(1.08)}
+.cr-tabx:hover,.cr-x:hover{background-color:rgba(255,255,255,.07)!important;color:#FFFFFF!important}
+@media (prefers-reduced-motion: reduce){.vx-orbit{animation:none!important}.vx-pop{animation:none!important}.vxs-breath,.vxs-slide{animation:none!important}.vxs-glow{animation:none!important;opacity:.9!important}.vxs-ripple{animation:none!important;opacity:0!important}*{transition:none!important}}
+@media (max-width: 1100px){.vxs-tl,.vxs-nw{display:none!important}}
+</style>
+</helmet>
+<div data-theme="dark" style="position: relative; box-sizing: border-box; min-height: 1000px; padding: 50px 2.5%; display: flex; align-items: center; justify-content: center; overflow: hidden; background-color: {{wall.base}}; background-image: {{wall.image}}; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 13px; line-height: 18px; -webkit-font-smoothing: antialiased; color: {{t.text}}">
+<div aria-hidden="true" style="position: absolute; left: 4%; right: 16%; top: 66%; height: 300px; border-radius: 999px; background: {{wall.ribbon}}; filter: blur(64px); transform: rotate(-11deg); pointer-events: none"></div>
+<div aria-hidden="true" style="position: absolute; right: -8%; top: -14%; width: 46%; height: 62%; border-radius: 50%; background: {{wall.glow}}; filter: blur(40px); pointer-events: none"></div>
+
+<div style="position: relative; z-index: 1; width: 100%; max-width: 1520px; min-height: 900px; display: flex; flex-wrap: nowrap; align-items: stretch; border-radius: 12px; overflow: hidden; box-shadow: {{t.windowShadow}}">
+
+<div aria-hidden="true" style="position: absolute; left: 16px; top: 16px; z-index: 9; display: flex; gap: 8px; pointer-events: none">
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2)"></span>
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2)"></span>
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #28C840; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2)"></span>
+</div>
+
+<nav aria-label="Vector sidebar" style="position: relative; z-index: 3; flex: 0 0 264px; width: 264px; height: 900px; display: flex; flex-direction: column; background: {{t.sbBg}}; backdrop-filter: {{t.blur}}; -webkit-backdrop-filter: {{t.blur}}; box-shadow: inset -1px 0 0 {{t.edge}}; color: {{t.textRow}}">
+
+<div style="flex: none; height: 44px; display: flex; align-items: center; padding: 0 8px 0 78px">
+<button aria-label="Hide sidebar" title="Hide sidebar  ⌘B" class="vx-h" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.icon}}; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"></rect><path d="M9 4.5v15"></path></svg></button>
+<button aria-label="Back" title="Back  ⌘[" disabled="true" class="vx-h" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.textDisabled}}; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"></path></svg></button>
+<button aria-label="Forward" title="Forward  ⌘]" disabled="true" class="vx-h" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.textDisabled}}; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 6l6 6-6 6"></path></svg></button>
+<div role="group" aria-label="Agent or Editor" style="margin-left: auto; position: relative; flex: none; width: 56px; height: 26px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<span aria-hidden="true" style="position: absolute; top: 1px; left: 1px; width: 26px; height: 22px; border-radius: 6px; background: {{t.segActive}}"></span>
+<button aria-label="Agent" aria-pressed="true" title="Agent  ⌘⇧E" style="position: absolute; top: 1px; left: 1px; width: 26px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.text}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2.5"></rect><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"></path></svg></button>
+<button aria-label="Editor" aria-pressed="false" title="Editor  ⌘⇧E" style="position: absolute; top: 1px; left: 27px; width: 26px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.text3}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="6" height="5" rx="1.5"></rect><path d="M6.5 9v8.5A1.5 1.5 0 0 0 8 19h4.5M6.5 12.5h6"></path><rect x="12.5" y="10.5" width="8" height="4" rx="1.5"></rect><rect x="12.5" y="17" width="8" height="4" rx="1.5"></rect></svg></button>
+</div>
+</div>
+
+<div style="flex: none; position: relative; padding: 4px 8px 0; display: flex; flex-direction: column; gap: 2px">
+<button class="vx-h vx-row" title="New session  ⌘N" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: {{t.textRow}}; font-size: 13px; line-height: 18px; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.5H7A2.5 2.5 0 0 0 4.5 7v10A2.5 2.5 0 0 0 7 19.5h10a2.5 2.5 0 0 0 2.5-2.5v-4"></path><path d="M17.6 3.9a1.9 1.9 0 0 1 2.7 2.7L13 13.9l-3.4.8.8-3.4z"></path></svg></span>
+<span style="flex: 1; min-width: 0">New session</span>
+</button>
+<button class="vx-h vx-row" title="Search  ⌘K" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: {{t.textRow}}; font-size: 13px; line-height: 18px; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="M15 15l5 5"></path></svg></span>
+<span style="flex: 1; min-width: 0">Search</span>
+</button>
+<button class="vx-h vx-row" title="Automations · next run 2:00" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: {{t.textRow}}; font-size: 13px; line-height: 18px; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"></path><path d="M19.5 4.5v3.8h-3.8"></path><path d="M12 8.5V12l2.5 1.8"></path></svg></span>
+<span style="flex: 1; min-width: 0">Automations</span>
+<span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}">2:00</span>
+</button>
+<button class="vx-h vx-row" aria-label="On-call, 1 needs you, 2 working" title="On-call · 1 needs you · 2 working · on until 6:00 PM" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: {{t.textRow}}; font-size: 13px; line-height: 18px; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M6.5 12h2.6l1.6-3.2 2.8 6.4 1.6-3.2h2.4"></path></svg></span>
+<span style="flex: 1; min-width: 0">On-call</span>
+<span style="display: inline-flex; align-items: center; gap: 3px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}"><span style="display: grid; place-items: center; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>1</span>
+</button>
+<button class="vx-h vx-row" title="Vectorscope · 3 open pull requests" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: {{t.textRow}}; font-size: 13px; line-height: 18px; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"></circle><circle cx="12" cy="12" r="2.5"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"></path></svg></span>
+<span style="flex: 1; min-width: 0">Vectorscope</span>
+<span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}">3</span>
+</button>
+<button class="vx-h vx-row" title="More" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: {{t.textRow}}; font-size: 13px; line-height: 18px; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor"></circle></svg></span>
+<span style="flex: 1; min-width: 0">More</span>
+</button>
+</div>
+
+<section aria-label="Live" style="flex: none; position: relative; margin: 12px 8px 0; padding: 4px; border-radius: 10px; background: {{t.liveFill}}; border: 1px solid {{t.liveBorder}}">
+<div style="display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 0 0 5px">
+<span style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Live</span>
+<span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}">{{live.count}}</span>
+<button aria-label="{{live.toggleLabel}}" aria-expanded="{{live.expanded}}" onClick="{{live.toggle}}" class="vx-h" style="margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.text3}}; flex: none"><span style="display: grid; place-items: center; transform: rotate({{live.rot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"></path></svg></span></button>
+</div>
+<sc-if value="{{live.open}}" hint-placeholder-val="{{ true }}">
+<ul aria-label="Live items" style="list-style: none; margin: 0; padding: 0">
+<sc-for list="{{live.items}}" as="it" hint-placeholder-count="4">
+<li style="position: relative; display: flex; align-items: center; height: 28px">
+<button class="vx-h vx-row" title="{{it.tip}}" style="flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 {{it.padR}} 0 5px; border: 0; border-radius: 7px; background: transparent; text-align: left">
+<span style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{it.glyphColor}}">
+<sc-if value="{{it.gNeeds}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></sc-if>
+<sc-if value="{{it.gRun}}" hint-placeholder-val="{{ true }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></sc-if>
+</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; font-size: 13px; line-height: 18px; color: {{it.titleColor}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent)">{{it.title}}</span>
+<sc-if value="{{it.hasMeta}}" hint-placeholder-val="{{ true }}">
+<span style="flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}">
+<sc-if value="{{it.kindScope}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"></circle><circle cx="12" cy="12" r="2.5"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"></path></svg></sc-if>
+<sc-if value="{{it.kindCloud}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5a4.5 4.5 0 0 1-.4-8.98 5.5 5.5 0 0 1 10.6 1.1A3.9 3.9 0 0 1 17 18.5z"></path><rect x="9.25" y="12" width="5.5" height="3.5" rx="0.8"></rect></svg></sc-if>
+<span>{{it.time}}</span>
+</span>
+</sc-if>
+</button>
+<sc-if value="{{it.review}}" hint-placeholder-val="{{ false }}">
+<button aria-label="Review {{it.title}}" title="Open the session at its permission prompt" style="position: absolute; right: 5px; top: 2px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; display: grid; place-items: center">
+<span class="vx-h" style="display: inline-flex; align-items: center; height: 20px; padding: 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}">Review</span>
+</button>
+</sc-if>
+</li>
+</sc-for>
+</ul>
+<sc-if value="{{live.hasMore}}" hint-placeholder-val="{{ true }}">
+<button class="vx-h vx-row" title="Show every live item in Search" style="width: 100%; height: 24px; display: flex; align-items: center; padding: 0 5px 0 29px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{live.moreLabel}}</button>
+</sc-if>
+</sc-if>
+</section>
+
+<div class="vx-scroll" style="flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding-bottom: 12px; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 24px), transparent)">
+
+<div role="group" aria-label="Pinned" style="padding-top: 16px">
+<div style="height: 24px; display: flex; align-items: center; padding: 0 18px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">Pinned</div>
+<div style="position: relative; padding: 0 8px">
+<button class="vx-row vx-h" aria-label="Release 1.99.114 checklist, Done" title="Release 1.99.114 checklist · Done · 1d" style="position: relative; width: 100%; min-height: 28px; display: flex; align-items: flex-start; gap: 8px; padding: 5px 10px 5px 10px; box-sizing: border-box; border: 0; border-radius: 7px; background: transparent; text-align: left">
+<span style="width: 16px; height: 18px; display: grid; place-items: center; flex: none"></span>
+<span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 18px">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; font-size: 13px; line-height: 18px; color: {{t.textRow}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent)">Release 1.99.114 checklist</span>
+<span style="flex: none; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}">1d</span>
+</span>
+</button>
+</div>
+</div>
+
+<sc-for list="{{hosts}}" as="host" hint-placeholder-count="2">
+<div role="group" aria-label="{{host.name}}" style="padding-top: {{host.padTop}}">
+<div style="display: flex; align-items: center; height: 28px; margin: 0 8px; gap: 2px">
+<button class="vx-h vx-row" aria-expanded="true" title="{{host.tip}}" style="flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; color: {{t.text2}}">
+<span style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.icon}}">
+<sc-if value="{{host.isMac}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="2"></rect><path d="M3 19h18"></path></svg></sc-if>
+<sc-if value="{{host.isCloud}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5a4.5 4.5 0 0 1-.4-8.98 5.5 5.5 0 0 1 10.6 1.1A3.9 3.9 0 0 1 17 18.5z"></path><rect x="9.25" y="12" width="5.5" height="3.5" rx="0.8"></rect></svg></sc-if>
+</span>
+<span style="font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap">{{host.name}}</span>
+<span aria-hidden="true" style="width: 6px; height: 6px; margin-left: -2px; border-radius: 50%; background: {{t.ready}}; flex: none"></span>
+<span style="flex: 1"></span>
+</button>
+<button aria-label="{{host.addLabel}}" title="{{host.addLabel}}" class="vx-h" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"></path></svg></button>
+</div>
+<sc-for list="{{host.groups}}" as="g" hint-placeholder-count="3">
+<sc-if value="{{g.isProject}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 4px 8px 0">
+<button class="vx-h vx-row" onClick="{{g.toggle}}" aria-expanded="{{g.expanded}}" title="{{g.tip}}" style="width: 100%; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.text3}}"><span style="display: grid; place-items: center; transform: rotate({{g.chevRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"></path></svg></span></span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{g.name}}</span>
+<sc-if value="{{g.hasBranch}}" hint-placeholder-val="{{ false }}"><span style="margin-left: -2px; flex: none; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text3}}">{{g.branch}}</span></sc-if>
+<span style="flex: 1"></span>
+<span style="flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{t.text3}}">
+<sc-if value="{{g.needs}}" hint-placeholder-val="{{ false }}"><span style="display: grid; place-items: center; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span></sc-if>
+<span>{{g.meta}}</span>
+</span>
+</button>
+</div>
+</sc-if>
+<sc-if value="{{g.isLabel}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 4px 8px 0">
+<div style="height: 24px; display: flex; align-items: center; padding: 0 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}"><span style="flex: 1">{{g.name}}</span><span style="font-size: 11px; line-height: 14px; font-weight: 400; font-variant-numeric: tabular-nums">{{g.meta}}</span></div>
+</div>
+</sc-if>
+<sc-if value="{{g.open}}" hint-placeholder-val="{{ true }}">
+<sc-for list="{{g.rows}}" as="row" hint-placeholder-count="4">
+<div style="position: relative; padding: 0 8px">
+<sc-if value="{{row.isChild}}" hint-placeholder-val="{{ false }}">
+<span aria-hidden="true" style="position: absolute; left: 25px; top: {{row.trunkTop}}; width: 1px; height: {{row.trunkH}}; background: {{t.connector}}"></span>
+<span aria-hidden="true" style="position: absolute; left: 25px; top: 8px; width: 7px; height: 6.5px; box-sizing: border-box; border-left: 1px solid {{t.connector}}; border-bottom: 1px solid {{t.connector}}; border-bottom-left-radius: 6px"></span>
+<span aria-hidden="true" style="position: absolute; z-index: 1; left: 31px; top: 12px; width: 4px; height: 4px; border-radius: 50%; background: {{row.node}}"></span>
+</sc-if>
+<button class="{{row.cls}}" aria-current="{{row.current}}" aria-label="{{row.aria}}" title="{{row.tip}}" style="position: relative; width: 100%; min-height: {{row.h}}; display: flex; align-items: flex-start; gap: 8px; padding: 5px 10px 5px {{row.padL}}; box-sizing: border-box; border: 0; border-radius: 7px; background: {{row.bg}}; box-shadow: {{row.shadow}}; text-align: left; transition: background-color 120ms">
+<span style="width: 16px; height: 18px; display: grid; place-items: center; flex: none; color: {{row.glyphColor}}">
+<sc-if value="{{row.gRun}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></sc-if>
+<sc-if value="{{row.gNeeds}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></sc-if>
+<sc-if value="{{row.gFail}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5.5" fill="currentColor" fill-opacity="0.18"></circle><path d="M3.6 3.6l4.8 4.8M8.4 3.6L3.6 8.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></sc-if>
+<sc-if value="{{row.gReady}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M3.9 6.1l1.4 1.4 2.8-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if>
+<sc-if value="{{row.gQueue}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="2 2"></circle></svg></sc-if>
+</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<span style="display: flex; align-items: center; gap: 8px; height: 18px">
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; font-size: 13px; line-height: 18px; color: {{row.titleColor}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent)">{{row.title}}</span>
+<span style="flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: {{row.metaColor}}">
+<sc-if value="{{row.hasDiff}}" hint-placeholder-val="{{ false }}"><span style="display: inline-flex; gap: 4px"><span style="color: {{t.diffAdd}}">{{row.add}}</span><span style="color: {{t.diffDel}}">{{row.del}}</span></span></sc-if>
+<sc-if value="{{row.unread}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.text}}"></span></sc-if>
+<sc-if value="{{row.hasTime}}" hint-placeholder-val="{{ true }}"><span>{{row.time}}</span></sc-if>
+</span>
+</span>
+<sc-if value="{{row.two}}" hint-placeholder-val="{{ false }}"><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{row.line2}}</span></sc-if>
+</span>
+</button>
+</div>
+</sc-for>
+<sc-if value="{{g.hasMore}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 0 8px">
+<button class="vx-h vx-row" style="width: 100%; height: 26px; display: flex; align-items: center; padding: 0 10px 0 34px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{g.moreLabel}}</button>
+</div>
+</sc-if>
+</sc-if>
+</sc-for>
+</div>
+</sc-for>
+</div>
+
+<div style="flex: none; position: relative; height: 50px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px; padding: 8px 12px; box-sizing: border-box; border-top: 1px solid {{t.hairline}}">
+<button class="vx-h" aria-haspopup="dialog" aria-expanded="false" aria-label="Account: You, Codium Max" title="Account" style="min-width: 0; height: 34px; display: flex; align-items: center; gap: 8px; padding: 4px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; text-align: left">
+<span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 50%; background: {{t.avatar}}; color: #FFFFFF; display: grid; place-items: center; font-size: 11px; line-height: 14px; font-weight: 500; flex: none">Y</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 16px; font-weight: 400"><span style="color: {{t.text}}">You</span><span style="color: {{t.text3}}"> · </span><span style="color: {{t.text2}}">Codium Max</span></span>
+</button>
+<button aria-label="Help" title="Help" aria-haspopup="menu" aria-expanded="{{help.expanded}}" onClick="{{help.toggle}}" class="vx-h vxs-ih" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: {{help.bg}}; color: {{t.iconQuiet}}; flex: none"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.1"></circle><path d="M6.2 6.25a1.85 1.85 0 0 1 3.6.55c0 1.15-1.8 1.35-1.8 2.4"></path><circle cx="8" cy="11.35" r="0.7" fill="currentColor" stroke="none"></circle></svg></button>
+<button aria-label="Settings" title="Settings  ⌘," class="vx-h vxs-ih" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.iconQuiet}}; flex: none"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10.35A2.35 2.35 0 1 0 8 5.65a2.35 2.35 0 0 0 0 4.7Zm4.72-1.35a4.8 4.8 0 0 0 0-2l1.2-.92-1.2-2.08-1.42.58a5.1 5.1 0 0 0-1.72-1L9.4 2H6.6l-.18 1.58a5.1 5.1 0 0 0-1.72 1L3.28 4l-1.2 2.08 1.2.92a4.8 4.8 0 0 0 0 2l-1.2.92L3.28 12l1.42-.58a5.1 5.1 0 0 0 1.72 1L6.6 14h2.8l.18-1.58a5.1 5.1 0 0 0 1.72-1l1.42.58 1.2-2.08-1.2-.92Z"></path></svg></button>
+</div>
+<sc-if value="{{help.open}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Help" class="vx-pop" style="position: absolute; z-index: 40; left: 104px; bottom: 54px; width: 220px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.tour}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: {{help.tourBg}}; font-size: 13px; line-height: 18px; text-align: left; color: {{help.tourColor}}">Take the tour</button>
+<div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Docs</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Best practices</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Changelog</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Send feedback</button>
+<div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Diagnostics</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{help.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Open debug tools</button>
+</div>
+</sc-if>
+</nav>
+
+<main aria-label="{{head.title}}" style="position: relative; z-index: 1; flex: 1 1 auto; min-width: 0; height: 900px; display: flex; flex-direction: column; background: {{t.main}}; color: {{t.text}}">
+
+<header style="flex: none; position: relative; z-index: 20; height: 44px; display: flex; align-items: center; gap: 4px; padding: 0 12px 0 20px; background: {{t.main}}; box-shadow: 0 1px 0 {{t.hairline}}">
+<div style="flex: 0 1 auto; min-width: 0; max-width: 52%; display: flex; align-items: center; gap: 6px">
+<span style="display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.1 2.3v6.1a2.7 2.7 0 0 0 2.7 2.7h2.45M4.1 2.3a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Zm7.8 8.8a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Zm0 0V5.85A2.7 2.7 0 0 0 9.2 3.15H7.45"></path></svg></span>
+<span style="flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">{{head.title}}</span>
+<span title="~/vector" class="vxs-nw" style="flex: 0 100 auto; min-width: 0; margin-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; line-height: 14px; color: {{t.text3}}">vector</span>
+</div>
+<button class="vx-h" aria-label="Branch main. Switch branch" title="Switch branch" style="flex: none; height: 22px; max-width: 180px; margin: 1px 0; display: inline-flex; align-items: center; gap: 6px; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">
+<span>main</span>
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; opacity: 0.7"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<span role="status" aria-label="{{head.status}}" class="vxs-nw" style="flex: none; height: 22px; margin: 1px 0; display: inline-flex; align-items: center; gap: 6px; padding: 0 7px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.chipBorder}}; background: {{t.chipFill}}; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">
+<sc-if value="{{head.ready}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ready}}"></span></sc-if>
+<sc-if value="{{head.working}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.running}}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span></sc-if>
+<sc-if value="{{head.needs}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.needs}}"><svg width="10" height="10" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span></sc-if>
+<span>{{head.status}}</span>
+</span>
+<span style="flex: 1; min-width: 8px"></span>
+
+<button class="vxs-tool" aria-pressed="false" title="Background tasks  ⌘⇧B" style="flex: none; height: 24px; margin-left: 4px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px 0 6px; box-sizing: border-box; border-radius: 6px; border: 1px solid transparent; background: transparent; color: {{t.text2}}; font-size: 12px; line-height: 16px; white-space: nowrap; transition: background-color 120ms, border-color 120ms">
+<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.08V17.92M7.08 3.75H2.08V16.25H7.08M12.92 16.25H17.92V3.75H12.92"></path></svg>
+<span class="vxs-tl">Tasks</span>
+</button>
+<button class="vxs-tool" aria-pressed="false" title="Toggle review  ⌘⇧R" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px 0 6px; box-sizing: border-box; border-radius: 6px; border: 1px solid transparent; background: transparent; color: {{t.text2}}; font-size: 12px; line-height: 16px; white-space: nowrap; transition: background-color 120ms, border-color 120ms">
+<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 14.5H13M7 8H13M10 5V11M18 18V2L2 2L2 18H18Z"></path></svg>
+<span class="vxs-tl">Changes</span>
+</button>
+<button class="vxs-tool" aria-pressed="false" title="Toggle terminal  ⌃`" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px 0 6px; box-sizing: border-box; border-radius: 6px; border: 1px solid transparent; background: transparent; color: {{t.text2}}; font-size: 12px; line-height: 16px; white-space: nowrap; transition: background-color 120ms, border-color 120ms">
+<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 8L8.64 10L6.5 12M10.93 12H13.5M2 18H18V2H2V18Z"></path></svg>
+<span class="vxs-tl">Terminal</span>
+</button>
+<span style="position: relative; flex: none; display: inline-flex">
+<button class="{{pb.cls}}" onClick="{{pm.toggleHead}}" aria-label="Panels" aria-haspopup="menu" aria-expanded="{{pm.headExpanded}}" title="Panels  ⌥⌘0" style="flex: none; height: 24px; display: inline-flex; align-items: center; gap: 2px; padding: 0 4px 0 5px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{pb.border}}; background: {{pb.bg}}; color: {{pb.color}}; transition: background-color 120ms, border-color 120ms">
+<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.08 3.75H17.92V16.25H2.08Z M12.5 3.75V16.25"></path></svg>
+<span aria-hidden="true" style="display: grid; place-items: center; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<sc-if value="{{pm.headOpen}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Panels" class="vx-pop" style="position: absolute; z-index: 60; top: 30px; right: 0; width: 252px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
+<div style="padding: 6px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text2}}">Beside the chat</div>
+<sc-for list="{{pm.rows}}" as="r" hint-placeholder-count="7">
+<sc-if value="{{r.sep}}" hint-placeholder-val="{{ false }}"><div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div></sc-if>
+<button role="menuitemradio" aria-checked="{{r.ariaChecked}}" class="vx-h vxs-mi" onClick="{{r.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}">
+<sc-if value="{{r.gReview}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14.5H13M7 8H13M10 5V11M18 18V2L2 2L2 18H18Z"></path></svg></sc-if>
+<sc-if value="{{r.gWindow}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M3.5 9.5h17"></path></svg></sc-if>
+<sc-if value="{{r.gChecklist}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.58 13.75H17.08M9.58 6.25H17.08M2.92 6.67L4.58 7.92L7.08 4.17M2.92 14.17L4.58 15.42L7.08 11.67"></path></svg></sc-if>
+<sc-if value="{{r.gArtifact}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 2.5H17.5V13.75H6.25Z M2.5 6.25V17.5H13.75"></path></svg></sc-if>
+<sc-if value="{{r.gPhone}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"></rect><path d="M11 18h2"></path></svg></sc-if>
+<sc-if value="{{r.gContext}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="5.5" opacity="0.4"></circle><path d="M7 1.5a5.5 5.5 0 0 1 4.6 2.5"></path></svg></sc-if>
+<sc-if value="{{r.gPanel}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.08 3.75H17.92V16.25H2.08Z M12.5 3.75V16.25"></path></svg></sc-if>
+</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.label}}</span>
+<sc-if value="{{r.checked}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.accentText}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"></path></svg></span></sc-if>
+<sc-if value="{{r.hasKey}}" hint-placeholder-val="{{ true }}"><span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 5px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">{{r.key}}</span></sc-if>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</span>
+</header>
+
+<div style="position: relative; flex: 1; min-height: 0; display: flex; align-items: stretch">
+
+<section aria-label="Conversation" style="position: relative; flex: {{lay.chatFlex}}; width: {{lay.chatW}}; min-width: 0; min-height: 0; display: flex; flex-direction: column">
+
+<div style="flex: none; position: relative; z-index: 6; height: 32px; display: flex; align-items: center; gap: 4px; padding: 0 12px 0 20px">
+<span style="flex: 1; min-width: 8px"></span>
+<button title="Session usage: Codium" aria-label="Session usage: Codium" style="height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent">
+<span class="vx-h" style="height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; box-sizing: border-box; border-radius: 10px; border: 1px solid {{t.hairline}}; background: rgba(236,235,239,0.03); font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.accentText}}">Codium</span>
+</button>
+<button class="vx-h" aria-label="View context usage" title="Context · 18% used" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent">
+<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.hairlineStrong}}" stroke-width="1.5"></circle><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.text3}}" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6.2 34.6" transform="rotate(-90 7 7)"></circle></svg>
+</button>
+<button class="vx-h" aria-label="More options" title="More options" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}">
+<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="7.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="12.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect></svg>
+</button>
+</div>
+
+<div class="vx-scroll" style="flex: 1; min-height: 0; overflow-y: auto; padding: 0 32px; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 24px); mask-image: linear-gradient(180deg, transparent 0, #000 24px)">
+<div style="max-width: 720px; margin: 0 auto; padding: 8px 0 28px; display: flex; flex-direction: column; gap: 16px">
+
+<div class="vxs-um" style="position: relative; align-self: flex-end; max-width: 80%">
+<div style="box-sizing: border-box; padding: 10px 14px; border-radius: 12px; background: {{t.rowHover}}; font-size: 14px; line-height: 22px; color: {{t.text}}">Check Remote’s Sessions screen on iPhone. The Done tab looks empty even when sessions finished today.</div>
+<div class="vxs-umeta" style="position: absolute; z-index: 1; top: 100%; right: 0; height: 24px; display: flex; align-items: center; gap: 2px">
+<span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text3}}">10:39</span>
+<button class="vx-h" aria-label="Copy message" title="Copy" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"></rect><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"></path></svg></button>
+</div>
+</div>
+
+<p style="margin: 0; font-size: 14px; line-height: 22px; color: {{t.text}}">I’ll build Remote, open Sessions in the simulator and tap through the tabs.</p>
+
+<sc-if value="{{tr.any}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 4px">
+
+<sc-if value="{{tr.building}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Simulator</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Building Vector Remote · iPhone 17 Pro</span>
+</div>
+</sc-if>
+
+<sc-if value="{{tr.failed}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.failed}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.5" fill="currentColor" fill-opacity="0.18"></circle><path d="M3.6 3.6l4.8 4.8M8.4 3.6L3.6 8.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Simulator</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Build failed · 2 errors</span>
+<span style="flex: 1"></span>
+<span style="flex: none; font-size: 12px">41s</span>
+</div>
+</sc-if>
+
+<sc-if value="{{tr.built}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"></rect><path d="M11 18h2"></path></svg></span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Simulator</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Built and opened Vector Remote · iPhone 17 Pro</span>
+<span style="flex: 1"></span>
+<span style="flex: none; font-size: 12px">38s</span>
+</div>
+<div>
+<div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"></rect><path d="M11 18h2"></path></svg></span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Simulator</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Tapped “Needs you” · Sessions</span>
+<span style="flex: 1"></span>
+<span style="flex: none; font-size: 12px">3 steps</span>
+</div>
+<div style="margin: 6px 0 0 24px; display: flex; gap: 6px">
+<sc-for list="{{tr.thumbs}}" as="th" hint-placeholder-count="3">
+<div role="img" aria-label="{{th.label}}" title="{{th.label}}" style="position: relative; width: 40px; height: 86px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairline}}; background: #161519; overflow: hidden; flex: none">
+<span style="position: absolute; left: 4px; top: 9px; width: 16px; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.45)"></span>
+<span style="position: absolute; left: 4px; top: 16px; width: 30px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08)"></span>
+<span style="position: absolute; left: {{th.segLeft}}; top: 16px; width: 10px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.30)"></span>
+<span style="position: absolute; left: 4px; top: 24px; width: 30px; height: {{th.c1}}; border-radius: 2px; background: rgba(255,255,255,0.07)"></span>
+<span style="position: absolute; left: 4px; top: {{th.c2Top}}; width: 30px; height: 9px; border-radius: 2px; background: rgba(255,255,255,0.07)"></span>
+<span style="position: absolute; left: 4px; right: 4px; bottom: 5px; height: 1px; background: rgba(255,255,255,0.12)"></span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 -8px; padding: 4px 8px; font-size: 13px; line-height: 20px; color: {{t.text3}}">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{tr.runColor}}">
+<sc-if value="{{tr.runOrbit}}" hint-placeholder-val="{{ true }}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></sc-if>
+<sc-if value="{{tr.runPause}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M4.25 3v6M7.75 3v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></sc-if>
+<sc-if value="{{tr.runStop}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="3" y="3" width="6" height="6" rx="1.25" fill="currentColor"></rect></svg></sc-if>
+</span>
+<span style="flex: none; font-weight: 500; color: {{t.text2}}">Simulator</span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{tr.runText}}</span>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+
+</div>
+</div>
+
+<div style="position: relative; z-index: 5; flex: none; padding: 0 32px 16px">
+<div style="position: relative; max-width: 720px; margin: 0 auto">
+
+<sc-if value="{{dock.work}}" hint-placeholder-val="{{ true }}">
+<div role="status" style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px; padding: 0 4px 2px; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: {{t.text3}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.running}}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{dock.workText}}</span>
+</div>
+</sc-if>
+
+<sc-if value="{{dock.perm}}" hint-placeholder-val="{{ false }}">
+<section aria-label="Permission required" style="margin-bottom: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid {{dock.permBorder}}; background: {{t.raised}}; box-shadow: inset 0 1px 0 rgba(255,255,255,0.045); transition: border-color 160ms">
+<div style="display: flex; align-items: center; gap: 8px">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.needs}}"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5 14.2 13.5H1.8Z M8 6.6v3.1 M8 11.7v.01"></path></svg></span>
+<span style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Permission required</span>
+</div>
+<div style="margin-top: 6px; font-size: 13px; line-height: 18px; color: {{t.text}}">Use the <strong style="font-weight: 600">iOS Simulator</strong></div>
+<div style="margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}">Vector can install and open apps in the simulator, tap, type and take screenshots there. It can’t reach anything outside the simulator.</div>
+<div style="margin-top: 12px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px">
+<button class="vx-h vxs-gh" onClick="{{dock.deny}}" style="height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">Deny</button>
+<button class="vxs-sec" onClick="{{dock.allow}}" title="Don’t ask again in this project" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; transition: background-color 120ms">Allow always</button>
+<button class="vxs-pri" onClick="{{dock.allow}}" style="height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; transition: background-color 120ms">Allow once</button>
+</div>
+</section>
+</sc-if>
+
+<div class="vx-composer" style="position: relative; display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 2px; min-height: 48px; box-sizing: border-box; padding: 10px; border-radius: 14px; background: {{t.raised}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.composerBox}}; transition: border-color 120ms">
+
+<sc-if value="{{c.hasAtt}}" hint-placeholder-val="{{ false }}">
+<div style="flex: 0 0 100%; box-sizing: border-box; padding: 0 0 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<sc-if value="{{c.shot}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 8px">
+<div class="vxs-thumb" title="iPhone 17 Pro · 402 × 874" style="position: relative; width: 48px; height: 48px; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairline}}; flex: none; transition: border-color 120ms">
+<div role="img" aria-label="Simulator screenshot, iPhone 17 Pro, 402 by 874" style="position: absolute; inset: 0; border-radius: 7px; overflow: hidden; background: linear-gradient(160deg, #2E2B38 0%, #1B1A20 100%)">
+<span style="position: absolute; left: 15px; top: 4px; width: 18px; height: 40px; box-sizing: border-box; border-radius: 4px; border: 1px solid rgba(255,255,255,0.22); background: #161519"></span>
+<span style="position: absolute; left: 18px; top: 10px; width: 9px; height: 2px; border-radius: 1px; background: rgba(255,255,255,0.45)"></span>
+<span style="position: absolute; left: 18px; top: 15px; width: 12px; height: 4px; border-radius: 1px; background: rgba(255,255,255,0.10)"></span>
+<span style="position: absolute; left: 18px; top: 22px; width: 12px; height: 6px; border-radius: 1px; background: rgba(255,255,255,0.08)"></span>
+<span style="position: absolute; left: 18px; top: 30px; width: 12px; height: 6px; border-radius: 1px; background: rgba(255,255,255,0.08)"></span>
+</div>
+<button class="vxs-thx" onClick="{{c.removeShot}}" aria-label="Remove the simulator screenshot" title="Remove" style="position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; box-sizing: border-box; border-radius: 50%; border: 1px solid {{t.raisedBorder}}; background: {{t.menu}}; color: {{t.text}}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</div>
+<span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}">iPhone 17 Pro · 402 × 874</span>
+</div>
+</sc-if>
+<sc-if value="{{c.log}}" hint-placeholder-val="{{ false }}">
+<span style="height: 22px; display: inline-flex; align-items: center; gap: 5px; padding: 0 3px 0 6px; box-sizing: border-box; border-radius: 6px; background: {{t.rowSel}}">
+<span aria-hidden="true" style="display: grid; place-items: center; color: {{t.failed}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.5" fill="currentColor" fill-opacity="0.18"></circle><path d="M3.6 3.6l4.8 4.8M8.4 3.6L3.6 8.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></span>
+<span style="font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text}}">{{c.logLabel}}</span>
+<button class="vx-h" onClick="{{c.removeLog}}" aria-label="Remove {{c.logLabel}}" title="Remove" style="width: 16px; height: 16px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: {{t.text2}}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</span>
+</sc-if>
+</div>
+</sc-if>
+
+<button class="vx-h" aria-label="Add files" title="Add files  ⌘U" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.icon}}; flex: none"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.8 7.2 8.3 11.7a2.6 2.6 0 0 1-3.68-3.68l4.6-4.6a1.75 1.75 0 0 1 2.47 2.47l-4.6 4.6a.9.9 0 0 1-1.27-1.27l4.24-4.25"></path></svg></button>
+<label for="vx-sim-prompt" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0">Message Vector</label>
+<textarea id="vx-sim-prompt" rows="1" placeholder="Ask anything, / for commands, @ for context..." value="{{draft}}" onChange="{{onDraft}}" style="flex: 1 1 0px; align-self: stretch; min-width: 0; min-height: 28px; max-height: 200px; box-sizing: border-box; padding: 3px 4px; border: 0; outline: none; resize: none; background: transparent; font-size: 14px; line-height: 22px; color: {{t.text}}; field-sizing: content"></textarea>
+<button class="vx-h" aria-label="Dictate prompt" title="Dictate prompt" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{t.icon}}; flex: none"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 9.6a2.1 2.1 0 0 0 2.1-2.1V4.1a2.1 2.1 0 1 0-4.2 0v3.4A2.1 2.1 0 0 0 8 9.6Zm4-2.1a4 4 0 0 1-8 0M8 11.5v2M6 13.5h4"></path></svg></button>
+<sc-if value="{{c.stop}}" hint-placeholder-val="{{ true }}">
+<button class="vxs-send" onClick="{{stopRun}}" aria-label="Stop" title="Stop  esc" style="width: 28px; height: 28px; margin-left: 2px; display: grid; place-items: center; padding: 0; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairlineStrong}}; background: {{t.text}}; flex: none"><span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 2px; background: {{t.main}}"></span></button>
+</sc-if>
+<sc-if value="{{c.send}}" hint-placeholder-val="{{ false }}">
+<button class="vxs-send" disabled="{{c.sendDisabled}}" aria-label="Send" title="Send  ↵" style="width: 28px; height: 28px; margin-left: 2px; display: grid; place-items: center; padding: 0; box-sizing: border-box; border-radius: 8px; border: 1px solid {{t.hairlineStrong}}; background: {{c.sendBg}}; color: {{c.sendFg}}; flex: none; transition: background-color 120ms"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5.5M6.5 11L12 5.5l5.5 5.5"></path></svg></button>
+</sc-if>
+</div>
+
+<div style="position: relative; margin-top: 8px; height: 24px; display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 12px">
+<div style="flex: none; display: flex; flex-wrap: nowrap; align-items: center; gap: 2px">
+<button class="vx-h" aria-label="This Mac" title="This Mac" style="width: 24px; height: 24px; flex: none; display: grid; place-items: center; padding: 0; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="2"></rect><path d="M3 19h18"></path></svg></button>
+<button class="vx-h" aria-label="Project: vector" title="Project · ~/vector" style="height: 24px; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text}}">vector<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
+</div>
+<div style="flex: 0 1 auto; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 2px">
+<button class="vx-h vxs-model" title="Model · Codium Auto" aria-label="Model: Codium Auto" style="height: 24px; flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text2}}">
+<span class="vxs-mg" aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="7" rx="2"></rect><rect x="4" y="13" width="16" height="7" rx="2"></rect><path d="M8 7.5h.01M8 16.5h.01M12 7.5h4M12 16.5h4"></path></svg></span>
+<span style="min-width: 72px; max-width: {{c.modelMax}}; overflow: hidden; white-space: nowrap; -webkit-mask-image: {{c.modelMask}}; mask-image: {{c.modelMask}}">Codium Auto</span>
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<button class="vx-h {{c.chevCc}}" aria-label="Mode: Manual" title="Mode · Manual" style="height: 24px; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">
+<span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.dotNeutral}}; flex: none"></span>Manual
+<span class="vxs-cv" aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<button class="vx-h {{c.chevCc}}" aria-label="Effort: Balanced" title="Effort · Balanced" style="height: 24px; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text2}}">Balanced
+<span class="vxs-cv" aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<button class="vx-h {{c.chevCc}}" aria-label="Speed: Normal" title="Speed · Normal" style="height: 24px; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text2}}">
+<span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{t.dotNeutral}}; flex: none"></span><sc-if value="{{c.speedText}}" hint-placeholder-val="{{ true }}"><span>Normal</span></sc-if>
+<span class="vxs-cv" aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<button class="vx-h" title="Codium · 64% of this month left · renews Dec 1" aria-label="Codium: 64% of this month left, renews December 1" style="height: 24px; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; white-space: nowrap">
+<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.hairlineStrong}}" stroke-width="2"></circle><circle cx="7" cy="7" r="5.5" fill="none" stroke="{{t.accent}}" stroke-width="2" stroke-dasharray="22.1 34.6" transform="rotate(-90 7 7)"></circle></svg>
+<sc-if value="{{c.ringPct}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text3}}">64%</span></sc-if>
+</button>
+</div>
+</div>
+
+</div>
+</div>
+
+<sc-if value="{{panelOpen}}" hint-placeholder-val="{{ true }}">
+<div role="separator" aria-orientation="vertical" aria-label="Resize the chat column" title="Drag to resize" style="position: absolute; z-index: 6; top: 0; bottom: 0; right: -3px; width: 6px; display: flex; justify-content: center; cursor: col-resize"><span style="width: 1px; height: 100%; background: transparent"></span></div>
+</sc-if>
+</section>
+
+<sc-if value="{{panelOpen}}" hint-placeholder-val="{{ true }}">
+<aside aria-label="iOS Simulator" style="position: relative; z-index: 1; flex: 1 1 655px; min-width: 0; height: 856px; display: flex; flex-direction: column; box-sizing: border-box; background: {{t.main}}; border-left: 1px solid rgba(226,213,237,0.09)">
+
+<div style="flex: none; position: relative; z-index: 8; height: 43px; display: flex; align-items: stretch">
+<div role="tablist" aria-label="Side panel" style="flex: none; display: flex; align-items: center; gap: 8px; padding-left: 12px; background: #16151c; box-shadow: inset 0 -1px 0 rgba(226,213,237,.07)">
+<div role="tab" aria-selected="true" title="iOS Simulator  ⌥⌘5" style="position: relative; height: 24px; display: inline-flex; align-items: center; gap: 7px; padding: 0 3px 0 5px; box-sizing: border-box; border-radius: 7px; background: #231f2a; font-size: 14px; line-height: 18px; font-weight: 400; color: #ebe7ee; white-space: nowrap">
+<sc-if value="{{strip.orbit}}" hint-placeholder-val="{{ true }}"><span aria-label="Vector is using the simulator" style="width: 14px; height: 14px; display: grid; place-items: center; color: {{t.running}}"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span></sc-if>
+<sc-if value="{{strip.glyph}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#b3a1f2" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2.5"></rect><path d="M11 18h2"></path></svg></sc-if>
+<span>iOS Simulator</span>
+<button class="cr-tabx" onClick="{{closePanel}}" aria-label="Close iOS Simulator" title="Close iOS Simulator" style="width: 16px; height: 16px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #a8a6ad"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M8 8l8 8M16 8l-8 8"></path></svg></button>
+<span aria-hidden="true" style="position: absolute; left: 0; right: 0; bottom: -9.5px; height: 1.5px; background: #e2dfe7"></span>
+</div>
+<span style="position: relative; display: inline-flex">
+<button class="cr-x" onClick="{{pm.toggleStrip}}" aria-label="Open a panel" aria-haspopup="menu" aria-expanded="{{pm.stripExpanded}}" title="Open a panel" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{pm.stripBg}}; color: #a8a6ad"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"></path></svg></button>
+<sc-if value="{{pm.stripOpen}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Open a panel" class="vx-pop" style="position: absolute; z-index: 60; top: 30px; left: 0; width: 252px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
+<div style="padding: 6px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text2}}">Beside the chat</div>
+<sc-for list="{{pm.rows}}" as="r" hint-placeholder-count="7">
+<sc-if value="{{r.sep}}" hint-placeholder-val="{{ false }}"><div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div></sc-if>
+<button role="menuitemradio" aria-checked="{{r.ariaChecked}}" class="vx-h vxs-mi" onClick="{{r.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">
+<span aria-hidden="true" style="width: 16px; height: 16px; display: grid; place-items: center; flex: none; color: {{t.icon}}">
+<sc-if value="{{r.gReview}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14.5H13M7 8H13M10 5V11M18 18V2L2 2L2 18H18Z"></path></svg></sc-if>
+<sc-if value="{{r.gWindow}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M3.5 9.5h17"></path></svg></sc-if>
+<sc-if value="{{r.gChecklist}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.58 13.75H17.08M9.58 6.25H17.08M2.92 6.67L4.58 7.92L7.08 4.17M2.92 14.17L4.58 15.42L7.08 11.67"></path></svg></sc-if>
+<sc-if value="{{r.gArtifact}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 2.5H17.5V13.75H6.25Z M2.5 6.25V17.5H13.75"></path></svg></sc-if>
+<sc-if value="{{r.gPhone}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"></rect><path d="M11 18h2"></path></svg></sc-if>
+<sc-if value="{{r.gContext}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="5.5" opacity="0.4"></circle><path d="M7 1.5a5.5 5.5 0 0 1 4.6 2.5"></path></svg></sc-if>
+<sc-if value="{{r.gPanel}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.08 3.75H17.92V16.25H2.08Z M12.5 3.75V16.25"></path></svg></sc-if>
+</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.label}}</span>
+<sc-if value="{{r.checked}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.accentText}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"></path></svg></span></sc-if>
+<sc-if value="{{r.hasKey}}" hint-placeholder-val="{{ true }}"><span style="flex: none; height: 18px; display: inline-flex; align-items: center; padding: 0 5px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{t.hairlineStrong}}; font-size: 11px; line-height: 14px; color: {{t.text2}}; white-space: nowrap">{{r.key}}</span></sc-if>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</span>
+<span style="display: flex; align-items: center; padding: 0 8px 0 5px"><button class="cr-x" onClick="{{closePanel}}" aria-label="Close panel" title="Close panel  Esc" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #a8a6ad"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button></span>
+</div>
+<div aria-hidden="true" style="flex: 1; background: #221e29; box-shadow: inset 0 -1px 0 rgba(226,213,237,.07)"></div>
+</div>
+
+<div style="position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: {{t.main}}">
+
+<div style="flex: none; position: relative; z-index: 7; height: 36px; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 10px; box-sizing: border-box; box-shadow: inset 0 -1px 0 {{t.hairline}}">
+<span style="position: relative; flex: none; display: inline-flex">
+<button class="vx-h" onClick="{{menus.device.toggle}}" aria-haspopup="menu" aria-expanded="{{menus.device.expanded}}" aria-label="Device: {{dev.name}}" title="Choose a simulator" style="height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: {{menus.device.bg}}; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text2}}">
+<span aria-hidden="true" style="display: grid; place-items: center; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"></rect><path d="M11 18h2"></path></svg></span>{{dev.name}}<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span>
+</button>
+<sc-if value="{{menus.device.open}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Simulators" class="vx-pop" style="position: absolute; z-index: 40; top: 30px; left: 0; width: 260px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
+<sc-for list="{{devRows}}" as="d" hint-placeholder-count="4">
+<sc-if value="{{d.isHead}}" hint-placeholder-val="{{ false }}"><div style="padding: 6px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text2}}">{{d.label}}</div></sc-if>
+<sc-if value="{{d.isRow}}" hint-placeholder-val="{{ true }}">
+<button role="menuitemradio" aria-checked="{{d.ariaChecked}}" class="vx-h vxs-mi" onClick="{{d.pick}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">
+<span aria-hidden="true" style="width: 14px; height: 14px; display: grid; place-items: center; flex: none; color: {{t.accentText}}; visibility: {{d.checkVis}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"></path></svg></span>
+<span style="flex: 1; min-width: 0">{{d.label}}</span>
+<span style="font-size: 11px; line-height: 14px; color: {{t.text2}}">{{d.os}}</span>
+</button>
+</sc-if>
+</sc-for>
+<div role="separator" style="height: 1px; margin: 4px 6px; background: {{t.hairline}}"></div>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{menus.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px 0 32px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Manage simulators…</button>
+</div>
+</sc-if>
+</span>
+
+<sc-if value="{{dev.hasApp}}" hint-placeholder-val="{{ true }}">
+<span style="position: relative; flex: none; display: inline-flex">
+<button class="vx-h" onClick="{{menus.app.toggle}}" aria-haspopup="menu" aria-expanded="{{menus.app.expanded}}" aria-label="App: Vector Remote" title="Run target" style="height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; box-sizing: border-box; border: 0; border-radius: 6px; background: {{menus.app.bg}}; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{t.text}}">Vector Remote<span aria-hidden="true" style="display: grid; place-items: center; margin-left: -1px; color: {{t.text3}}"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.67 8.33L10 11.67L13.33 8.33"></path></svg></span></button>
+<sc-if value="{{menus.app.open}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Run targets" class="vx-pop" style="position: absolute; z-index: 40; top: 30px; left: 0; width: 240px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
+<div style="padding: 6px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text2}}">Run targets in vector</div>
+<button role="menuitemradio" aria-checked="true" class="vx-h vxs-mi" onClick="{{menus.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.accentText}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"></path></svg></span>
+<span style="flex: 1">Vector Remote</span>
+<span style="font-size: 11px; line-height: 14px; color: {{t.text2}}">Phone web app</span>
+</button>
+</div>
+</sc-if>
+</span>
+</sc-if>
+<sc-if value="{{dev.noApp}}" hint-placeholder-val="{{ false }}">
+<span style="flex: none; height: 24px; display: inline-flex; align-items: center; padding: 0 6px; font-size: 12px; line-height: 16px; color: {{t.text2}}">No iOS app</span>
+</sc-if>
+
+<sc-if value="{{bt.run}}" hint-placeholder-val="{{ true }}">
+<button class="vxs-pri" onClick="{{buildRun}}" aria-label="Build and run" title="Build and run  ⌘R" style="flex: none; height: 24px; margin-left: 4px; display: inline-flex; align-items: center; gap: 5px; padding: {{bt.runPad}}; box-sizing: border-box; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.main}}; white-space: nowrap">
+<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7.5-4.5z" fill="currentColor"></path></svg>
+<sc-if value="{{bt.runLabel}}" hint-placeholder-val="{{ true }}"><span>Build and run</span></sc-if>
+</button>
+</sc-if>
+<sc-if value="{{bt.building}}" hint-placeholder-val="{{ false }}">
+<span role="status" style="flex: none; height: 24px; margin-left: 4px; display: inline-flex; align-items: center; gap: 5px; padding: 0 2px 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}; white-space: nowrap">
+<span aria-hidden="true" style="display: grid; place-items: center; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>Building…
+<button class="vx-h" onClick="{{cancelBuild}}" aria-label="Cancel the build" title="Cancel the build" style="width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: {{t.text2}}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path></svg></button>
+</span>
+</sc-if>
+
+<span style="flex: 1; min-width: 8px"></span>
+
+<sc-if value="{{bt.failed}}" hint-placeholder-val="{{ false }}">
+<span role="status" style="flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text}}; white-space: nowrap">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.failed}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.5" fill="currentColor" fill-opacity="0.18"></circle><path d="M3.6 3.6l4.8 4.8M8.4 3.6L3.6 8.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></span><span style="min-width: 0; overflow: hidden; text-overflow: ellipsis">Build failed · 2 errors</span>
+</span>
+<button class="vxs-tint" onClick="{{sendErrors}}" style="flex: none; height: 24px; margin: 0 4px 0 2px; padding: 0 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.activeBorder}}; background: {{t.activeFill}}; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.accentText}}; white-space: nowrap">Send to chat</button>
+</sc-if>
+
+<button class="vx-h" onClick="{{rotate}}" aria-label="Rotate" title="Rotate  ⌘→" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 9M19.5 4.5V9H15"></path></svg></button>
+<button class="vx-h" onClick="{{home}}" aria-label="Home" title="Home  ⇧⌘H" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true"><circle cx="8" cy="8" r="5.25"></circle></svg></button>
+<button class="vx-h" onClick="{{shoot}}" aria-label="Add a screenshot to the chat" title="Add a screenshot to the chat" style="flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8.5a2 2 0 0 1 2-2h2l1.5-2h5L16 6.5h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><circle cx="12" cy="13" r="3.5"></circle></svg></button>
+<span style="position: relative; flex: none; display: inline-flex">
+<button class="vx-h" onClick="{{menus.more.toggle}}" aria-haspopup="menu" aria-expanded="{{menus.more.expanded}}" aria-label="More simulator options" title="More" style="width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: {{menus.more.bg}}; color: {{t.icon}}"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="7.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect><rect x="12.2" y="7.2" width="1.6" height="1.6" rx="0.4" fill="currentColor"></rect></svg></button>
+<sc-if value="{{menus.more.open}}" hint-placeholder-val="{{ false }}">
+<div role="menu" aria-label="Simulator options" class="vx-pop" style="position: absolute; z-index: 40; top: 30px; right: 0; width: 248px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{t.menu}}; border: 1px solid {{t.raisedBorder}}; box-shadow: {{t.menuShadow}}; color: {{t.textRow}}; text-align: left">
+<button role="menuitem" aria-haspopup="menu" class="vx-h vxs-mi" onClick="{{menus.close}}" style="display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}"><span style="flex: 1">Appearance</span><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Dark</span><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"></path></svg></span></button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{menus.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Erase content and settings…</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{menus.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Open in the Simulator app</button>
+<button role="menuitem" class="vx-h vxs-mi" onClick="{{shutDown}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{t.textRow}}">Shut down device</button>
+</div>
+</sc-if>
+</span>
+</div>
+
+<sc-if value="{{bt.building}}" hint-placeholder-val="{{ false }}">
+<div role="progressbar" aria-label="Building Vector Remote" style="flex: none; position: relative; height: 3px; overflow: hidden; background: rgba(255,255,255,0.06)"><span class="vxs-slide" style="position: absolute; left: 0; top: 0; bottom: 0; width: 38%; background: linear-gradient(90deg, rgba(165,140,242,0), {{t.running}}, rgba(165,140,242,0))"></span></div>
+</sc-if>
+
+<sc-if value="{{bar.drive}}" hint-placeholder-val="{{ true }}">
+<div role="status" style="flex: none; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 10px; box-sizing: border-box; background: {{t.raised}}; box-shadow: inset 0 1px 0 rgba(165,140,242,0.60), inset 0 -1px 0 {{t.hairline}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.running}}"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">Vector is using the simulator · <span style="color: {{t.text}}">Tapping “Done”</span></span>
+<button class="vxs-sec" onClick="{{takeOver}}" style="flex: none; height: 22px; padding: 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}">Take over</button>
+<button class="vx-h" onClick="{{stopRun}}" aria-label="Stop" title="Stop the run  esc" style="flex: none; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 2px; background: {{t.text}}"></span></button>
+</div>
+</sc-if>
+<sc-if value="{{bar.control}}" hint-placeholder-val="{{ false }}">
+<div role="status" style="flex: none; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 10px; box-sizing: border-box; background: {{t.raised}}; box-shadow: inset 0 1px 0 rgba(226,171,87,0.60), inset 0 -1px 0 {{t.hairline}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text2}}"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M4.25 3v6M7.75 3v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">You have control · Vector is paused · no screenshots</span>
+<button class="vxs-pri" onClick="{{giveBack}}" style="flex: none; height: 22px; padding: 0 10px; border: 0; border-radius: 6px; background: {{t.text}}; font-size: 11px; line-height: 14px; font-weight: 600; color: {{t.main}}">Give back</button>
+<button class="vx-h" onClick="{{stopRun}}" aria-label="Stop" title="Stop the run  esc" style="flex: none; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 2px; background: {{t.text}}"></span></button>
+</div>
+</sc-if>
+<sc-if value="{{bar.wait}}" hint-placeholder-val="{{ false }}">
+<div role="status" style="flex: none; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 10px; box-sizing: border-box; background: {{t.raised}}; box-shadow: inset 0 1px 0 rgba(226,171,87,0.60), inset 0 -1px 0 {{t.hairline}}">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.needs}}"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 16px; color: {{t.text2}}">Vector is waiting for you · <span style="color: {{t.text}}">Use the iOS Simulator?</span></span>
+<button class="vxs-sec" onClick="{{review}}" style="flex: none; height: 22px; padding: 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text}}">Review</button>
+</div>
+</sc-if>
+
+<div style="position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; padding-top: 24px; box-sizing: border-box; background: {{t.terminal}}">
+<div style="position: relative; flex: none; width: {{dev.boxW}}; height: {{dev.boxH}}">
+<div style="position: absolute; left: 0; top: 0; width: {{dev.outerW}}; height: {{dev.outerH}}; transform: scale({{dev.scale}}); transform-origin: 0 0">
+
+<sc-if value="{{dev.glow}}" hint-placeholder-val="{{ true }}">
+<div aria-hidden="true" class="{{dev.glowCls}}" style="position: absolute; inset: 0; border-radius: 49px; box-shadow: 0 0 0 2px rgba(184,146,255,0.90), 0 0 14px rgba(139,92,246,0.55), 0 0 40px rgba(102,51,204,0.28); opacity: {{dev.glowOp}}; pointer-events: none"></div>
+</sc-if>
+
+<div style="position: absolute; inset: 0; border-radius: 49px; background: #0B0A0E; box-shadow: 0 0 0 1px rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.06), 0 24px 60px rgba(0,0,0,0.45); opacity: {{dev.frameOp}}">
+<div role="region" aria-label="{{dev.screenAria}}" style="position: absolute; left: 9px; top: 9px; width: {{dev.screenW}}; height: {{dev.screenH}}; border-radius: 40px; overflow: hidden; background: {{dev.screenBg}}; color: #ECEBEF; font-size: 13px; line-height: 18px">
+
+<sc-if value="{{dev.app}}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{ap.status}}" hint-placeholder-val="{{ true }}">
+<div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; box-sizing: border-box">
+<span style="font-size: 11px; line-height: 14px; font-weight: 600; color: #ECEBEF">9:41</span>
+<span style="display: inline-flex; align-items: center; gap: 5px">
+<svg width="14" height="9" viewBox="0 0 14 9"><rect x="0" y="6" width="2.4" height="3" rx="0.6" fill="#ECEBEF"></rect><rect x="3.8" y="4" width="2.4" height="5" rx="0.6" fill="#ECEBEF"></rect><rect x="7.6" y="2" width="2.4" height="7" rx="0.6" fill="#ECEBEF"></rect><rect x="11.4" y="0" width="2.4" height="9" rx="0.6" fill="#ECEBEF"></rect></svg>
+<span style="position: relative; width: 18px; height: 8px; box-sizing: border-box; border-radius: 2px; border: 1px solid rgba(236,235,239,0.55)"><span style="position: absolute; left: 1px; top: 1px; bottom: 1px; width: 11px; border-radius: 1px; background: #ECEBEF"></span></span>
+</span>
+</div>
+</sc-if>
+<div style="position: absolute; left: {{ap.titleL}}; top: {{ap.titleT}}; font-size: 22px; line-height: 28px; font-weight: 700; color: #ECEBEF">Sessions</div>
+<div style="position: absolute; left: {{ap.titleL}}; top: {{ap.subT}}; font-size: 11px; line-height: 14px; color: #A9A7B0">This Mac · 3 live</div>
+<div role="tablist" aria-label="Sessions filter" style="position: absolute; left: {{ap.segL}}; top: {{ap.segT}}; width: {{ap.segW}}; height: 24px; box-sizing: border-box; display: flex; padding: 1px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.07); background: rgba(255,255,255,0.05)">
+<sc-for list="{{segs}}" as="sg" hint-placeholder-count="3">
+<button role="tab" aria-selected="{{sg.selected}}" onClick="{{sg.pick}}" class="vxs-dev" style="flex: 1; min-width: 0; height: 20px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0; border: 0; border-radius: 6px; background: {{sg.bg}}; font-size: 11px; line-height: 14px; font-weight: 500; color: {{sg.color}}; white-space: nowrap">{{sg.label}}<sc-if value="{{sg.hasCount}}" hint-placeholder-val="{{ false }}"><span style="color: #E2AB57">1</span></sc-if></button>
+</sc-for>
+</div>
+
+<div style="position: absolute; left: {{ap.listL}}; top: {{ap.listT}}; width: {{ap.listW}}; display: flex; flex-direction: column; gap: 8px">
+<sc-if value="{{ap.showNeeds}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 10px; border-radius: 12px; background: rgba(255,255,255,0.05)">
+<div style="display: flex; align-items: flex-start; gap: 8px">
+<span aria-label="Needs you" style="height: 18px; display: grid; place-items: center; flex: none; color: #E2AB57"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></span>
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13px; line-height: 18px; font-weight: 600; color: #ECEBEF">Fix Codium P8 CI</div>
+<div style="font-size: 11px; line-height: 14px; color: #95929C">vector-codium</div>
+</div>
+</div>
+<div style="margin-top: 6px; font-size: 12px; line-height: 16px; color: #A9A7B0">Wants to run</div>
+<div style="margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; color: #ECEBEF">pnpm install --frozen-lockfile</div>
+<div style="margin-top: 8px; display: flex; gap: 8px">
+<button class="vxs-dev" onClick="{{deviceTap}}" aria-label="Deny, in Vector Remote on the simulator" style="flex: 1; height: 32px; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: #ECEBEF">Deny</button>
+<button class="vxs-dev" onClick="{{deviceTap}}" aria-label="Allow once, in Vector Remote on the simulator" style="flex: 1; height: 32px; box-sizing: border-box; border-radius: 8px; border: 0; background: #ECEBEF; font-size: 12px; line-height: 16px; font-weight: 600; color: #161519">Allow once</button>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{ap.showLive}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: flex-start; gap: 8px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,0.05)">
+<span aria-label="Running" style="height: 18px; display: grid; place-items: center; flex: none; color: #A58CF2"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13px; line-height: 18px; font-weight: 600; color: #ECEBEF">Recheck keyboard focus across menu reads</div>
+<div style="font-size: 11px; line-height: 14px; color: #95929C">vector · 12m</div>
+</div>
+</div>
+<div style="display: flex; align-items: flex-start; gap: 8px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,0.05)">
+<span aria-label="Running" style="height: 18px; display: grid; place-items: center; flex: none; color: #A58CF2"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"></circle><g class="vx-orbit" style="transform-origin: 6px 6px; animation: vx-orbit 1.6s linear infinite"><circle cx="6" cy="1.75" r="1.5" fill="currentColor"></circle></g></svg></span>
+<div style="flex: 1; min-width: 0">
+<div style="font-size: 13px; line-height: 18px; font-weight: 600; color: #ECEBEF">Reproduce Windows packaging limit</div>
+<div style="display: flex; align-items: center; gap: 4px; font-size: 11px; line-height: 14px; color: #95929C"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5a4.5 4.5 0 0 1-.4-8.98 5.5 5.5 0 0 1 10.6 1.1A3.9 3.9 0 0 1 17 18.5z"></path></svg>Cloud computer · 4m</div>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{ap.empty}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 32px 0; text-align: center; font-size: 12px; line-height: 16px; color: #95929C">No sessions finished today</div>
+</sc-if>
+</div>
+
+<div style="position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; height: {{ap.tabH}}; box-sizing: border-box; display: flex; padding: 6px 8px 0; border-top: 1px solid rgba(255,255,255,0.07); background: rgba(22,21,25,0.96)">
+<button class="vxs-dev" onClick="{{deviceTap}}" aria-label="Sessions tab" style="flex: 1; height: 34px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; color: #B69FF7"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4.5" width="16" height="15" rx="3"></rect><path d="M8 9.5h8M8 13h8M8 16.5h5"></path></svg><span style="font-size: 9px; line-height: 12px; font-weight: 500">Sessions</span></button>
+<button class="vxs-dev" onClick="{{deviceTap}}" aria-label="Approvals tab" style="flex: 1; height: 34px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; color: #95929C"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l7 2.5v5.5c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6z"></path><path d="M9 12l2.2 2.2L15.5 10"></path></svg><span style="font-size: 9px; line-height: 12px; font-weight: 500">Approvals</span></button>
+<button class="vxs-dev" onClick="{{deviceTap}}" aria-label="Computers tab" style="flex: 1; height: 34px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; color: #95929C"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="2"></rect><path d="M3 19h18"></path></svg><span style="font-size: 9px; line-height: 12px; font-weight: 500">Computers</span></button>
+<button class="vxs-dev" onClick="{{deviceTap}}" aria-label="Alerts tab" style="flex: 1; height: 34px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; color: #95929C"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14z"></path><path d="M10 20.5h4"></path></svg><span style="font-size: 9px; line-height: 12px; font-weight: 500">Alerts</span></button>
+</div>
+<span aria-hidden="true" style="position: absolute; z-index: 4; left: 50%; bottom: 6px; width: 100px; height: 4px; margin-left: -50px; border-radius: 2px; background: rgba(255,255,255,0.6)"></span>
+
+<sc-if value="{{dev.touch}}" hint-placeholder-val="{{ true }}">
+<span aria-hidden="true" style="position: absolute; z-index: 6; left: {{tp.l}}; top: {{tp.t}}; width: 22px; height: 22px; box-sizing: border-box; border-radius: 50%; background: rgba(165,140,242,0.30); border: 1.5px solid #A58CF2; pointer-events: none"></span>
+<span aria-hidden="true" class="vxs-ripple" style="position: absolute; z-index: 6; left: {{tp.cx}}; top: {{tp.cy}}; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #A58CF2; transform: translate(-50%, -50%); pointer-events: none"></span>
+<span aria-hidden="true" style="position: absolute; z-index: 7; left: {{tp.tagL}}; top: {{tp.tagT}}; padding: 1px 4px; border-radius: 4px; background: #7C5CE6; font-size: 10px; line-height: 12px; font-weight: 600; color: #FFFFFF; pointer-events: none">Vector</span>
+</sc-if>
+</sc-if>
+
+<sc-if value="{{dev.msg}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 0 28px; text-align: center">
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: #ECEBEF">{{dev.msgTitle}}</div>
+<sc-if value="{{dev.msgHasSub}}" hint-placeholder-val="{{ true }}"><div style="font-size: 12px; line-height: 16px; color: #95929C">{{dev.msgSub}}</div></sc-if>
+<sc-if value="{{dev.msgBtn}}" hint-placeholder-val="{{ true }}"><button class="vxs-sec" onClick="{{buildRun}}" style="margin-top: 12px; height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid rgba(255,255,255,0.12); background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: #ECEBEF">Build and run</button></sc-if>
+</div>
+</sc-if>
+
+<span aria-hidden="true" style="position: absolute; z-index: 8; left: {{dev.islL}}; top: {{dev.islT}}; width: {{dev.islW}}; height: {{dev.islH}}; border-radius: 13px; background: #000000"></span>
+</div>
+</div>
+
+<sc-if value="{{dev.off}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center">
+<div style="font-size: 13px; line-height: 18px; font-weight: 500; color: {{t.text}}">Simulator is off</div>
+<button class="vxs-sec" onClick="{{startDevice}}" style="height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairlineStrong}}; background: transparent; font-size: 12px; line-height: 16px; font-weight: 500; color: {{t.text}}">Start {{dev.name}}</button>
+</div>
+</sc-if>
+</div>
+</div>
+<div style="margin-top: 12px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text3}}">{{dev.caption}}</div>
+</div>
+
+<div style="flex: none; position: relative; height: {{logs.h}}; display: flex; flex-direction: column; box-sizing: border-box; border-top: 1px solid {{t.hairline}}; background: {{t.main}}">
+<sc-if value="{{logs.open}}" hint-placeholder-val="{{ false }}">
+<div role="separator" aria-orientation="horizontal" aria-label="Resize the logs drawer" title="Drag to resize" style="position: absolute; z-index: 2; left: 0; right: 0; top: -4px; height: 6px; cursor: row-resize"></div>
+</sc-if>
+<button class="vx-h" onClick="{{logs.toggle}}" aria-expanded="{{logs.expanded}}" title="{{logs.tip}}" style="flex: none; width: 100%; height: 27px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; box-sizing: border-box; border: 0; border-radius: 0; background: transparent; text-align: left">
+<span aria-hidden="true" style="display: grid; place-items: center; flex: none; color: {{t.text3}}; transform: rotate({{logs.rot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 14.5l6-6 6 6"></path></svg></span>
+<span style="flex: none; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Logs</span>
+<sc-if value="{{logs.hasErr}}" hint-placeholder-val="{{ true }}"><span aria-label="{{logs.errAria}}" style="flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text2}}"><span aria-hidden="true" style="display: grid; place-items: center; color: {{t.failed}}"><svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.5" fill="currentColor" fill-opacity="0.18"></circle><path d="M3.6 3.6l4.8 4.8M8.4 3.6L3.6 8.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></span>{{logs.errCount}}</span></sc-if>
+<span style="flex: 1; min-width: 12px"></span>
+<span style="flex: 0 1 auto; min-width: 0; max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{t.text3}}">{{logs.latest}}</span>
+</button>
+<sc-if value="{{logs.open}}" hint-placeholder-val="{{ false }}">
+<div style="flex: none; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px; box-sizing: border-box">
+<div role="group" aria-label="Show" style="flex: none; height: 22px; display: flex; padding: 1px; box-sizing: border-box; border-radius: 7px; border: 1px solid {{t.hairline}}; background: {{t.segTrack}}">
+<button aria-pressed="{{logs.allPressed}}" onClick="{{logs.showAll}}" style="height: 18px; padding: 0 8px; border: 0; border-radius: 5px; background: {{logs.allBg}}; font-size: 11px; line-height: 14px; color: {{logs.allColor}}">All</button>
+<button aria-pressed="{{logs.errPressed}}" onClick="{{logs.showErr}}" style="height: 18px; padding: 0 8px; border: 0; border-radius: 5px; background: {{logs.errBg}}; font-size: 11px; line-height: 14px; color: {{logs.errColor}}">Errors</button>
+</div>
+<input aria-label="Filter logs" placeholder="Filter logs" value="{{logQ}}" onChange="{{onLogQ}}" style="flex: none; width: 180px; height: 24px; padding: 0 8px; box-sizing: border-box; border-radius: 6px; border: 1px solid {{t.hairline}}; background: {{t.rowHover}}; outline: none; font-size: 12px; line-height: 16px; color: {{t.text}}">
+<span style="flex: 1"></span>
+<button class="vx-h vxs-gh" onClick="{{sendErrors}}" disabled="{{logs.noErr}}" style="flex: none; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font-size: 11px; line-height: 14px; font-weight: 500; color: {{logs.sendColor}}">Send errors to chat</button>
+</div>
+<div class="vx-scroll" role="log" aria-label="Simulator logs" style="flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 6px">
+<sc-for list="{{logs.rows}}" as="l" hint-placeholder-count="3">
+<div class="vxs-lr" style="position: relative; display: flex; align-items: center; gap: 8px; min-height: 20px; padding: 2px 12px; box-sizing: border-box; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 16px">
+<span style="flex: none; width: 56px; font-size: 10px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{t.text3}}">{{l.time}}</span>
+<span style="flex: none; width: 10px; height: 10px; display: grid; place-items: center; color: {{l.color}}">
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap">{{l.level}}</span>
+<sc-if value="{{l.err}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5.5" fill="currentColor" fill-opacity="0.18"></circle><path d="M3.6 3.6l4.8 4.8M8.4 3.6L3.6 8.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg></sc-if>
+<sc-if value="{{l.warn}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" transform="rotate(45 6 6)" fill="currentColor"></rect></svg></sc-if>
+</span>
+<span style="flex: none; color: {{t.text3}}">{{l.proc}}</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: {{t.text2}}">{{l.msg}}</span>
+<button class="vx-h vxs-gh vxs-lrx" onClick="{{l.send}}" style="flex: none; height: 20px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif; font-size: 11px; line-height: 14px; font-weight: 500; color: {{t.text2}}">Send to chat</button>
+</div>
+</sc-for>
+<sc-if value="{{logs.none}}" hint-placeholder-val="{{ false }}"><div style="padding: 10px 12px; font-size: 12px; line-height: 16px; color: {{t.text3}}">{{logs.noneText}}</div></sc-if>
+</div>
+</sc-if>
+</div>
+
+</div>
+</aside>
+</sc-if>
+
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"enum","options":["driving","control","permission","building","idle","failed","off","noapp"],"default":"driving","section":"State"},"logs":{"editor":"boolean","default":false,"section":"State"},"$preview":{"width":1600,"height":1000}}'>
+class Component extends DCLogic {
+  rgb(h) {
+    let x = String(h || '').trim().replace('#', '');
+    if (x.length === 3) x = x.split('').map(function (c) { return c + c; }).join('');
+    const n = parseInt(x.slice(0, 6), 16);
+    if (x.length < 6 || isNaN(n)) return [146, 116, 236];
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  rgba(h, a) {
+    return 'rgba(' + this.rgb(h).join(',') + ',' + a + ')';
+  }
+
+  cur() {
+    const s = this.state || {};
+    const ok = ['driving', 'control', 'permission', 'building', 'idle', 'failed', 'off', 'noapp'];
+    let ps = this.props.state ?? 'driving';
+    if (ok.indexOf(ps) < 0) ps = 'driving';
+    const pl = this.props.logs === true || this.props.logs === 'true';
+    const key = ps + '|' + (pl ? '1' : '0');
+    if (s._p === key && s.st) return { key: key, st: s.st, logs: !!s.logs, stopped: !!s.stopped };
+    return { key: key, st: ps, logs: pl, stopped: false };
+  }
+
+  put(patch) {
+    const c = this.cur();
+    this.setState(Object.assign({ _p: c.key, st: c.st, logs: c.logs, stopped: c.stopped, menu: null, flash: false }, patch));
+  }
+
+  renderVals() {
+    const s = this.state || {};
+    const C = this.cur();
+    const st = C.st;
+    const stopped = C.stopped;
+    const logsOpen = C.logs;
+    const menu = s.menu || null;
+    const panelOpen = s.panel !== false;
+    const land = !!s.land;
+    const seg = s.seg || 'live';
+    const devName = 'iPhone 17 Pro';
+
+    const t = {
+      main: '#161519', sbBg: 'rgba(32,31,36,0.860)', blur: 'blur(20px) saturate(1.15)',
+      edge: 'rgba(255,255,255,0.08)', hairline: 'rgba(255,255,255,0.07)', hairlineStrong: 'rgba(255,255,255,0.12)',
+      raised: '#27262C', raisedBorder: 'rgba(255,255,255,0.08)',
+      composerBox: 'inset 0 1px 0 rgba(255,255,255,0.045), 0 8px 24px rgba(0,0,0,0.22)',
+      menu: '#2A292F',
+      menuShadow: 'inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 0.5px rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.30), 0 14px 36px rgba(0,0,0,0.45)',
+      liveFill: 'rgba(255,255,255,0.03)', liveBorder: 'rgba(255,255,255,0.07)',
+      rowHover: 'rgba(255,255,255,0.045)', rowSel: 'rgba(255,255,255,0.085)', rowSelShadow: 'inset 0 0 0 1px rgba(255,255,255,0.025)',
+      rowPressed: 'rgba(255,255,255,0.11)',
+      segTrack: 'rgba(255,255,255,0.05)', segActive: 'rgba(255,255,255,0.10)',
+      connector: 'rgba(255,255,255,0.14)',
+      text: '#ECEBEF', textRow: '#BDBBC4', text2: '#A9A7B0', text3: '#95929C', textDisabled: '#5D5B63', icon: '#A9A7B0',
+      needs: '#E2AB57', ready: '#62C48D', failed: '#E8777D', diffAdd: '#62C48D', diffDel: '#EE8388',
+      windowShadow: '0 0 0 0.5px rgba(0,0,0,0.65), 0 30px 80px rgba(4,2,16,0.55), 0 10px 28px rgba(4,2,16,0.32)',
+      chipFill: 'rgba(255,255,255,0.025)', chipBorder: 'rgba(255,255,255,0.07)',
+      dotNeutral: '#8A8595', terminal: '#121115', iconQuiet: 'rgba(255,255,255,0.38)',
+      accent: '#9274EC', accentStrong: '#7C5CE6', accentText: '#B69FF7', running: '#A58CF2', avatar: '#9274EC'
+    };
+    t.activeFill = this.rgba(t.accentText, 0.11);
+    t.activeBorder = this.rgba(t.accentText, 0.28);
+
+    const wall = {
+      base: '#130F22',
+      image: 'radial-gradient(60% 70% at 6% 10%, rgba(118,84,232,0.50) 0%, rgba(118,84,232,0) 70%), radial-gradient(50% 60% at 96% 92%, rgba(214,104,128,0.42) 0%, rgba(214,104,128,0) 70%), radial-gradient(48% 56% at 84% 4%, rgba(72,112,214,0.42) 0%, rgba(72,112,214,0) 70%), radial-gradient(42% 50% at 30% 100%, rgba(222,160,90,0.24) 0%, rgba(222,160,90,0) 70%), linear-gradient(150deg, #1B1533 0%, #0F1020 55%, #1D1020 100%)',
+      ribbon: 'linear-gradient(90deg, rgba(124,77,255,0) 0%, rgba(124,77,255,0.50) 32%, rgba(232,119,125,0.42) 68%, rgba(232,119,125,0) 100%)',
+      glow: 'radial-gradient(closest-side, rgba(96,136,236,0.36), rgba(96,136,236,0))'
+    };
+
+    const driving = st === 'driving' && !stopped;
+    const control = st === 'control' && !stopped;
+    const needs = st === 'permission';
+    const working = !stopped && ['driving', 'control', 'building', 'idle', 'off', 'noapp'].indexOf(st) >= 0;
+    const appUp = st === 'driving' || st === 'control';
+    const simTitle = 'Check Remote’s Sessions screen on iPhone';
+
+    const close = () => this.setState({ menu: null });
+    const toggleMenu = (id) => () => this.setState({ menu: menu === id ? null : id });
+    const takeOver = () => this.put({ st: 'control', stopped: false });
+
+    // Sidebar
+    const word = { running: 'Running', needs: 'Needs you', failed: 'Failed', ready: 'Ready to review', queued: 'Queued', done: 'Done' };
+    const gColor = { running: t.running, needs: t.needs, failed: t.failed, ready: t.ready, queued: t.text3, done: t.text3 };
+    const S = {
+      sim: { title: simTitle, st: needs ? 'needs' : (working ? 'running' : 'ready'), time: '1m', line2: needs ? 'Wants to use the iOS Simulator' : '' },
+      recheck: { title: 'Recheck keyboard focus across menu reads', st: 'running', time: '12m' },
+      swarm2: { title: 'Swarm worker 2', st: 'running', add: '+142', del: '−18' },
+      handsReview: { title: 'Review: Hands Windows fixes', st: 'ready', time: '12m' },
+      warn: { title: 'Warn on review model evidence', st: 'ready', add: '+318', del: '−32' },
+      packaging: { title: 'Give the packaging dry-run a Windows-sized limit', st: 'failed', time: '2h', line2: 'Checks failed · 3' },
+      installer: { title: 'Shorten Windows installer progress copy', st: 'done', time: '3h', unread: true },
+      p8: { title: 'Fix Codium P8 CI', st: 'needs', time: '2m', line2: 'Wants to run pnpm install --frozen-lockfile' },
+      queueJob: { title: 'Upgrade the site’s framework on vectordev.ai', st: 'queued', time: '6:00' },
+      cloudRepro: { title: 'Reproduce Windows packaging limit', st: 'running', time: '4m' }
+    };
+    const mkRow = (id, level, pos) => {
+      const x = S[id];
+      const selected = id === 'sim';
+      const unread = !!x.unread;
+      const emph = selected || x.st === 'needs' || x.st === 'failed' || unread;
+      const two = !!x.line2;
+      const h = two ? 44 : 28;
+      const first = pos === 'first' || pos === 'only';
+      const last = pos === 'last' || pos === 'only';
+      const top = first ? -8 : 0;
+      const end = last ? 8 : h;
+      const metaText = x.add ? x.add + ' ' + x.del : x.time;
+      return {
+        title: x.title, line2: x.line2 || '', two: two,
+        gRun: x.st === 'running', gNeeds: x.st === 'needs', gFail: x.st === 'failed', gReady: x.st === 'ready', gQueue: x.st === 'queued',
+        glyphColor: gColor[x.st],
+        hasDiff: !!x.add, add: x.add || '', del: x.del || '', hasTime: !x.add, time: x.time || '', unread: unread,
+        titleColor: emph ? t.text : t.textRow,
+        metaColor: selected ? t.text2 : t.text3,
+        bg: selected ? t.rowSel : 'transparent',
+        shadow: selected ? t.rowSelShadow : 'none',
+        cls: selected ? 'vx-row' : 'vx-row vx-h',
+        current: selected ? 'page' : 'false',
+        padL: (10 + level * 18) + 'px', h: h + 'px', isChild: level > 0,
+        trunkTop: top + 'px', trunkH: (end - top) + 'px',
+        node: x.st === 'done' ? t.connector : gColor[x.st],
+        tip: x.title + ' · ' + word[x.st] + (x.line2 ? ' · ' + x.line2 : '') + ' · ' + metaText,
+        aria: x.title + ', ' + word[x.st] + (x.line2 ? ': ' + x.line2 : '') + (unread ? ', unread' : '')
+      };
+    };
+    const grpOpen = Object.assign({ 'mac-vector': true, 'mac-codium': true, 'mac-hands': false, 'mac-site': false, 'cloud-vector': true }, s.grpOpen || {});
+    const toggleGrp = (key) => () => { const o = Object.assign({}, grpOpen); o[key] = !o[key]; this.setState({ grpOpen: o }); };
+    const mkGroup = (key, name, opts) => {
+      const open = !!grpOpen[key];
+      const rows = opts.rows || [];
+      return {
+        isProject: true, isLabel: false, name: name, chevRot: open ? '0deg' : '-90deg',
+        hasBranch: !!opts.branch, branch: opts.branch || '', needs: !!opts.needs, meta: opts.meta,
+        open: open, expanded: open ? 'true' : 'false', toggle: toggleGrp(key),
+        rows: rows, hasMore: !!opts.more,
+        moreLabel: rows.length ? 'Show ' + opts.more + ' more' : 'Show ' + opts.more + ' sessions',
+        tip: name + (opts.branch ? ' · ' + opts.branch : '') + (opts.needs ? ' · 1 needs you' : ' · ' + opts.meta + ' active')
+      };
+    };
+    const hosts = [
+      {
+        name: 'This Mac', isMac: true, isCloud: false, padTop: '16px', addLabel: 'New session on This Mac', tip: 'This Mac · Runtime ready',
+        groups: [
+          mkGroup('mac-vector', 'vector', { meta: working || needs ? '5' : '4', more: 7, rows: [mkRow('sim', 0), mkRow('recheck', 0), mkRow('swarm2', 1, 'first'), mkRow('handsReview', 1, 'last'), mkRow('warn', 0), mkRow('packaging', 0), mkRow('installer', 0)] }),
+          mkGroup('mac-codium', 'vector-codium', { branch: 'codium', meta: '1', needs: true, rows: [mkRow('p8', 0)] }),
+          mkGroup('mac-hands', 'vector-hands', { branch: 'hands', meta: '5', more: 5 }),
+          mkGroup('mac-site', 'vectordev.ai', { meta: '2', more: 2 })
+        ]
+      },
+      {
+        name: 'Cloud computer', isMac: false, isCloud: true, padTop: '12px', addLabel: 'New session on Cloud computer', tip: 'Cloud computer · Runtime ready',
+        groups: [
+          { isProject: false, isLabel: true, name: 'Morning queue', meta: '1', open: true, rows: [mkRow('queueJob', 0)], hasMore: false, moreLabel: '', toggle: close, expanded: 'true', tip: 'Morning queue', chevRot: '0deg', hasBranch: false, branch: '', needs: false },
+          mkGroup('cloud-vector', 'vector', { meta: '1', rows: [mkRow('cloudRepro', 0)] })
+        ]
+      }
+    ];
+
+    const defs = [{ title: 'Fix Codium P8 CI', st: 'needs', review: true }];
+    if (needs) defs.push({ title: simTitle, st: 'needs', review: true });
+    if (working) defs.push({ title: simTitle, st: 'running', time: '1m' });
+    defs.push({ title: 'Recheck keyboard focus across menu reads', st: 'running', time: '12m' });
+    defs.push({ title: 'Vectorscope review · PR #2184', st: 'running', time: '1m', kindScope: true });
+    defs.push({ title: 'Reproduce Windows packaging limit', st: 'running', time: '4m', kindCloud: true });
+    const liveItems = defs.map((o) => ({
+      title: o.title, gNeeds: o.st === 'needs', gRun: o.st === 'running', glyphColor: gColor[o.st],
+      titleColor: o.st === 'needs' ? t.text : t.textRow,
+      review: !!o.review, hasMeta: !o.review, padR: o.review ? '66px' : '5px',
+      kindScope: !!o.kindScope, kindCloud: !!o.kindCloud, time: o.time || '',
+      tip: word[o.st] + ' · ' + o.title + (o.time ? ' · ' + o.time : '')
+    }));
+    const liveOpen = !s.liveClosed;
+    const live = {
+      count: String(defs.length), items: liveItems.slice(0, 4),
+      hasMore: liveItems.length > 4, moreLabel: '+' + Math.max(0, liveItems.length - 4) + ' more',
+      open: liveOpen, expanded: liveOpen ? 'true' : 'false', rot: liveOpen ? '0deg' : '-90deg',
+      toggleLabel: liveOpen ? 'Collapse Live' : 'Expand Live',
+      toggle: () => this.setState({ liveClosed: liveOpen })
+    };
+
+    // Header and Panels menu
+    const head = {
+      title: simTitle,
+      status: needs ? 'Needs you' : (working ? 'Working' : 'Ready'),
+      working: working, needs: needs, ready: !working && !needs
+    };
+    const pb = {
+      cls: panelOpen ? '' : 'vxs-tool',
+      bg: panelOpen ? t.activeFill : 'transparent',
+      border: panelOpen ? t.activeBorder : 'transparent',
+      color: panelOpen ? t.accentText : t.text2
+    };
+    const mkPm = (o) => Object.assign({
+      sep: false, gReview: false, gWindow: false, gChecklist: false, gArtifact: false, gPhone: false, gContext: false, gPanel: false,
+      checked: false, ariaChecked: 'false', hasKey: true, key: '', pick: close
+    }, o);
+    const pmRows = [
+      mkPm({ label: 'Changes', gReview: true, key: '⇧⌘R' }),
+      mkPm({ label: 'Browser', gWindow: true, key: '⌥⌘2' }),
+      mkPm({ label: 'Plan', gChecklist: true, key: '⌥⌘3' }),
+      mkPm({ label: 'Artifacts', gArtifact: true, key: '⌥⌘4' }),
+      mkPm({ label: 'iOS Simulator', gPhone: true, key: '⌥⌘5', checked: panelOpen, ariaChecked: panelOpen ? 'true' : 'false', pick: () => this.setState({ panel: true, menu: null }) }),
+      mkPm({ label: 'Context', gContext: true, sep: true, hasKey: false }),
+      mkPm({ label: panelOpen ? 'Hide side panel' : 'Show side panel', gPanel: true, sep: true, key: '⌥⌘0', pick: () => this.setState({ panel: !panelOpen, menu: null }) })
+    ];
+    const pm = {
+      rows: pmRows,
+      headOpen: menu === 'panelsHead', headExpanded: menu === 'panelsHead' ? 'true' : 'false', toggleHead: toggleMenu('panelsHead'),
+      stripOpen: menu === 'panelsStrip', stripExpanded: menu === 'panelsStrip' ? 'true' : 'false', toggleStrip: toggleMenu('panelsStrip'),
+      stripBg: menu === 'panelsStrip' ? 'rgba(255,255,255,.07)' : 'transparent'
+    };
+    const lay = { chatFlex: panelOpen ? '0 0 600px' : '1 1 auto', chatW: panelOpen ? '600px' : 'auto' };
+    const helpOpen = menu === 'help';
+    const help = {
+      open: helpOpen, expanded: helpOpen ? 'true' : 'false', bg: helpOpen ? t.rowPressed : 'transparent',
+      toggle: toggleMenu('help'), close: close, tour: close, tourBg: 'transparent', tourColor: t.textRow
+    };
+
+    // Transcript and composer
+    const thumbs = [
+      { label: 'Step 1 · Sessions, Live', segLeft: '4px', c1: '26px', c2Top: '53px' },
+      { label: 'Step 2 · Sessions, Live', segLeft: '4px', c1: '26px', c2Top: '53px' },
+      { label: 'Step 3 · Sessions, Needs you', segLeft: '14px', c1: '26px', c2Top: '96px' }
+    ];
+    const tr = {
+      building: st === 'building' && !stopped,
+      failed: st === 'failed',
+      built: appUp,
+      thumbs: thumbs,
+      runOrbit: driving, runPause: control, runStop: appUp && stopped,
+      runColor: driving ? t.running : (control ? t.text2 : t.text3),
+      runText: driving ? 'Tapping “Done”' : (control ? 'Vector is paused' : 'Stopped by you')
+    };
+    tr.any = tr.building || tr.failed || tr.built;
+
+    const workTime = appUp ? '1m 10s' : (st === 'building' ? '24s' : '8s');
+    const stopRun = () => {
+      if (st === 'building' || st === 'permission') this.put({ st: 'idle', stopped: true });
+      else this.put({ stopped: true });
+    };
+    const dock = {
+      work: working, workText: workTime + ' · Codium · Using the iOS Simulator',
+      perm: needs, permBorder: s.flash ? 'rgba(182,159,247,0.60)' : t.hairlineStrong,
+      allow: () => this.put({ st: 'driving', stopped: false }),
+      deny: () => this.put({ st: 'idle', stopped: true })
+    };
+
+    const draft = typeof s.draft === 'string' ? s.draft : '';
+    const compact = panelOpen;
+    const hasDraft = draft.trim().length > 0;
+    const c = {
+      shot: !!s.shot, log: !!s.logAtom, logLabel: s.logAtom || '',
+      stop: working || needs,
+      modelMax: compact ? '72px' : 'none',
+      modelMask: compact ? 'linear-gradient(90deg, #000 calc(100% - 16px), transparent)' : 'none',
+      chevCc: '', speedText: true, ringPct: !compact,
+      sendDisabled: !hasDraft,
+      sendBg: hasDraft ? t.accentStrong : 'rgba(255,255,255,0.06)',
+      sendFg: hasDraft ? '#FFFFFF' : t.textDisabled,
+      removeShot: () => this.setState({ shot: false }),
+      removeLog: () => this.setState({ logAtom: '' })
+    };
+    c.hasAtt = c.shot || c.log;
+    c.send = !c.stop;
+
+    // Pane: toolbar, bars, device
+    const bt = {
+      run: st !== 'building' && st !== 'noapp',
+      runLabel: st !== 'failed',
+      building: st === 'building',
+      failed: st === 'failed'
+    };
+    bt.runPad = bt.runLabel ? '0 10px 0 8px' : '0 6px';
+    const bar = { drive: driving, control: control, wait: needs };
+    const strip = { orbit: driving || st === 'building', glyph: !(driving || st === 'building') };
+    const mkMenu = (id) => ({
+      open: menu === id, expanded: menu === id ? 'true' : 'false',
+      bg: menu === id ? t.rowPressed : 'transparent', toggle: toggleMenu(id)
+    });
+    const menus = { device: mkMenu('device'), app: mkMenu('app'), more: mkMenu('more'), close: close };
+    const mkDev = (o) => Object.assign({ isHead: false, isRow: true, os: 'iOS 27', checkVis: 'hidden', ariaChecked: 'false', pick: close }, o);
+    const devRows = [
+      mkDev({ isHead: true, isRow: false, label: 'iPhone', os: '' }),
+      mkDev({ label: 'iPhone 17 Pro', checkVis: 'visible', ariaChecked: 'true' }),
+      mkDev({ label: 'iPhone 17' }),
+      mkDev({ isHead: true, isRow: false, label: 'iPad', os: '' }),
+      mkDev({ label: 'iPad Air 11-inch' })
+    ];
+
+    const logsH = logsOpen ? 200 : 28;
+    const outerW = land ? 648 : 308;
+    const outerH = land ? 308 : 648;
+    const availH = 813 - 36 - (needs || driving || control ? 28 : 0) - (bt.building ? 3 : 0) - logsH - 62;
+    const availW = 630;
+    const scale = Math.max(0.4, Math.min(1, availH / outerH, availW / outerW));
+    const sc = Math.round(scale * 1000) / 1000;
+    const dev = {
+      name: devName,
+      hasApp: st !== 'noapp', noApp: st === 'noapp',
+      app: appUp, off: st === 'off',
+      msg: !appUp && st !== 'off',
+      msgTitle: st === 'noapp' ? 'Nothing to run here' : 'No app running',
+      msgHasSub: st !== 'building',
+      msgSub: st === 'noapp' ? 'This project has no iOS app. Ask Vector to make one, or open a project that has one.' : 'Build and run Vector Remote, or ask Vector to.',
+      msgBtn: st === 'idle' || st === 'failed' || st === 'permission',
+      frameOp: st === 'off' ? '0.4' : '1',
+      glow: driving || control, glowCls: driving ? 'vxs-glow' : '', glowOp: driving ? '1' : '0.38',
+      touch: driving,
+      screenBg: appUp ? '#161519' : '#08070A',
+      screenAria: appUp ? 'Vector Remote on ' + devName : devName + ' screen',
+      outerW: outerW + 'px', outerH: outerH + 'px',
+      screenW: (outerW - 18) + 'px', screenH: (outerH - 18) + 'px',
+      islL: land ? '10px' : '101px', islT: land ? '101px' : '10px', islW: land ? '26px' : '88px', islH: land ? '88px' : '26px',
+      scale: String(sc), boxW: Math.round(outerW * sc) + 'px', boxH: Math.round(outerH * sc) + 'px',
+      caption: devName + ' · iOS 27 · ' + Math.round(72 * sc) + '%'
+    };
+    const ap = land
+      ? { status: false, titleL: '56px', titleT: '16px', subT: '44px', segL: '56px', segT: '66px', segW: '244px', listL: '316px', listT: '16px', listW: '290px', tabH: '52px' }
+      : { status: true, titleL: '16px', titleT: '52px', subT: '80px', segL: '12px', segT: '102px', segW: '266px', listL: '12px', listT: '138px', listW: '266px', tabH: '56px' };
+    ap.showNeeds = seg === 'live' || seg === 'needs';
+    ap.showLive = seg === 'live';
+    ap.empty = seg === 'done';
+    const cx = land ? 258 : 233;
+    const cy = land ? 78 : 114;
+    const tp = { l: (cx - 11) + 'px', t: (cy - 11) + 'px', cx: cx + 'px', cy: cy + 'px', tagL: (cx + 14) + 'px', tagT: (cy + 16) + 'px' };
+    const deviceTap = () => { if (driving) takeOver(); };
+    const segs = [
+      { key: 'live', label: 'Live', hasCount: false },
+      { key: 'needs', label: 'Needs you', hasCount: true },
+      { key: 'done', label: 'Done', hasCount: false }
+    ].map((g) => ({
+      label: g.label, hasCount: g.hasCount, selected: seg === g.key ? 'true' : 'false',
+      bg: seg === g.key ? 'rgba(255,255,255,0.10)' : 'transparent',
+      color: seg === g.key ? '#ECEBEF' : '#A9A7B0',
+      pick: () => { if (driving) this.put({ st: 'control', stopped: false, seg: g.key }); else this.setState({ seg: g.key }); }
+    }));
+
+    // Logs
+    const L = {
+      run: [
+        { time: '10:41:02', lvl: 'info', proc: 'Vector Remote', msg: 'Loaded 3 sessions', atom: 'Vector Remote · Loaded 3 sessions' },
+        { time: '10:41:05', lvl: 'warn', proc: 'Vector Remote', msg: 'Sessions › Done: list is empty for today', atom: 'Vector Remote · warning' },
+        { time: '10:41:06', lvl: 'error', proc: 'Vector Remote', msg: 'TypeError: finishedAt is undefined', atom: 'Vector Remote · TypeError' }
+      ],
+      build: [
+        { time: '10:40:02', lvl: 'info', proc: 'build', msg: 'Building Vector Remote for iPhone 17 Pro', atom: 'build · started' }
+      ],
+      failed: [
+        { time: '10:40:19', lvl: 'info', proc: 'build', msg: 'Building Vector Remote for iPhone 17 Pro', atom: 'build · started' },
+        { time: '10:40:21', lvl: 'error', proc: 'build', msg: 'sessions.tsx(48): Property ‘finishedAt’ does not exist on type ‘Session’.', atom: 'build · sessions.tsx(48)' },
+        { time: '10:40:21', lvl: 'error', proc: 'build', msg: 'sessions.tsx(62): Property ‘finishedAt’ does not exist on type ‘Session’.', atom: 'build · sessions.tsx(62)' }
+      ]
+    };
+    const all = appUp ? L.run : (st === 'failed' ? L.failed : (st === 'building' ? L.build : []));
+    const errN = all.filter(function (r) { return r.lvl === 'error'; }).length;
+    const logF = s.logF === 'errors' ? 'errors' : 'all';
+    const logQ = typeof s.logQ === 'string' ? s.logQ : '';
+    const q = logQ.trim().toLowerCase();
+    const shown = all.filter(function (r) {
+      if (logF === 'errors' && r.lvl !== 'error') return false;
+      if (q && (r.msg + ' ' + r.proc).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    const errAtom = st === 'failed' ? 'build · 2 errors' : 'Vector Remote · TypeError';
+    const sendErrors = () => { if (errN > 0) this.setState({ logAtom: errAtom, menu: null }); };
+    const logs = {
+      open: logsOpen, h: logsH + 'px', expanded: logsOpen ? 'true' : 'false', rot: logsOpen ? '180deg' : '0deg',
+      tip: logsOpen ? 'Hide logs' : 'Show logs',
+      toggle: () => this.put({ logs: !logsOpen }),
+      hasErr: errN > 0, errCount: String(errN), errAria: errN + (errN === 1 ? ' error' : ' errors'),
+      latest: all.length ? all[all.length - 1].msg : 'No logs yet',
+      allPressed: logF === 'all' ? 'true' : 'false', errPressed: logF === 'errors' ? 'true' : 'false',
+      allBg: logF === 'all' ? t.segActive : 'transparent', errBg: logF === 'errors' ? t.segActive : 'transparent',
+      allColor: logF === 'all' ? t.text : t.text2, errColor: logF === 'errors' ? t.text : t.text2,
+      showAll: () => this.setState({ logF: 'all' }), showErr: () => this.setState({ logF: 'errors' }),
+      noErr: errN === 0, sendColor: errN === 0 ? t.textDisabled : t.text2,
+      rows: shown.map((r) => ({
+        time: r.time, proc: r.proc, msg: r.msg,
+        level: r.lvl === 'error' ? 'Error' : (r.lvl === 'warn' ? 'Warning' : 'Info'),
+        err: r.lvl === 'error', warn: r.lvl === 'warn',
+        color: r.lvl === 'error' ? t.failed : t.needs,
+        send: () => this.setState({ logAtom: r.atom })
+      })),
+      none: shown.length === 0,
+      noneText: all.length ? 'No logs match' : 'No logs yet'
+    };
+
+    return {
+      t: t, wall: wall, live: live, hosts: hosts, help: help, head: head, pb: pb, pm: pm, lay: lay,
+      tr: tr, dock: dock, c: c, draft: draft, panelOpen: panelOpen,
+      strip: strip, menus: menus, devRows: devRows, bt: bt, bar: bar, dev: dev, ap: ap, tp: tp, segs: segs, logs: logs, logQ: logQ,
+      onDraft: (e) => this.setState({ draft: e && e.target ? e.target.value : '' }),
+      onLogQ: (e) => this.setState({ logQ: e && e.target ? e.target.value : '' }),
+      stopRun: stopRun,
+      takeOver: takeOver,
+      giveBack: () => this.put({ st: 'driving', stopped: false }),
+      review: () => this.put({ flash: true }),
+      buildRun: () => this.put({ st: 'building', stopped: false }),
+      cancelBuild: () => this.put({ st: 'idle', stopped: true }),
+      startDevice: () => this.put({ st: 'idle' }),
+      shutDown: () => this.put({ st: 'off' }),
+      rotate: () => this.setState({ land: !land, menu: null }),
+      home: () => { if (driving) takeOver(); else close(); },
+      shoot: () => this.setState({ shot: true, menu: null }),
+      sendErrors: sendErrors,
+      deviceTap: deviceTap,
+      closePanel: () => this.setState({ panel: false, menu: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

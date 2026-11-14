@@ -1,0 +1,933 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Vector Sidebar States</title><script src="./support.js"></script></head><body><x-dc><helmet><style>body{margin:0}
+*, *::before, *::after { box-sizing: border-box; }
+sc-for, sc-if { display: contents; }
+button { font: inherit; color: inherit; background: none; border: 0; margin: 0; padding: 0; text-align: left; cursor: default; -webkit-appearance: none; appearance: none; }
+button:focus-visible { outline: 2px solid #8B6CF0; outline-offset: 2px; }
+a { color: #B69FF7; }
+a:hover { color: #D9C6FF; }
+@keyframes vxs-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .vxs-orbit { animation: none !important; } }
+</style></helmet>
+<div style="position: relative; width: 1440px; height: 1000px; overflow: hidden; background: {{st.backdrop}}; color: {{st.text}}; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 13px; line-height: 18px; -webkit-font-smoothing: antialiased;">
+
+  <!-- Sheet header: title and status legend -->
+  <div style="position: absolute; left: 24px; right: 24px; top: 22px; height: 40px; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div style="font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.005em; color: {{st.text}};">Sidebar states</div>
+      <div style="font-size: 12px; line-height: 16px; color: {{st.t3}};">1:1 · sidebar 264 px · default density · window material simulated over a wallpaper</div>
+    </div>
+    <div role="list" aria-label="Status legend" style="display: flex; align-items: center; gap: 16px;">
+      <sc-for list="{{legend}}" as="lg" hint-placeholder-count="8">
+        <div role="listitem" style="display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: {{lg.t.t2}};">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{lg.g.fill}}" fill="{{lg.g.c}}" fill-opacity="{{lg.g.fillOp}}"></path><path d="{{lg.g.ring}}" stroke="{{lg.g.c}}" stroke-opacity="{{lg.g.ringOp}}" stroke-width="{{lg.g.sw}}" stroke-dasharray="{{lg.g.dash}}" vector-effect="non-scaling-stroke"></path><path d="{{lg.g.mark}}" stroke="{{lg.g.c}}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><g class="vxs-orbit" style="transform-origin: 12px 12px; animation: {{lg.g.anim}};"><circle cx="12" cy="4.5" r="{{lg.g.dotR}}" fill="{{lg.g.c}}"></circle></g></svg>
+          <span>{{lg.label}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- Captions above the wallpaper samples -->
+  <div style="position: absolute; left: 52px; top: 76px; display: flex; gap: 26px;">
+    <sc-for list="{{sidebars}}" as="c" hint-placeholder-count="2">
+      <div style="width: 304px; padding-right: 40px; display: flex; justify-content: space-between; font-size: 12px; line-height: 16px;">
+        <span style="font-weight: 500; color: {{c.capColor}};">{{c.caption}}</span>
+        <span style="font-variant-numeric: tabular-nums; color: {{c.capColor3}};">{{c.t.tint}}</span>
+      </div>
+    </sc-for>
+    <div style="width: 92px; font-size: 12px; line-height: 16px; font-weight: 500; color: {{st.t2}};">Rail · Dark</div>
+  </div>
+
+  <!-- Wallpaper with the three glass samples -->
+  <div style="position: absolute; left: 24px; top: 100px; width: 808px; height: 876px; border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px {{st.edge}}; background: radial-gradient(70% 55% at 12% 8%, rgba(126,92,255,0.60) 0%, rgba(126,92,255,0) 70%), radial-gradient(60% 50% at 58% 92%, rgba(240,140,92,0.50) 0%, rgba(240,140,92,0) 70%), radial-gradient(55% 45% at 96% 18%, rgba(64,140,230,0.50) 0%, rgba(64,140,230,0) 70%), radial-gradient(60% 60% at 40% 50%, rgba(206,96,170,0.28) 0%, rgba(206,96,170,0) 70%), linear-gradient(160deg, #1C1838 0%, #241B3B 45%, #2B1E2C 80%, #17182A 100%);">
+    <div style="display: flex; align-items: flex-start; gap: 26px; padding: 16px 28px;">
+
+      <sc-for list="{{sidebars}}" as="s" hint-placeholder-count="2">
+        <div style="position: relative; flex: none; width: 304px; height: 844px; display: flex;">
+          <!-- window shadow, faded out under the stage strip -->
+          <div aria-hidden="true" style="position: absolute; left: -80px; top: -80px; width: 384px; height: 1004px; overflow: hidden; pointer-events: none; -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 85%, transparent 100%); mask-image: linear-gradient(90deg, #000 0%, #000 85%, transparent 100%);">
+            <div style="position: absolute; left: 80px; top: 80px; width: 264px; height: 844px; border-radius: 12px 0 0 12px; box-shadow: {{s.t.winShadow}};"></div>
+          </div>
+
+          <nav aria-label="{{s.navLabel}}" style="position: relative; flex: none; width: 264px; height: 844px; display: flex; flex-direction: column; border-radius: 12px 0 0 12px; overflow: hidden; background: {{s.t.mat}}; backdrop-filter: {{s.t.matFilter}}; -webkit-backdrop-filter: {{s.t.matFilter}}; box-shadow: inset -1px 0 0 {{s.t.edge}}, inset 1px 1px 0 {{s.t.rim}}, inset 0 -1px 0 {{s.t.rim}}; color: {{s.t.text}};">
+
+            <!-- A. Chrome row -->
+            <div style="position: relative; flex: none; height: 44px;">
+              <span aria-hidden="true" style="position: absolute; left: 16px; top: 16px; display: flex; gap: 8px;">
+                <span style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);"></span>
+                <span style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);"></span>
+                <span style="width: 12px; height: 12px; border-radius: 50%; background: #28C840; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);"></span>
+              </span>
+              <button type="button" aria-label="Hide sidebar" title="Hide sidebar  ⌘B" style="position: absolute; left: 78px; top: 8px; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: {{s.t.icon}};">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 4.5h13A2.5 2.5 0 0 1 21 7v10a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17V7a2.5 2.5 0 0 1 2.5-2.5zM9.5 4.5v15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+              </button>
+              <button type="button" aria-label="Back" title="Back  ⌘[" style="position: absolute; left: 106px; top: 8px; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: {{s.t.icon}};">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5.5L8.5 12l6.5 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+              </button>
+              <button type="button" aria-label="Forward" aria-disabled="true" title="Forward  ⌘]" style="position: absolute; left: 134px; top: 8px; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: {{s.t.dis}};">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5.5l6.5 6.5L9 18.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+              </button>
+              <div role="group" aria-label="Agent or Editor" style="position: absolute; right: 8px; top: 9px; width: 56px; height: 26px; padding: 1px; display: flex; border-radius: 8px; background: {{s.t.segTrack}}; border: 1px solid {{s.t.hair}};">
+                <button type="button" aria-label="Agent" aria-pressed="{{s.agent.pressed}}" title="Agent  ⌘⇧E" onClick="{{s.setAgent}}" style="width: 26px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; background: {{s.agent.bg}}; box-shadow: {{s.agent.shadow}}; color: {{s.agent.color}}; transition: background-color 140ms cubic-bezier(.22,1,.36,1);">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.5 6.5h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM10.5 10.5h3v3h-3zM10 3.5v3M14 3.5v3M10 17.5v3M14 17.5v3M3.5 10h3M3.5 14h3M17.5 10h3M17.5 14h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                </button>
+                <button type="button" aria-label="Editor" aria-pressed="{{s.editor.pressed}}" title="Editor  ⌘⇧E" onClick="{{s.setEditor}}" style="width: 26px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; background: {{s.editor.bg}}; box-shadow: {{s.editor.shadow}}; color: {{s.editor.color}}; transition: background-color 140ms cubic-bezier(.22,1,.36,1);">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4v12M6 9h3M6 16h3M10.5 6.5h7A1.5 1.5 0 0 1 19 8v2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 9 10V8a1.5 1.5 0 0 1 1.5-1.5zM10.5 13.5h7A1.5 1.5 0 0 1 19 15v2a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 9 17v-2a1.5 1.5 0 0 1 1.5-1.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- B. Verbs -->
+            <div style="flex: none; padding-top: 4px; display: flex; flex-direction: column; gap: 2px;">
+              <sc-for list="{{s.verbs}}" as="v" hint-placeholder-count="5">
+                <div style="padding: 0 8px;">
+                  <button type="button" style="width: 100%; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 7px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex: none; color: {{v.t.icon}};"><path d="{{v.d}}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><path d="{{v.f}}" fill="currentColor"></path></svg>
+                    <span style="flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: {{v.t.row}}; white-space: nowrap;">{{v.label}}</span>
+                    <sc-if value="{{v.hasMeta}}" hint-placeholder-val="{{ true }}">
+                      <span style="flex: none; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{v.t.t3}};">{{v.meta}}</span>
+                    </sc-if>
+                  </button>
+                </div>
+              </sc-for>
+            </div>
+
+            <!-- C. Live strip -->
+            <div style="position: relative; flex: none; margin: 12px 8px 0; padding: 4px; border-radius: 10px; background: {{s.t.liveFill}}; border: 1px solid {{s.t.liveBorder}};">
+              <span aria-hidden="true" style="position: absolute; left: 10px; right: 10px; top: -1px; height: 1px; background: {{s.liveEdge}}; opacity: {{s.liveEdgeOp}};"></span>
+              <div style="height: 24px; display: flex; align-items: center; padding-left: 5px;">
+                <span style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{s.t.t2}};">Live</span>
+                <span style="margin-left: 6px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{s.t.t3}};">{{s.liveCount}}</span>
+                <span style="flex: 1;"></span>
+                <sc-if value="{{s.liveShut}}" hint-placeholder-val="{{ false }}">
+                  <span title="1 needs you" style="display: flex; align-items: center; gap: 2px; margin-right: 4px; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; color: {{s.t.t3}};">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{s.needsG.fill}}" fill="{{s.needsG.c}}" fill-opacity="{{s.needsG.fillOp}}"></path></svg>
+                    <span>1</span>
+                  </span>
+                </sc-if>
+                <button type="button" aria-label="{{s.liveToggleLabel}}" aria-expanded="{{s.liveExpanded}}" onClick="{{s.toggleLive}}" style="flex: none; width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: {{s.t.icon}};">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="{{s.liveChevron}}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                </button>
+              </div>
+              <sc-if value="{{s.liveOpen}}" hint-placeholder-val="{{ true }}">
+                <div role="list" aria-label="Live" style="display: flex; flex-direction: column;">
+                  <sc-for list="{{s.live}}" as="li" hint-placeholder-count="4">
+                    <div role="listitem" style="height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 5px; border-radius: 7px;">
+                      <button type="button" aria-label="{{li.aria}}" style="flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; gap: 8px;">
+                        <span style="flex: none; width: 16px; height: 16px;">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{li.g.fill}}" fill="{{li.g.c}}" fill-opacity="{{li.g.fillOp}}"></path><path d="{{li.g.ring}}" stroke="{{li.g.c}}" stroke-opacity="{{li.g.ringOp}}" stroke-width="{{li.g.sw}}" stroke-dasharray="{{li.g.dash}}" vector-effect="non-scaling-stroke"></path><path d="{{li.g.mark}}" stroke="{{li.g.c}}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><g class="vxs-orbit" style="transform-origin: 12px 12px; animation: {{li.g.anim}};"><circle cx="12" cy="4.5" r="{{li.g.dotR}}" fill="{{li.g.c}}"></circle></g></svg>
+                        </span>
+                        <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{li.titleColor}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">{{li.title}}</span>
+                      </button>
+                      <sc-if value="{{li.notReview}}" hint-placeholder-val="{{ true }}">
+                        <span style="flex: none; display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{li.t.t3}};">
+                          <sc-if value="{{li.hasKind}}" hint-placeholder-val="{{ false }}">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;"><path d="{{li.kind}}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                          </sc-if>
+                          <span>{{li.time}}</span>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{li.isReview}}" hint-placeholder-val="{{ false }}">
+                        <button type="button" aria-label="{{li.reviewLabel}}" style="flex: none; height: 24px; display: flex; align-items: center;">
+                          <span style="height: 20px; padding: 0 8px; border-radius: 6px; border: 1px solid {{li.t.hairStrong}}; font-size: 11px; line-height: 18px; font-weight: 500; color: {{li.t.text}};">Review</span>
+                        </button>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+
+            <!-- D-F. Pinned, hosts, projects, sessions (the only scrolling part) -->
+            <div style="flex: 1; min-height: 0; overflow: hidden; padding-bottom: 8px; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 12px), transparent);">
+              <sc-for list="{{s.tree}}" as="r" hint-placeholder-count="16">
+                <div style="position: relative; margin-top: {{r.mt}}px;">
+                  <sc-if value="{{r.isLabel}}" hint-placeholder-val="{{ false }}">
+                    <div style="height: 24px; padding: 0 18px; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{r.t.t3}};">
+                      <span>{{r.label}}</span>
+                      <sc-if value="{{r.hasCount}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; line-height: 14px; font-weight: 400; letter-spacing: 0.01em; font-variant-numeric: tabular-nums;">{{r.count}}</span></sc-if>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{r.isHost}}" hint-placeholder-val="{{ false }}">
+                    <div style="height: 28px; margin: 0 8px; padding: 0 4px 0 10px; border-radius: 7px; display: flex; align-items: center; background: {{r.bg}};">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex: none; color: {{r.t.icon}};"><path d="{{r.d}}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                      <span style="margin-left: 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{r.t.t2}}; white-space: nowrap;">{{r.name}}</span>
+                      <sc-if value="{{r.hasChevron}}" hint-placeholder-val="{{ false }}">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex: none; margin-left: 4px; color: {{r.t.t3}};"><path d="M5.5 9l6.5 6.5L18.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                      </sc-if>
+                      <span title="{{r.dotTitle}}" style="flex: none; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: {{r.dotBg}}; box-shadow: inset 0 0 0 1.5px {{r.dotRing}};"></span>
+                      <span style="flex: 1;"></span>
+                      <button type="button" aria-label="{{r.plusLabel}}" style="flex: none; width: 24px; height: 24px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: {{r.t.icon}};">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" vector-effect="non-scaling-stroke"></path></svg>
+                      </button>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{r.isProject}}" hint-placeholder-val="{{ false }}">
+                    <div style="margin: 0 {{r.mr}}px 0 {{r.ml}}px;">
+                      <button type="button" aria-label="{{r.aria}}" aria-expanded="{{r.expanded}}" style="width: 100%; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 7px; background: {{r.bg}}; box-shadow: {{r.shadow}};">
+                        <span aria-hidden="true" style="flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; color: {{r.t.t3}};"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; transform: rotate({{r.chevRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1);"><path d="M5.5 9l6.5 6.5L18.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg></span>
+                        <span style="flex: none; font-size: 13px; line-height: 18px; font-weight: 500; color: {{r.t.text}}; white-space: nowrap;">{{r.name}}</span>
+                        <sc-if value="{{r.hasBranch}}" hint-placeholder-val="{{ false }}">
+                          <span style="flex: none; margin-left: -2px; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{r.t.t3}}; white-space: nowrap;">{{r.branch}}</span>
+                        </sc-if>
+                        <span style="flex: 1;"></span>
+                        <sc-if value="{{r.metaNeeds}}" hint-placeholder-val="{{ false }}">
+                          <span title="Needs you" style="flex: none; display: flex; align-items: center; gap: 2px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{r.t.t3}};">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;"><path d="{{r.needsG.fill}}" fill="{{r.needsG.c}}" fill-opacity="{{r.needsG.fillOp}}"></path></svg>
+                            <span>{{r.count}}</span>
+                          </span>
+                        </sc-if>
+                        <sc-if value="{{r.metaPlain}}" hint-placeholder-val="{{ true }}">
+                          <span style="flex: none; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{r.t.t3}};">{{r.count}}</span>
+                        </sc-if>
+                      </button>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{r.isSession}}" hint-placeholder-val="{{ true }}">
+                    <div style="padding: 0 8px; opacity: {{r.op}};">
+                      <button type="button" onClick="{{r.pick}}" aria-label="{{r.aria}}" aria-current="{{r.current}}" style="display: block; width: 100%; height: {{r.h}}px; padding: 5px 10px 5px {{r.pl}}px; border-radius: 7px; background: {{r.bg}}; box-shadow: {{r.shadow}}; transition: background-color 120ms cubic-bezier(.22,1,.36,1);">
+                        <span style="height: 18px; display: flex; align-items: center; gap: 8px;">
+                          <span style="flex: none; width: 16px; height: 16px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{r.g.fill}}" fill="{{r.g.c}}" fill-opacity="{{r.g.fillOp}}"></path><path d="{{r.g.ring}}" stroke="{{r.g.c}}" stroke-opacity="{{r.g.ringOp}}" stroke-width="{{r.g.sw}}" stroke-dasharray="{{r.g.dash}}" vector-effect="non-scaling-stroke"></path><path d="{{r.g.mark}}" stroke="{{r.g.c}}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><g class="vxs-orbit" style="transform-origin: 12px 12px; animation: {{r.g.anim}};"><circle cx="12" cy="4.5" r="{{r.g.dotR}}" fill="{{r.g.c}}"></circle></g></svg>
+                          </span>
+                          <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{r.titleColor}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">{{r.title}}</span>
+                          <sc-if value="{{r.noActions}}" hint-placeholder-val="{{ true }}">
+                            <span style="flex: none; display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{r.metaColor}};">
+                              <sc-if value="{{r.hasDot}}" hint-placeholder-val="{{ false }}"><span title="Unread" style="flex: none; width: 6px; height: 6px; border-radius: 50%; background: {{r.t.text}};"></span></sc-if>
+                              <sc-if value="{{r.hasDiff}}" hint-placeholder-val="{{ false }}"><span style="display: flex; gap: 4px;"><span style="color: {{r.t.add}};">{{r.add}}</span><span style="color: {{r.t.del}};">{{r.del}}</span></span></sc-if>
+                              <sc-if value="{{r.hasTime}}" hint-placeholder-val="{{ true }}"><span>{{r.time}}</span></sc-if>
+                            </span>
+                          </sc-if>
+                          <sc-if value="{{r.hasActions}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="flex: none; width: 44px; height: 18px;"></span></sc-if>
+                        </span>
+                        <sc-if value="{{r.hasLine2}}" hint-placeholder-val="{{ false }}">
+                          <span style="display: block; padding-left: 24px; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{r.t.t2}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">{{r.line2}}</span>
+                        </sc-if>
+                      </button>
+                    </div>
+                    <sc-if value="{{r.hasActions}}" hint-placeholder-val="{{ false }}">
+                      <span style="position: absolute; right: 12px; top: 2px; display: flex; gap: 2px;">
+                        <button type="button" aria-label="Archive" title="Archive  ⌘⌫" style="width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: {{r.t.icon}};">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 5h13A1.5 1.5 0 0 1 20 6.5v1A1.5 1.5 0 0 1 18.5 9h-13A1.5 1.5 0 0 1 4 7.5v-1A1.5 1.5 0 0 1 5.5 5zM5.5 9v8.5A1.5 1.5 0 0 0 7 19h10a1.5 1.5 0 0 0 1.5-1.5V9M10 12.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                        </button>
+                        <button type="button" aria-label="More actions" style="width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: {{r.t.icon}};">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zM13.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zM19.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0z" fill="currentColor"></path></svg>
+                        </button>
+                      </span>
+                    </sc-if>
+                    <sc-if value="{{r.isChild}}" hint-placeholder-val="{{ false }}">
+                      <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden="true" style="position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none;"><path d="{{r.conn}}" fill="none" stroke="{{r.t.connector}}" stroke-width="1"></path><circle cx="33" cy="14" r="2" fill="{{r.nodeColor}}"></circle></svg>
+                    </sc-if>
+                  </sc-if>
+                  <sc-if value="{{r.isMore}}" hint-placeholder-val="{{ false }}">
+                    <div style="padding: 0 8px;">
+                      <button type="button" style="width: 100%; height: 26px; padding-left: 34px; border-radius: 7px; font-size: 12px; line-height: 16px; color: {{r.t.t3}};">{{r.label}}</button>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{r.isGap}}" hint-placeholder-val="{{ false }}">
+                    <div aria-hidden="true" style="height: {{r.h}}px;"></div>
+                  </sc-if>
+                  <sc-if value="{{r.isDrop}}" hint-placeholder-val="{{ false }}">
+                    <div aria-hidden="true" style="position: relative; height: 0;">
+                      <span style="position: absolute; left: 12px; right: 12px; top: -1px; height: 2px; border-radius: 1px; background: {{r.t.accent}};"></span>
+                      <span style="position: absolute; left: 10px; top: -2px; width: 4px; height: 4px; border-radius: 50%; background: {{r.t.accent}}; box-shadow: 0 0 0 2px {{r.t.sidebar}};"></span>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+
+            <!-- H. Footer -->
+            <div style="flex: none; position: relative; height: 50px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px; padding: 8px 12px; box-sizing: border-box; border-top: 1px solid {{s.t.hair}};">
+              <button type="button" onClick="{{s.acct.toggle}}" aria-haspopup="dialog" aria-expanded="{{s.acct.expanded}}" aria-label="{{s.acct.aria}}" title="Account" style="min-width: 0; height: 34px; display: flex; align-items: center; gap: 8px; padding: 4px; box-sizing: border-box; border: 0; border-radius: 6px; background: {{s.acct.bg}}; text-align: left;">
+                <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 50%; background: {{s.t.avatar}}; color: #FFFFFF; display: grid; place-items: center; font-size: 11px; line-height: 14px; font-weight: 500; flex: none;">Y</span>
+                <span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 16px; font-weight: 400;"><span style="color: {{s.t.text}};">You</span><span style="color: {{s.t.t3}};"> · </span><span style="color: {{s.t.t2}};">Codium Max</span></span>
+              </button>
+              <button type="button" aria-label="Help" title="Help" onClick="{{s.help.toggle}}" aria-haspopup="menu" aria-expanded="{{s.help.expanded}}" style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: {{s.help.bg}}; color: {{s.help.color}}; flex: none;">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.1"></circle><path d="M6.2 6.25a1.85 1.85 0 0 1 3.6.55c0 1.15-1.8 1.35-1.8 2.4"></path><circle cx="8" cy="11.35" r="0.7" fill="currentColor" stroke="none"></circle></svg>
+              </button>
+              <button type="button" aria-label="Settings" title="Settings  ⌘," style="width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: {{s.t.iconQuiet}}; flex: none;">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10.35A2.35 2.35 0 1 0 8 5.65a2.35 2.35 0 0 0 0 4.7Zm4.72-1.35a4.8 4.8 0 0 0 0-2l1.2-.92-1.2-2.08-1.42.58a5.1 5.1 0 0 0-1.72-1L9.4 2H6.6l-.18 1.58a5.1 5.1 0 0 0-1.72 1L3.28 4l-1.2 2.08 1.2.92a4.8 4.8 0 0 0 0 2l-1.2.92L3.28 12l1.42-.58a5.1 5.1 0 0 0 1.72 1L6.6 14h2.8l.18-1.58a5.1 5.1 0 0 0 1.72-1l1.42.58 1.2-2.08-1.2-.92Z"></path></svg>
+              </button>
+            </div>
+          </nav>
+
+          <!-- a strip of the opaque stage, fading into the wallpaper -->
+          <div aria-hidden="true" style="flex: none; width: 40px; height: 844px; background: {{s.t.main}}; -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 30%, transparent 100%); mask-image: linear-gradient(90deg, #000 0%, #000 30%, transparent 100%);"></div>
+
+          <!-- account popover and Help menu, opening upward from the footer (outside the nav so its clip does not cut them) -->
+          <sc-if value="{{s.acct.open}}" hint-placeholder-val="{{ false }}">
+            <div role="dialog" aria-label="Account" style="position: absolute; z-index: 40; left: 8px; bottom: 54px; width: 280px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{s.t.menu}}; border: 1px solid {{s.t.raisedBorder}}; box-shadow: {{s.t.menuShadow}}; color: {{s.t.row}};">
+              <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px 4px;">
+                <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 50%; background: {{s.t.avatar}}; color: #FFFFFF; display: grid; place-items: center; font-size: 11px; line-height: 14px; font-weight: 500; flex: none;">Y</span>
+                <span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 16px;"><span style="color: {{s.t.text}};">You</span><span style="color: {{s.t.t3}};"> · </span><span style="color: {{s.t.t2}};">Codium Max</span></span>
+              </div>
+              <div style="padding: 6px 10px 10px;">
+                <div role="meter" aria-label="Share of this month's Codium usage left" aria-valuenow="64" aria-valuemin="0" aria-valuemax="100" style="height: 4px; border-radius: 2px; background: {{s.t.hairStrong}}; overflow: hidden;"><div style="width: 64%; height: 100%; border-radius: 2px; background: {{s.t.accent}};"></div></div>
+                <div style="margin-top: 6px; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: {{s.t.t2}};">64% of this month left · renews Dec 1</div>
+              </div>
+              <div role="separator" style="height: 1px; margin: 4px 6px; background: {{s.t.hair}};"></div>
+              <div style="padding: 6px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 500; color: {{s.t.t3}};">Activity</div>
+              <div style="padding: 2px 10px 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 12px; line-height: 16px; color: {{s.t.text}};">5 day streak</span><span style="flex: 1;"></span><span aria-hidden="true" style="display: flex; gap: 4px;"><sc-for list="{{s.acct.days}}" as="d" hint-placeholder-count="7"><span style="width: 6px; height: 6px; border-radius: 50%; background: {{d.bg}};"></span></sc-for></span></div>
+                <div style="margin-top: 4px; font-size: 12px; line-height: 16px; color: {{s.t.t2}};">Favourite model: Codium Auto</div>
+                <div style="font-size: 12px; line-height: 16px; color: {{s.t.t2}};">14 chats completed this week</div>
+              </div>
+              <div role="separator" style="height: 1px; margin: 4px 6px; background: {{s.t.hair}};"></div>
+              <button type="button" onClick="{{s.acct.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{s.t.row}};">Pair a phone…</button>
+              <button type="button" onClick="{{s.acct.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{s.t.row}};">Account settings</button>
+              <button type="button" onClick="{{s.acct.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{s.t.row}};">Plans</button>
+              <div role="separator" style="height: 1px; margin: 4px 6px; background: {{s.t.hair}};"></div>
+              <button type="button" onClick="{{s.acct.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left; color: {{s.t.row}};">Sign out</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{s.help.open}}" hint-placeholder-val="{{ false }}">
+            <div role="menu" aria-label="Help" style="position: absolute; z-index: 40; left: 104px; bottom: 54px; width: 220px; box-sizing: border-box; padding: 4px; border-radius: 10px; background: {{s.t.menu}}; border: 1px solid {{s.t.raisedBorder}}; box-shadow: {{s.t.menuShadow}}; color: {{s.t.row}};">
+              <button type="button" role="menuitem" onClick="{{s.help.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left;">Docs</button>
+              <button type="button" role="menuitem" onClick="{{s.help.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left;">Best practices</button>
+              <button type="button" role="menuitem" onClick="{{s.help.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left;">Changelog</button>
+              <button type="button" role="menuitem" onClick="{{s.help.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left;">Send feedback</button>
+              <div role="separator" style="height: 1px; margin: 4px 6px; background: {{s.t.hair}};"></div>
+              <button type="button" role="menuitem" onClick="{{s.help.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left;">Diagnostics</button>
+              <button type="button" role="menuitem" onClick="{{s.help.close}}" style="display: flex; align-items: center; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; line-height: 18px; text-align: left;">Open debug tools</button>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <!-- Slim rail (dark) -->
+      <div style="position: relative; flex: none; width: 92px; height: 844px; display: flex;">
+        <div aria-hidden="true" style="position: absolute; left: -80px; top: -80px; width: 172px; height: 1004px; overflow: hidden; pointer-events: none; -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 66%, transparent 100%); mask-image: linear-gradient(90deg, #000 0%, #000 66%, transparent 100%);">
+          <div style="position: absolute; left: 80px; top: 80px; width: 52px; height: 844px; border-radius: 12px 0 0 12px; box-shadow: {{rt.winShadow}};"></div>
+        </div>
+        <nav aria-label="Vector sidebar, slim rail" style="position: relative; flex: none; width: 52px; height: 844px; display: flex; flex-direction: column; align-items: center; border-radius: 12px 0 0 12px; overflow: hidden; background: {{rt.mat}}; backdrop-filter: {{rt.matFilter}}; -webkit-backdrop-filter: {{rt.matFilter}}; box-shadow: inset -1px 0 0 {{rt.edge}}, inset 1px 1px 0 {{rt.rim}}, inset 0 -1px 0 {{rt.rim}}; color: {{rt.icon}};">
+          <div style="flex: none; height: 44px;"></div>
+          <div style="flex: none; display: flex; flex-direction: column; gap: 2px;">
+            <button type="button" aria-label="Show sidebar" title="Show sidebar  ⌘B" style="width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{rt.icon}};">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 4.5h13A2.5 2.5 0 0 1 21 7v10a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17V7a2.5 2.5 0 0 1 2.5-2.5zM9.5 4.5v15M13.5 10l2 2-2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+            </button>
+            <button type="button" aria-label="New session" title="New session  ⌘N" style="width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{rt.icon}};">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M11 4.5H7A2.5 2.5 0 0 0 4.5 7v10A2.5 2.5 0 0 0 7 19.5h10a2.5 2.5 0 0 0 2.5-2.5v-4M17.3 4.2a1.77 1.77 0 0 1 2.5 2.5l-7.3 7.3-3.2.7.7-3.2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+            </button>
+            <button type="button" aria-label="Search" title="Search  ⌘K" style="width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{rt.icon}};">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M16.5 10.5a6 6 0 1 1-12 0 6 6 0 0 1 12 0zM15 15l4.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+            </button>
+            <button type="button" aria-label="Live: 4 items, 1 needs you" title="Live  ⌘⇧L" style="position: relative; width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{rt.icon}};">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.6 8.6a4.8 4.8 0 0 0 0 6.8M15.4 8.6a4.8 4.8 0 0 1 0 6.8M5.8 5.8a8.8 8.8 0 0 0 0 12.4M18.2 5.8a8.8 8.8 0 0 1 0 12.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><path d="M13.8 12a1.8 1.8 0 1 1-3.6 0 1.8 1.8 0 0 1 3.6 0z" fill="currentColor"></path></svg>
+              <span aria-hidden="true" style="position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;">
+                <span style="position: absolute; left: 2px; top: 2px; width: 10px; height: 10px; border-radius: 2px; transform: rotate(45deg); background: {{rt.needs}}; box-shadow: 0 0 0 2px {{rt.sidebar}};"></span>
+                <span style="position: relative; font-size: 9px; line-height: 10px; font-weight: 700; font-variant-numeric: tabular-nums; color: #161519;">4</span>
+              </span>
+            </button>
+            <button type="button" aria-label="Vectorscope: 3 reviews waiting" title="Vectorscope" style="width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{rt.icon}};">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12a7 7 0 1 1-14 0 7 7 0 0 1 14 0zM14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+            </button>
+          </div>
+          <div aria-hidden="true" style="flex: none; width: 20px; height: 1px; margin: 9px 0; background: {{rt.hair}};"></div>
+          <div role="list" aria-label="Sessions that need attention" style="flex: none; display: flex; flex-direction: column; gap: 2px;">
+            <sc-for list="{{railTiles}}" as="x" hint-placeholder-count="5">
+              <div role="listitem">
+                <button type="button" aria-label="{{x.aria}}" title="{{x.title}}" style="position: relative; width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                  <span aria-hidden="true" style="width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{x.g.fill}}" fill="{{x.g.c}}" fill-opacity="{{x.g.fillOp}}"></path><path d="{{x.g.ring}}" stroke="{{x.g.c}}" stroke-opacity="{{x.g.ringOp}}" stroke-width="{{x.g.sw}}" stroke-dasharray="{{x.g.dash}}" vector-effect="non-scaling-stroke"></path><path d="{{x.g.mark}}" stroke="{{x.g.c}}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><g class="vxs-orbit" style="transform-origin: 12px 12px; animation: {{x.g.anim}};"><circle cx="12" cy="4.5" r="{{x.g.dotR}}" fill="{{x.g.c}}"></circle></g></svg>
+                  </span>
+                </button>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex: 1;"></div>
+          <button type="button" aria-label="Settings" title="Settings  ⌘," style="flex: none; width: 36px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{rt.icon}};">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10.35A2.35 2.35 0 1 0 8 5.65a2.35 2.35 0 0 0 0 4.7Zm4.72-1.35a4.8 4.8 0 0 0 0-2l1.2-.92-1.2-2.08-1.42.58a5.1 5.1 0 0 0-1.72-1L9.4 2H6.6l-.18 1.58a5.1 5.1 0 0 0-1.72 1L3.28 4l-1.2 2.08 1.2.92a4.8 4.8 0 0 0 0 2l-1.2.92L3.28 12l1.42-.58a5.1 5.1 0 0 0 1.72 1L6.6 14h2.8l.18-1.58a5.1 5.1 0 0 0 1.72-1l1.42.58 1.2-2.08-1.2-.92Z"></path></svg>
+          </button>
+          <button type="button" aria-label="Account: You, Codium Max" title="You · Codium Max" style="flex: none; width: 36px; height: 32px; margin-top: 2px; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+            <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: {{rt.avatar}}; color: #FFFFFF; font-size: 11px; line-height: 14px; font-weight: 500;">Y</span>
+          </button>
+          <div style="flex: none; height: 10px;"></div>
+        </nav>
+        <div aria-hidden="true" style="flex: none; width: 40px; height: 844px; background: {{rt.main}}; -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 45%, transparent 100%); mask-image: linear-gradient(90deg, #000 0%, #000 45%, transparent 100%);"></div>
+        <span aria-hidden="true" style="position: absolute; left: 16px; top: 16px; display: flex; gap: 8px;">
+          <span style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);"></span>
+          <span style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);"></span>
+          <span style="width: 12px; height: 12px; border-radius: 50%; background: #28C840; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);"></span>
+        </span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Row states, each at 1:1 on the solid sidebar surface -->
+  <sc-for list="{{states}}" as="it" hint-placeholder-count="14">
+    <div style="position: absolute; left: {{it.x}}px; top: {{it.y}}px; width: 264px; display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-size: 12px; line-height: 16px; font-weight: 500; color: {{it.t.t2}};">{{it.caption}}</div>
+
+      <sc-if value="{{it.isTree}}" hint-placeholder-val="{{ true }}">
+        <div style="position: relative; width: 264px; padding: 8px 0; border-radius: 10px; background: {{it.t.sidebar}}; box-shadow: 0 0 0 1px {{it.t.edge}}; color: {{it.t.text}};">
+          <sc-for list="{{it.rows}}" as="r" hint-placeholder-count="2">
+            <div style="position: relative; margin-top: {{r.mt}}px;">
+              <sc-if value="{{r.isLabel}}" hint-placeholder-val="{{ false }}">
+                <div style="height: 24px; padding: 0 18px; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{r.t.t3}};">
+                  <span>{{r.label}}</span>
+                  <sc-if value="{{r.hasCount}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; line-height: 14px; font-weight: 400; letter-spacing: 0.01em; font-variant-numeric: tabular-nums;">{{r.count}}</span></sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{r.isHost}}" hint-placeholder-val="{{ false }}">
+                <div style="height: 28px; margin: 0 8px; padding: 0 4px 0 10px; border-radius: 7px; display: flex; align-items: center; background: {{r.bg}};">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex: none; color: {{r.t.icon}};"><path d="{{r.d}}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                  <span style="margin-left: 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{r.t.t2}}; white-space: nowrap;">{{r.name}}</span>
+                  <sc-if value="{{r.hasChevron}}" hint-placeholder-val="{{ false }}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex: none; margin-left: 4px; color: {{r.t.t3}};"><path d="M5.5 9l6.5 6.5L18.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                  </sc-if>
+                  <span title="{{r.dotTitle}}" style="flex: none; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: {{r.dotBg}}; box-shadow: inset 0 0 0 1.5px {{r.dotRing}};"></span>
+                  <span style="flex: 1;"></span>
+                  <button type="button" aria-label="{{r.plusLabel}}" style="flex: none; width: 24px; height: 24px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: {{r.t.icon}};">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" vector-effect="non-scaling-stroke"></path></svg>
+                  </button>
+                </div>
+              </sc-if>
+              <sc-if value="{{r.isProject}}" hint-placeholder-val="{{ false }}">
+                <div style="margin: 0 {{r.mr}}px 0 {{r.ml}}px;">
+                  <button type="button" aria-label="{{r.aria}}" aria-expanded="{{r.expanded}}" style="width: 100%; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 7px; background: {{r.bg}}; box-shadow: {{r.shadow}};">
+                    <span aria-hidden="true" style="flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; color: {{r.t.t3}};"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; transform: rotate({{r.chevRot}}); transition: transform 140ms cubic-bezier(.22,1,.36,1);"><path d="M5.5 9l6.5 6.5L18.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg></span>
+                    <span style="flex: none; font-size: 13px; line-height: 18px; font-weight: 500; color: {{r.t.text}}; white-space: nowrap;">{{r.name}}</span>
+                    <sc-if value="{{r.hasBranch}}" hint-placeholder-val="{{ false }}">
+                      <span style="flex: none; margin-left: -2px; font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 11px; line-height: 14px; color: {{r.t.t3}}; white-space: nowrap;">{{r.branch}}</span>
+                    </sc-if>
+                    <span style="flex: 1;"></span>
+                    <sc-if value="{{r.metaNeeds}}" hint-placeholder-val="{{ false }}">
+                      <span title="Needs you" style="flex: none; display: flex; align-items: center; gap: 2px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{r.t.t3}};">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;"><path d="{{r.needsG.fill}}" fill="{{r.needsG.c}}" fill-opacity="{{r.needsG.fillOp}}"></path></svg>
+                        <span>{{r.count}}</span>
+                      </span>
+                    </sc-if>
+                    <sc-if value="{{r.metaPlain}}" hint-placeholder-val="{{ true }}">
+                      <span style="flex: none; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{r.t.t3}};">{{r.count}}</span>
+                    </sc-if>
+                  </button>
+                </div>
+              </sc-if>
+              <sc-if value="{{r.isSession}}" hint-placeholder-val="{{ true }}">
+                <div style="padding: 0 8px; opacity: {{r.op}};">
+                  <button type="button" onClick="{{r.pick}}" aria-label="{{r.aria}}" aria-current="{{r.current}}" style="display: block; width: 100%; height: {{r.h}}px; padding: 5px 10px 5px {{r.pl}}px; border-radius: 7px; background: {{r.bg}}; box-shadow: {{r.shadow}}; transition: background-color 120ms cubic-bezier(.22,1,.36,1);">
+                    <span style="height: 18px; display: flex; align-items: center; gap: 8px;">
+                      <span style="flex: none; width: 16px; height: 16px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{r.g.fill}}" fill="{{r.g.c}}" fill-opacity="{{r.g.fillOp}}"></path><path d="{{r.g.ring}}" stroke="{{r.g.c}}" stroke-opacity="{{r.g.ringOp}}" stroke-width="{{r.g.sw}}" stroke-dasharray="{{r.g.dash}}" vector-effect="non-scaling-stroke"></path><path d="{{r.g.mark}}" stroke="{{r.g.c}}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path><g class="vxs-orbit" style="transform-origin: 12px 12px; animation: {{r.g.anim}};"><circle cx="12" cy="4.5" r="{{r.g.dotR}}" fill="{{r.g.c}}"></circle></g></svg>
+                      </span>
+                      <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{r.titleColor}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">{{r.title}}</span>
+                      <sc-if value="{{r.noActions}}" hint-placeholder-val="{{ true }}">
+                        <span style="flex: none; display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{r.metaColor}};">
+                          <sc-if value="{{r.hasDot}}" hint-placeholder-val="{{ false }}"><span title="Unread" style="flex: none; width: 6px; height: 6px; border-radius: 50%; background: {{r.t.text}};"></span></sc-if>
+                          <sc-if value="{{r.hasDiff}}" hint-placeholder-val="{{ false }}"><span style="display: flex; gap: 4px;"><span style="color: {{r.t.add}};">{{r.add}}</span><span style="color: {{r.t.del}};">{{r.del}}</span></span></sc-if>
+                          <sc-if value="{{r.hasTime}}" hint-placeholder-val="{{ true }}"><span>{{r.time}}</span></sc-if>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{r.hasActions}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="flex: none; width: 44px; height: 18px;"></span></sc-if>
+                    </span>
+                    <sc-if value="{{r.hasLine2}}" hint-placeholder-val="{{ false }}">
+                      <span style="display: block; padding-left: 24px; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 16px; color: {{r.t.t2}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">{{r.line2}}</span>
+                    </sc-if>
+                  </button>
+                </div>
+                <sc-if value="{{r.hasActions}}" hint-placeholder-val="{{ false }}">
+                  <span style="position: absolute; right: 12px; top: 2px; display: flex; gap: 2px;">
+                    <button type="button" aria-label="Archive" title="Archive  ⌘⌫" style="width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: {{r.t.icon}};">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 5h13A1.5 1.5 0 0 1 20 6.5v1A1.5 1.5 0 0 1 18.5 9h-13A1.5 1.5 0 0 1 4 7.5v-1A1.5 1.5 0 0 1 5.5 5zM5.5 9v8.5A1.5 1.5 0 0 0 7 19h10a1.5 1.5 0 0 0 1.5-1.5V9M10 12.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                    </button>
+                    <button type="button" aria-label="More actions" style="width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: {{r.t.icon}};">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zM13.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zM19.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0z" fill="currentColor"></path></svg>
+                    </button>
+                  </span>
+                </sc-if>
+                <sc-if value="{{r.isChild}}" hint-placeholder-val="{{ false }}">
+                  <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden="true" style="position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none;"><path d="{{r.conn}}" fill="none" stroke="{{r.t.connector}}" stroke-width="1"></path><circle cx="33" cy="14" r="2" fill="{{r.nodeColor}}"></circle></svg>
+                </sc-if>
+              </sc-if>
+              <sc-if value="{{r.isMore}}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 0 8px;">
+                  <button type="button" style="width: 100%; height: 26px; padding-left: 34px; border-radius: 7px; font-size: 12px; line-height: 16px; color: {{r.t.t3}};">{{r.label}}</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{r.isGap}}" hint-placeholder-val="{{ false }}">
+                <div aria-hidden="true" style="height: {{r.h}}px;"></div>
+              </sc-if>
+              <sc-if value="{{r.isDrop}}" hint-placeholder-val="{{ false }}">
+                <div aria-hidden="true" style="position: relative; height: 0;">
+                  <span style="position: absolute; left: 12px; right: 12px; top: -1px; height: 2px; border-radius: 1px; background: {{r.t.accent}};"></span>
+                  <span style="position: absolute; left: 10px; top: -2px; width: 4px; height: 4px; border-radius: 50%; background: {{r.t.accent}}; box-shadow: 0 0 0 2px {{r.t.sidebar}};"></span>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+
+          <!-- host switcher popover (3 or more hosts) -->
+          <sc-if value="{{it.hasPopover}}" hint-placeholder-val="{{ false }}">
+            <div role="menu" aria-label="Hosts" style="position: absolute; left: 8px; top: 40px; width: 280px; padding: 4px; border-radius: 10px; background: {{it.t.menu}}; border: 1px solid {{it.t.raisedBorder}}; box-shadow: {{it.t.menuShadow}};">
+              <sc-for list="{{it.menu}}" as="h" hint-placeholder-count="3">
+                <button type="button" role="menuitemradio" aria-checked="{{h.checked}}" style="width: 100%; height: 28px; display: flex; align-items: center; padding: 0 8px; border-radius: 6px;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex: none; color: {{h.t.icon}};"><path d="{{h.d}}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                  <span style="margin-left: 8px; font-size: 13px; line-height: 18px; color: {{h.nameColor}}; white-space: nowrap;">{{h.name}}</span>
+                  <span title="{{h.dotTitle}}" style="flex: none; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: {{h.dotBg}}; box-shadow: inset 0 0 0 1.5px {{h.dotRing}};"></span>
+                  <sc-if value="{{h.hasStatus}}" hint-placeholder-val="{{ false }}"><span style="margin-left: 6px; font-size: 11px; line-height: 14px; color: {{h.t.t3}};">Offline</span></sc-if>
+                  <span style="flex: 1;"></span>
+                  <span style="flex: none; display: flex; align-items: center; gap: 10px; font-size: 11px; line-height: 14px; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: {{h.t.t3}};">
+                    <sc-if value="{{h.hasRun}}" hint-placeholder-val="{{ true }}">
+                      <span title="Running" style="display: flex; align-items: center; gap: 3px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{h.runG.ring}}" stroke="{{h.runG.c}}" stroke-opacity="{{h.runG.ringOp}}" stroke-width="{{h.runG.sw}}" vector-effect="non-scaling-stroke"></path><circle cx="12" cy="4.5" r="{{h.runG.dotR}}" fill="{{h.runG.c}}"></circle></svg>
+                        <span>{{h.run}}</span>
+                      </span>
+                    </sc-if>
+                    <sc-if value="{{h.hasNeeds}}" hint-placeholder-val="{{ false }}">
+                      <span title="Needs you" style="display: flex; align-items: center; gap: 3px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;"><path d="{{h.needsG.fill}}" fill="{{h.needsG.c}}"></path></svg>
+                        <span>{{h.needs}}</span>
+                      </span>
+                    </sc-if>
+                  </span>
+                  <span style="flex: none; width: 12px; margin-left: 10px; display: flex; color: {{h.t.t2}};">
+                    <sc-if value="{{h.isChecked}}" hint-placeholder-val="{{ false }}">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 12.5l4 4 9-9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path></svg>
+                    </sc-if>
+                  </span>
+                </button>
+              </sc-for>
+              <div role="separator" style="height: 1px; margin: 4px; background: {{it.t.hair}};"></div>
+              <button type="button" role="menuitem" style="width: 100%; height: 28px; padding: 0 8px 0 30px; border-radius: 6px; font-size: 13px; line-height: 18px; color: {{it.t.row}};">All hosts</button>
+              <button type="button" role="menuitem" style="width: 100%; height: 28px; padding: 0 8px 0 30px; border-radius: 6px; font-size: 13px; line-height: 18px; color: {{it.t.row}};">Pair a phone…</button>
+              <button type="button" role="menuitem" style="width: 100%; height: 28px; padding: 0 8px 0 30px; border-radius: 6px; font-size: 13px; line-height: 18px; color: {{it.t.row}};">Add server…</button>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- Reduce Transparency: same wallpaper, translucent material next to the solid fallback -->
+      <sc-if value="{{it.isRT}}" hint-placeholder-val="{{ false }}">
+        <div style="position: relative; width: 264px; display: flex; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px {{it.t.edge}}; background: linear-gradient(180deg, #5A43C4 0%, #8E4F86 55%, #B4665E 100%);">
+          <div style="flex: none; width: 132px; padding: 10px 0; background: {{it.t.mat}}; backdrop-filter: {{it.t.matFilter}}; -webkit-backdrop-filter: {{it.t.matFilter}}; box-shadow: inset -1px 0 0 {{it.t.edge}};">
+            <div style="padding: 0 10px 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: {{it.t.t3}};">{{it.leftLabel}}</div>
+            <div style="height: 28px; margin: 0 4px; padding: 0 6px; display: flex; align-items: center; gap: 8px;">
+              <span style="flex: none; width: 16px; height: 16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;"><path d="{{it.gNeeds.fill}}" fill="{{it.gNeeds.c}}"></path></svg></span>
+              <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{it.t.text}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">Fix Codium P8 CI</span>
+            </div>
+            <div style="height: 28px; margin: 0 4px; padding: 0 6px; display: flex; align-items: center; gap: 8px;">
+              <span style="flex: none; width: 16px; height: 16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{it.gRun.ring}}" stroke="{{it.gRun.c}}" stroke-opacity="{{it.gRun.ringOp}}" stroke-width="1.5" vector-effect="non-scaling-stroke"></path><circle cx="12" cy="4.5" r="{{it.gRun.dotR}}" fill="{{it.gRun.c}}"></circle></svg></span>
+              <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{it.t.row}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">Recheck keyboard focus across menu reads</span>
+            </div>
+          </div>
+          <div style="flex: none; width: 132px; padding: 10px 0; background: {{it.t.sidebar}};">
+            <div style="padding: 0 10px 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: {{it.t.t3}};">{{it.rightLabel}}</div>
+            <div style="height: 28px; margin: 0 4px; padding: 0 6px; display: flex; align-items: center; gap: 8px;">
+              <span style="flex: none; width: 16px; height: 16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block;"><path d="{{it.gNeeds.fill}}" fill="{{it.gNeeds.c}}"></path></svg></span>
+              <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{it.t.text}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">Fix Codium P8 CI</span>
+            </div>
+            <div style="height: 28px; margin: 0 4px; padding: 0 6px; display: flex; align-items: center; gap: 8px;">
+              <span style="flex: none; width: 16px; height: 16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display: block; overflow: visible;"><path d="{{it.gRun.ring}}" stroke="{{it.gRun.c}}" stroke-opacity="{{it.gRun.ringOp}}" stroke-width="1.5" vector-effect="non-scaling-stroke"></path><circle cx="12" cy="4.5" r="{{it.gRun.dotR}}" fill="{{it.gRun.c}}"></circle></svg></span>
+              <span style="flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; line-height: 18px; color: {{it.t.row}}; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);">Recheck keyboard focus across menu reads</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-for>
+
+</div>
+</x-dc><script type="text/x-dc" data-dc-script data-props='{"theme":{"type":"enum","options":["dark","light"],"default":"dark"},"glass":{"type":"range","min":0,"max":100,"step":1,"default":70},"accent":{"type":"color","options":["#9274EC","#6F86F0","#C47FD6","#4FA3E0"],"default":"#9274EC"},"collapsed":{"type":"boolean","default":false},"view":{"type":"enum","options":["session","new"],"default":"session"},"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(...args) {
+    super(...args);
+    this.state = { sel: null, liveCollapsed: null, mode: 'agent', foot: null };
+  }
+
+  renderVals() {
+    const p = this.props || {};
+    const cur = this.state || {};
+    const themeName = p.theme === 'light' ? 'light' : 'dark';
+    let glass = Number(p.glass ?? 70);
+    if (!isFinite(glass)) glass = 70;
+    glass = Math.min(100, Math.max(0, glass));
+    const accentIn = String(p.accent ?? '#9274EC').trim();
+    const collapsed = Boolean(p.collapsed ?? false);
+    const view = p.view === 'new' ? 'new' : 'session';
+    const sel = cur.sel ?? (view === 'new' ? '' : 'warn');
+    const liveCollapsed = cur.liveCollapsed ?? collapsed;
+    const mode = cur.mode === 'editor' ? 'editor' : 'agent';
+    const noop = () => {};
+
+    // colour helpers
+    const hexRgb = (h) => {
+      let x = String(h || '').replace('#', '').trim();
+      if (x.length === 3) x = x.split('').map((ch) => ch + ch).join('');
+      const n = parseInt(x.slice(0, 6), 16);
+      if (x.length < 6 || !isFinite(n)) return [146, 116, 236];
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const rgba = (h, a) => {
+      const c = hexRgb(h);
+      return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+    };
+    const mix = (h1, h2, k) => {
+      const a = hexRgb(h1);
+      const b = hexRgb(h2);
+      return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * k).toString(16).padStart(2, '0')).join('').toUpperCase();
+    };
+
+    // accent swatches: exact dark and light values, each checked for 4.5:1 text contrast
+    const ACC = {
+      '#9274EC': { d: { a: '#9274EC', tx: '#B69FF7', run: '#A58CF2', av: '#E6DDFF' }, l: { a: '#6A4FD6', tx: '#5B3FC9', run: '#6F52DA', av: '#4B34A6' } },
+      '#6F86F0': { d: { a: '#6F86F0', tx: '#A3B3F8', run: '#8A9CF3', av: '#DDE4FF' }, l: { a: '#4458C8', tx: '#3A4CB8', run: '#4A5FCF', av: '#2F3E96' } },
+      '#C47FD6': { d: { a: '#C47FD6', tx: '#DDA8EC', run: '#CE92E0', av: '#F4DDFB' }, l: { a: '#9440AE', tx: '#833A9B', run: '#9A46B5', av: '#6E2D84' } },
+      '#4FA3E0': { d: { a: '#4FA3E0', tx: '#8CC4F2', run: '#6FB4EC', av: '#DCEEFC' }, l: { a: '#1F6FB2', tx: '#1C64A3', run: '#2475BA', av: '#16507F' } }
+    };
+    const acc = ACC[accentIn.toUpperCase()] || {
+      d: { a: accentIn, tx: mix(accentIn, '#FFFFFF', 0.42), run: mix(accentIn, '#FFFFFF', 0.15), av: mix(accentIn, '#FFFFFF', 0.8) },
+      l: { a: mix(accentIn, '#000000', 0.25), tx: mix(accentIn, '#000000', 0.35), run: mix(accentIn, '#000000', 0.2), av: mix(accentIn, '#000000', 0.5) }
+    };
+
+    // material tint: glass 70 gives the spec values (0.86 dark, 0.84 light); 0 is the solid fallback
+    const gk = glass / 100;
+    const aD = Math.round((1 - 0.2 * gk) * 1000) / 1000;
+    const aL = Math.round(Math.max(0.8, 1 - (0.16 / 0.7) * gk) * 1000) / 1000;
+
+    const BASE = {
+      dark: {
+        backdrop: '#111014', main: '#161519', sidebar: '#201F24',
+        edge: 'rgba(255,255,255,0.08)', hair: 'rgba(255,255,255,0.07)', hairStrong: 'rgba(255,255,255,0.12)',
+        raisedBorder: 'rgba(255,255,255,0.08)', menu: '#2A292F',
+        menuShadow: 'inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 0.5px rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.30), 0 14px 36px rgba(0,0,0,0.45)',
+        liveFill: 'rgba(255,255,255,0.03)', liveBorder: 'rgba(255,255,255,0.07)',
+        hover: 'rgba(255,255,255,0.045)', selBg: 'rgba(255,255,255,0.085)', selShadow: 'inset 0 0 0 1px rgba(255,255,255,0.025)',
+        segTrack: 'rgba(255,255,255,0.05)', segActive: 'rgba(255,255,255,0.10)', segShadow: 'none',
+        connector: 'rgba(255,255,255,0.14)',
+        text: '#ECEBEF', row: '#BDBBC4', t2: '#A9A7B0', t3: '#95929C', dis: '#5D5B63', icon: '#A9A7B0',
+        needs: '#E2AB57', ready: '#62C48D', failed: '#E8777D', add: '#62C48D', del: '#EE8388',
+        dragBg: 'rgba(39,38,44,0.96)', dragShadow: '0 0 0 1px rgba(255,255,255,0.12), 0 6px 18px rgba(0,0,0,0.35)',
+        rim: 'rgba(255,255,255,0.09)',
+        winShadow: '0 0 0 0.5px rgba(0,0,0,0.75), 0 24px 60px rgba(0,0,0,0.5), 0 6px 16px rgba(0,0,0,0.3)'
+      },
+      light: {
+        backdrop: '#E7E6EB', main: '#FFFFFF', sidebar: '#F4F3F7',
+        edge: 'rgba(24,22,32,0.10)', hair: 'rgba(24,22,32,0.08)', hairStrong: 'rgba(24,22,32,0.15)',
+        raisedBorder: 'rgba(24,22,32,0.12)', menu: '#FFFFFF',
+        menuShadow: '0 0 0 0.5px rgba(24,22,32,0.10), 0 2px 6px rgba(24,22,32,0.06), 0 14px 36px rgba(24,22,32,0.12)',
+        liveFill: 'rgba(255,255,255,0.72)', liveBorder: 'rgba(24,22,32,0.08)',
+        hover: 'rgba(24,22,32,0.045)', selBg: '#FFFFFF', selShadow: '0 0 0 0.5px rgba(24,22,32,0.10), 0 1px 2px rgba(24,22,32,0.06)',
+        segTrack: 'rgba(24,22,32,0.05)', segActive: '#FFFFFF', segShadow: '0 1px 2px rgba(24,22,32,0.10)',
+        connector: 'rgba(24,22,32,0.16)',
+        text: '#1C1B21', row: '#3B3942', t2: '#4F4D57', t3: '#66636D', dis: '#A3A1AB', icon: '#5F5D68',
+        needs: '#A86C12', ready: '#23864F', failed: '#C43E47', add: '#1D7444', del: '#B3343D',
+        dragBg: 'rgba(255,255,255,0.96)', dragShadow: '0 0 0 1px rgba(24,22,32,0.15), 0 6px 18px rgba(24,22,32,0.14)',
+        rim: 'rgba(255,255,255,0.55)',
+        winShadow: '0 0 0 0.5px rgba(16,12,40,0.30), 0 24px 60px rgba(10,8,30,0.38), 0 6px 16px rgba(10,8,30,0.20)'
+      }
+    };
+
+    const T = (name) => {
+      const t = Object.assign({}, BASE[name]);
+      const light = name === 'light';
+      const a = light ? acc.l : acc.d;
+      t.accent = a.a;
+      t.accentText = a.tx;
+      t.run = a.run;
+      t.focusRing = 'inset 0 0 0 2px ' + rgba(light ? a.a : a.tx, 0.85);
+      t.avatarFg = a.av;
+      t.avatarBg = rgba(a.a, light ? 0.14 : 0.28);
+      t.foundBorder = rgba(a.a, 0.4);
+      t.avatar = a.a;
+      t.iconQuiet = light ? 'rgba(24,22,32,0.52)' : 'rgba(255,255,255,0.38)';
+      if (light) {
+        t.mat = glass === 0 ? t.sidebar : 'linear-gradient(rgba(244,243,247,' + aL + '), rgba(244,243,247,' + aL + ')), linear-gradient(rgba(240,240,244,0.5), rgba(240,240,244,0.5))';
+        t.matFilter = glass === 0 ? 'none' : 'blur(20px) saturate(140%) brightness(1.15)';
+        t.tint = glass === 0 ? 'Solid' : 'Tint ' + aL.toFixed(2);
+      } else {
+        t.mat = glass === 0 ? t.sidebar : 'linear-gradient(rgba(32,31,36,' + aD + '), rgba(32,31,36,' + aD + '))';
+        t.matFilter = glass === 0 ? 'none' : 'blur(20px) saturate(140%) brightness(0.8)';
+        t.tint = glass === 0 ? 'Solid' : 'Tint ' + aD.toFixed(2);
+      }
+      return t;
+    };
+
+    // icon paths (24 grid)
+    const NIL = 'M0 0';
+    const I = {
+      compose: 'M11 4.5H7A2.5 2.5 0 0 0 4.5 7v10A2.5 2.5 0 0 0 7 19.5h10a2.5 2.5 0 0 0 2.5-2.5v-4M17.3 4.2a1.77 1.77 0 0 1 2.5 2.5l-7.3 7.3-3.2.7.7-3.2z',
+      search: 'M16.5 10.5a6 6 0 1 1-12 0 6 6 0 0 1 12 0zM15 15l4.5 4.5',
+      automation: 'M12 4.5a7.5 7.5 0 1 0 7.5 7.5M17.2 13.2l2.3-2.4 2.3 2.4M12 8.5V12l2.5 1.5',
+      scope: 'M19 12a7 7 0 1 1-14 0 7 7 0 0 1 14 0zM14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5',
+      dots: 'M7.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zM13.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0zM19.75 12a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0z',
+      mac: 'M5.5 5.5h13A1.5 1.5 0 0 1 20 7v8.5H4V7a1.5 1.5 0 0 1 1.5-1.5zM2.5 18.5h19',
+      cloud: 'M7 18.5h10a3.75 3.75 0 0 0 .5-7.47A5.5 5.5 0 0 0 6.9 9.9 4.3 4.3 0 0 0 7 18.5zM10 12.5h4v3h-4z',
+      server: 'M5.5 4.5h13A1.5 1.5 0 0 1 20 6v3a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 9V6a1.5 1.5 0 0 1 1.5-1.5zM5.5 13.5h13A1.5 1.5 0 0 1 20 15v3a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18v-3a1.5 1.5 0 0 1 1.5-1.5zM7.5 7.5h1M7.5 16.5h1',
+      chevDown: 'M5.5 9l6.5 6.5L18.5 9',
+      chevRight: 'M9 5.5l6.5 6.5L9 18.5'
+    };
+
+    // status glyphs: shape always pairs with colour (spec 5.10)
+    const circ = (r) => 'M' + (12 + r) + ' 12a' + r + ' ' + r + ' 0 1 1-' + (2 * r) + ' 0 ' + r + ' ' + r + ' 0 0 1 ' + (2 * r) + ' 0z';
+    const DIAMOND = 'M10.41 5.11A2.25 2.25 0 0 1 13.59 5.11L18.89 10.41A2.25 2.25 0 0 1 18.89 13.59L13.59 18.89A2.25 2.25 0 0 1 10.41 18.89L5.11 13.59A2.25 2.25 0 0 1 5.11 10.41Z';
+    const PAUSE = 'M7.5 8.6a1.125 1.125 0 0 1 2.25 0v6.8a1.125 1.125 0 0 1-2.25 0zM14.25 8.6a1.125 1.125 0 0 1 2.25 0v6.8a1.125 1.125 0 0 1-2.25 0z';
+    const STOP = 'M9 6h6a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3z';
+    const glyph = (kind, t, anim) => {
+      const g = { ring: NIL, ringOp: '1', sw: '1.5', dash: 'none', fill: NIL, fillOp: '1', mark: NIL, dotR: '0', anim: 'none', c: t.t3 };
+      if (kind === 'run') {
+        g.c = t.run; g.ring = circ(7.5); g.ringOp = '0.3'; g.dotR = '2.25';
+        g.anim = anim ? 'vxs-orbit 1.6s linear infinite' : 'none';
+      } else if (kind === 'needs') {
+        g.c = t.needs; g.fill = DIAMOND;
+      } else if (kind === 'failed') {
+        g.c = t.failed; g.fill = circ(8.25); g.fillOp = '0.18'; g.mark = 'M8.25 8.25l7.5 7.5M15.75 8.25l-7.5 7.5';
+      } else if (kind === 'ready') {
+        g.c = t.ready; g.ring = circ(8.25); g.mark = 'M7.6 12.3l3 2.9 6-6';
+      } else if (kind === 'queued') {
+        g.c = t.t3; g.ring = circ(7.5); g.sw = '1.25'; g.dash = '2 1.93';
+      } else if (kind === 'paused') {
+        g.c = t.t2; g.fill = PAUSE;
+      } else if (kind === 'stopped') {
+        g.c = t.t3; g.ring = STOP;
+      } else if (kind === 'unread') {
+        g.c = t.text; g.fill = circ(4.5);
+      }
+      return g;
+    };
+
+    // row builders shared by the sidebars and the states column
+    const blank = (t) => ({
+      t: t, g: glyph('none', t, false), needsG: glyph('needs', t, false),
+      isLabel: false, isHost: false, isProject: false, isSession: false, isMore: false, isGap: false, isDrop: false, mt: 0
+    });
+    const L = (t, label, count, mt) => Object.assign(blank(t), { isLabel: true, label: label, hasCount: !!count, count: count || '', mt: mt || 0 });
+    const M = (t, label, mt) => Object.assign(blank(t), { isMore: true, label: label, mt: mt || 0 });
+    const G = (t, h, mt) => Object.assign(blank(t), { isGap: true, h: h, mt: mt || 0 });
+    const D = (t, mt) => Object.assign(blank(t), { isDrop: true, mt: mt || 0 });
+    const H = (t, o) => Object.assign(blank(t), {
+      isHost: true, name: o.name, d: o.d, mt: o.mt == null ? 16 : o.mt,
+      dotBg: o.offline ? 'transparent' : t.ready, dotRing: o.offline ? t.t3 : 'transparent',
+      dotTitle: o.offline ? 'Offline' : 'Runtime ready',
+      hasChevron: !!o.switcher, bg: o.open ? t.hover : 'transparent',
+      plusLabel: 'New session on ' + o.name
+    });
+    const P = (t, o) => {
+      return Object.assign(blank(t), {
+        isProject: true, name: o.name, chevRot: o.open ? '0deg' : '-90deg',
+        hasBranch: !!o.branch, branch: o.branch || '',
+        metaNeeds: !!o.needs, metaPlain: !o.needs && !!o.count, count: o.needs || o.count || '',
+        mt: o.mt == null ? 4 : o.mt, ml: o.lifted ? 14 : 8, mr: o.lifted ? 2 : 8,
+        bg: o.lifted ? t.dragBg : 'transparent', shadow: o.lifted ? t.dragShadow : 'none',
+        expanded: o.open ? 'true' : 'false',
+        aria: o.name + (o.branch ? ', branch ' + o.branch : '') + (o.needs ? ', ' + o.needs + ' needs you' : '')
+      });
+    };
+    const S = (t, o) => {
+      const level = o.level || 0;
+      const selected = !!o.selected;
+      const emph = selected || !!o.emph;
+      const two = !!o.line2;
+      let conn = NIL;
+      if (level > 0) {
+        conn = (o.first ? 'M25.5 -8V7.5' : 'M25.5 0V7.5') + 'A6 6 0 0 0 31.5 13.5' + (o.last ? '' : 'M25.5 7.5V28');
+      }
+      return Object.assign(blank(t), {
+        isSession: true, title: o.title, g: o.g,
+        mt: o.mt || 0, h: two ? 44 : 28, pl: 10 + 18 * level,
+        bg: o.bg || (selected ? t.selBg : 'transparent'),
+        shadow: o.shadow || (selected ? t.selShadow : 'none'),
+        titleColor: emph ? t.text : t.row,
+        metaColor: selected ? t.t2 : t.t3,
+        hasActions: !!o.actions, noActions: !o.actions,
+        hasDot: !!o.unread, hasDiff: !!o.add, add: o.add || '', del: o.del || '',
+        hasTime: !!o.time, time: o.time || '',
+        hasLine2: two, line2: o.line2 || '',
+        isChild: level > 0, conn: conn, nodeColor: selected ? t.text : (o.node || t.connector),
+        current: selected ? 'page' : 'false',
+        aria: o.title + ', ' + (o.status || 'Done') + (o.line2 ? ': ' + o.line2 : ''),
+        op: o.op || '1',
+        pick: o.pick || noop
+      });
+    };
+
+    const MINUS = '−';
+    const recheckT = 'Recheck keyboard focus across menu reads';
+    const shortT = 'Shorten Windows installer progress copy';
+    const warnT = 'Warn on review model evidence';
+
+    // the expanded sidebar (spec 9.1), built once per theme
+    const mkSidebar = (name, animate) => {
+      const t = T(name);
+      const gl = (k, an) => glyph(k, t, !!an && animate);
+      const pick = (id) => () => this.setState({ sel: id, foot: null });
+      const acctOpen = cur.foot === name + ':acct';
+      const helpOpen = cur.foot === name + ':help';
+      const seg =(on) => ({ bg: on ? t.segActive : 'transparent', shadow: on ? t.segShadow : 'none', color: on ? t.text : t.t3, pressed: on ? 'true' : 'false' });
+      const verbs = [
+        { label: 'New session', d: I.compose, f: NIL, meta: '' },
+        { label: 'Search', d: I.search, f: NIL, meta: '' },
+        { label: 'Automations', d: I.automation, f: NIL, meta: '2:00' },
+        { label: 'Vectorscope', d: I.scope, f: NIL, meta: '3' },
+        { label: 'More', d: NIL, f: I.dots, meta: '' }
+      ].map((v) => Object.assign({ t: t, hasMeta: !!v.meta }, v));
+      const live = [
+        { title: 'Fix Codium P8 CI', g: gl('needs'), emph: true, review: true, status: 'Needs you' },
+        { title: recheckT, g: gl('run', true), time: '12m', status: 'Running' },
+        { title: 'Vectorscope review · PR #2184', g: gl('run', true), time: '1m', kind: I.scope, status: 'Vectorscope review running' },
+        { title: 'Reproduce Windows packaging limit', g: gl('run', true), time: '4m', kind: I.cloud, status: 'Running on Cloud computer' }
+      ].map((x) => ({
+        t: t, title: x.title, g: x.g, titleColor: x.emph ? t.text : t.row,
+        isReview: !!x.review, notReview: !x.review, time: x.time || '',
+        hasKind: !!x.kind, kind: x.kind || NIL,
+        aria: x.title + ', ' + x.status + (x.time ? ', ' + x.time : ''),
+        reviewLabel: 'Review: ' + x.title
+      }));
+      const pc = collapsed;
+      const tree = [
+        L(t, 'Pinned', '', 16),
+        S(t, { title: 'Release 1.99.114 checklist', g: gl('none'), time: '1d', selected: sel === 'release', pick: pick('release'), status: 'Done' }),
+        H(t, { name: 'This Mac', d: I.mac, mt: 16 }),
+        P(t, { name: 'vector', count: '4', open: true }),
+        S(t, { title: recheckT, g: gl('run', true), time: pc ? '2' : '12m', selected: sel === 'recheck', pick: pick('recheck'), status: pc ? 'Running, 2 child sessions collapsed' : 'Running' })
+      ];
+      if (!pc) {
+        tree.push(
+          S(t, { level: 1, first: true, title: 'Swarm worker 2', g: gl('run', true), add: '+142', del: MINUS + '18', node: t.run, selected: sel === 'swarm', pick: pick('swarm'), status: 'Running' }),
+          S(t, { level: 1, last: true, title: 'Review: Hands Windows fixes', g: gl('ready'), time: '12m', node: t.ready, selected: sel === 'reviewhands', pick: pick('reviewhands'), status: 'Ready to review' })
+        );
+      }
+      tree.push(
+        S(t, { title: warnT, g: gl('ready'), add: '+318', del: MINUS + '32', selected: sel === 'warn', pick: pick('warn'), status: 'Ready to review' }),
+        S(t, { title: 'Give the packaging dry-run a Windows-sized limit', g: gl('failed'), time: '2h', line2: 'Checks failed · 3', emph: true, selected: sel === 'pkg', pick: pick('pkg'), status: 'Failed' }),
+        S(t, { title: shortT, g: gl('none'), time: '3h', unread: sel !== 'shorten', emph: sel !== 'shorten', selected: sel === 'shorten', pick: pick('shorten'), status: sel !== 'shorten' ? 'Done, unread' : 'Done' }),
+        M(t, 'Show 7 more'),
+        P(t, { name: 'vector-codium', branch: 'codium', needs: '1', open: true }),
+        S(t, { title: 'Fix Codium P8 CI', g: gl('needs'), time: '2m', line2: 'Wants to run pnpm install --frozen-lockfile', emph: true, selected: sel === 'fixp8', pick: pick('fixp8'), status: 'Needs you' }),
+        P(t, { name: 'vector-hands', branch: 'hands', count: '5' }),
+        P(t, { name: 'vectordev.ai', count: '2' }),
+        H(t, { name: 'Cloud computer', d: I.cloud, mt: 12 }),
+        L(t, 'Morning queue', '1', 4),
+        S(t, { title: 'Upgrade the site\'s framework on vectordev.ai', g: gl('queued'), time: '6:00', selected: sel === 'astro', pick: pick('astro'), status: 'Queued for 6:00' }),
+        P(t, { name: 'vector', count: '1', open: true }),
+        S(t, { title: 'Reproduce Windows packaging limit', g: gl('run', false), time: '4m', selected: sel === 'repro', pick: pick('repro'), status: 'Running' })
+      );
+      return {
+        t: t,
+        caption: name === 'light' ? 'Expanded · Light' : 'Expanded · Dark',
+        navLabel: name === 'light' ? 'Vector sidebar, light theme' : 'Vector sidebar, dark theme',
+        capColor: st.t2, capColor3: st.t3,
+        verbs: verbs, live: live, liveCount: '4',
+        liveOpen: !liveCollapsed, liveShut: liveCollapsed,
+        liveEdge: view === 'session' ? 'linear-gradient(90deg,#7C4DFF 0%,#A883FF 52%,#D9C6FF 100%)' : t.accent,
+        liveEdgeOp: view === 'session' ? '0.55' : '0.4',
+        liveChevron: liveCollapsed ? I.chevRight : I.chevDown,
+        liveToggleLabel: liveCollapsed ? 'Expand Live' : 'Collapse Live',
+        liveExpanded: liveCollapsed ? 'false' : 'true',
+        toggleLive: () => this.setState({ liveCollapsed: !liveCollapsed }),
+        needsG: gl('needs'),
+        agent: seg(mode === 'agent'), editor: seg(mode === 'editor'),
+        setAgent: () => this.setState({ mode: 'agent' }),
+        setEditor: () => this.setState({ mode: 'editor' }),
+        acct: {
+          open: acctOpen, expanded: acctOpen ? 'true' : 'false', bg: acctOpen ? t.hover : 'transparent',
+          aria: 'Account: You, Codium Max',
+          toggle: () => this.setState({ foot: acctOpen ? null : name + ':acct' }),
+          close: () => this.setState({ foot: null }),
+          days: [false, false, true, true, true, true, true].map((on) => ({ bg: on ? t.accent : t.hairStrong }))
+        },
+        help: {
+          open: helpOpen, expanded: helpOpen ? 'true' : 'false', bg: helpOpen ? t.hover : 'transparent',
+          color: helpOpen ? t.text : t.iconQuiet,
+          toggle: () => this.setState({ foot: helpOpen ? null : name + ':help' }),
+          close: () => this.setState({ foot: null })
+        },
+        tree: tree
+      };
+    };
+
+    // states column follows the theme tweak
+    const st = T(themeName);
+    const sg = (k, an) => glyph(k, st, !!an);
+    const hostMenu = [
+      { name: 'This Mac', d: I.mac, run: '2', needs: '1', on: true },
+      { name: 'Cloud computer', d: I.cloud, run: '1', needs: '', on: false },
+      { name: 'Build server', d: I.server, run: '', needs: '', on: false, off: true }
+    ].map((h) => ({
+      t: st, name: h.name, d: h.d, checked: h.on ? 'true' : 'false', isChecked: !!h.on,
+      nameColor: h.on ? st.text : st.row,
+      dotBg: h.off ? 'transparent' : st.ready, dotRing: h.off ? st.t3 : 'transparent',
+      dotTitle: h.off ? 'Offline' : 'Runtime ready',
+      hasStatus: !!h.off, hasRun: !!h.run, run: h.run, runG: sg('run'),
+      hasNeeds: !!h.needs, needs: h.needs, needsG: sg('needs')
+    }));
+    const one = (caption, rows, extra) => Object.assign({
+      t: st, caption: caption, rows: rows, isTree: true, isRT: false, hasPopover: false, menu: [],
+      gNeeds: sg('needs'), gRun: sg('run'), leftLabel: '', rightLabel: ''
+    }, extra || {});
+
+    const col1 = [
+      one('Default', [S(st, { title: shortT, g: sg('none'), time: '3h', status: 'Done' })]),
+      one('Hover', [S(st, { title: shortT, g: sg('none'), time: '3h', bg: st.hover, emph: true, actions: true, status: 'Done' })]),
+      one('Selected', [S(st, { title: warnT, g: sg('ready'), add: '+318', del: MINUS + '32', selected: true, status: 'Ready to review' })]),
+      one('Running agent', [S(st, { title: recheckT, g: sg('run', true), time: '12m', status: 'Running' })]),
+      one('Needs approval', [S(st, { title: 'Fix Codium P8 CI', g: sg('needs'), time: '2m', emph: true, line2: 'Wants to run pnpm install --frozen-lockfile', status: 'Needs you' })]),
+      one('Unread', [S(st, { title: shortT, g: sg('none'), time: '3h', unread: true, emph: true, status: 'Done, unread' })]),
+      one('Host switcher open', [
+        H(st, { name: 'This Mac', d: I.mac, mt: 0, switcher: true, open: true }),
+        P(st, { name: 'vector', count: '4', open: true }),
+        S(st, { title: recheckT, g: sg('run'), time: '12m', status: 'Running' }),
+        S(st, { title: warnT, g: sg('ready'), add: '+318', del: MINUS + '32', status: 'Ready to review' })
+      ], { hasPopover: true, menu: hostMenu })
+    ];
+    const col2 = [
+      one('Error', [S(st, { title: 'Give the packaging dry-run a Windows-sized limit', g: sg('failed'), time: '2h', emph: true, line2: 'Checks failed · 3', status: 'Failed' })]),
+      one('Pinned', [L(st, 'Pinned', '', 0), S(st, { title: 'Release 1.99.114 checklist', g: sg('none'), time: '1d', status: 'Done' })]),
+      one('Nested child session', [
+        S(st, { title: recheckT, g: sg('run'), time: '12m', status: 'Running' }),
+        S(st, { level: 1, first: true, title: 'Swarm worker 2', g: sg('run'), add: '+142', del: MINUS + '18', node: st.run, status: 'Running' }),
+        S(st, { level: 1, last: true, title: 'Review: Hands Windows fixes', g: sg('ready'), time: '12m', node: st.ready, status: 'Ready to review' })
+      ]),
+      one('Collapsed parent', [S(st, { title: recheckT, g: sg('run'), time: '2', status: 'Running, 2 child sessions collapsed' })]),
+      one('Dragging', [
+        P(st, { name: 'vector', count: '4', mt: 0 }),
+        G(st, 28, 4),
+        P(st, { name: 'vector-hands', branch: 'hands', count: '5' }),
+        P(st, { name: 'vectordev.ai', count: '2' }),
+        D(st, 2),
+        P(st, { name: 'vector-codium', branch: 'codium', needs: '1', lifted: true, mt: 6 })
+      ]),
+      one('Keyboard focus', [S(st, { title: 'Upgrade the site\'s framework on vectordev.ai', g: sg('queued'), time: '6:00', shadow: st.focusRing, status: 'Queued for 6:00' })]),
+      one('Reduce Transparency', [], { isTree: false, isRT: true, leftLabel: glass === 0 ? 'Solid' : 'Translucent', rightLabel: 'Solid fallback' })
+    ];
+
+    // stack each column at fixed 1:1 heights
+    const rowH = (r) => (r.mt || 0) + (r.isLabel ? 24 : (r.isHost || r.isProject) ? 28 : r.isSession ? r.h : r.isMore ? 26 : r.isGap ? r.h : 0);
+    const place = (items, x) => {
+      let y = 76;
+      return items.map((it) => {
+        const cardH = it.isRT ? 96 : 16 + it.rows.reduce((sum, r) => sum + rowH(r), 0);
+        const placed = Object.assign(it, { x: x, y: y });
+        y += 24 + cardH + 16;
+        return placed;
+      });
+    };
+    const states = place(col1, 856).concat(place(col2, 1152));
+
+    // slim rail (dark)
+    const rt = T('dark');
+    const rg = (k) => glyph(k, rt, false);
+    const railTiles = [
+      { proj: 'vector-codium', g: rg('needs'), title: 'Fix Codium P8 CI', status: 'Needs you' },
+      { proj: 'vector', g: rg('run'), title: recheckT, status: 'Running' },
+      { proj: 'vector', g: rg('run'), title: 'Swarm worker 2', status: 'Running' },
+      { proj: 'vector', g: rg('run'), title: 'Reproduce Windows packaging limit', status: 'Running on Cloud computer' },
+      { proj: 'vector', g: rg('unread'), title: shortT, status: 'Unread' }
+    ].map((x) => ({ t: rt, g: x.g, title: x.title + ' · ' + x.proj, aria: x.title + ', ' + x.status }));
+
+    const legend = [
+      ['run', 'Running'], ['needs', 'Needs you'], ['ready', 'Ready to review'], ['failed', 'Failed'],
+      ['queued', 'Queued'], ['paused', 'Paused'], ['stopped', 'Stopped'], ['unread', 'Unread']
+    ].map((x) => ({ t: st, g: sg(x[0]), label: x[1] }));
+
+    return {
+      st: st,
+      rt: rt,
+      sidebars: [mkSidebar('dark', true), mkSidebar('light', false)],
+      states: states,
+      railTiles: railTiles,
+      legend: legend
+    };
+  }
+}
+</script></body></html>
