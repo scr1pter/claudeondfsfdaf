@@ -51,6 +51,11 @@ on:
         type: boolean
         required: false
         default: false
+      production_source_sha:
+        description: "Optional exact source commit for the production UI comparison"
+        type: string
+        required: false
+        default: ""
       offline_footprint:
         description: "Record offline Standard/Thorough request footprints against local fake providers"
         type: boolean
@@ -93,9 +98,14 @@ jobs:
           HANDS_BENCHMARK: ${{ inputs.hands_benchmark || false }}
           RELEASE_EVIDENCE: ${{ inputs.release_evidence || false }}
           PRODUCTION_BENCHMARK: ${{ inputs.production_benchmark || false }}
+          PRODUCTION_SOURCE_SHA: ${{ inputs.production_source_sha || '' }}
           OFFLINE_FOOTPRINT: ${{ inputs.offline_footprint || false }}
         run: |
           set -euo pipefail
+          if [[ -n "$PRODUCTION_SOURCE_SHA" ]] && { [[ "$PRODUCTION_BENCHMARK" != true ]] || [[ ! "$PRODUCTION_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]; }; then
+            echo "::error::An exact source SHA requires the production benchmark mode."
+            exit 1
+          fi
           case "$COMPUTER_HELPER_TARGET" in
             all|linux|windows|windows-units|macos-signing|macos-overlay|windows-overlay) ;;
             *) echo "::error::Unsupported computer-helper target."; exit 1 ;;
@@ -1217,7 +1227,8 @@ jobs:
       PLAYWRIGHT_WORKERS: "1"
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
       VECTOR_PERFORMANCE: "1"
-      VECTOR_PERFORMANCE_RUN_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      UI_SOURCE_SHA: ${{ inputs.production_source_sha || github.sha }}
+      VECTOR_PERFORMANCE_RUN_ID: ${{ inputs.production_source_sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     defaults:
       run:
         shell: bash
@@ -1226,6 +1237,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.production_source_sha || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -1267,7 +1279,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$VECTOR_PERFORMANCE_TRACE_DIR"
-          node -e 'require("node:fs").writeFileSync(process.env.VECTOR_PERFORMANCE_TRACE_DIR + "/source.json", JSON.stringify({commit: process.env.GITHUB_SHA, run: process.env.VECTOR_PERFORMANCE_RUN_ID, node: process.version, fixture: "mockStressTimeline", providerRequests: "none; navigation-only fixture"}, null, 2))'
+          node -e 'require("node:fs").writeFileSync(process.env.VECTOR_PERFORMANCE_TRACE_DIR + "/source.json", JSON.stringify({commit: process.env.UI_SOURCE_SHA, run: process.env.VECTOR_PERFORMANCE_RUN_ID, node: process.version, fixture: "mockStressTimeline", providerRequests: "none; navigation-only fixture"}, null, 2))'
           # The config builds the production app, then serves it with Vite preview.
           # The existing fixture mocks the engine and providers; no keys or live inference are used.
           bunx playwright test --config e2e/performance/playwright.config.ts timeline/first-navigation-benchmark.spec.ts --project chromium --workers 1 --repeat-each 3 2>&1 | tee "$VECTOR_PERFORMANCE_TRACE_DIR/benchmark.log"
@@ -1276,7 +1288,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: production-app-benchmark-${{ github.sha }}-${{ github.run_attempt }}
+          name: production-app-benchmark-${{ inputs.production_source_sha || github.sha }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
           path: |
