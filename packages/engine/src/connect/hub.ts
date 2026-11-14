@@ -1536,6 +1536,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const budget = ConnectNote.repairBudget(run, entry.call.repairBudget)
         const proof = entry.call.repairCurrent ?? Effect.succeed(false)
         const repair =
+          ConnectPolicy.REPAIR_AVAILABLE &&
           entry.call.repair === true &&
           budget !== undefined &&
           (yield* recorded(sessionID)).requestID === run.request.requestID &&

@@ -479,6 +479,9 @@ export function checkCommandRules(): Rule[] {
 /** The hidden agent a fix in an isolated worktree runs as. Only connect launches it; the task tool refuses a model. */
 export const FIX_AGENT = "connect_fix"
 
+// A13 remains an owner decision. A future SpendGuard method must never silently enable automatic repair.
+export const REPAIR_AVAILABLE = false
+
 /** The tools a fix child may use. Every other tool and permission is denied. */
 export const FIX_TOOLS: readonly string[] = [
   "read",

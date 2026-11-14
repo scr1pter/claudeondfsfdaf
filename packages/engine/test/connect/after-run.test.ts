@@ -4,6 +4,7 @@ import path from "node:path"
 import { $ } from "bun"
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Npm } from "@vectordevai/core/npm"
 import { SessionAudience } from "@vectordevai/core/session/audience"
@@ -164,9 +165,10 @@ const control: {
   acquisition?: { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> }
   decline: boolean
   releases: number
+  acquisitions: number
   gate?: Deferred.Deferred<void>
   calls: Connect.Request[]
-} = { mode: "report", consent: false, verdict: "clean", decline: false, releases: 0, calls: [] }
+} = { mode: "report", consent: false, verdict: "clean", decline: false, releases: 0, acquisitions: 0, calls: [] }
 beforeEach(() => {
   control.mode = "report"
   control.consent = false
@@ -178,6 +180,7 @@ beforeEach(() => {
   delete control.acquisition
   control.decline = false
   control.releases = 0
+  control.acquisitions = 0
 })
 afterEach(async () => {
   await disposeAllInstances()
@@ -294,6 +297,7 @@ const injectedLease = Layer.effect(
       ...original,
       tightenLease: (id: SessionID, budget: RunBudget.Info) =>
         Effect.gen(function* () {
+          control.acquisitions += 1
           const probe = control.acquisition
           if (probe) {
             yield* Deferred.succeed(probe.entered, undefined)
@@ -333,6 +337,39 @@ const observedNotify = Layer.effect(
 const bounded = testEffect(
   AppNodeBuilderV1.build(nodes, boundedReplacements.concat([[TaskNotify.node, observedNotify]])),
 )
+
+// A13 is held even if a future guard has the optional method. The existing injected-capability assertions below
+// remain as future qualification cases; while held they must prove quiet reporting without reaching that method.
+const heldRepair = Effect.fn("AfterRunTest.heldRepair")(function* (sessionID: SessionID) {
+  const sessions = yield* Session.Service
+  const llm = yield* TestLLMServer
+  yield* pollWithTimeout(
+    sessions
+      .messages({ sessionID })
+      .pipe(
+        Effect.map((messages) =>
+          messages.find((message) =>
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                part.metadata?.connectNotification !== undefined &&
+                part.metadata?.taskQuiet === true,
+            ),
+          ),
+        ),
+      ),
+    "Held repair must settle as a quiet report even with a callable lease capability.",
+  )
+  expect(yield* llm.inputs).toHaveLength(0)
+  expect(control.acquisitions).toBe(0)
+  expect(control.releases).toBe(0)
+  const messages = yield* sessions.messages({ sessionID })
+  expect(
+    messages
+      .flatMap((message) => message.parts)
+      .some((part) => part.type === "text" && part.text.includes(TaskNotify.CONNECT_REPAIR_ADMISSION)),
+  ).toBe(false)
+})
 
 const seed = Effect.fn("AfterRunTest.seed")(function* () {
   const sessions = yield* Session.Service
@@ -619,7 +656,7 @@ cliIt.live(
 )
 
 bounded.instance(
-  "injected capability: repair wakes only for blocking findings and retains the original request's durable round cap",
+  "held repair with a callable lease stays quiet; future wake qualification retains the original round cap",
   () =>
     Effect.gen(function* () {
       control.mode = "repair"
@@ -659,6 +696,13 @@ bounded.instance(
       yield* llm.text("I rechecked the blocking finding within the original request.")
       yield* status.set(seeded.session.id, { type: "busy" })
       yield* status.set(seeded.session.id, { type: "idle" })
+      if (!ConnectPolicy.REPAIR_AVAILABLE) {
+        yield* heldRepair(seeded.session.id)
+        const unchanged = yield* guard.snapshot(seeded.session.id)
+        expect(unchanged?.budget.usd).toBe(0.3)
+        expect(unchanged?.spentUsd).toBe(0.12)
+        return
+      }
       yield* pollWithTimeout(
         sessions
           .messages({ sessionID: seeded.session.id })
@@ -768,92 +812,99 @@ actual.instance(
 )
 
 for (const first of ["other", "connect"] as const)
-  bounded.instance(`injected capability: all repair bounds apply when ${first} leads a real Notify batch`, () =>
-    Effect.gen(function* () {
-      const seeded = yield* seed()
-      control.mode = "off"
-      const notify = yield* TaskNotify.Service
-      const prompts = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const hub = yield* ConnectHub.Service
-      const guard = yield* SpendGuard.Service
-      const llm = yield* TestLLMServer
-      yield* guard.begin(seeded.session.id, { usd: 0.3 })
-      yield* guard.record(seeded.session.id, {
-        costUsd: 0.12,
-        costKind: "priced",
-        contextTokens: 10,
-        cachedTokens: 0,
-        continues: false,
-        tools: [],
-        patched: true,
-      })
-      yield* guard.end(seeded.session.id)
-      const leads: string[] = []
-      const ops = (kind: string) => ({
-        cancel: prompts.cancel,
-        resolvePromptParts: prompts.resolvePromptParts,
-        prompt: (input: SessionPrompt.PromptInput) =>
-          Effect.sync(() => leads.push(kind)).pipe(Effect.andThen(prompts.prompt(input)), Effect.orDie),
-      })
-      const notes: Record<"other" | "connect", TaskNotify.Note> = {
-        other: {
-          kind: "message",
-          state: "completed",
-          text: "Another background task's quiet report.",
-          wake: false,
-          quiet: true,
-        },
-        connect: {
-          kind: "connect",
-          runID: "cr_bound_fixture",
-          state: "completed",
-          text: "A blocking connected review asks for the configured repair.",
-          wake: true,
-          connectRepair: {
-            requestID: seeded.requestID,
-            budget: { usd: 0.14 },
-            current: hub
-              .request(seeded.session.id)
-              .pipe(Effect.map((request) => request.requestID === seeded.requestID)),
+  bounded.instance(
+    `held repair stays quiet when ${first} leads a Notify batch; future bounds remain qualified separately`,
+    () =>
+      Effect.gen(function* () {
+        const seeded = yield* seed()
+        control.mode = "off"
+        const notify = yield* TaskNotify.Service
+        const prompts = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const hub = yield* ConnectHub.Service
+        const guard = yield* SpendGuard.Service
+        const llm = yield* TestLLMServer
+        yield* guard.begin(seeded.session.id, { usd: 0.3 })
+        yield* guard.record(seeded.session.id, {
+          costUsd: 0.12,
+          costKind: "priced",
+          contextTokens: 10,
+          cachedTokens: 0,
+          continues: false,
+          tools: [],
+          patched: true,
+        })
+        yield* guard.end(seeded.session.id)
+        const leads: string[] = []
+        const ops = (kind: string) => ({
+          cancel: prompts.cancel,
+          resolvePromptParts: prompts.resolvePromptParts,
+          prompt: (input: SessionPrompt.PromptInput) =>
+            Effect.sync(() => leads.push(kind)).pipe(Effect.andThen(prompts.prompt(input)), Effect.orDie),
+        })
+        const notes: Record<"other" | "connect", TaskNotify.Note> = {
+          other: {
+            kind: "message",
+            state: "completed",
+            text: "Another background task's quiet report.",
+            wake: false,
+            quiet: true,
           },
-        },
-      }
-      yield* llm.text("The combined reports were checked.")
-      for (const kind of [first, first === "other" ? "connect" : "other"] as const)
-        yield* notify.enqueue({ parentID: seeded.session.id, note: notes[kind], ops: ops(kind), agent: "build" })
-      yield* pollWithTimeout(
-        sessions
-          .messages({ sessionID: seeded.session.id })
-          .pipe(
-            Effect.map((messages) =>
-              messages.find(
-                (message) =>
-                  message.info.role === "assistant" &&
-                  message.parts.some(
-                    (part) => part.type === "text" && part.text.includes("The combined reports were checked."),
-                  ),
+          connect: {
+            kind: "connect",
+            runID: "cr_bound_fixture",
+            state: "completed",
+            text: "A blocking connected review asks for the configured repair.",
+            wake: true,
+            connectRepair: {
+              requestID: seeded.requestID,
+              budget: { usd: 0.14 },
+              current: hub
+                .request(seeded.session.id)
+                .pipe(Effect.map((request) => request.requestID === seeded.requestID)),
+            },
+          },
+        }
+        yield* llm.text("The combined reports were checked.")
+        for (const kind of [first, first === "other" ? "connect" : "other"] as const)
+          yield* notify.enqueue({ parentID: seeded.session.id, note: notes[kind], ops: ops(kind), agent: "build" })
+        if (!ConnectPolicy.REPAIR_AVAILABLE) {
+          yield* heldRepair(seeded.session.id)
+          expect((yield* guard.snapshot(seeded.session.id))?.budget.usd).toBe(0.3)
+          return
+        }
+        yield* pollWithTimeout(
+          sessions
+            .messages({ sessionID: seeded.session.id })
+            .pipe(
+              Effect.map((messages) =>
+                messages.find(
+                  (message) =>
+                    message.info.role === "assistant" &&
+                    message.parts.some(
+                      (part) => part.type === "text" && part.text.includes("The combined reports were checked."),
+                    ),
+                ),
               ),
             ),
+          "The actual batched prompt did not complete.",
+        )
+        expect(leads).toEqual([first])
+        const messages = yield* sessions.messages({ sessionID: seeded.session.id })
+        expect(
+          messages.some(
+            (message) =>
+              message.info.role === "user" &&
+              message.parts.length === 2 &&
+              message.parts.every((part) => part.type === "text" && part.synthetic),
           ),
-        "The actual batched prompt did not complete.",
-      )
-      expect(leads).toEqual([first])
-      const messages = yield* sessions.messages({ sessionID: seeded.session.id })
-      expect(
-        messages.some(
-          (message) =>
-            message.info.role === "user" &&
-            message.parts.length === 2 &&
-            message.parts.every((part) => part.type === "text" && part.synthetic),
-        ),
-      ).toBe(true)
-      expect((yield* guard.snapshot(seeded.session.id))?.budget.usd).toBeCloseTo(0.14)
-      expect(yield* llm.inputs).toHaveLength(1)
-    }),
+        ).toBe(true)
+        expect((yield* guard.snapshot(seeded.session.id))?.budget.usd).toBeCloseTo(0.14)
+        expect(yield* llm.inputs).toHaveLength(1)
+      }),
   )
 
-bounded.instance("injected capability: a new human before actual note admission revokes the old repair bound", () =>
+bounded.instance("held repair does not reach note admission; future human revocation qualification is retained", () =>
   Effect.gen(function* () {
     control.mode = "repair"
     control.verdict = "blocking"
@@ -868,6 +919,11 @@ bounded.instance("injected capability: a new human before actual note admission 
     yield* Effect.addFinalizer(() => Deferred.succeed(probe.release, undefined))
     yield* status.set(seeded.session.id, { type: "busy" })
     yield* status.set(seeded.session.id, { type: "idle" })
+    if (!ConnectPolicy.REPAIR_AVAILABLE) {
+      yield* heldRepair(seeded.session.id)
+      expect(yield* Deferred.isDone(probe.entered)).toBe(false)
+      return
+    }
     yield* pollWithTimeout(
       Deferred.isDone(probe.entered).pipe(Effect.map((done) => (done ? true : undefined))),
       "The actual runner did not reach the private admission check.",
@@ -910,7 +966,7 @@ bounded.instance("injected capability: a new human before actual note admission 
 )
 
 for (const revoke of ["guest", "report", "off"] as const)
-  bounded.instance(`injected capability: ${revoke} before admission revokes automatic repair`, () =>
+  bounded.instance(`held repair never acquires authority; future ${revoke} revocation qualification is retained`, () =>
     Effect.gen(function* () {
       control.mode = "repair"
       control.verdict = "blocking"
@@ -924,6 +980,11 @@ for (const revoke of ["guest", "report", "off"] as const)
       yield* Effect.addFinalizer(() => Deferred.succeed(probe.release, undefined))
       yield* status.set(seeded.session.id, { type: "busy" })
       yield* status.set(seeded.session.id, { type: "idle" })
+      if (!ConnectPolicy.REPAIR_AVAILABLE) {
+        yield* heldRepair(seeded.session.id)
+        expect(yield* Deferred.isDone(probe.entered)).toBe(false)
+        return
+      }
       yield* pollWithTimeout(
         Deferred.isDone(probe.entered).pipe(Effect.map((done) => (done ? true : undefined))),
         "The notification never reached the actual runner admission check.",
@@ -1059,7 +1120,7 @@ actual.instance(
     }),
 )
 
-bounded.instance("declining capability: a new owner budget survives rejection between proof and acquisition", () =>
+bounded.instance("held repair never invokes a declining lease; future owner-budget qualification is retained", () =>
   Effect.gen(function* () {
     control.mode = "repair"
     control.verdict = "blocking"
@@ -1075,6 +1136,20 @@ bounded.instance("declining capability: a new owner budget survives rejection be
     yield* Effect.addFinalizer(() => Deferred.succeed(probe.release, undefined))
     yield* status.set(seeded.session.id, { type: "busy" })
     yield* status.set(seeded.session.id, { type: "idle" })
+    if (!ConnectPolicy.REPAIR_AVAILABLE) {
+      yield* heldRepair(seeded.session.id)
+      expect(yield* Deferred.isDone(probe.entered)).toBe(false)
+      control.mode = "off"
+      yield* llm.text("I am handling the new owner's request.")
+      yield* prompts.prompt({
+        sessionID: seeded.session.id,
+        agent: "build",
+        budget: { usd: 5 },
+        parts: [{ type: "text", text: "A new owner request chooses its own budget." }],
+      })
+      expect((yield* guard.snapshot(seeded.session.id))?.budget.usd).toBe(5)
+      return
+    }
     yield* pollWithTimeout(
       Deferred.isDone(probe.entered).pipe(Effect.map((done) => (done ? true : undefined))),
       "The optional capability was not reached after the first authority proof.",
@@ -1169,67 +1244,70 @@ bounded.instance("an already active unrelated ledger is not narrowed by a repair
 )
 
 for (const removed of ["session", "part"] as const)
-  bounded.instance(
-    `injected capability: a ${removed} disappearing after acquisition refuses the grant and releases`,
-    () =>
-      Effect.gen(function* () {
-        const seeded = yield* seed()
-        control.mode = "off"
-        const notify = yield* TaskNotify.Service
-        const prompts = yield* SessionPrompt.Service
-        const sessions = yield* Session.Service
-        const hub = yield* ConnectHub.Service
-        const llm = yield* TestLLMServer
-        const proofs = { value: 0 }
-        const current = Effect.gen(function* () {
-          const valid = (yield* hub.request(seeded.session.id)).requestID === seeded.requestID
-          proofs.value += 1
-          if (proofs.value === 2) {
-            const messages = yield* sessions.messages({ sessionID: seeded.session.id }).pipe(Effect.orDie)
-            const report = messages
-              .flatMap((message) => message.parts)
-              .find((part) => part.type === "text" && part.metadata?.connectNotification !== undefined)
-            if (!report) throw new Error("The actual notification part was not written before admission")
-            if (removed === "session") yield* sessions.remove(seeded.session.id).pipe(Effect.orDie)
-            else
-              yield* sessions.removePart({
-                sessionID: seeded.session.id,
-                messageID: report.messageID,
-                partID: report.id,
-              })
-          }
-          return valid
-        })
-        yield* notify.enqueue({
-          parentID: seeded.session.id,
-          agent: "build",
-          note: {
-            kind: "connect",
-            runID: "cr_removed_fixture",
-            state: "completed",
-            text: "Review data only; no automatic edit is authorized by this report.",
-            wake: true,
-            connectRepair: { requestID: seeded.requestID, budget: { usd: 0.14 }, current },
-          },
-          ops: {
-            cancel: prompts.cancel,
-            resolvePromptParts: prompts.resolvePromptParts,
-            prompt: (input) => prompts.prompt(input).pipe(Effect.orDie),
-          },
-        })
-        yield* pollWithTimeout(
-          Effect.sync(() => (control.releases > 0 ? true : undefined)),
-          "The removed report did not release its acquired capability.",
-        )
-        expect(proofs.value).toBeGreaterThanOrEqual(2)
-        expect(yield* llm.inputs).toHaveLength(0)
-        if (removed === "part") {
-          const messages = yield* sessions.messages({ sessionID: seeded.session.id })
-          expect(
-            messages
-              .flatMap((message) => message.parts)
-              .some((part) => part.type === "text" && part.text.includes(TaskNotify.CONNECT_REPAIR_ADMISSION)),
-          ).toBe(false)
+  bounded.instance(`held repair does not run proofs; future ${removed} removal qualification is retained`, () =>
+    Effect.gen(function* () {
+      const seeded = yield* seed()
+      control.mode = "off"
+      const notify = yield* TaskNotify.Service
+      const prompts = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const hub = yield* ConnectHub.Service
+      const llm = yield* TestLLMServer
+      const proofs = { value: 0 }
+      const current = Effect.gen(function* () {
+        const valid = (yield* hub.request(seeded.session.id)).requestID === seeded.requestID
+        proofs.value += 1
+        if (proofs.value === 2) {
+          const messages = yield* sessions.messages({ sessionID: seeded.session.id }).pipe(Effect.orDie)
+          const report = messages
+            .flatMap((message) => message.parts)
+            .find((part) => part.type === "text" && part.metadata?.connectNotification !== undefined)
+          if (!report) throw new Error("The actual notification part was not written before admission")
+          if (removed === "session") yield* sessions.remove(seeded.session.id).pipe(Effect.orDie)
+          else
+            yield* sessions.removePart({
+              sessionID: seeded.session.id,
+              messageID: report.messageID,
+              partID: report.id,
+            })
         }
-      }),
+        return valid
+      })
+      yield* notify.enqueue({
+        parentID: seeded.session.id,
+        agent: "build",
+        note: {
+          kind: "connect",
+          runID: "cr_removed_fixture",
+          state: "completed",
+          text: "Review data only; no automatic edit is authorized by this report.",
+          wake: true,
+          connectRepair: { requestID: seeded.requestID, budget: { usd: 0.14 }, current },
+        },
+        ops: {
+          cancel: prompts.cancel,
+          resolvePromptParts: prompts.resolvePromptParts,
+          prompt: (input) => prompts.prompt(input).pipe(Effect.orDie),
+        },
+      })
+      if (!ConnectPolicy.REPAIR_AVAILABLE) {
+        yield* heldRepair(seeded.session.id)
+        expect(proofs.value).toBe(0)
+        return
+      }
+      yield* pollWithTimeout(
+        Effect.sync(() => (control.releases > 0 ? true : undefined)),
+        "The removed report did not release its acquired capability.",
+      )
+      expect(proofs.value).toBeGreaterThanOrEqual(2)
+      expect(yield* llm.inputs).toHaveLength(0)
+      if (removed === "part") {
+        const messages = yield* sessions.messages({ sessionID: seeded.session.id })
+        expect(
+          messages
+            .flatMap((message) => message.parts)
+            .some((part) => part.type === "text" && part.text.includes(TaskNotify.CONNECT_REPAIR_ADMISSION)),
+        ).toBe(false)
+      }
+    }),
   )

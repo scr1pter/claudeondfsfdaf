@@ -636,7 +636,7 @@ const layer = Layer.effect(
                   call: {
                     promptOps,
                     unattended: true,
-                    repair: next.mode === "repair",
+                    repair: ConnectPolicy.REPAIR_AVAILABLE && next.mode === "repair",
                     repairBudget,
                     expectedRequestID: next.requestID,
                     afterRunCurrent,
@@ -649,7 +649,11 @@ const layer = Layer.effect(
                 // A run that finished before detach returned has no background note; the automatic caller reports it.
                 if (run.status === "done") {
                   const budget = ConnectNote.repairBudget(run, repairBudget)
-                  const repair = next.mode === "repair" && budget !== undefined && (yield* repairCurrent)
+                  const repair =
+                    ConnectPolicy.REPAIR_AVAILABLE &&
+                    next.mode === "repair" &&
+                    budget !== undefined &&
+                    (yield* repairCurrent)
                   yield* notify.enqueue({
                     parentID: sessionID,
                     note: {

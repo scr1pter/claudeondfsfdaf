@@ -2,6 +2,7 @@ import { Cause, Clock, Context, Effect, Fiber, Layer, Option, Scope, Semaphore, 
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Database } from "@vectordevai/core/database/database"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { TaskSize } from "@vectordevai/core/task-size"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { BackgroundJob } from "@/background/job"
@@ -886,6 +887,7 @@ const layer = Layer.effect(
           const halted = (yield* guard.snapshot(parentID))?.stopped !== undefined
           if (pending.parentID !== parentID || pending.revoked || fenced.has(parentID) || halted) return false
           if (pending.bounds.length === 0) return true
+          if (!ConnectPolicy.REPAIR_AVAILABLE) return false
           if (!boundedGuard.tightenLease) return false
           const current = yield* restore(
             Effect.forEach(pending.bounds, (bound) => bound.current).pipe(
