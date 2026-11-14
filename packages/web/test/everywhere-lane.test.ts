@@ -50,9 +50,10 @@ const serverImports = await (async () => {
   const found = new Set<string>()
   for (const dir of ["api/_lib/everywhere", "api/everywhere"])
     for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: path.join(root, dir) })) {
-      const source = await read(path.posix.join(dir, file))
+      const portable = file.replaceAll("\\", "/")
+      const source = await read(path.posix.join(dir, portable))
       for (const match of source.matchAll(/from\s+"(\.\.?\/[^"]+)"/g)) {
-        const target = path.posix.normalize(path.posix.join(dir, path.posix.dirname(file), match[1]!))
+        const target = path.posix.normalize(path.posix.join(dir, path.posix.dirname(portable), match[1]!))
         if (!target.startsWith("api/_lib/everywhere/") && !target.startsWith("api/everywhere/"))
           found.add(target.replace(/\.js$/, ".ts"))
       }
@@ -295,6 +296,7 @@ describe("the lane's shape", () => {
       "api/_lib/cli-token.ts",
       "api/_lib/revocation.ts",
       "api/_lib/codium-switches.ts",
+      "api/_lib/codium-tombstone.ts",
       "packages/desktop/src/main/github-auth.ts",
       "packages/desktop/src/main/github-api.ts",
     ]
@@ -329,6 +331,7 @@ describe("the scope job", () => {
       const c = await commit(directory, { "api/_lib/everywhere/store.ts": "export {}\n" })
       const d = await commit(directory, { "api/_lib/http.ts": "export {}\n" })
       const e = await commit(directory, { "packages/web/test/teams-api.test.ts": "export {}\n" })
+      const f = await commit(directory, { "api/_lib/codium-tombstone.ts": "export {}\n" })
       const bun = path.dirname(process.execPath)
       const scope = async (EVENT: string, REF: string, BEFORE: string, AFTER: string) => {
         const result = await runStep(SCOPE, directory, {
@@ -353,6 +356,7 @@ describe("the scope job", () => {
       expect(await scope("push", "refs/heads/main", b, c)).toBe("run=true")
       expect(await scope("push", "refs/heads/main", c, d)).toBe("run=true")
       expect(await scope("push", "refs/heads/main", a, e)).toBe("run=true")
+      expect(await scope("push", "refs/heads/main", e, f)).toBe("run=true")
       // A change that cannot be listed (a new ref, or a history GitHub no longer has) runs the lane.
       expect(await scope("push", "refs/heads/main", "0".repeat(40), b)).toBe("run=true")
       expect(await scope("push", "refs/heads/main", "1234567890abcdef1234567890abcdef12345678", b)).toBe("run=true")

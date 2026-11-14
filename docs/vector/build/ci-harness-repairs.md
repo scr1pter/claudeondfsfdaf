@@ -46,6 +46,14 @@ Only the private smoke child now receives `GITHUB_ACTIONS=false`, matching the d
 
 This narrowed repair is based on `f830e3fdf` in isolated branch `smoke-child-env`. `bun run typecheck` from `packages/engine` exited 0 with no diagnostics. Full smoke build/execution remains GitHub-only and still requires a fresh successful receipt; the local typecheck is not that receipt.
 
+## Everywhere workflow dependency coverage
+
+At exact `f830e3fdf`, job [132557814749](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43631024020/job/132557814749) passed 54 of 55 Everywhere test files. The only failing file was `everywhere-lane.test.ts`: its actual-import coverage assertion detected that the workflow did not watch the newly imported `api/_lib/codium-tombstone.ts`. This is a real CI coverage gap, not a reason to remove or narrow the assertion.
+
+The helper is now in the workflow's pull-request paths, the same list consumed by the real main-push scope script. The strict expected helper list includes it too, and the existing Bash scope regression additionally checks that a tombstone-only change starts the lane. No trigger permission, dispatch, service, production code or test selection changed.
+
+The named Windows check `bun test --timeout 30000 ./test/everywhere-lane.test.ts --test-name-pattern "the lane's shape"`, run from `packages/web`, passed eight cases and 57 assertions. Five Unix Bash scope/picker cases were filtered out and are not local passes; hosted Linux must run them, including the new tombstone-only case. The first Windows attempt also exposed a fixture scanner issue: `Bun.Glob` yields native separators, while `path.posix.dirname` requires forward slashes. Normalizing only those relative paths corrected the fabricated import names without allowing any additional source or dropping any actual-import check.
+
 ## Validation
 
 Windows; Bun 1.3.14. Frozen installation with scripts disabled completed in 35.23 seconds; the lockfile did not change. The coordinated local Bun slot was released after these checks:

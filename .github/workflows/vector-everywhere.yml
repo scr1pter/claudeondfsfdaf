@@ -51,6 +51,7 @@ on:
       - api/_lib/revocation.ts
       - api/_lib/codium-switches.ts
       - api/_lib/codium-keys.ts
+      - api/_lib/codium-tombstone.ts
       - integrations/linear/**
       - packages/desktop/src/main/github-auth.ts
       - packages/desktop/src/main/github-api.ts
