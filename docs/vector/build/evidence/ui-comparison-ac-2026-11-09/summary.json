@@ -1,0 +1,354 @@
+{
+  "kind": "production-ui-ac-common-harness-comparison-v1",
+  "observedAtUtc": "2026-11-10T03:27:53.387513+00:00",
+  "sourceRevisions": {
+    "baseline": "4299d7432aaac8b1937c5986729360e6b9f176f5",
+    "candidate": "82a7d26ce2bea3751f59076e6a26469eea632b00"
+  },
+  "productionSourceTrees": {
+    "baseline": {
+      "app": "0897232d33d705bc6ceeb006f6725d3a6d831a01",
+      "core": "2a569dafe80b77c6a7e65616273f9ceb13cc61ef",
+      "ui": "f642ee11576ae03c0f1b976f6b38b11b0f887e18",
+      "session-ui": "f80186465905b8be3d852febe19de954ee00f0c7"
+    },
+    "candidate": {
+      "app": "d0fc5cadc3ffe9d4f74d02648d8b61709d4c02d5",
+      "core": "cc64668766516a2bf3ea2a6e4b1639fb536147db",
+      "ui": "f642ee11576ae03c0f1b976f6b38b11b0f887e18",
+      "session-ui": "5fc3dfe5daa6f14d3a887e97f3db738ace9df501"
+    }
+  },
+  "commonHarnessRevision": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+  "commonConfigSha256": "07080c3487f27b5bf23a2a7150d516f9d20658f0e3d5d2a226faee689dbf3edb",
+  "controllers": {
+    "forwardAsExecutedSha256": "1afb715c1a1bd2eb7011152f2bf1dc1ca5b7f2707df2e66d9c39a50b9bc2560a",
+    "reversedAsExecutedSha256": "454e2f05950440cc699063a4ea62162df9d28ab99e63c970a7820438dc7a2b5b",
+    "forwardQualification": "After the first run, the published runner added missing/duplicate/retry guards, bounded owned-process cleanup and selectable order. First-run raw records were independently revalidated; no timing instrumentation or application source changed.",
+    "publishedRunnerSha256": "e6991bc466f5c2a291d4b9d69dadabee354c8a6a28e377e691b16118758d2227",
+    "publishedRunnerQualification": "After measured runs, resolve harness from the toolkit checkout rather than the candidate build root. In the recorded runs those were the same checkout; timing instrumentation and production sources are unchanged."
+  },
+  "environment": {
+    "platform": "Windows x64",
+    "cpu": "Intel Core i9-13950HX; 32 logical processors",
+    "ramGiB": 127.66,
+    "powerScheme": "Balanced",
+    "powerSamplingSeconds": 10,
+    "allPowerSamplesAC": true,
+    "powerSampleCount": 46,
+    "firstPowerSample": "2026-11-10T03:15:28.940941+00:00",
+    "lastPowerSample": "2026-11-10T03:24:33.456011+00:00",
+    "node": "24.22.0",
+    "bun": "1.3.14",
+    "playwright": "1.59.1",
+    "chromiumHeadlessShellRevision": 1217,
+    "vite": "7.1.4",
+    "solid": "1.9.10",
+    "channel": "dev",
+    "samePort": 4487,
+    "workerCount": 1,
+    "retries": 0,
+    "chromeProfiling": "off",
+    "workspaceAliases": "Each arm core/ui/session-ui resolved to its own checkout; no cross-checkout junction sharing.",
+    "appDotEnvFiles": "Absent in both arms",
+    "childEnvironment": "Removed inherited VITE_, SENTRY_, PLAYWRIGHT_, VECTOR_PERFORMANCE* and CI settings before applying matched explicit controls."
+  },
+  "completion": {
+    "totalPassed": 60,
+    "totalFailed": 0,
+    "scenarios": 3,
+    "repeatsPerScenarioPerRevision": 10,
+    "batches": 2,
+    "observedBlankSamples": 0,
+    "observedUnknownSamples": 0,
+    "originalScenarioAssertionsUnchanged": true,
+    "allScenarioRepeatIdentitiesVerified": true
+  },
+  "batches": [
+    {
+      "id": "forward",
+      "order": ["baseline", "candidate"],
+      "arms": [
+        {
+          "arm": "baseline",
+          "revision": "4299d7432aaac8b1937c5986729360e6b9f176f5",
+          "passed": 15,
+          "exitCode": 0,
+          "scenarioRepeatIdentitiesRevalidated": true,
+          "powerSamples": 16,
+          "allPowerSamplesAC": true,
+          "medians": {
+            "performance: first navigation paint > opens an unvisited task without a blank frame": {
+              "firstDestinationObservedMs": 82.39999985694885,
+              "stableDestinationObservedMs": 203.69999980926514
+            },
+            "performance: first navigation paint > opens the new session page before its lazy module is used": {
+              "firstDestinationObservedMs": 100.29999995231628,
+              "stableDestinationObservedMs": 178.90000009536743
+            },
+            "performance: first navigation paint > opens a child session without a blank frame": {
+              "firstDestinationObservedMs": 72.5,
+              "stableDestinationObservedMs": 134.5
+            }
+          },
+          "qualification": "Post-hoc unique-repeat validation; original runner predates validation and interruption guards."
+        },
+        {
+          "arm": "candidate",
+          "revision": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+          "passed": 15,
+          "exitCode": 0,
+          "scenarioRepeatIdentitiesRevalidated": true,
+          "powerSamples": 12,
+          "allPowerSamplesAC": true,
+          "medians": {
+            "performance: first navigation paint > opens an unvisited task without a blank frame": {
+              "firstDestinationObservedMs": 98.5,
+              "stableDestinationObservedMs": 229.20000004768372
+            },
+            "performance: first navigation paint > opens the new session page before its lazy module is used": {
+              "firstDestinationObservedMs": 111.29999995231628,
+              "stableDestinationObservedMs": 178.30000019073486
+            },
+            "performance: first navigation paint > opens a child session without a blank frame": {
+              "firstDestinationObservedMs": 79.10000014305115,
+              "stableDestinationObservedMs": 128.90000009536743
+            }
+          },
+          "qualification": "Post-hoc unique-repeat validation; original runner predates validation and interruption guards."
+        }
+      ]
+    },
+    {
+      "id": "reversed",
+      "order": ["candidate", "baseline"],
+      "arms": [
+        {
+          "arm": "baseline",
+          "revision": "4299d7432aaac8b1937c5986729360e6b9f176f5",
+          "passed": 15,
+          "exitCode": 0,
+          "scenarioRepeatIdentitiesRevalidated": true,
+          "powerSamples": 9,
+          "allPowerSamplesAC": true,
+          "medians": {
+            "performance: first navigation paint > opens an unvisited task without a blank frame": {
+              "firstDestinationObservedMs": 86.40000009536743,
+              "stableDestinationObservedMs": 212.10000014305115
+            },
+            "performance: first navigation paint > opens the new session page before its lazy module is used": {
+              "firstDestinationObservedMs": 103.10000014305115,
+              "stableDestinationObservedMs": 133.90000009536743
+            },
+            "performance: first navigation paint > opens a child session without a blank frame": {
+              "firstDestinationObservedMs": 72.5,
+              "stableDestinationObservedMs": 127
+            }
+          },
+          "qualification": "Hardened runner validated unique scenario-repeat identities during completion."
+        },
+        {
+          "arm": "candidate",
+          "revision": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+          "passed": 15,
+          "exitCode": 0,
+          "scenarioRepeatIdentitiesRevalidated": true,
+          "powerSamples": 9,
+          "allPowerSamplesAC": true,
+          "medians": {
+            "performance: first navigation paint > opens an unvisited task without a blank frame": {
+              "firstDestinationObservedMs": 94.40000009536743,
+              "stableDestinationObservedMs": 226
+            },
+            "performance: first navigation paint > opens the new session page before its lazy module is used": {
+              "firstDestinationObservedMs": 92.20000004768372,
+              "stableDestinationObservedMs": 138.59999990463257
+            },
+            "performance: first navigation paint > opens a child session without a blank frame": {
+              "firstDestinationObservedMs": 73.5,
+              "stableDestinationObservedMs": 123.59999990463257
+            }
+          },
+          "qualification": "Hardened runner validated unique scenario-repeat identities during completion."
+        }
+      ]
+    }
+  ],
+  "results": [
+    {
+      "scenario": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "repeatsPerRevision": 10,
+      "baseline": {
+        "firstDestinationObservedMs": {
+          "median": 85.25000011920929,
+          "min": 65.29999995231628,
+          "max": 100.69999980926514,
+          "values": [
+            65.29999995231628, 82.39999985694885, 87.5, 82.20000004768372, 88.70000004768372, 76.20000004768372,
+            100.69999980926514, 84.10000014305115, 92.29999995231628, 86.40000009536743
+          ]
+        },
+        "stableDestinationObservedMs": {
+          "median": 208.40000009536743,
+          "min": 77.79999995231628,
+          "max": 256.2999999523163,
+          "values": [
+            77.79999995231628, 203.69999980926514, 208.70000004768372, 100.5, 218.60000014305115, 94.89999985694885,
+            256.2999999523163, 212.10000014305115, 225.79999995231628, 208.10000014305115
+          ]
+        }
+      },
+      "candidate": {
+        "firstDestinationObservedMs": {
+          "median": 96.45000004768372,
+          "min": 84.90000009536743,
+          "max": 115.79999995231628,
+          "values": [
+            115.79999995231628, 99.40000009536743, 93.40000009536743, 90.39999985694885, 98.5, 85.39999985694885,
+            94.40000009536743, 103.5, 84.90000009536743, 100.09999990463257
+          ]
+        },
+        "stableDestinationObservedMs": {
+          "median": 227.60000002384186,
+          "min": 94.09999990463257,
+          "max": 253.29999995231628,
+          "values": [
+            129.39999985694885, 240.59999990463257, 229.20000004768372, 217.69999980926514, 237.90000009536743,
+            94.09999990463257, 226, 239, 213.90000009536743, 253.29999995231628
+          ]
+        }
+      },
+      "candidateMinusBaselineMedianMs": {
+        "firstDestinationObservedMs": 11.199999928474426,
+        "stableDestinationObservedMs": 19.199999928474426
+      }
+    },
+    {
+      "scenario": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "repeatsPerRevision": 10,
+      "baseline": {
+        "firstDestinationObservedMs": {
+          "median": 101.5,
+          "min": 92.40000009536743,
+          "max": 135.30000019073486,
+          "values": [
+            116.60000014305115, 102.70000004768372, 99.59999990463257, 92.40000009536743, 100.29999995231628,
+            103.10000014305115, 114.29999995231628, 135.30000019073486, 97.5, 99.90000009536743
+          ]
+        },
+        "stableDestinationObservedMs": {
+          "median": 164.20000004768372,
+          "min": 119.20000004768372,
+          "max": 184.29999995231628,
+          "values": [
+            184, 178.90000009536743, 164.79999995231628, 119.20000004768372, 178.90000009536743, 133.90000009536743,
+            184.29999995231628, 163.60000014305115, 132.29999995231628, 121
+          ]
+        }
+      },
+      "candidate": {
+        "firstDestinationObservedMs": {
+          "median": 101.39999997615814,
+          "min": 87.40000009536743,
+          "max": 127,
+          "values": [
+            115.19999980926514, 96, 127, 111.29999995231628, 110.60000014305115, 94.5, 87.40000009536743,
+            92.20000004768372, 91.39999985694885, 106.79999995231628
+          ]
+        },
+        "stableDestinationObservedMs": {
+          "median": 154.75,
+          "min": 117.20000004768372,
+          "max": 189,
+          "values": [
+            184, 158.90000009536743, 189, 169.70000004768372, 178.30000019073486, 146.20000004768372,
+            117.20000004768372, 119.40000009536743, 150.59999990463257, 138.59999990463257
+          ]
+        }
+      },
+      "candidateMinusBaselineMedianMs": {
+        "firstDestinationObservedMs": -0.10000002384185791,
+        "stableDestinationObservedMs": -9.450000047683716
+      }
+    },
+    {
+      "scenario": "performance: first navigation paint > opens a child session without a blank frame",
+      "repeatsPerRevision": 10,
+      "baseline": {
+        "firstDestinationObservedMs": {
+          "median": 72.5,
+          "min": 69.70000004768372,
+          "max": 78.79999995231628,
+          "values": [
+            70.5, 78.79999995231628, 76.89999985694885, 72.5, 69.70000004768372, 71.89999985694885, 72.20000004768372,
+            77.29999995231628, 72.5, 72.5
+          ]
+        },
+        "stableDestinationObservedMs": {
+          "median": 133.34999990463257,
+          "min": 121.59999990463257,
+          "max": 159.20000004768372,
+          "values": [
+            132.19999980926514, 149.89999985694885, 134.5, 159.20000004768372, 123.5, 123.39999985694885, 127, 143,
+            121.59999990463257, 139.90000009536743
+          ]
+        }
+      },
+      "candidate": {
+        "firstDestinationObservedMs": {
+          "median": 77.700000166893,
+          "min": 64.70000004768372,
+          "max": 92.59999990463257,
+          "values": [
+            92.59999990463257, 79.10000014305115, 76.30000019073486, 80.79999995231628, 76.20000004768372, 73.5,
+            64.70000004768372, 72, 83.20000004768372, 83.70000004768372
+          ]
+        },
+        "stableDestinationObservedMs": {
+          "median": 128.39999997615814,
+          "min": 110.80000019073486,
+          "max": 151.09999990463257,
+          "values": [
+            145.79999995231628, 123.10000014305115, 128.90000009536743, 127.89999985694885, 133.70000004768372,
+            122.80000019073486, 110.80000019073486, 123.59999990463257, 134.70000004768372, 151.09999990463257
+          ]
+        }
+      },
+      "candidateMinusBaselineMedianMs": {
+        "firstDestinationObservedMs": 5.200000166893005,
+        "stableDestinationObservedMs": -4.949999928474426
+      }
+    }
+  ],
+  "measurementDefinition": {
+    "firstDestinationObservedMs": "First sampled destination with source absent, after the scenario navigation trigger. DOM visibility observation, not browser FCP.",
+    "stableDestinationObservedMs": "Timestamp of the third consecutive destination-only sample.",
+    "scope": "Selected first-navigation scenarios only; not full timeline benchmarking, model throughput, provider cost, tool quality or native desktop acceptance."
+  },
+  "interpretation": "Mixed local result. Existing-conversation navigation was modestly slower in both orders; new-chat and child-navigation results do not support a general speedup claim. Retain existing-conversation path as a profiling follow-up.",
+  "limits": [
+    "Two nonrandomized batches in A-B-B-A order on one shared Windows host; observations are descriptive.",
+    "Ten repeats per scenario per revision are not independent hardware/platform replications.",
+    "AC status was sampled every 10 seconds, not continuously; thermal, cache and background-host effects remain possible.",
+    "Compared whole production revisions, so this study does not attribute timing changes to one particular source edit.",
+    "No machine-dependent timing threshold was used as a pass/fail gate."
+  ],
+  "safeguardProbes": {
+    "uniqueRepeatValidation": "For both forward arms: accepted complete raw records and rejected same-length duplicate/missing identities, missing records and retry records.",
+    "ownedProcessCleanup": "Real synthetic sleeping parent and child were both terminated and verified using a process handle. No user app was targeted."
+  },
+  "realProviderCalls": 0,
+  "otherAgentsBranchesModified": false,
+  "commonHarnessGitBlobs": {
+    "firstNavigationSpec": "633c74be4943f10fff79a34fbfc3da167604fda1",
+    "navigationProbe": "0cc50d6f51e61e68d623842cbe8faaace7076b4e",
+    "navigationMetrics": "db38678046918dde3a78c1dd89674c93e137b50e",
+    "stressFixture": "6f0b85ef865e97ebc8db2a55e29adcb85a418686",
+    "timelineHelpers": "07b96d73230b6625f3fad3e4fffea5b5a2024157",
+    "performanceConfig": "24aede6768dc368cb2cccd2f519ee8eebc4e1e11",
+    "parentPlaywrightConfig": "2830f228eb48e2858ec7d78b0bd323cccbf3c4f7",
+    "bunLock": "c8c74181e0fb630724c98fa9e0fec4204faf71eb",
+    "candidateMockServer": "ff099bfedd44b03daf6939c137a77021bb514dee",
+    "baselineMockServerNotUsedBySharedHarness": "62645f5743a3daf7b4ff33ffac0ddb383e5f5c31"
+  }
+}
