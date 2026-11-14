@@ -216,7 +216,7 @@ describe("@vector CI lane", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["pull_request", "push", "workflow_dispatch"])
     // A path filter or an ignore list here would leave a package's commit with no CI at all.
     expect(workflow.on.push).toEqual({
-      branches: ["vector-at-mention", "build-integrate", "build-github-ui"],
+      branches: ["main", "vector-at-mention", "build-integrate", "build-github-ui"],
     })
     // No other workflow runs the web GitHub tests, so every hosted API module they load (http, abuse, persistent-store
     // as well as github-*), the lockfile that pins jose and the Bun version in package.json start the lane on a pull
