@@ -68,9 +68,7 @@ Read this first. It is enough to pick up all the in-flight work from a fresh `gi
 - The docs: `v2-integration.md` (merge log, plus the list of deleted branches with their SHAs), `v2-spawn-review.md`, `v2-finish-plan.md`, and this file.
 - The design folder.
 
-**Pending first step:** fast-forward `main` to `v2`.
-- Check first that `v2`'s `test` run is green. Run 43567384542 failed only on a Linux Bun segfault and was re-run.
-- Then retarget open PRs to `main` and delete `v2`.
+**Done 2026-11-14:** `main` was fast-forwarded to `v2` at `983fe7025` (#26, #27, Codium and the docs; `v2` test run 43567384542 green on its re-run). Open PRs were retargeted to `main` (#21, #29, #30, #31). `v2` now equals `main`. Delete it once no running lane still references it, and target `main` for everything.
 
 **Lanes that were in progress.** Each may have pushed commits and a draft PR into `v2`. Check `gh pr list`, re-fetch, and continue from the branch head.
 
