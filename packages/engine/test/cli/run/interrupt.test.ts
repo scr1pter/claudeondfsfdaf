@@ -231,6 +231,44 @@ describe("helpers", () => {
 })
 
 describe("watchInterrupts", () => {
+  test("an attached stop-all waits for connected review cancellation before exiting", async () => {
+    const live = engine()
+    const signals = new EventEmitter()
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const exited = Promise.withResolvers<number>()
+    const exits: number[] = []
+    const watch = watchInterrupts({
+      client: live.client,
+      sessionID: "parent",
+      stopHelpers: false,
+      inProcess: false,
+      now: () => 10_000,
+      signals,
+      stopReviews: async () => {
+        entered.resolve()
+        await release.promise
+      },
+      write: () => {},
+      exit: (code) => {
+        exits.push(code)
+        exited.resolve(code)
+      },
+    })
+    try {
+      signals.emit("SIGINT")
+      signals.emit("SIGINT")
+      await entered.promise
+      expect(exits).toEqual([])
+      release.resolve()
+      expect(await exited.promise).toBe(INTERRUPT_EXIT_CODE)
+      expect(exits).toEqual([INTERRUPT_EXIT_CODE])
+    } finally {
+      release.resolve()
+      watch.dispose()
+    }
+  })
+
   async function settle() {
     for (let index = 0; index < 20; index++) await new Promise((resolve) => setTimeout(resolve, 1))
   }

@@ -11,6 +11,7 @@ import {
   waitingFor,
 } from "./run/background-wait"
 import { runSessionAncestry } from "./run/ancestry"
+import { stopConnectedReviews } from "./run/connect-stop"
 import { runWorkflow } from "./run/workflow"
 import { INTERRUPT_EXIT_CODE, handlesInterrupt, watchInterrupts } from "./run/interrupt"
 import { assertWorkflowOwner, parseWorkflowInputs, readWorkflowSource, requireWorkflowCapability } from "./workflow"
@@ -1043,6 +1044,14 @@ export const RunCommand = effectCmd({
         // to stdout/UI. `client` is passed explicitly because attach mode may
         // rebind the SDK to the session's directory after the subscription is
         // created, and replies issued from inside the loop must use that client.
+        const background = backgroundTracker()
+        const stopReviews = async (client: VectorClient) => {
+          const unconfirmed = await stopConnectedReviews(client, sessionID, background.running)
+          if (unconfirmed.length)
+            UI.error(
+              `Could not confirm cancellation of ${unconfirmed.length} background review(s). Check the server's connected runs.`,
+            )
+        }
         async function loop(client: VectorClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
           // A step-finish part is written again once its snapshot lands; its usage was already in the first write.
@@ -1051,8 +1060,14 @@ export const RunCommand = effectCmd({
           // Subagents run in child sessions, and a request left unanswered there blocks the whole run, so the run
           // answers requests from any session that descends from its own.
           const tree = new Set([sessionID])
-          const inRun = runSessionAncestry(tree, async (id) =>
-            (await client.session.get({ sessionID: id }, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined))?.data,
+          const inRun = runSessionAncestry(
+            tree,
+            async (id) =>
+              (
+                await client.session
+                  .get({ sessionID: id }, { signal: AbortSignal.timeout(5_000) })
+                  .catch(() => undefined)
+              )?.data,
           )
           let error: string | undefined
           // A background subagent reports back in a follow-up turn after this session goes idle, and exiting would stop
@@ -1060,7 +1075,6 @@ export const RunCommand = effectCmd({
           // turn. A note is answered once an assistant message created after it finishes: one that lands while a turn
           // is ending is read by the next turn, which starts after the session has briefly gone idle. A background
           // command (5.H) is waited for the same way, from the shell call that started it to its exit note.
-          const background = backgroundTracker()
           let idle = false
           let activeAt = Date.now()
           const waited = background.settled
@@ -1092,7 +1106,7 @@ export const RunCommand = effectCmd({
                 await client.session
                   .abort({ sessionID }, { signal: AbortSignal.timeout(5_000), throwOnError: true })
                   .catch(() => undefined)
-              // A background review is no task: one refused ID would stop none, and the run's exit ends the review.
+              // Reviews use connect.cancel when the attached run leaves; they are never task IDs.
               const stopping = [...background.running].filter((id) => !isConnectID(id))
               if (stopping.length)
                 await client.experimental.task
@@ -1413,6 +1427,7 @@ export const RunCommand = effectCmd({
                 sessionID,
                 stopHelpers: args["stop-helpers"] === true,
                 inProcess: !args.attach,
+                ...(args.attach ? { stopReviews: () => stopReviews(client) } : {}),
                 write: (text) => process.stderr.write(text + EOL),
                 exit: leave,
               })
@@ -1422,7 +1437,8 @@ export const RunCommand = effectCmd({
               console.error(e)
               process.exitCode = 1
             })
-            .finally(() => {
+            .finally(async () => {
+              if (args.attach) await stopReviews(client)
               streamAbort.abort()
               interrupts?.dispose()
             })
