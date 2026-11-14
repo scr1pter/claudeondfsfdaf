@@ -68,6 +68,9 @@ lineage, spend or cancellation assertion was relaxed to hide the failure.
 
 ## Branch cleanup
 
+The raw `evidence/v2-repository-audit-2026-11-14.json` and failed-job snapshot preserve the earlier 79-branch observation.
+They are historical data collected before the owner's cleanup, not today's branch count or final-head qualification.
+
 Delete a remote feature branch only after its work is included and its last SHA is recorded. A patch-equivalent or
 superseded branch needs an explicit equivalence record. Keep unmerged legal/runtime proposals and active agent branches
 until their disposition is recorded; branch deletion must not stand in for finishing their work.
