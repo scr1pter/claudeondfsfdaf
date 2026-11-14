@@ -104,6 +104,7 @@ const live = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectHub.node,
+      Config.node,
       SessionPrompt.node,
       Session.node,
       SpendGuard.node,
