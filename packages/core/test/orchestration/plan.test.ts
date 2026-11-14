@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { Connect } from "@vectordevai/schema/connect"
 import { WorkflowPlan } from "../../src/orchestration/plan"
 import { examples } from "./examples"
 
@@ -11,6 +12,93 @@ const agents: WorkflowPlan.Agent[] = [
 const base = { version: 1, title: "Review", stages: [{ id: "a", prompt: "Review" }] }
 const build = (spec: unknown, options: Partial<WorkflowPlan.Options> = {}) =>
   WorkflowPlan.build(spec, { agents, cpus: 8, ...options })
+
+const connections: NonNullable<WorkflowPlan.Options["connections"]> = [
+  {
+    id: "vectorscope",
+    actions: [
+      { id: "review", title: "Review", effects: ["read"], background: true, result: "review" },
+      { id: "fix", title: "Fix", effects: ["read", "write"], background: false, result: "fix" },
+    ],
+  },
+]
+
+test("connected stages require a real nonempty read manifest and plan no agent or selected model", () => {
+  const spec = {
+    ...base,
+    defaults: { agent: "general", model: "provider/model" },
+    stages: [{ id: "review", connect: { to: "vectorscope", action: "review" } }],
+  }
+  expect(build(spec).ok).toBe(false)
+  const planned = build(spec, { connections })
+  expect(planned.ok).toBe(true)
+  expect(planned.plan?.stages[0]).toMatchObject({
+    kind: "connect",
+    connect: { to: "vectorscope", action: "review" },
+    serial: false,
+    items: 1,
+  })
+  expect(Object.hasOwn(planned.plan!.stages[0], "agent")).toBe(false)
+  expect(Object.hasOwn(planned.plan!.stages[0], "model")).toBe(false)
+  expect(planned.warnings.some((issue) => issue.message.includes("ancestor budget"))).toBe(true)
+  expect(
+    build({ ...spec, stages: [{ id: "fix", connect: { to: "vectorscope", action: "fix" } }] }, { connections }).ok,
+  ).toBe(false)
+  const rejectedEffects: readonly (readonly Connect.Effect[])[] = [[], ["write"], ["read", "write"]]
+  for (const effects of rejectedEffects)
+    expect(
+      build(spec, {
+        connections: [
+          {
+            id: "vectorscope",
+            actions: [{ id: "review", title: "Review", effects, background: true, result: "review" }],
+          },
+        ],
+      }).ok,
+    ).toBe(false)
+})
+
+test("connected nested stages preserve group identity, dependency barriers and fingerprint inputs", () => {
+  const child = {
+    ...base,
+    stages: [
+      { id: "implement", prompt: "Implement" },
+      {
+        id: "review",
+        connect: { to: "vectorscope", action: "review", input: { target: { kind: "branch", base: "main" } } },
+        after: ["implement"],
+        if: { path: "stages.implement.done", gt: 0 },
+      },
+    ],
+  }
+  const result = build(
+    {
+      ...base,
+      stages: [
+        { id: "nested", workflow: "child" },
+        { id: "summarize", prompt: "{{stages.nested.review.outputs}}" },
+      ],
+    },
+    { connections, saved: { child } },
+  )
+  expect(result.ok).toBe(true)
+  expect(result.stages?.[1]).toMatchObject({
+    group: "nested",
+    stage: { id: "nested.review", if: { path: "stages.nested.implement.done", gt: 0 } },
+    barriers: ["nested.implement"],
+  })
+  expect(result.stages?.[2].dependencies).toEqual(["nested.review"])
+  const review = result.stages?.[1]
+  expect(review && WorkflowPlan.isAgent(review)).toBe(false)
+  expect(WorkflowPlan.key(child)).not.toBe(
+    WorkflowPlan.key({
+      ...child,
+      stages: [
+        { id: "review", connect: { to: "vectorscope", action: "review", input: { target: { kind: "staged" } } } },
+      ],
+    }),
+  )
+})
 
 test("real guide plans list source sizes, asks and serial or isolated writers", () => {
   for (const example of examples)

@@ -43,6 +43,7 @@ export class Service extends ConfigService.Service<Service>()("@vector/RuntimeFl
   experimentalEventSystem: enabledByExperimental("VECTOR_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("VECTOR_EXPERIMENTAL_WORKSPACES"),
   experimentalIconDiscovery: enabledByExperimental("VECTOR_EXPERIMENTAL_ICON_DISCOVERY"),
+  experimentalConnect: enabledByExperimental("VECTOR_EXPERIMENTAL_CONNECT"),
   outputTokenMax: positiveInteger("VECTOR_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   bashDefaultTimeoutMs: positiveInteger("VECTOR_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   runBackgroundWaitMs: positiveInteger("VECTOR_RUN_BACKGROUND_WAIT_MS"),

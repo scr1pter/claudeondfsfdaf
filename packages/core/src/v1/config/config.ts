@@ -18,6 +18,7 @@ import { ConfigPermissionV1 } from "./permission"
 import { ConfigPluginV1 } from "./plugin"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigResearchV1 } from "./research"
+import { ConfigConnectV1 } from "./connect"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
 
@@ -297,8 +298,15 @@ export const Info = Schema.Struct({
     description:
       "Deep research (preview): when the build agent may research as a tool, what one run may spend and read, the sites it prefers or avoids, and robots.txt. Research searches the web in each research agent's own browser in the desktop app; there is no search service to set up. depth and retain_days do not apply yet. Read from your user config; a repository's config may only add sites to avoid and turn the research tool down.",
   }),
+  connect: Schema.optional(ConfigConnectV1.Info).annotate({
+    description:
+      "Connected tools preview. Reviews run on the models you choose; GitHub is optional. A repository can only turn automatic reviews down or lower their limits.",
+  }),
   experimental: Schema.optional(
     Schema.Struct({
+      vectorscope: Schema.optional(Schema.Boolean).annotate({
+        description: "Enable the staged VectorScope service settings UI; off by default.",
+      }),
       disable_paste_summary: Schema.optional(Schema.Boolean),
       batch_tool: Schema.optional(Schema.Boolean).annotate({ description: "Enable the batch tool" }),
       openTelemetry: Schema.optional(Schema.Boolean).annotate({

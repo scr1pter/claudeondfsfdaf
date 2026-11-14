@@ -359,6 +359,11 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         taskAttention: true,
         taskIsolation: true,
         backgroundShells: true,
+        vectorscopeSettings: true,
+        vectorscopeRuns: true,
+        // Owner data controls only; this does not advertise automatic review-context consumption.
+        vectorscopeReviewMemoryControls: true,
+        connections: flags.experimentalConnect,
       }
     })
 

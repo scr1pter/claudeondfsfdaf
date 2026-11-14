@@ -16,6 +16,7 @@ import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
 import { mergeDeep } from "remeda"
 import type { TaskSize } from "@vectordevai/core/task-size"
+import { isRecord } from "@/util/record"
 
 const USER_AGENT = `vector/${InstallationVersion}`
 
@@ -37,6 +38,7 @@ type PrepareInput = {
   readonly effort?: TaskSize.Effort
   readonly tools: Record<string, Tool>
   readonly purpose?: ModelPlanStatus.Purpose
+  readonly pinnedContext?: true
   readonly provider: Provider.Info
   readonly auth: Auth.Info | undefined
   readonly plugin: Plugin.Interface
@@ -64,13 +66,69 @@ export type Prepared = {
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
   mergeDeep(target, source ?? {}) as Record<string, any>
 
+// System text every request this process sends carries after the session's own, whatever its session, agent or user
+// message. `vector github run` pins its repository-work policy here (INV-S14): one user message's `system` reaches only
+// the turns that message starts, so the run's subagents, compaction and judge follow-ups would go without it.
+const pinned: { system?: string } = {}
+
+/** Pins `system` to every request this process sends from now on; undefined unpins it. */
+export function pin(system: string | undefined) {
+  pinned.system = system
+}
+
+// These SDK options replace instructions or import an unbound remote context.
+// Model options and variants can come from a project even when the model was
+// explicitly selected. Remove these channels only for server-bound reviews,
+// including nested provider namespaces and raw-body overrides.
+const CONTEXT_OPTIONS = new Set([
+  "instructions",
+  "system",
+  "systemprompt",
+  "systeminstruction",
+  "systeminstructions",
+  "systemmessagemode",
+  "systemmessages",
+  "developer",
+  "developermessage",
+  "developermessages",
+  "prompt",
+  "promptid",
+  "messages",
+  "input",
+  "conversation",
+  "conversationid",
+  "previousresponseid",
+  "assistantid",
+  "threadid",
+  "cachedcontent",
+  "contextmanagement",
+  "truncation",
+  "body",
+  "extrabody",
+])
+
+function pinnedOptions(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(pinnedOptions)
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !CONTEXT_OPTIONS.has(key.toLowerCase().replaceAll("_", "").replaceAll("-", "")))
+      .map(([key, child]) => [key, pinnedOptions(child)]),
+  )
+}
+
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
+  const responses = ["@ai-sdk/openai", "@ai-sdk/azure", "@ai-sdk/amazon-bedrock/mantle"].includes(input.model.api.npm)
   const prompt = [
     ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model, input.explore)),
     ...(input.stableSystem ?? []),
   ]
-  const rest = [...input.system, ...(input.user.system ? [input.user.system] : [])]
+  const rest = [
+    ...input.system,
+    ...(input.user.system ? [input.user.system] : []),
+    ...(pinned.system ? [pinned.system] : []),
+  ]
   // With stable parts, the prompt and those parts form the first block and everything per-session (directory, date,
   // references, project instructions, MCP, skills, the user's system text) the second, so a new session, directory or
   // date leaves the first block, and every prefix it starts, unchanged. A model that takes cache breakpoints gets one
@@ -201,6 +259,20 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   )
 
+  // Apply after the final model/agent/variant and hook merge. A transport's
+  // runtime-owned OAuth instructions are rebuilt from the admitted system
+  // context afterwards; an ambient `systemMessageMode: remove` cannot erase it.
+  if (input.pinnedContext) {
+    params.options = pinnedOptions(params.options) as Record<string, unknown>
+    // Responses must refuse an oversized input instead of discarding the
+    // admitted instructions/diff on the server. Compaction is refused above.
+    if (responses) params.options.truncation = "disabled"
+    if (isOpenaiOauth) {
+      params.options.instructions = instructions.join("\n")
+      params.options.systemMessageMode = "developer"
+    }
+  }
+
   // Provider hooks may omit a normal task's limit. An automatic title must keep its smaller ceiling afterwards.
   if (input.small && input.agent.name === "title")
     params.maxOutputTokens = ProviderTransform.maxOutputTokens(
@@ -230,11 +302,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   // Codex parity: OpenAI Responses-family providers hardcode `strict: false`
   // on every function tool so MCP-sourced and dynamic schemas that don't
   // satisfy OpenAI's structured-outputs constraints still register.
-  if (
-    input.model.api.npm === "@ai-sdk/openai" ||
-    input.model.api.npm === "@ai-sdk/azure" ||
-    input.model.api.npm === "@ai-sdk/amazon-bedrock/mantle"
-  ) {
+  if (responses) {
     for (const key of Object.keys(tools)) tools[key] = { ...tools[key], strict: false }
   }
   if (
@@ -260,7 +328,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
     params,
-    messageTransformOptions: options,
+    messageTransformOptions: input.pinnedContext ? params.options : options,
     // The session header goes last and in one spelling: the free-model fetch reads it to apply the guest rule
     // (FreeModelGuests), so model configuration and plugins can neither replace it nor join a second value to it. A
     // Codium request's purpose is fixed the same way and is sent to Codium only.

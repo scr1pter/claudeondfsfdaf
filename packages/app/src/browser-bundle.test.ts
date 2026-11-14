@@ -31,6 +31,8 @@ describe("the app's browser bundle", () => {
         "packages/core/src/model-plan-status.ts",
         "packages/core/src/local-mode/policy.ts",
         "packages/core/src/local-mode/sources.ts",
+        // config.ts reads zdrAttested's attestation objects through it (VS-33).
+        "packages/core/src/review/privacy.ts",
         "packages/app/src/workers/local-transcription.worker.ts",
         "packages/session-ui/src/components/markdown-shiki.worker.ts",
       ]),

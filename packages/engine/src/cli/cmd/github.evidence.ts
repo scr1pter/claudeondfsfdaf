@@ -27,6 +27,8 @@ export type EvidenceCheck = {
 
 export type MeasuredCost = {
   codium?: boolean
+  /** Measured turns on Codium, excluded from every currency and token subtotal. */
+  codiumTurns: number
   usageMissing?: boolean
   /** Measured own turns; absent on older own-only records. */
   ownTurns?: number
@@ -131,7 +133,7 @@ export function measureCost(messages: readonly SessionV1.WithParts[]): MeasuredC
   })
   if (!measured.length) return undefined
   const own = measured.filter(Billing.hasOwnIdentity)
-  const codium = measured.some((message) => Billing.of(message))
+  const codiumTurns = measured.filter((message) => Billing.of(message)).length
   const unknown = measured.filter((message) => !Billing.of(message) && !Billing.hasOwnIdentity(message)).length
   const missing = own.some((message) =>
     [
@@ -144,7 +146,8 @@ export function measureCost(messages: readonly SessionV1.WithParts[]): MeasuredC
   )
   const last = own.at(-1) ?? measured.at(-1)!
   return {
-    ...(codium ? { codium: true, ownTurns: own.length } : {}),
+    ...(codiumTurns ? { codium: true, ownTurns: own.length } : {}),
+    codiumTurns,
     ...(unknown ? { unknownTurns: unknown } : {}),
     ...(missing ? { usageMissing: true } : {}),
     costUsd: own.reduce((sum, m) => sum + finite(m.cost), 0),
@@ -293,18 +296,28 @@ function formatCost(cost: MeasuredCost | undefined): string {
   if (cost.codium && cost.ownTurns === 0 && !cost.unknownTurns)
     return `**Cost:** Codium · Vector Codium${cost.model ? ` · ${cost.model}` : ""} · ${turns}`
   const usd = `$${cost.costUsd.toFixed(cost.costUsd > 0 && cost.costUsd < 0.01 ? 4 : 2)}`
+  const ownPrice = cost.codium && cost.costUsd === 0 && cost.unpriced === 0 ? undefined : usd
   const parts = [
     // A turn on a model with no listed price adds nothing, so the cost is a lower bound, or unknown if that is all.
-    `${cost.unpriced === 0 ? usd : cost.costUsd > 0 ? `${usd} + ${cost.unpriced} unpriced` : "unknown (no listed price)"}${cost.codium ? " + Codium" : ""}`,
+    [
+      cost.unpriced === 0
+        ? ownPrice
+        : cost.costUsd > 0
+          ? `${usd} + ${cost.unpriced} unpriced`
+          : "unknown (no listed price)",
+      cost.codium ? "Codium" : undefined,
+    ]
+      .filter((part) => part !== undefined)
+      .join(" + "),
     ...(cost.usageMissing
       ? ["token usage unavailable"]
       : cost.unknownTurns && !(cost.ownTurns ?? cost.turns - cost.unknownTurns)
         ? []
-        : [`${fmtTokens(cost.input)} in / ${fmtTokens(cost.output)} out`]),
+        : [`${fmtTokens(cost.input)} in / ${fmtTokens(cost.output)} out${cost.codium ? " from other models" : ""}`]),
   ]
-  if (cost.reasoning > 0) parts.push(`${fmtTokens(cost.reasoning)} reasoning`)
-  if (cost.cacheRead > 0) parts.push(`${fmtTokens(cost.cacheRead)} cache read`)
-  if (cost.provider && cost.model && Billing.hasOwnIdentity({ providerID: cost.provider }))
+  if (!cost.codium && cost.reasoning > 0) parts.push(`${fmtTokens(cost.reasoning)} reasoning`)
+  if (!cost.codium && cost.cacheRead > 0) parts.push(`${fmtTokens(cost.cacheRead)} cache read`)
+  if (!cost.codium && cost.provider && cost.model && Billing.hasOwnIdentity({ providerID: cost.provider }))
     parts.push(`${cost.provider}/${cost.model}`)
   parts.push(turns)
   return `**Cost:** ${parts.join(" · ")}`

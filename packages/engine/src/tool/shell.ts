@@ -6,10 +6,10 @@ import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { lazy } from "@/util/lazy"
+import { TreeSitter } from "@/util/tree-sitter"
 import { Language, type Node } from "web-tree-sitter"
 
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell } from "@vectordevai/core/shell"
@@ -34,6 +34,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { LocalCommand } from "@vectordevai/core/local-mode/command"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
 export { Parameters } from "./shell/prompt"
 
@@ -135,13 +136,6 @@ type Scan = {
 type Chunk = {
   text: string
   size: number
-}
-
-const resolveWasm = (asset: string) => {
-  if (asset.startsWith("file://")) return fileURLToPath(asset)
-  if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
-  const url = new URL(asset, import.meta.url)
-  return fileURLToPath(url)
 }
 
 // A command's name and arguments. Numbers and expansions are arguments too:
@@ -1014,7 +1008,10 @@ function tail(text: string, maxLines: number, maxBytes: number) {
 }
 
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
-  const tree = yield* Effect.promise(() => (ps ? psParser() : bashParser()).then((parser) => parser.parse(command)))
+  // A poisoned runtime (TreeSitter.poison) may misread the command without failing, so it is not parsed at all.
+  const tree = TreeSitter.poisoned()
+    ? null
+    : yield* Effect.promise(() => (ps ? psParser() : bashParser()).then((parser) => parser.parse(command)))
   if (!tree) throw new Error("Failed to parse command")
   return tree
 })
@@ -1231,7 +1228,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     })
   }
 
-  if (Sandbox.sandboxEnabled()) {
+  if (Sandbox.sandboxEnabled() && !ProcessIsolation.required()) {
     const wrapped = Sandbox.wrapCommand({ shell, command, cwd, env, workspaceRoot })
     yield* Effect.logInfo("shell tool sandbox", {
       sandboxed: wrapped.sandboxed,
@@ -1261,7 +1258,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     })
   }
 
-  yield* Effect.logWarning("shell tool sandbox disabled", { workspaceRoot, cwd })
+  if (!ProcessIsolation.required()) yield* Effect.logWarning("shell tool sandbox disabled", { workspaceRoot, cwd })
 
   if (process.platform === "win32" && Shell.ps(shell)) {
     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
@@ -1280,27 +1277,14 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     detached: process.platform !== "win32",
   })
 })
-const runtime = lazy(async () => {
-  const { Parser } = await import("web-tree-sitter")
-  const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const treePath = resolveWasm(treeWasm)
-  await Parser.init({
-    locateFile() {
-      return treePath
-    },
-  })
-  return Parser
-})
 // Each grammar loads on the first command in its language. The PowerShell grammar alone adds about 15 MiB, and a
 // session whose shell is not PowerShell never parses with it.
 const grammar = (wasm: () => Promise<{ default: string }>) =>
   lazy(async () => {
-    const Parser = await runtime()
+    const Parser = await TreeSitter.runtime()
     const { default: asset } = await wasm()
     const parser = new Parser()
-    parser.setLanguage(await Language.load(resolveWasm(asset)))
+    parser.setLanguage(await Language.load(TreeSitter.resolveWasm(asset)))
     return parser
   })
 const bashParser = grammar(

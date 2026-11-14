@@ -12,6 +12,7 @@ import { LocalEvent } from "./local-event"
 import { LspEvent } from "./lsp-event"
 import { McpEvent } from "./mcp-event"
 import { MemoryEvent } from "./memory-event"
+import { Connect } from "./connect"
 import { ModelCatalog } from "./model-catalog"
 import { Permission } from "./permission"
 import { PermissionV1 } from "./permission-v1"
@@ -81,6 +82,7 @@ export const Definitions = Event.inventory(
   ...Research.Event.Definitions,
   ...LocalEvent.Definitions,
   ...MemoryEvent.Definitions,
+  ...Connect.Event.Definitions,
   ...VcsEvent.Definitions,
   ...WorkspaceEvent.Definitions,
   ...WorktreeEvent.Definitions,

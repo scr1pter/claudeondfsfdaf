@@ -25,7 +25,9 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { KeyedMutex } from "@vectordevai/core/effect/keyed-mutex"
 import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { IsolationCopy } from "@vectordevai/core/isolation/copy"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Database } from "@vectordevai/core/database/database"
@@ -146,10 +148,10 @@ export type By =
       kind: "agent"
       sessionID: string
       ask: (input: {
-        permission: "edit"
+        permission: "edit" | "connect_write"
         patterns: string[]
         always: string[]
-        metadata: { diff: string }
+        metadata: { diff: string; description?: string; runID?: string }
       }) => Effect.Effect<void, unknown>
       assertWritable: (input: { files: string[] }) => Effect.Effect<void, unknown>
       assertExternalDirectory: (file: string) => Effect.Effect<unknown, unknown>
@@ -768,6 +770,70 @@ export const make = Effect.gen(function* () {
       return yield* err("registry", "The task checkout's Git metadata changed identity.")
     return current
   })
+  const inspectReview = (record: Record) =>
+    Effect.tryPromise({
+      try: () => {
+        if (!record.gitDirectory || !record.gitCommonDirectory)
+          return Promise.reject(new ReadOnlyGit.Unavailable("the task has no verified Git binding"))
+        return ReadOnlyGit.inspect({
+          directory: record.directory,
+          gitDirectory: record.gitDirectory,
+          commonDirectory: record.gitCommonDirectory,
+        })
+      },
+      catch: () =>
+        new IsolationError({
+          code: "review_target",
+          message: "This task's Git metadata cannot be inspected safely. The review did not start.",
+        }),
+    })
+  /** A settled checkout remains the same registered task until the read-only review releases this lock. */
+  const review = <A, E, R>(
+    input: { readonly taskID: string; readonly parentSessionID: string },
+    use: (record: Record) => Effect.Effect<A, E, R>,
+  ) =>
+    lock(
+      input.taskID,
+      Effect.gen(function* () {
+        const record = yield* get(input.taskID)
+        if (record.parentSessionID !== input.parentSessionID || record.deleted)
+          return yield* err("review_target", "That isolated task does not belong to this conversation.")
+        if (record.mode !== "worktree" || !["changed", "diverged"].includes(record.state))
+          return yield* err("review_target", "Only a settled task with saved worktree changes can be reviewed.")
+        if (!record.tip || !(record.reviewBase ?? record.seed))
+          return yield* err("review_target", "The task has no saved review range.")
+        const checked = yield* verify(record)
+        const before = yield* inspectReview(checked)
+        if (before.head !== checked.tip)
+          return yield* err(
+            "review_target",
+            "The task checkout changed since it settled. Settle it again before reviewing.",
+          )
+        // The branch review covers saved commits only; unsaved edits must never be silently reported as reviewed.
+        if (before.dirty)
+          return yield* err("review_target", "The task has unsaved changes. Settle it again before reviewing.")
+        const result = yield* use(checked)
+        const current = yield* verify(checked)
+        const after = yield* inspectReview(current)
+        if (
+          current.deleted ||
+          current.parentSessionID !== checked.parentSessionID ||
+          current.state !== checked.state ||
+          current.attempt !== checked.attempt ||
+          current.settledAttempt !== checked.settledAttempt ||
+          current.tip !== checked.tip ||
+          (current.reviewBase ?? current.seed) !== (checked.reviewBase ?? checked.seed) ||
+          after.head !== checked.tip ||
+          after.dirty
+        )
+          return yield* err(
+            "review_target",
+            "The task changed while it was being reviewed; the review was not accepted.",
+          )
+        return result
+      }),
+    )
+
   const identity = Effect.fn("TaskIsolation.identity")(function* (cwd: string) {
     const name = yield* run(cwd, ["config", "user.name"])
     const email = yield* run(cwd, ["config", "user.email"])
@@ -2294,6 +2360,10 @@ export const make = Effect.gen(function* () {
             // them there for the prompt_source and memory_source asks. A project that is not a Git repository has the
             // file system root as its worktree, while its merge targets sit in the project folder.
             const ctx = yield* home
+            const patterns = plan.targets.map((target) => path.relative(ctx.worktree, target))
+            // A connected-tools fix child's changes reach the checkout only after the user says yes, every time (CW-07).
+            if (plan.record.agent.name === ConnectPolicy.FIX_AGENT)
+              yield* by.ask(ConnectPolicy.mergeAsk({ title: plan.record.title, patterns, diff: plan.diff }))
             yield* by.ask({
               permission: "edit",
               patterns: plan.targets.map((target) => path.relative(ctx.worktree, target)),
@@ -2805,6 +2875,7 @@ export const make = Effect.gen(function* () {
     find: optional,
     markSettling,
     records,
+    review,
     enqueue,
     admit,
   }

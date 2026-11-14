@@ -27,10 +27,43 @@ test("workflow plans distinguish dynamic sources from a literal empty stage", ()
   expect(() => Schema.decodeUnknownSync(Workflow.PlanStage)({ ...stage, items: -1 })).toThrow()
 })
 
+test("connected plans use their own public kind and never pretend to select an agent or model", () => {
+  const stage: Workflow.PlanConnectStage = {
+    id: "review",
+    title: "Review",
+    phase: "",
+    kind: "connect",
+    connect: { to: "vectorscope", action: "review" },
+    items: 1,
+    serial: false,
+    writes: "read only; execution unavailable",
+    asks: ["connect"],
+  }
+  const decode = Schema.decodeUnknownSync(Workflow.PlanStage, { onExcessProperty: "error" })
+  expect(decode(stage)).toEqual(stage)
+  for (const extra of [{ agent: "general" }, { model: "provider/model" }, { kind: "unknown" }, { connect: undefined }])
+    expect(() => decode({ ...stage, ...extra })).toThrow()
+  expect(
+    Schema.encodeSync(Workflow.PlanAgentStage)({
+      id: "legacy",
+      title: "Legacy",
+      phase: "",
+      agent: "general",
+      items: 1,
+      serial: false,
+      writes: "read only",
+      asks: [],
+      kind: undefined,
+    }),
+  ).not.toHaveProperty("kind")
+})
+
 test("workflow public identifiers remain unique", () => {
   const contracts = [
     Workflow.Issue,
     Workflow.PlanStage,
+    Workflow.PlanAgentStage,
+    Workflow.PlanConnectStage,
     Workflow.Plan,
     Workflow.Saved,
     Workflow.SavedList,

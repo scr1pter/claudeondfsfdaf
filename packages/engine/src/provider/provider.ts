@@ -1,3 +1,4 @@
+import { GithubSecrets } from "@/cli/cmd/github.secrets"
 import {
   activeOAuthApproval,
   pluginCredentialAllowed,
@@ -565,6 +566,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       // TODO: Using process.env directly because Env.set only updates a process.env shallow copy,
       // until the scope of the Env API is clarified (test only or runtime?)
       const awsBearerToken = iife(() => {
+        if (GithubSecrets.credentials.loaded()) return env["AWS_BEARER_TOKEN_BEDROCK"]
         const envToken = process.env.AWS_BEARER_TOKEN_BEDROCK
         if (envToken) return envToken
         if (auth?.type === "api") {
@@ -596,13 +598,25 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         region: defaultRegion,
       }
 
+      // Channel credentials stay in memory: the SDK must not fall back to the runner's environment/profile.
+      if (GithubSecrets.credentials.loaded() && awsBearerToken) providerOptions.apiKey = awsBearerToken
+
       // Only use credential chain if no bearer token exists
       // Bearer token takes precedence over credential chain (profiles, access keys, IAM roles, web identity tokens)
       if (!awsBearerToken && !configApiKey) {
         // Build credential provider options (only pass profile if specified)
         const credentialProviderOptions = profile ? { profile } : {}
 
-        providerOptions.credentialProvider = fromNodeProviderChain(credentialProviderOptions)
+        if (GithubSecrets.credentials.loaded()) {
+          const secretAccessKey = env["AWS_SECRET_ACCESS_KEY"]
+          if (!awsAccessKeyId || !secretAccessKey)
+            throw new Error("The GitHub secret channel requires complete Bedrock credentials.")
+          providerOptions.credentialProvider = async () => ({
+            accessKeyId: awsAccessKeyId,
+            secretAccessKey,
+            ...(env["AWS_SESSION_TOKEN"] ? { sessionToken: env["AWS_SESSION_TOKEN"] } : {}),
+          })
+        } else providerOptions.credentialProvider = fromNodeProviderChain(credentialProviderOptions)
       }
 
       // Add custom endpoint if specified (endpoint takes precedence over baseURL)
@@ -1837,7 +1851,9 @@ const layer = Layer.effect(
         const modelCatalog = Object.fromEntries(Object.entries(loaded).filter(([id]) => providerAllowed(id)))
         const catalogIDs = Object.fromEntries(Object.keys(modelCatalog).map((id) => [id, true as const]))
         const catalog = new Map<string, Info>()
-        const freeCatalog = yield* freeModels.catalog()
+        const freeCatalog = GithubSecrets.credentials.pendingRunToken()
+          ? { enabled: false, updatedAt: 0, models: [] }
+          : yield* freeModels.catalog()
         const vectorToken = yield* freeCredentials.get("vector")
         const planCatalog = yield* modelPlans.catalog(vectorToken)
         // Codium is a catalog provider like the free models, so the env loop and custom loaders walk it too.
@@ -2192,9 +2208,11 @@ const layer = Layer.effect(
         if (freeCatalog.enabled && isProviderAllowed(ProviderV2.ID.vector) && vectorToken && freeCatalog.models.length)
           providers[ProviderV2.ID.vector] = fromFreeModels(freeCatalog.models)
         if (!freeCatalog.enabled) delete providers[ProviderV2.ID.vector]
-        // Codium replaces every user or project override of its ID, so prices and destination stay Vector's.
+        // Codium replaces every user or project override of its ID, so prices and destination stay Vector's. An own-key
+        // GitHub run never sends a model request to Codium (INV-K1), whatever MODEL, an agent or small_model names.
         delete providers[planID]
-        if (planCatalog.enabled && isProviderAllowed(planID)) providers[planID] = fromModelPlans(planCatalog.models, planCatalog)
+        if (planCatalog.enabled && isProviderAllowed(planID) && !GithubSecrets.ownKeyRun())
+          providers[planID] = fromModelPlans(planCatalog.models, planCatalog)
         if (openRouterKey && isProviderAllowed(ProviderV2.ID.openrouter)) {
           providers[ProviderV2.ID.openrouter] ??= fromFreeModels([], "openrouter")
           Object.assign(providers[ProviderV2.ID.openrouter].models, fromFreeModels(ownedFree, "openrouter").models)
@@ -2358,6 +2376,7 @@ const layer = Layer.effect(
       delete s.providers[planID]
       if (
         current.enabled &&
+        !GithubSecrets.ownKeyRun() &&
         !Config.local().enabled &&
         !cfg.disabled_providers?.includes(planID) &&
         (!cfg.enabled_providers || cfg.enabled_providers.includes(planID))
@@ -2714,6 +2733,12 @@ const layer = Layer.effect(
             reason: "off-in-local",
             message: `${providerID}: off in Vector Local. ${OFF_IN_LOCAL.vector}`,
           },
+        })
+      if (providerID === planID && GithubSecrets.ownKeyRun())
+        return yield* new ModelNotFoundError({
+          providerID,
+          modelID,
+          unavailable: { id: providerID, reason: "no-models", message: GithubSecrets.OWN_KEY_CODIUM },
         })
       // A turn waits for vectordev.ai's answer when this account has no Codium catalog yet.
       if (providerID === planID) yield* refreshCodium({ wait: true })

@@ -18,6 +18,7 @@ export type SettingsTab =
   | "memory"
   | "local"
   | "shortcuts"
+  | "github"
 
 export type SettingsItem = {
   value: SettingsTab
@@ -184,6 +185,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
   {
     title: "Agents & environment",
     items: [
+      {
+        value: "github",
+        label: "GitHub",
+        icon: "github",
+        keywords: ["github", "actions", "repository bindings", "run in github", "scheduled runs"],
+      },
       {
         value: "subagents",
         label: "Agents",

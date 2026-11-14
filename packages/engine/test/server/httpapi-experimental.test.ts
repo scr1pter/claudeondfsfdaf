@@ -137,6 +137,17 @@ afterEach(async () => {
 })
 
 describe("experimental HttpApi", () => {
+  it.instance("the combined server advertises owner memory controls without enabling review-memory use", () =>
+    Effect.gen(function* () {
+      const tmp = yield* TestInstance
+      const response = yield* request("/experimental/capabilities", tmp.directory)
+      expect(response.status).toBe(200)
+      const capabilities = yield* response.json
+      expect(capabilities).toMatchObject({ vectorscopeReviewMemoryControls: true })
+      expect(capabilities).not.toHaveProperty("vectorscopeReviewMemoryContext")
+    }),
+  )
+
   it.instance(
     "serves read-only experimental endpoints through the default server app",
     () =>

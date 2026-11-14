@@ -1,4 +1,5 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
@@ -7,6 +8,7 @@ import { WorkflowTool } from "./workflow"
 import { WorkflowRuns } from "@/orchestration/runs"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { McpCatalog } from "@/mcp/catalog"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { TerminalTool } from "./terminal"
@@ -86,6 +88,8 @@ import { ResearchNoteTool } from "./research-note"
 import { ResearchReportTool } from "./research-report"
 import { ResearchBrowserTool } from "./research-browser"
 import { ResearchTool } from "./research"
+import { ConnectTool, beforeCommitDescription } from "./connect"
+import { ConnectHub } from "@/connect/hub"
 
 // Which research tool each research agent is offered (section 5.3). The agents' permissions say the same; offering
 // them only here keeps every other agent's tool list, and its provider cache, as it was.
@@ -113,6 +117,48 @@ export function isBuiltinTask(tool: Tool.Def) {
 
 export function isBuiltinPatch(tool: Tool.Def) {
   return builtinPatches.has(tool)
+}
+
+/**
+ * On GitHub Actions no tool that drives the user's browser, the Vector Cloud bridge or a computer is offered, whatever
+ * bridge variables are set (INV-S13). Read on every call, so a registry built before the variable was set is filtered
+ * too. MCP tools never pass through the registry: SessionTools.resolve asks `actionsWithheldMcpTool` of each one.
+ */
+export function actionsWithheld(id: string) {
+  return GithubAgents.onActionsRunner(process.env) && GithubAgents.withheldOnActions(id)
+}
+
+/**
+ * Of the connected MCP `servers`, those a run on GitHub Actions withholds whole, with their tools, resources and
+ * instructions (INV-S13): each whose own name, or the name of a tool it lists, is computer use. Such a server's
+ * resources (a screenshot, say) and instructions reach the model too, and its other tools act on the same computer. A
+ * server that only shares a bridged tool's name (a `browser` server) is not computer use, so its tools, resources and
+ * instructions stay together. `keys` are tool keys (`McpCatalog.toolName`) of any of the servers. Read on every call, as
+ * `actionsWithheld` is. SessionTools.resolve leaves these servers' tools out and keeps them from the resource tools, and
+ * SystemPrompt.mcp leaves out their instructions.
+ */
+export function actionsWithheldServers(servers: readonly string[], keys: readonly string[]) {
+  if (!GithubAgents.onActionsRunner(process.env)) return []
+  return servers.filter((name) => {
+    const server = McpCatalog.sanitize(name)
+    // A key does not say where the server's name ends, so a server `a` beside an `a_computer` that lists a tool is
+    // withheld too.
+    return (
+      GithubAgents.computerUse(server) ||
+      keys.some((key) => key.startsWith(`${server}_`) && GithubAgents.computerUse(key.slice(server.length + 1)))
+    )
+  })
+}
+
+/**
+ * Whether a run on GitHub Actions withholds the MCP tool `key`: an id `actionsWithheld` withholds, or a tool of one of
+ * the `withheld` servers (`actionsWithheldServers`), found by its prefix.
+ */
+export function actionsWithheldMcpTool(key: string, withheld: readonly string[]) {
+  return (
+    GithubAgents.onActionsRunner(process.env) &&
+    (GithubAgents.withheldOnActions(key) || withheld.some((name) => key.startsWith(`${McpCatalog.sanitize(name)}_`)))
+  )
 }
 
 type State = {
@@ -178,6 +224,7 @@ const layer = Layer.effect(
     const researchreport = yield* ResearchReportTool
     const researchbrowser = yield* ResearchBrowserTool
     const researchtool = yield* ResearchTool
+    const connecttool = yield* ConnectTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -317,6 +364,7 @@ const layer = Layer.effect(
           researchreport: Tool.init(researchreport),
           researchbrowser: Tool.init(researchbrowser),
           research: Tool.init(researchtool),
+          connect: Tool.init(connecttool),
         })
 
         return {
@@ -357,6 +405,7 @@ const layer = Layer.effect(
             // needs the desktop browser.
             tool.researchbrowser,
             tool.research,
+            ...(flags.experimentalConnect ? [tool.connect] : []),
           ],
           task: tool.task,
           taskSchema: JSON.stringify(tool.task.jsonSchema),
@@ -368,7 +417,7 @@ const layer = Layer.effect(
 
     const all: Interface["all"] = Effect.fn("ToolRegistry.all")(function* () {
       const s = yield* InstanceState.get(state)
-      return [...s.builtin, ...s.custom] as Tool.Def[]
+      return [...s.builtin, ...s.custom].filter((tool) => !actionsWithheld(tool.id)) as Tool.Def[]
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
@@ -396,6 +445,7 @@ const layer = Layer.effect(
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const builtin = yield* InstanceState.get(state)
       const researchSetting = (yield* config.get()).research?.tool
+      const connectSetting = (yield* config.get()).connect
       // A research agent is offered its own tools and nothing else, whatever a session's or the user's rules allow:
       // no edit, shell, plugin or custom tool reaches Deep research (RC1).
       const own = Agent.researchTools(input.agent.name)
@@ -407,6 +457,9 @@ const layer = Layer.effect(
         // The build agent researches as a tool on its own requests unless the user turned that off; the session
         // runtime's size decides the rest when the tool runs.
         if (tool.id === ResearchTool.id) return input.agent.name === "build" && researchSetting !== "off"
+        // Connected tools on: the built-in to build alone, and a custom or plugin tool named connect to nobody.
+        if (tool.id === ConnectTool.id && flags.experimentalConnect)
+          return input.agent.name === "build" && !builtin.custom.includes(tool)
 
         const usePatch =
           input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
@@ -423,7 +476,10 @@ const layer = Layer.effect(
           // from in-place plugin edits without mutating the cached builtin schema.
           const initialSchema = tool === builtin.task ? structuredClone(tool.jsonSchema) : tool.jsonSchema
           const output = {
-            description: tool.description,
+            description:
+              tool.id === ConnectTool.id && flags.experimentalConnect
+                ? beforeCommitDescription(tool.description, connectSetting)
+                : tool.description,
             parameters: tool.parameters,
             jsonSchema: initialSchema,
           }
@@ -592,6 +648,7 @@ export const node = LayerNode.make({
     SessionFork.node,
     // The task tool isolates through it (Effect.serviceOption); without it every isolation request is refused.
     TaskIsolation.node,
+    ConnectHub.node,
     locationServiceMapNode,
   ],
 })

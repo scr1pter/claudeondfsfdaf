@@ -36,6 +36,7 @@ import { NativePatch } from "./llm/native-patch"
 import { SessionFork } from "./fork"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { NEXT_STEP_SLACK } from "@vectordevai/core/review/plan"
+import { PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import { Auth } from "@/auth"
@@ -621,7 +622,10 @@ const layer = Layer.effect(
             // A helper session's agent may be a Subagent specialist Settings turned off, which only `helper` finds.
             const internal = (yield* session.get(ctx.sessionID).pipe(Effect.orDie)).internal
             const agent = internal
-              ? yield* agents.helper(ctx.assistantMessage.agent)
+              ? yield* agents.helper(
+                  ctx.assistantMessage.agent,
+                  internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+                )
               : yield* agents.get(ctx.assistantMessage.agent)
             yield* permission.ask({
               permission: "doom_loop",

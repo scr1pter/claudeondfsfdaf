@@ -16,6 +16,7 @@ import {
   parseTime,
   sortAutomations,
   sortByNextRun,
+  supportsGithubSchedule,
   type AutomationDraft,
   type AutomationRecord,
   type ScheduledTask,
@@ -23,6 +24,14 @@ import {
 
 // A Friday, 10:00 local time.
 const friday10 = new Date(2026, 7, 14, 10, 0, 0, 0)
+
+test("GitHub schedules require a recurring task in one repository with a fresh run", () => {
+  for (const kind of ["daily", "weekdays", "weekly"] as const) expect(supportsGithubSchedule(kind, [{}])).toBe(true)
+  expect(supportsGithubSchedule("once", [{}])).toBe(false)
+  expect(supportsGithubSchedule("daily", [])).toBe(false)
+  expect(supportsGithubSchedule("daily", [{}, {}])).toBe(false)
+  expect(supportsGithubSchedule("daily", [{ sessionId: "local-session" }])).toBe(false)
+})
 
 function task(partial: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
@@ -367,7 +376,13 @@ describe("describeAutomationTargets", () => {
       "2 repositories · new session each run",
     )
     expect(
-      describeAutomationTargets([{ directory: "/a", sessionId: "x" }, { directory: "/b", sessionId: "y" }], name),
+      describeAutomationTargets(
+        [
+          { directory: "/a", sessionId: "x" },
+          { directory: "/b", sessionId: "y" },
+        ],
+        name,
+      ),
     ).toBe("2 repositories · existing sessions")
     expect(describeAutomationTargets([{ directory: "/a", sessionId: "x" }, { directory: "/b" }], name)).toBe(
       "2 repositories · 1 existing, 1 new",

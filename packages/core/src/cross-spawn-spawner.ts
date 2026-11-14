@@ -25,6 +25,7 @@ import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { untrustedChildEnvironment } from "./child-environment"
 import { OwnedProcess } from "./owned-process"
+import { ProcessIsolation } from "./process-isolation"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
 
@@ -296,7 +297,12 @@ export const make = Effect.gen(function* () {
       PlatformError.PlatformError
     >((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const proc = launch(command.command, command.args, opts)
+      const isolated = ProcessIsolation.launch(command.command, command.args, {
+        cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
+        shell: opts.shell,
+        env: opts.env,
+      })
+      const proc = launch(isolated.file, isolated.args, { ...opts, shell: isolated.shell })
       // Bun resumes stdio at native exit, before a delayed Effect reader can attach.
       // Pipe immediately into bounded streams; retain backpressure until consumed.
       const captured = captureOutput(proc)

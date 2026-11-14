@@ -1,4 +1,11 @@
-import { initializeVectorAccount, vectorAccount } from "./vector-account-runtime"
+import {
+  initializeVectorAccount,
+  vectorAccount,
+  vectorAccountAuthorityRevision,
+  onVectorAccountAuthorityChange,
+} from "./vector-account-runtime"
+import { createGithubAgents } from "./github-agents"
+import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
 import { execFile } from "node:child_process"
 import { realpath, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
@@ -260,6 +267,14 @@ function on<T extends unknown[]>(channel: string, listener: (event: IpcMainEvent
 }
 
 export function registerIpcHandlers(deps: Deps) {
+  const githubAgents = createGithubAgents({
+    version: app.getVersion(),
+    token: () => vectorAccount.token(),
+    authorityRevision: vectorAccountAuthorityRevision,
+    engine: deps.awaitInitialization,
+  })
+  const stopAccountAuthority = onVectorAccountAuthorityChange(githubAgents.invalidateAuthority)
+  app.once("will-quit", stopAccountAuthority)
   initializeVectorAccount(deps.awaitInitialization)
   // Pull requests, reviews and commits Vector makes are checked against the owner's memory by the engine first.
   usePostingEngine(deps.awaitInitialization)
@@ -267,7 +282,10 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-status", () => vectorAccount.status())
   handle("vector-account-start", () => vectorAccount.start())
   handle("vector-account-cancel", () => vectorAccount.cancel())
-  handle("vector-account-logout", () => vectorAccount.logout())
+  handle("vector-account-logout", async () => {
+    githubAgents.invalidateAuthority()
+    return vectorAccount.logout()
+  })
   handle("vector-account-codium", () => vectorAccount.codium())
   handle("vector-account-offers", () => vectorAccount.offers())
   handle("vector-account-refresh-models", () => vectorAccount.refreshModels())
@@ -276,6 +294,34 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-cancel-deletion", () => vectorAccount.cancelDeletion())
   handle("vector-account-delete", (_event, email: unknown) => vectorAccount.deleteAccount(email))
   handle("vector-account-roadmap", (_event, input: unknown) => vectorAccount.roadmap(input))
+  handle("github-agents-status", (_event, cwd: string) => githubAgents.status(cwd))
+  handle("github-agents-setup-preview", (_event, input: Parameters<GithubAgentsAPI["preview"]>[0]) =>
+    githubAgents.preview(input),
+  )
+  handle("github-agents-setup", (_event, input: Parameters<GithubAgentsAPI["setup"]>[0]) => githubAgents.setup(input))
+  handle("github-agents-bind", (_event, input: Parameters<GithubAgentsAPI["bind"]>[0]) => githubAgents.bind(input))
+  handle("github-agents-run", (_event, input: Parameters<GithubAgentsAPI["run"]>[0]) => githubAgents.run(input))
+  handle("github-agents-schedules", (_event, input: Parameters<GithubAgentsAPI["schedules"]>[0]) =>
+    githubAgents.schedules(input),
+  )
+  handle("github-agents-bindings", () => githubAgents.bindings())
+  handle("github-agents-unbind", (_event, input: Parameters<GithubAgentsAPI["unbind"]>[0]) =>
+    githubAgents.unbind(input),
+  )
+  handle("github-agents-runs", () => githubAgents.runs())
+  handle("github-agents-brain-preview", (_event, cwd: string) => githubAgents.previewBrain(cwd))
+  handle("github-agents-returned-artifacts", (_event, input: Parameters<GithubAgentsAPI["returnedArtifacts"]>[0]) =>
+    githubAgents.returnedArtifacts(input),
+  )
+  handle("github-agents-returned-preview", (_event, input: Parameters<GithubAgentsAPI["previewReturned"]>[0]) =>
+    githubAgents.previewReturned(input),
+  )
+  handle("github-agents-returned-import", (_event, input: Parameters<GithubAgentsAPI["importReturned"]>[0]) =>
+    githubAgents.importReturned(input),
+  )
+  app.once("will-quit", () => {
+    void githubAgents.clearBrain()
+  })
 
   const voiceOwners = new Set<number>()
   const updaterSubscriptions = createUpdaterSubscriptions()
@@ -661,9 +707,13 @@ export function registerIpcHandlers(deps: Deps) {
     startDeviceLogin({ workflow: input?.workflow === true }),
   )
   handle("github-auth-open-verification", () => openVerification())
-  handle("github-auth-complete", () => completeDeviceLogin())
+  handle("github-auth-complete", () => {
+    githubAgents.invalidateAuthority()
+    return completeDeviceLogin()
+  })
   handle("github-auth-cancel", () => cancelDeviceLogin())
   handle("github-auth-logout", () => {
+    githubAgents.invalidateAuthority()
     logoutGithub()
     // A clone Vector couldn't clean up may have left the token in its private auth config.
     void sweepGithubCloneSecrets()

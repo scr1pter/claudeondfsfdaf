@@ -21,8 +21,9 @@ import {
   type Trust,
 } from "./types"
 
-// Lines: how close two findings must be to be the same one, and how close to a focus hunk counts as inside it.
-const NEAR = 3
+// Lines: how close two findings must be to be the same one, and how close to a focus hunk counts as inside it. The
+// strict guardrail's S7 reads it (guardrail.ts), so "the same class within 3 lines" cannot drift from selection.
+export const NEAR = 3
 // Two nearby findings in one run are the same one only with titles at least this alike (or the same fix or code).
 const SAME_TITLE = 0.3
 // The same defect reported at several places in one file: titles at least this alike, same category and severity.
@@ -32,7 +33,8 @@ const OUTDATED_TITLE = 0.5
 const TEAM_PENALTY = 0.15
 const TEAM_SIMILARITY = 0.5
 const TEAM_MATCHES = 2
-const MAX_INLINE = 50
+// The per-run inline cap's clamp; the strict guardrail's S8 clamps maxComments the same way.
+export const MAX_INLINE = 50
 const LARGE_CHANGE = 800
 
 const DROP_ORDER: DropReason[] = [
@@ -389,8 +391,9 @@ function stronger(a: Finding, b: Finding): number {
 }
 
 // Two findings of one run on the same path and side, within 3 lines, are one when their titles are alike, when they
-// carry the same fix, or when different reviewers flagged the same code (whatever category each gave it).
-function sameFinding(a: Finding, b: Finding, code: (finding: Finding) => string): boolean {
+// carry the same fix, or when different reviewers flagged the same code (whatever category each gave it). The strict
+// guardrail's S7 reuses it (guardrail.ts).
+export function sameFinding(a: Finding, b: Finding, code: (finding: Finding) => string): boolean {
   if (a.path !== b.path || a.side !== b.side) return false
   if (gap(a.line, a.endLine ?? a.line, b.line, b.endLine ?? b.line) > NEAR) return false
   if (titleSimilarity(a.title, b.title) >= SAME_TITLE) return true
@@ -456,8 +459,8 @@ function isInjection(finding: Finding): boolean {
   return finding.title.trim().toLowerCase() === INJECTION_TITLE.toLowerCase()
 }
 
-// 0 when the ranges overlap, otherwise the number of lines between them.
-function gap(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+// 0 when the ranges overlap, otherwise the number of lines between them. S7's class clause measures with it too.
+export function gap(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
   if (aEnd < bStart) return bStart - aEnd
   if (bEnd < aStart) return aStart - bEnd
   return 0

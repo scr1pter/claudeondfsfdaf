@@ -39,6 +39,8 @@ import { runtime } from "./runtime"
 import { type Scenario } from "./types"
 import { workspaceScenarios } from "./workspace-scenarios"
 import { sessionScenarios } from "./session-scenarios"
+import { reviewScenarios } from "./review-scenarios"
+import { connectScenarios } from "./connect-scenarios"
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
@@ -77,8 +79,10 @@ function locationData(validate: (value: any) => void) {
 }
 
 const scenarios: Scenario[] = [
+  ...reviewScenarios,
   ...workspaceScenarios,
   ...sessionScenarios,
+  ...connectScenarios,
   http.protected
     .get("/experimental/session/usage", "experimental.session.usage")
     .preserveDatabase()

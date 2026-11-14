@@ -13964,6 +13964,1453 @@
         ]
       }
     },
+    "/experimental/connect": {
+      "get": {
+        "tags": ["connect"],
+        "operationId": "connect.list",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "kind": {
+                        "$ref": "#/components/schemas/ConnectKind"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "summary": {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      "owner": {
+                        "$ref": "#/components/schemas/ConnectOwner"
+                      },
+                      "place": {
+                        "$ref": "#/components/schemas/ConnectPlace"
+                      },
+                      "sendsTo": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": ["this-computer", "vector-codium"]
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^model-server:[\\s\\S]*?$"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^provider:[\\s\\S]*?$"
+                          }
+                        ]
+                      },
+                      "state": {
+                        "$ref": "#/components/schemas/ConnectState"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "reach": {
+                        "$ref": "#/components/schemas/ConnectReach"
+                      },
+                      "actions": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/ConnectAction"
+                        },
+                        "maxItems": 20
+                      },
+                      "activity": {
+                        "$ref": "#/components/schemas/ConnectActivity"
+                      }
+                    },
+                    "required": ["id", "kind", "title", "summary", "owner", "place", "state", "reach"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List connected tools",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs": {
+      "get": {
+        "tags": ["connect"],
+        "operationId": "connect.runs",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^cr_",
+                        "minLength": 4,
+                        "maxLength": 64
+                      },
+                      "request": {
+                        "$ref": "#/components/schemas/ConnectRequest"
+                      },
+                      "status": {
+                        "$ref": "#/components/schemas/ConnectRunStatus"
+                      },
+                      "progress": {
+                        "$ref": "#/components/schemas/ConnectProgress"
+                      },
+                      "result": {
+                        "type": "object",
+                        "properties": {
+                          "state": {
+                            "$ref": "#/components/schemas/ConnectResultState"
+                          },
+                          "verdict": {
+                            "$ref": "#/components/schemas/ConnectVerdict"
+                          },
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "findings": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/ConnectFinding"
+                            },
+                            "maxItems": 200
+                          },
+                          "sendsTo": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["this-computer", "vector-codium"]
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^model-server:[\\s\\S]*?$"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^provider:[\\s\\S]*?$"
+                              }
+                            ]
+                          },
+                          "cached": {
+                            "type": "boolean"
+                          },
+                          "cost": {
+                            "$ref": "#/components/schemas/ConnectCost"
+                          },
+                          "sessions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^ses"
+                            },
+                            "maxItems": 200
+                          },
+                          "notes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 1000
+                            },
+                            "maxItems": 100
+                          },
+                          "refusal": {
+                            "$ref": "#/components/schemas/ConnectRefusalCode"
+                          },
+                          "target": {
+                            "$ref": "#/components/schemas/ConnectTarget"
+                          },
+                          "head": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "base": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["state", "summary", "findings", "sessions", "notes"],
+                        "additionalProperties": false
+                      },
+                      "time": {
+                        "type": "object",
+                        "properties": {
+                          "created": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "started": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "ended": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "required": ["created"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["id", "request", "status", "time"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List connected tool runs",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.runs({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs/{runID}": {
+      "get": {
+        "tags": ["connect"],
+        "operationId": "connect.get",
+        "parameters": [
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^cr_",
+              "minLength": 4,
+              "maxLength": 64
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a connected tool run",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/connect": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.review",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Review changes in a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectReviewInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.review({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/review": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.directoryReview",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Review the selected directory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectDirectoryReviewInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.directoryReview({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs/{runID}/cancel": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.cancel",
+        "parameters": [
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^cr_",
+              "minLength": 4,
+              "maxLength": 64
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel a connected tool run",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.cancel({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/findings": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.register",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Bring desktop findings into a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectRegisterInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.register({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs/{runID}/dismiss": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.dismiss",
+        "parameters": [
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^cr_",
+              "minLength": 4,
+              "maxLength": 64
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Dismiss findings from an owner action",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectDismissInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.dismiss({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/project": {
       "get": {
         "tags": ["project"],
@@ -15330,6 +16777,774 @@
         ]
       }
     },
+    "/experimental/session/{sessionID}/review/target": {
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.target",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunTarget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read the existing conversation's exact Git head without starting model work. Owner only.",
+        "summary": "Read the local review target",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.target({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.start",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Opt-in owner-only review of local changes. Placement and read authority come from the existing conversation. No GitHub connection is required; no checks, posting or automatic restart occur.",
+        "summary": "Start an owner local review",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRunStart"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.start({\n  ...\n})"
+          }
+        ]
+      },
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.list",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.List",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only bounded status summaries for reconnection. No result JSON or code is included.",
+        "summary": "Find local review runs",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/{runID}": {
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.get",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read the exact retained result without starting or retrying model work.",
+        "summary": "Read an owned local review",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/{runID}/stop": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.stop",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Signal and join this engine's exact owned run, retaining completed partial output.",
+        "summary": "Stop an owned local review",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.stop({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory": {
+      "get": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.inspect",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewMemoryControl.Inspect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlInspect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only bounded read in the engine's verified physical repository. Does not start a review.",
+        "summary": "Read this repository's review memory",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.inspect({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory/prepare": {
+      "post": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.prepare",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewMemoryControl.Preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Prepare one exact, short-lived approval. Preparing does not apply the change.",
+        "summary": "Preview an owner review-memory change",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewMemoryControlPrepare"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.prepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory/confirm": {
+      "post": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.confirm",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewMemoryControl.ConfirmationResult",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlConfirmationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.",
+        "summary": "Confirm one exact review-memory preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewMemoryControlConfirmation"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.confirm({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory/previews/{previewId}": {
+      "delete": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.discard",
+        "parameters": [
+          {
+            "name": "previewId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Retire this owner's exact preview without applying a change or altering stored memory.",
+        "summary": "Discard an owned review-memory preview",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.discard({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/permission": {
       "get": {
         "tags": ["permission"],
@@ -16580,11 +18795,18 @@
             }
           },
           "409": {
-            "description": "PublicShareRemovalError",
+            "description": "PublicShareRemovalError | SessionBusyError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PublicShareRemovalError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PublicShareRemovalError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionBusyError"
+                    }
+                  ]
                 }
               }
             }
@@ -21401,11 +23623,18 @@
             }
           },
           "409": {
-            "description": "PublicShareRemovalError",
+            "description": "PublicShareRemovalError | SessionBusyError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PublicShareRemovalError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PublicShareRemovalError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionBusyError"
+                    }
+                  ]
                 }
               }
             }
@@ -28539,6 +30768,9 @@
             "$ref": "#/components/schemas/EventMemoryLearned"
           },
           {
+            "$ref": "#/components/schemas/EventConnectRunUpdated"
+          },
+          {
             "$ref": "#/components/schemas/EventVcsBranchUpdated"
           },
           {
@@ -34188,6 +36420,152 @@
                   },
                   "type": {
                     "type": "string",
+                    "enum": ["connect.run.updated"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "sessionID": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      },
+                      "run": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^cr_",
+                            "minLength": 4,
+                            "maxLength": 64
+                          },
+                          "request": {
+                            "$ref": "#/components/schemas/ConnectRequest"
+                          },
+                          "status": {
+                            "$ref": "#/components/schemas/ConnectRunStatus"
+                          },
+                          "progress": {
+                            "$ref": "#/components/schemas/ConnectProgress"
+                          },
+                          "result": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "$ref": "#/components/schemas/ConnectResultState"
+                              },
+                              "verdict": {
+                                "$ref": "#/components/schemas/ConnectVerdict"
+                              },
+                              "summary": {
+                                "type": "string",
+                                "maxLength": 2000
+                              },
+                              "findings": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/ConnectFinding"
+                                },
+                                "maxItems": 200
+                              },
+                              "sendsTo": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": ["this-computer", "vector-codium"]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^model-server:[\\s\\S]*?$"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^provider:[\\s\\S]*?$"
+                                  }
+                                ]
+                              },
+                              "cached": {
+                                "type": "boolean"
+                              },
+                              "cost": {
+                                "$ref": "#/components/schemas/ConnectCost"
+                              },
+                              "sessions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^ses"
+                                },
+                                "maxItems": 200
+                              },
+                              "notes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1000
+                                },
+                                "maxItems": 100
+                              },
+                              "refusal": {
+                                "$ref": "#/components/schemas/ConnectRefusalCode"
+                              },
+                              "target": {
+                                "$ref": "#/components/schemas/ConnectTarget"
+                              },
+                              "head": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "base": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              }
+                            },
+                            "required": ["state", "summary", "findings", "sessions", "notes"],
+                            "additionalProperties": false
+                          },
+                          "time": {
+                            "type": "object",
+                            "properties": {
+                              "created": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "started": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "ended": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": ["created"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["id", "request", "status", "time"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["run"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "type", "properties"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
                     "enum": ["vcs.branch.updated"]
                   },
                   "properties": {
@@ -35367,6 +37745,38 @@
         },
         "additionalProperties": false
       },
+      "ConnectReviewConfig": {
+        "type": "object",
+        "properties": {
+          "after_run": {
+            "type": "string",
+            "enum": ["off", "report", "repair"]
+          },
+          "before_commit": {
+            "type": "string",
+            "enum": ["off", "offer", "run"]
+          },
+          "max_rounds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "max_cost_usd": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectConfig": {
+        "type": "object",
+        "properties": {
+          "review": {
+            "$ref": "#/components/schemas/ConnectReviewConfig"
+          }
+        },
+        "additionalProperties": false
+      },
       "ConfigWithLocks": {
         "type": "object",
         "properties": {
@@ -35951,9 +38361,15 @@
           "research": {
             "$ref": "#/components/schemas/ResearchConfig"
           },
+          "connect": {
+            "$ref": "#/components/schemas/ConnectConfig"
+          },
           "experimental": {
             "type": "object",
             "properties": {
+              "vectorscope": {
+                "type": "boolean"
+              },
               "disable_paste_summary": {
                 "type": "boolean"
               },
@@ -36580,9 +38996,15 @@
           "research": {
             "$ref": "#/components/schemas/ResearchConfig"
           },
+          "connect": {
+            "$ref": "#/components/schemas/ConnectConfig"
+          },
           "experimental": {
             "type": "object",
             "properties": {
+              "vectorscope": {
+                "type": "boolean"
+              },
               "disable_paste_summary": {
                 "type": "boolean"
               },
@@ -37143,6 +39565,18 @@
             "type": "boolean"
           },
           "backgroundShells": {
+            "type": "boolean"
+          },
+          "vectorscopeSettings": {
+            "type": "boolean"
+          },
+          "vectorscopeRuns": {
+            "type": "boolean"
+          },
+          "vectorscopeReviewMemoryControls": {
+            "type": "boolean"
+          },
+          "connections": {
             "type": "boolean"
           }
         },
@@ -42535,6 +44969,20 @@
         "required": ["source", "chunks", "private"],
         "additionalProperties": false
       },
+      "ConnectApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": ["disabled", "forbidden", "not_found", "invalid"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      },
       "Project": {
         "type": "object",
         "properties": {
@@ -42657,6 +45105,55 @@
           }
         },
         "required": ["_tag", "requestID", "message"],
+        "additionalProperties": false
+      },
+      "ReviewApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "placement",
+              "invalid",
+              "not_found",
+              "conflict",
+              "unavailable",
+              "corrupt",
+              "permissions",
+              "stale"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "denied",
+              "unavailable",
+              "limit",
+              "stale",
+              "used",
+              "expired",
+              "disabled",
+              "not-found",
+              "source-unavailable"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
         "additionalProperties": false
       },
       "PermissionRequest": {
@@ -46023,6 +48520,9 @@
             "$ref": "#/components/schemas/MemoryLearned"
           },
           {
+            "$ref": "#/components/schemas/ConnectRunUpdated"
+          },
+          {
             "$ref": "#/components/schemas/VcsBranchUpdated"
           },
           {
@@ -47360,6 +49860,397 @@
         },
         "required": ["created", "updated"],
         "additionalProperties": false
+      },
+      "ConnectBudget": {
+        "type": "object",
+        "properties": {
+          "maxCostUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "timeoutMinutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectTarget": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["uncommitted"]
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["staged"]
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["branch"]
+              },
+              "base": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^(?!-)[^\\s\\u0000-\\u001f\\u007f]+$"
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["task"]
+              },
+              "task": {
+                "type": "string",
+                "pattern": "^ses"
+              }
+            },
+            "required": ["kind", "task"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ConnectReviewRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["agent", "user", "workflow"]
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          }
+        },
+        "required": ["id", "to", "requester", "requestID", "directory", "background", "action", "target"],
+        "additionalProperties": false
+      },
+      "ConnectFixMode": {
+        "type": "string",
+        "enum": ["here", "worktree"]
+      },
+      "ConnectFixRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["agent", "user", "workflow"]
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["fix"]
+          },
+          "run": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ConnectFixMode"
+          }
+        },
+        "required": [
+          "id",
+          "to",
+          "requester",
+          "requestID",
+          "directory",
+          "background",
+          "action",
+          "run",
+          "findings",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "ConnectRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ConnectReviewRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectFixRequest"
+          }
+        ]
+      },
+      "ConnectRunStatus": {
+        "type": "string",
+        "enum": ["queued", "running", "done"]
+      },
+      "ConnectProgress": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["message", "at"],
+        "additionalProperties": false
+      },
+      "ConnectResultState": {
+        "type": "string",
+        "enum": ["completed", "partial", "refused", "failed", "cancelled"]
+      },
+      "ConnectVerdict": {
+        "type": "string",
+        "enum": ["clean", "findings", "blocking", "incomplete", "not-reviewed"]
+      },
+      "ConnectSeverity": {
+        "type": "string",
+        "enum": ["blocking", "concern", "nit"]
+      },
+      "ConnectCategory": {
+        "type": "string",
+        "enum": ["bug", "security", "reliability", "performance", "tests", "maintainability", "style", "docs"]
+      },
+      "ConnectSide": {
+        "type": "string",
+        "enum": ["RIGHT", "LEFT"]
+      },
+      "ConnectBucket": {
+        "type": "string",
+        "enum": ["inline", "overflow", "outside-diff", "elsewhere", "nit", "still-open"]
+      },
+      "ConnectFindingStatus": {
+        "type": "string",
+        "enum": ["open", "fixing", "fixed", "still-open", "new", "dismissed"]
+      },
+      "ConnectFinding": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ConnectSeverity"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ConnectCategory"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "line": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "side": {
+            "$ref": "#/components/schemas/ConnectSide"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "source": {
+            "type": "string",
+            "enum": ["review", "security"]
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "suggestion": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "bucket": {
+            "$ref": "#/components/schemas/ConnectBucket"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectFindingStatus"
+          }
+        },
+        "required": ["id", "severity", "category", "path", "side", "title", "body", "source", "bucket", "status"],
+        "additionalProperties": false
+      },
+      "ConnectCostKind": {
+        "type": "string",
+        "enum": ["free", "priced", "plan", "local", "unknown"]
+      },
+      "ConnectCost": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConnectCostKind"
+          },
+          "usd": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ConnectRefusalCode": {
+        "type": "string",
+        "enum": [
+          "unknown",
+          "effect",
+          "permission",
+          "denied",
+          "read-rule",
+          "limit",
+          "budget",
+          "unavailable",
+          "input",
+          "not-allowed",
+          "escalate"
+        ]
       },
       "EventServerInstanceDisposed": {
         "type": "object",
@@ -51177,7 +54068,7 @@
         },
         "additionalProperties": false
       },
-      "WorkflowPlanStage": {
+      "WorkflowPlanAgentStage": {
         "type": "object",
         "properties": {
           "id": {
@@ -51187,18 +54078,6 @@
             "type": "string"
           },
           "phase": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "effort": {
-            "type": "string"
-          },
-          "isolation": {
             "type": "string"
           },
           "items": {
@@ -51225,6 +54104,22 @@
               "type": "string"
             }
           },
+          "kind": {
+            "type": "string",
+            "enum": ["agent"]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "string"
+          },
           "verify": {
             "type": "object",
             "properties": {
@@ -51240,8 +54135,75 @@
             "additionalProperties": false
           }
         },
-        "required": ["id", "title", "phase", "agent", "items", "serial", "writes", "asks"],
+        "required": ["id", "title", "phase", "items", "serial", "writes", "asks", "agent"],
         "additionalProperties": false
+      },
+      "WorkflowPlanConnectStage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "enum": ["dynamic"]
+              }
+            ]
+          },
+          "serial": {
+            "type": "boolean"
+          },
+          "writes": {
+            "type": "string"
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["connect"]
+          },
+          "connect": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              }
+            },
+            "required": ["to", "action"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "title", "phase", "items", "serial", "writes", "asks", "kind", "connect"],
+        "additionalProperties": false
+      },
+      "WorkflowPlanStage": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/WorkflowPlanAgentStage"
+          },
+          {
+            "$ref": "#/components/schemas/WorkflowPlanConnectStage"
+          }
+        ]
       },
       "WorkflowPlan": {
         "type": "object",
@@ -51511,6 +54473,206 @@
         "required": ["metric", "value", "unit"],
         "additionalProperties": false
       },
+      "ConnectKind": {
+        "type": "string",
+        "enum": ["agent", "helper", "tool", "runtime", "service", "mcp", "workflow", "skill"]
+      },
+      "ConnectOwner": {
+        "type": "string",
+        "enum": ["main", "vectorscope", "hands", "vector-at-mention", "codium", "cloud-workspaces", "plugin", "user"]
+      },
+      "ConnectPlace": {
+        "type": "string",
+        "enum": ["local", "your-cloud", "vector-cloud"]
+      },
+      "ConnectState": {
+        "type": "string",
+        "enum": ["ready", "busy", "unavailable", "off", "not-installed"]
+      },
+      "ConnectReach": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": ["connect", "ui", "none"]
+          },
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          }
+        ]
+      },
+      "ConnectActionID": {
+        "type": "string",
+        "enum": ["review", "fix"]
+      },
+      "ConnectEffect": {
+        "type": "string",
+        "enum": ["read", "write"]
+      },
+      "ConnectResultKind": {
+        "type": "string",
+        "enum": ["review", "fix"]
+      },
+      "ConnectAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ConnectActionID"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectEffect"
+            },
+            "minItems": 1
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ConnectResultKind"
+          }
+        },
+        "required": ["id", "title", "effects", "background", "result"],
+        "additionalProperties": false
+      },
+      "ConnectActivity": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastRunAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["running"],
+        "additionalProperties": false
+      },
+      "ConnectReviewInput": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectDirectoryReviewInput": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "requestKey": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "format": "uuid"
+          }
+        },
+        "required": ["requestKey"],
+        "additionalProperties": false
+      },
+      "ConnectRegisterInput": {
+        "type": "object",
+        "properties": {
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectFinding"
+            },
+            "maxItems": 200
+          }
+        },
+        "required": ["sessionID", "target", "findings"],
+        "additionalProperties": false
+      },
+      "ConnectDismissInput": {
+        "type": "object",
+        "properties": {
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 400
+          }
+        },
+        "required": ["sessionID", "findings"],
+        "additionalProperties": false
+      },
       "ProjectDirectories": {
         "type": "array",
         "items": {
@@ -51540,6 +54702,1050 @@
         },
         "required": ["ticket", "expires_in"],
         "additionalProperties": false
+      },
+      "ReviewRunTarget": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["working-tree", "staged"]
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          }
+        },
+        "required": ["kind", "head"],
+        "additionalProperties": false
+      },
+      "ReviewRunStart": {
+        "type": "object",
+        "properties": {
+          "requestID": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{8,128}$"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ReviewRunTarget"
+          },
+          "maxCost": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": ["requestID", "target"],
+        "additionalProperties": false
+      },
+      "ReviewRunStatus": {
+        "type": "string",
+        "enum": ["running", "completed", "failed", "cancelled", "interrupted", "unknown"]
+      },
+      "ReviewRunArtifact": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [1]
+          },
+          "json": {
+            "type": "string",
+            "maxLength": 8388608
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": ["version", "json", "bytes", "sha256"],
+        "additionalProperties": false
+      },
+      "ReviewRunInfo": {
+        "type": "object",
+        "properties": {
+          "runID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "parentID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ReviewRunStart"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReviewRunStatus"
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/ReviewRunArtifact"
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "required": ["runID", "parentID", "request", "status", "canStop", "startedAt"],
+        "additionalProperties": false
+      },
+      "ReviewRunSummary": {
+        "type": "object",
+        "properties": {
+          "runID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "parentID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ReviewRunStart"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReviewRunStatus"
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "hasResult": {
+            "type": "boolean"
+          }
+        },
+        "required": ["runID", "parentID", "request", "status", "canStop", "startedAt", "hasResult"],
+        "additionalProperties": false
+      },
+      "ReviewRunList": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewRunSummary"
+            },
+            "maxItems": 50
+          },
+          "next": {
+            "type": "string",
+            "pattern": "^ses"
+          }
+        },
+        "required": ["runs"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlID": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9:_-]{1,256}$"
+      },
+      "ReviewMemoryControlScope": {
+        "type": "string",
+        "pattern": "^vrs1_[0-9a-f]{64}$"
+      },
+      "ReviewMemoryControlGeneration": {
+        "type": "integer",
+        "minimum": 0,
+        "exclusiveMaximum": 9007199254740991
+      },
+      "ReviewMemoryControlHead": {
+        "type": "string",
+        "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+      },
+      "ReviewMemoryControlCitation": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "line": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 10000000
+          },
+          "head": {
+            "$ref": "#/components/schemas/ReviewMemoryControlHead"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": ["path", "line", "head", "quote"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlTimestamp": {
+        "type": "integer",
+        "minimum": 0,
+        "exclusiveMaximum": 9007199254740991
+      },
+      "ReviewMemoryControlOwnerEntry": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "approvedBy": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "approvedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMaximum": 9007199254740991,
+            "exclusiveMinimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["preference", "check"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["owner"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active"]
+          }
+        },
+        "required": [
+          "text",
+          "paths",
+          "citations",
+          "reason",
+          "visibility",
+          "id",
+          "createdAt",
+          "updatedAt",
+          "approvedBy",
+          "approvedAt",
+          "kind",
+          "origin",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlSource": {
+        "type": "object",
+        "properties": {
+          "parentID": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "reviewID": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "head": {
+            "$ref": "#/components/schemas/ReviewMemoryControlHead"
+          }
+        },
+        "required": ["parentID", "reviewID", "head"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlProposedEntry": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["outcome"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["proposed"]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSource"
+          }
+        },
+        "required": [
+          "text",
+          "paths",
+          "citations",
+          "reason",
+          "visibility",
+          "id",
+          "createdAt",
+          "updatedAt",
+          "kind",
+          "origin",
+          "status",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlApprovedEntry": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "approvedBy": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "approvedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMaximum": 9007199254740991,
+            "exclusiveMinimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["outcome"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active"]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSource"
+          }
+        },
+        "required": [
+          "text",
+          "paths",
+          "citations",
+          "reason",
+          "visibility",
+          "id",
+          "createdAt",
+          "updatedAt",
+          "approvedBy",
+          "approvedAt",
+          "kind",
+          "origin",
+          "status",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlEntry": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlOwnerEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlProposedEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlApprovedEntry"
+          }
+        ]
+      },
+      "ReviewMemoryControlInspect": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "state": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "generation": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlEntry"
+                },
+                "maxItems": 50
+              }
+            },
+            "required": ["enabled", "generation", "entries"],
+            "additionalProperties": false
+          },
+          "next": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMaximum": 9007199254740991,
+            "maximum": 200
+          }
+        },
+        "required": ["repository", "scope", "state"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlConfigure": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["configure"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["action", "expected", "enabled"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlRecord": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "action": {
+            "type": "string",
+            "enum": ["record"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["preference", "check"]
+          }
+        },
+        "required": ["text", "paths", "citations", "reason", "visibility", "action", "expected", "kind"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlApprove": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["approve"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          }
+        },
+        "required": ["action", "expected", "id"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlReopen": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["reopen"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          }
+        },
+        "required": ["action", "expected", "id", "reason"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlForget": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["forget"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          }
+        },
+        "required": ["action", "expected", "id"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlErase": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["erase"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          }
+        },
+        "required": ["action", "expected"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlCommand": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlConfigure"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlRecord"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlApprove"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlReopen"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlForget"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlErase"
+          }
+        ]
+      },
+      "ReviewMemoryControlPrepare": {
+        "type": "object",
+        "properties": {
+          "expectedScope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "command": {
+            "$ref": "#/components/schemas/ReviewMemoryControlCommand"
+          }
+        },
+        "required": ["expectedScope", "command"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlPreviewID": {
+        "type": "string",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+        "format": "uuid"
+      },
+      "ReviewMemoryControlSha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "ReviewMemoryControlConfigurePreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["configure"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": ["expected", "enabled"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlRecordPreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["record"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "minItems": 1,
+                "maxItems": 16
+              },
+              "citations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+                },
+                "maxItems": 8
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "visibility": {
+                "type": "string",
+                "enum": ["private", "repository"]
+              },
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["preference", "check"]
+              }
+            },
+            "required": ["text", "paths", "citations", "reason", "visibility", "expected", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlApprovePreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["approve"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "id": {
+                "$ref": "#/components/schemas/ReviewMemoryControlID"
+              },
+              "entry": {
+                "$ref": "#/components/schemas/ReviewMemoryControlProposedEntry"
+              }
+            },
+            "required": ["expected", "id", "entry"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlForgetPreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["forget"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "id": {
+                "$ref": "#/components/schemas/ReviewMemoryControlID"
+              }
+            },
+            "required": ["expected", "id"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlErasePreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["erase"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              }
+            },
+            "required": ["expected"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlPreview": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlConfigurePreview"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlRecordPreview"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlApprovePreview"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "previewId": {
+                "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+              },
+              "sha256": {
+                "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+              },
+              "expiresAt": {
+                "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+              },
+              "repository": {
+                "$ref": "#/components/schemas/ReviewMemoryControlID"
+              },
+              "scope": {
+                "$ref": "#/components/schemas/ReviewMemoryControlScope"
+              },
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "operation": {
+                "type": "string",
+                "enum": ["reopen"]
+              },
+              "payload": {
+                "type": "object",
+                "properties": {
+                  "expected": {
+                    "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+                  },
+                  "id": {
+                    "$ref": "#/components/schemas/ReviewMemoryControlID"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "pattern": "\\S"
+                  },
+                  "entry": {
+                    "$ref": "#/components/schemas/ReviewMemoryControlApprovedEntry"
+                  }
+                },
+                "required": ["expected", "id", "reason", "entry"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+            "additionalProperties": false
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlForgetPreview"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlErasePreview"
+          }
+        ]
+      },
+      "ReviewMemoryControlConfirmation": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "approvedSha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          }
+        },
+        "required": ["previewId", "approvedSha256"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlState": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          }
+        },
+        "required": ["enabled", "generation"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlConfirmationResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlState"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlEntry"
+          }
+        ]
       },
       "PublicSessionConsent": {
         "type": "object",
@@ -58254,6 +62460,326 @@
         "required": ["id", "type", "data"],
         "additionalProperties": false
       },
+      "ConnectRequester": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["agent", "user", "workflow"]
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ConnectReviewRequest1": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/ConnectRequester"
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          }
+        },
+        "required": ["id", "to", "requester", "requestID", "directory", "background", "action", "target"],
+        "additionalProperties": false
+      },
+      "ConnectFixRequest1": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/ConnectRequester"
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["fix"]
+          },
+          "run": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ConnectFixMode"
+          }
+        },
+        "required": [
+          "id",
+          "to",
+          "requester",
+          "requestID",
+          "directory",
+          "background",
+          "action",
+          "run",
+          "findings",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "ConnectResult": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/ConnectResultState"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/ConnectVerdict"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectFinding"
+            }
+          },
+          "sendsTo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["this-computer", "vector-codium"]
+              },
+              {
+                "type": "string",
+                "pattern": "^model-server:[\\s\\S]*?$"
+              },
+              {
+                "type": "string",
+                "pattern": "^provider:[\\s\\S]*?$"
+              }
+            ]
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/ConnectCost"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "maxItems": 200
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "maxItems": 100
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/ConnectRefusalCode"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "head": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "base": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": ["state", "summary", "findings", "sessions", "notes"],
+        "additionalProperties": false
+      },
+      "ConnectRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "request": {
+            "$ref": "#/components/schemas/ConnectRequest"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectRunStatus"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ConnectProgress"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ConnectResult"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "started": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ended": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "request", "status", "time"],
+        "additionalProperties": false
+      },
+      "ConnectRunUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["connect.run.updated"]
+          },
+          "durable": {
+            "type": "object",
+            "properties": {
+              "aggregateID": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": ["aggregateID", "seq", "version"],
+            "additionalProperties": false
+          },
+          "location": {
+            "$ref": "#/components/schemas/LocationRef"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "run": {
+                "$ref": "#/components/schemas/ConnectRun"
+              }
+            },
+            "required": ["run"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "data"],
+        "additionalProperties": false
+      },
       "VcsBranchUpdated": {
         "type": "object",
         "properties": {
@@ -61985,6 +66511,152 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "EventConnectRunUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["connect.run.updated"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "run": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^cr_",
+                    "minLength": 4,
+                    "maxLength": 64
+                  },
+                  "request": {
+                    "$ref": "#/components/schemas/ConnectRequest"
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/ConnectRunStatus"
+                  },
+                  "progress": {
+                    "$ref": "#/components/schemas/ConnectProgress"
+                  },
+                  "result": {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "$ref": "#/components/schemas/ConnectResultState"
+                      },
+                      "verdict": {
+                        "$ref": "#/components/schemas/ConnectVerdict"
+                      },
+                      "summary": {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      "findings": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/ConnectFinding"
+                        },
+                        "maxItems": 200
+                      },
+                      "sendsTo": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": ["this-computer", "vector-codium"]
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^model-server:[\\s\\S]*?$"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^provider:[\\s\\S]*?$"
+                          }
+                        ]
+                      },
+                      "cached": {
+                        "type": "boolean"
+                      },
+                      "cost": {
+                        "$ref": "#/components/schemas/ConnectCost"
+                      },
+                      "sessions": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^ses"
+                        },
+                        "maxItems": 200
+                      },
+                      "notes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "maxItems": 100
+                      },
+                      "refusal": {
+                        "$ref": "#/components/schemas/ConnectRefusalCode"
+                      },
+                      "target": {
+                        "$ref": "#/components/schemas/ConnectTarget"
+                      },
+                      "head": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "base": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    },
+                    "required": ["state", "summary", "findings", "sessions", "notes"],
+                    "additionalProperties": false
+                  },
+                  "time": {
+                    "type": "object",
+                    "properties": {
+                      "created": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "started": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "ended": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": ["created"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "request", "status", "time"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["run"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
       "EventVcsBranchUpdated": {
         "type": "object",
         "properties": {
@@ -62341,6 +67013,9 @@
       "description": "Vector's memory: rules, saved preferences and what Vector learned, kept on this computer."
     },
     {
+      "name": "connect"
+    },
+    {
       "name": "project",
       "description": "Experimental HttpApi project routes."
     },
@@ -62355,6 +67030,12 @@
     {
       "name": "question",
       "description": "Question routes."
+    },
+    {
+      "name": "review"
+    },
+    {
+      "name": "review-memory"
     },
     {
       "name": "permission",

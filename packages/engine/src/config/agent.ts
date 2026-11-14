@@ -10,7 +10,7 @@ import * as ConfigMarkdown from "./markdown"
 import { ConfigParse } from "./parse"
 
 /** Engine-owned names cannot be replaced by user or repository agent definitions. */
-export const RESERVED: readonly string[] = ["fork", "workflow"]
+export const RESERVED: readonly string[] = ["fork", "workflow", "vectorscope"]
 
 function refuseReserved(name: string, file: string) {
   if (RESERVED.includes(name))

@@ -26,6 +26,8 @@ export interface Interface {
    */
   readonly expire: (requestID: string, message: string) => Effect.Effect<boolean>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  /** Nonstarting preflight for internal unattended work; an absent implementation always refuses that work. */
+  readonly canAllow?: (input: PermissionV1.AskInput) => Effect.Effect<boolean>
 }
 
 interface PendingEntry {
@@ -224,7 +226,22 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, expire, list })
+    const canAllow = Effect.fn("Permission.canAllow")(
+      function* (input: PermissionV1.AskInput) {
+        if (PermissionPolicy.requiresApproval(input.permission, input.always, input.patterns)) return false
+        const data = yield* InstanceState.get(state)
+        return input.patterns.every((pattern) => {
+          const own = evaluate(input.permission, pattern, input.ruleset)
+          return (
+            own.action !== "deny" &&
+            evaluate(input.permission, pattern, input.ruleset, data.approved).action === "allow"
+          )
+        })
+      },
+      (effect, input) => TaskPlace.atHome(input.sessionID)(effect),
+    )
+
+    return Service.of({ ask, reply, expire, list, canAllow })
   }),
 )
 

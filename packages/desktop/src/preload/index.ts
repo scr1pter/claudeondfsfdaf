@@ -14,6 +14,21 @@ const updaterHandler = (_: unknown, state: UpdaterState) => {
 let taskBoardSubscribers = 0
 let researchWatchers = 0
 const api: ElectronAPI = {
+  githubAgents: {
+    status: (cwd) => ipcRenderer.invoke("github-agents-status", cwd),
+    preview: (input) => ipcRenderer.invoke("github-agents-setup-preview", input),
+    setup: (input) => ipcRenderer.invoke("github-agents-setup", input),
+    bind: (input) => ipcRenderer.invoke("github-agents-bind", input),
+    run: (input) => ipcRenderer.invoke("github-agents-run", input),
+    schedules: (input) => ipcRenderer.invoke("github-agents-schedules", input),
+    bindings: () => ipcRenderer.invoke("github-agents-bindings"),
+    unbind: (input) => ipcRenderer.invoke("github-agents-unbind", input),
+    runs: () => ipcRenderer.invoke("github-agents-runs"),
+    previewBrain: (cwd) => ipcRenderer.invoke("github-agents-brain-preview", cwd),
+    returnedArtifacts: (input) => ipcRenderer.invoke("github-agents-returned-artifacts", input),
+    previewReturned: (input) => ipcRenderer.invoke("github-agents-returned-preview", input),
+    importReturned: (input) => ipcRenderer.invoke("github-agents-returned-import", input),
+  },
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
   awaitInitialization: () => ipcRenderer.invoke("await-initialization"),
   wslServers: {

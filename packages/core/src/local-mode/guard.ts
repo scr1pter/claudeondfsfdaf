@@ -467,6 +467,15 @@ export function installed() {
 }
 
 /**
+ * Whether the guard installed is the strict one (installStrict), which refuses every connection off this computer and
+ * logs every attempt. `installed()` is also true for Vector Local's guard, which follows the user's policy and logs
+ * nothing while Vector Local is off.
+ */
+export function strictInstalled() {
+  return state.mode === "strict"
+}
+
+/**
  * Removes the Vector Local guard the worker preload installed (guard-worker.ts), so a worker entry that seals itself
  * (backstop-worker.ts) can put the strict guard in its place: the preload's guard follows the policy of the process,
  * which may allow more. A strict guard the preload installed in a test stays.

@@ -27,6 +27,7 @@ import { registerHooks } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { connectedReviews } from "./smoke-connect-node.ts"
 
 const PROVIDER = "smoke"
 const MODEL = "smoke-model"
@@ -50,7 +51,36 @@ if (typeof Bun !== "undefined" || process.versions.bun) {
 const script = fileURLToPath(import.meta.url)
 await (process.argv[2] === "--serve"
   ? serve(process.argv[3])
-  : smoke(path.resolve(process.argv[2] ?? path.join(path.dirname(script), "..", "dist", "node", "node.js"))))
+  : process.argv[2] === "--connect-only"
+    ? smokeConnect(path.resolve(process.argv[3] ?? path.join(path.dirname(script), "..", "dist", "node", "node.js")))
+    : smoke(path.resolve(process.argv[2] ?? path.join(path.dirname(script), "..", "dist", "node", "node.js"))))
+
+async function smokeConnect(bundle: string) {
+  const root = await mkdtemp(path.join(tmpdir(), "vector-connect-node-smoke-"))
+  const project = path.join(root, "project")
+  await mkdir(project, { recursive: true })
+  const model = await startFakeModel(path.join(project, "notes.txt"))
+  try {
+    const engine = await startEngine(bundle, root, model.url)
+    try {
+      await connectedReviews(engine, project)
+      if (model.requests.length !== 0) throw new Error("a refused or cancelled non-Git review reached the model")
+      console.log(
+        `connect owner transport smoke passed on node ${process.version}: explicit approval, concurrent-start refusal, peer-disconnect cancellation and durable settlement`,
+      )
+    } catch (error) {
+      console.error(
+        `connect owner transport smoke FAILED on node ${process.version}: ${String(error)}\n${engine.output.join("").slice(-8_000)}`,
+      )
+      process.exitCode = 1
+    } finally {
+      await engine.stop()
+    }
+  } finally {
+    model.close()
+    await rm(root, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
 
 async function smoke(bundle: string) {
   const root = await mkdtemp(path.join(tmpdir(), "vector-node-smoke-"))
@@ -70,6 +100,7 @@ async function smoke(bundle: string) {
         ...(await runTurn(engine, project, marker, PROVIDER, KEEP)).map((failure) => `document: ${failure}`),
         ...(await searchModel(engine, project, bundle)).map((failure) => `search model: ${failure}`),
         ...(await localRecommendation(engine, project)).map((failure) => `local recommendation: ${failure}`),
+        ...(await connectedReviews(engine, project)).map((failure) => `connected review: ${failure}`),
       ])
       .catch((error) => [`the turn could not run: ${String(error)}`])
       .finally(engine.stop)
@@ -195,6 +226,7 @@ function sidecarEnv(input: { home: string; userData: string; configDir: string; 
     USERPROFILE: input.home,
     VECTOR_TEST_HOME: input.home,
     VECTOR_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true",
+    VECTOR_EXPERIMENTAL_CONNECT: "true",
     VECTOR_EXPERIMENTAL_LSP_TOOL: "true",
     VECTOR_EXPERIMENTAL_ICON_DISCOVERY: "true",
     VECTOR_EXPERIMENTAL_FILEWATCHER: "true",
@@ -260,6 +292,7 @@ function providerConfig(baseURL: string) {
     small_model: `${PROVIDER}/${MODEL}`,
     formatter: false,
     lsp: false,
+    permission: { connect: "ask" },
     provider: {
       [PROVIDER]: provider("Smoke", "@ai-sdk/openai-compatible"),
       [NPM_PROVIDER]: provider("Smoke npm", NPM_PACKAGE),

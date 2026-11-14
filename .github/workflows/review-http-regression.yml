@@ -1,0 +1,80 @@
+name: Review HTTP regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: HTTP file alone or the full original Linux shard
+        type: choice
+        options: [local, shard]
+        default: local
+      diagnostics:
+        description: Passive counts, active observation, or no diagnostics
+        type: choice
+        options: [passive, "1", "off"]
+        default: passive
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  engine-linux-four:
+    name: Owner HTTP review (${{ inputs.scope }}, ${{ inputs.diagnostics }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Install ripgrep
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          fi
+          rg --version
+
+      - name: Configure disposable Git fixtures
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      - name: Build Engine test dependencies
+        timeout-minutes: 20
+        run: GITHUB_ACTIONS=false bun turbo run build --filter='@vectordevai/engine^...' --log-order=stream
+
+      - name: Run the selected HTTP diagnostic scope
+        timeout-minutes: 30
+        working-directory: packages/engine
+        run: |
+          if [ "$REVIEW_HTTP_SCOPE" = local ]; then
+            GITHUB_ACTIONS=false bun test --timeout 30000 test/server/httpapi-review.test.ts
+          else
+            GITHUB_ACTIONS=false bun test --timeout 30000 --shard=4/4
+          fi
+        env:
+          REVIEW_HTTP_SCOPE: ${{ inputs.scope }}
+          VECTOR_REVIEW_HTTP_DIAGNOSTICS: ${{ inputs.diagnostics }}
+          VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+          CI: "true"
+          RECORD: "false"

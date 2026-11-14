@@ -201,13 +201,19 @@ export async function setup(page: Page, input: Setup = {}) {
     )
   await page.addInitScript(
     ({ directory, server, rootID, settings }) => {
+      // The built App uses its saved server selection; the fixture engine lives on this exact origin.
+      localStorage.setItem("vector.settings.dat:defaultServerUrl", server)
       localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true, ...settings } }))
       localStorage.setItem("vector.onboarding.v1", JSON.stringify({ tour: true, dismissed: true }))
       localStorage.setItem(
         "vector.global.dat:server",
         JSON.stringify({
-          projects: { local: [{ worktree: directory, expanded: true }] },
-          lastProject: { local: directory },
+          list: [server],
+          projects: {
+            local: [{ worktree: directory, expanded: true }],
+            [server]: [{ worktree: directory, expanded: true }],
+          },
+          lastProject: { local: directory, [server]: directory },
         }),
       )
       localStorage.setItem(

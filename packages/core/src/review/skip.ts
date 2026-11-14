@@ -19,6 +19,9 @@ export type SkipReason =
   | "pr-budget"
   | "nothing-to-review"
   | "too-large"
+  // VS-24: Review.run's zero-attempt trivial outcome (trivial.ts). decideSkip never gives it; the GitHub job's skip
+  // through decideSkip state waits for the @vector merge. verdict.ts reads it as a policy skip.
+  | "trivial"
 
 export interface SkipInput {
   trigger: Trigger // "auto" for pull_request and workflow_dispatch, "command" for comments
