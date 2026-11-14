@@ -101,7 +101,7 @@
     "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
     "stagedStop": "not run because units failed"
   },
-  "pending": "Final cross-platform packaging, including final packaged helper/Main pin verification; owner-device calibration/takeover and ARM64 privileged/device checks, Mac grants, signing/notarization and owner publication. Exact a0e full PR completedSUCCESS with27successful/11skipped/0failed jobs at attempt1. Helper1.0.15 remains unreleased; actual hardware calibration and granted OS behavior are not established.",
+  "pending": "Owner-only/manual gates: real Windows mouse/same-Shift calibration, takeover/privileged device/UAC and ARM64 device checks, Mac grants and grant-persistence/reset verification, production signing/notarization, owner approvals, applicable Codium gateway image deployment and publication. All required automated gates passed at exact a0e: PR27successful/11skipped/0failed and unsigned preview31successful/3skipped/0failed, attempt1 each. Helper1.0.15 remains unreleased.",
   "native6fObservation": {
     "revision": "6f53a6ec9130220bf3fe7a03cc256802d227ee89",
     "run": 43547207683,
@@ -550,12 +550,12 @@
         "failed": 0,
         "assertions": 218
       },
-      "qualification": "Actual downloaded preview job log confirms exact-once full per-file app inventory and final244/244 summary, followed by browser-condition unit suite. No failed child was retried. The exact a0e full PR independently completed success, with actual Linux+Windows app244/244 verified below. Final packaged helper/Main pin verifiers remain pending; not hardware, signing or release proof."
+      "qualification": "Actual downloaded preview job log confirms exact-once full per-file app inventory and final244/244 summary, followed by browser-condition unit suite. No failed child was retried. The exact a0e full PR independently completed success, with actual Linux+Windows app244/244 verified below. All final Windows x64/native ARM64/Mac packaged verifiers also passed. None of these establish owner hardware, real certificate-signing or release proof."
     }
   },
   "integrationA0e": {
     "headRevision": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
-    "qualification": "Application source under validation; subsequent documentation-only commits do not change it. Exact-head PR completed success at attempt1 with27successful/11skipped/0failed jobs. Preview final packages remain pending. Actual reports/log observations below are independently read; no green job metadata erases named skips or the Windows browser flaky case.",
+    "qualification": "Application source under validation; subsequent documentation-only commits do not change it. Exact-head PR completed success at attempt1 with27successful/11skipped/0failed jobs; exact-head unsigned artifacts-only preview also completed success at attempt1 with31successful/3skipped/0failed jobs. Actual final Windows x64/native ARM64 and both Mac verifiers passed. Independently read actual reports/logs below retain every named native skip and Windows browser flaky case. This is not a release or owner-device proof.",
     "fullPR": {
       "run": 43560683817,
       "testedMergeRevision": "3b14e6627b394114efca488d7d256fc0709a6e2f",
@@ -1283,7 +1283,7 @@
           "name": "computer-helper / windows-arm64-test"
         }
       ],
-      "skippedRosterProvenance": "Nine selector-only skip rows retained from earlier exact-run GraphQL discovery; the two native rows and aggregate11skip count reconciled with final authoritative REST snapshot. A skipped selector-only dispatch is not a failed required job or executed diagnostic."
+      "skippedRosterProvenance": "All11 skipped job IDs/names and27successful/0failed/0cancelled totals independently reconciled against final authoritative REST at06:58:43UTC; attempt1, no manual workflow rerun."
     },
     "unsignedArtifactsOnlyPreview": {
       "run": 43560764334,
@@ -1294,7 +1294,7 @@
         "allow_unsigned": true,
         "prerelease": false
       },
-      "conclusion": "pending",
+      "conclusion": "success",
       "windowsX64Native": {
         "job": 132345214986,
         "logBytes": 189522,
@@ -1404,7 +1404,7 @@
           "qualification": "Both architecture manifests match this actual digest/toolchain; do not substitute the earlier 60300433 digest."
         }
       },
-      "remaining": "Final macOS/Windows/Linux package verifiers and the separate final ARM64 actual packed Main/helper verifier. Required executed preview prerequisites passed; configured dry-run/publish skips remain skips.",
+      "remaining": "No required automated gate remains at this application source. Owner device calibration/takeover/UAC/ARM64 privileged checks, Mac grants/grant persistence/reset checks, real signing/notarization, final approvals/Codium gateway image deployment if applicable, and publication remain owner gates.",
       "macIntelCore": {
         "job": 132350256389,
         "logBytes": 34350,
@@ -1498,8 +1498,126 @@
         "linux": 132360549034,
         "mac": 132360549035,
         "statusAtSpawn": "queued",
-        "arm64FinalPackedVerifier": "not yet spawned; depends on Windows package success"
-      }
+        "arm64FinalPackedVerifier": 132364288317,
+        "finalStatus": "All four final package/verifier jobs completed success; no active/queued jobs."
+      },
+      "windowsFinalPackage": {
+        "job": 132360549033,
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:40:05Z",
+        "logBytes": 427357,
+        "logSha256": "8eddc77bc6111478f043bcb6bb3dcb25dd2104a0ed70c66b7de8783016ef1641",
+        "actualVerifierMarker": "Verified the final computer helper identity, signatures, provenance and packaged self-test.",
+        "verifiedArchitecture": "x64",
+        "signatureObserver": "Fixed protected PowerShell7 under Program Files, not PS5; actual final unsigned-package verifier passed.",
+        "signingMode": "unsigned; never published",
+        "nativeSourceDigest": "d3309cc9422609dba810a9e3ab1fb40b825c7b41405dbef300dd3077fc44345b",
+        "helperVersion": "1.0.15",
+        "finalHelperArchive": {
+          "artifact": 14102421841,
+          "archiveBytes": 2087910,
+          "archiveSha256": "e283186545da5f1afc867c4d4ce880e422bacdecad5d3f2a831cd91b63e9c56b",
+          "independentlyRehashed": true
+        },
+        "nativeTestedExeBytesEqualFinalHelperBytes": true,
+        "actualHelperBytes": {
+          "x64": {
+            "bytes": 2444800,
+            "sha256": "757721ead97871e9009f6e659e55ac9d2fd220a98defab061064b8934e5e0117"
+          },
+          "arm64": {
+            "bytes": 2669568,
+            "sha256": "67131b0118a6c5a9c9f893bc699a30f718da46442310f9611ed350d0b14abae1"
+          }
+        },
+        "arm64PackedProof": {
+          "artifact": 14103211979,
+          "archiveBytes": 55646762,
+          "archiveSha256": "455b66542f94be21eee77dabea3283acb77c6aa3102422b22cee600b57ad446a",
+          "metadataProvenance": "Independently fetched API metadata matches package-job upload digest and exact run43560764334/head a0e. Native ARM64 final verifier132364288317 subsequently restored this exact id/digest/source/run and passed actual packed Main/helper checks. Large proof archive was not downloaded locally."
+        },
+        "installerArtifact": {
+          "artifact": 14102773268,
+          "archiveBytes": 596143849,
+          "archiveSha256": "f38bd7aa87df92344ff3a62fea968cc2315c87fecc09930277a62f9d48eb1cfc",
+          "metadataProvenance": "Independently fetched API metadata matches job upload digest and exact a0e preview. Large installer archive was not downloaded or installed locally."
+        },
+        "qualification": "Actual shipped-location x64 helper/packed-Main pins/signature/source/version/non-skipped packaged-self-test verifier success. Separate native ARM64 final packaged verifier and both final Mac verifiers also passed and are recorded below. No owner hardware, certificate-signing or publication claim."
+      },
+      "windowsArm64FinalPackage": {
+        "job": 132364288317,
+        "logBytes": 39186,
+        "logSha256": "4a37cf5fb909dcbedde490219d0d2a54585444ef2a279ac21b366379d9de1147",
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:49:40Z",
+        "actualVerifierMarker": "Verified the final computer helper identity, signatures, provenance and packaged self-test.",
+        "verifiedArchitecture": "arm64",
+        "nativeRunner": "windows-11-arm",
+        "expectedProofArtifact": 14103211979,
+        "expectedProofDigest": "455b66542f94be21eee77dabea3283acb77c6aa3102422b22cee600b57ad446a",
+        "actualRestoreMarker": "Restored the exact helper artifact ids, source/run identity and safe archives.",
+        "qualification": "Actual native ARM64 final shipped-location verification of actual app.asar Main pins, helper bytes/source/signature/version and every non-skipped packaged self-test. This is distinct from earlier ARM64 core checks. Real hardware calibration, privileged/device/UAC behavior, signing and publication remain owner gates."
+      },
+      "linuxFinalPackage": {
+        "job": 132360549034,
+        "logBytes": 405437,
+        "logSha256": "5d0f1f1313706ab1bccadfce4d830ced4e4dda6336ef6883ac2c71d50d5df6f7",
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:43:05Z",
+        "helperAbsence": "Actual successful Verify Linux artifacts step checked both linux-unpacked/resources/computer and linux-arm64-unpacked/resources/computer absent before preservation.",
+        "installerArtifact": {
+          "artifact": 14102962938,
+          "archiveBytes": 364067394,
+          "archiveSha256": "4d2aacc2870965048602204519095f858f283c2582d580652c1c23ac76b32e43",
+          "metadataProvenance": "Independently fetched API metadata matches job upload digest and exact run43560764334/head a0e. Large archive was not downloaded or installed locally."
+        },
+        "qualification": "Actual Linux package/audit/helper-absence validation; product Hands remains unsupported on Linux."
+      },
+      "macFinalPackage": {
+        "job": 132360549035,
+        "conclusion": "success",
+        "completedAtUtc": "2026-11-14T06:57:38Z",
+        "logBytes": 623846,
+        "logSha256": "5b13ed945581009b3b193f3c3586dd7eb68258c402a9a31d6a613dd6648aba1e",
+        "actualFinalVerifierMarkers": 2,
+        "verifiedApplicationArchitectures": [
+          "arm64",
+          "x64"
+        ],
+        "signingMode": "ad-hoc; unsigned artifacts-only preview, no Developer ID/notarization claim",
+        "actualVerifierMarker": "Verified the final computer helper identity, signatures, provenance and packaged self-test.",
+        "verifiedScope": "Both final applications: helper source/provenance receipt sealed by outer signature, current enforced measured lock, helper slices/signatures/cdhash/empty entitlements/runtime/channel identity, version and every non-skipped final-location packaged self-test; subsequent outer/helper codesign verification passed.",
+        "installerArtifact": {
+          "artifact": 14103421541,
+          "archiveBytes": 743649875,
+          "archiveSha256": "303a33b4f5ac07ebc6b4ceafaa6addc123a83119787a45913ec0507f5841b74c",
+          "metadataProvenance": "Independently fetched API metadata matches job upload digest and exact run43560764334/head a0e. Large archive was not downloaded or installed locally."
+        },
+        "qualification": "Actual two final-verifier success markers and final signature/audit/preservation steps, not just green metadata. No granted Mac OS behavior, grant persistence, Developer ID, notarization or publication claim."
+      },
+      "runAttempt": 1,
+      "observedCompleteAtUtc": "2026-11-14T06:58:17Z",
+      "jobCounts": {
+        "success": 31,
+        "skipped": 3,
+        "failure": 0
+      },
+      "manualWorkflowReruns": 0,
+      "skippedJobs": [
+        {
+          "job": 132345216392,
+          "name": "Build or restore the tested immutable computer helpers / desktop-e2e-linux"
+        },
+        {
+          "job": 132345216437,
+          "name": "Build or restore the tested immutable computer helpers / overlay-linux"
+        },
+        {
+          "job": 132368468013,
+          "name": "Publish release and update feeds"
+        }
+      ],
+      "finalRosterProvenance": "Final authoritative REST: all34jobs completed,31success/3skipped/0failed; actual required final verifier logs independently read. No active/queued jobs, no publication."
     },
     "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."
   },

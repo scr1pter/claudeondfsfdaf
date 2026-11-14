@@ -1,12 +1,13 @@
 # Vector Hands build: deviations from the contract
 
 Current continuation is recorded in [hands-progress.md](./hands-progress.md).
-The owner-approved W9 redesign is implemented. Current-source hosted Windows
-listener health and isolated native Stop, cross-platform core checks, focused
-Hands browser cases, the full Windows browser regression (with its named
-unrelated flaky case and skip), and integrated app tests have passed within
-their recorded scopes. Final packaged helper/Main pin verifiers and owner-device
-hardware/grants/signing/publication gates remain open. Helper 1.0.15 is unreleased.
+The owner-approved W9 redesign is implemented. Exact `a0e5ce8e` full PR CI and
+the unsigned artifacts-only preview passed, including actual final Windows
+x64/native ARM64 packed Main/helper verifiers, both final Mac verifiers and
+Linux package/helper-absence checks. Hosted listener health/Stop, cross-platform
+core checks, focused/full browser checks and integrated app tests retain their
+recorded flaky/skip qualifications. Only owner-device hardware/grants, production
+signing/notarization, approvals and publication gates remain. Helper 1.0.15 is unreleased.
 
 ## Historical 11 November checkpoint
 
