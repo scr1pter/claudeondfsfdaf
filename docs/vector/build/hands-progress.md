@@ -22,7 +22,23 @@ Verified baseline archives:
 
 **CI scheduling workaround executed.** After the `741a3379` Ubuntu selector remained queued without a runner for over 25 minutes, Windows-unit diagnostic dispatches moved their unchanged builtins-only Bash selector to `windows-2025`; PR, push and every other mode retain Ubuntu. Validation is still required, with unchanged permissions, timeout and rejection rules. Focused routing checks passed 3 tests / 340 assertions, and the actual `60300433` selector passed. This scheduling result is separate from the native results above.
 
-**Remaining gates.** Broad PR/integration CI and final cross-platform packaging remain open, including the actual final packaged helper/Main pin verifiers. The pending unsigned preview `43552031298` is at `d9f7985b`; its application/native source is identical to `60300433`, but its whole revision is different. Owner-device Windows calibration/takeover and ARM64 checks, Mac grants, signing/notarization and owner publication remain required. No merge, package release, granted OS permission or hardware-delivery pass is claimed. The current machine-readable record is [hands-windows-validation-2026-11-13.json](./evidence/hands-windows-validation-2026-11-13.json).
+**Additional verified platform results.** [PR run `43552396408`](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43552396408), head `60300433`, tested merge `dad7b450bbfd30a561f742925a1733d22362f30c`, independently passed Windows core and passive listener health in job `132329351436`. Its later source-bound native-stage invocation also recorded `stop.ok=true`, exit 0 and `native-os-stop=true`; the earlier ordinary overlay invocation's `native_harness_unavailable` skip is retained, and capture exclusion remains `not_applicable`. Full Linux and Windows unit jobs passed. The PR Mac report passed its executed checks but retained 13 explicit skips, including two `screen_denied` and ten `accessibility_denied` rows; this is not granted Mac permission proof.
+
+The unsigned [preview `43552031298`](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43552031298) remains at `d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb`. Its application/native source matches `60300433`, while its whole revision differs. Its desktop test job passed, and the following small report archives were independently rehashed and parsed. Counts are passed / failed / skipped; each report's top-level code is 0. Full byte lengths and SHA-256 values are retained in the [dated evidence](./evidence/hands-windows-validation-2026-11-13.json).
+
+| Source and report | Core | Isolated | Verified archive |
+| --- | --- | --- | --- |
+| PR Windows | 30 / 0 / 1 | 37 / 0 / 11, listener health passed | `14098981011` |
+| PR Mac | 31 / 0 / 1 | 33 / 0 / 13, permission-denial skips | `14099110979` |
+| Preview Windows x64 | 30 / 0 / 1 | Not run | `14097913631` |
+| Preview Windows ARM64 | 30 / 0 / 1 | Not run | `14098903110` |
+| Preview Mac helper build | 31 / 0 / 1 | Not run | `14098836330` |
+| Preview macOS 15 Intel | 31 / 0 / 1 | Not run | `14098921377` |
+| Preview macOS 26 | 31 / 0 / 1 | Not run | `14098363130` |
+
+These preview reports establish helper core execution, including ARM64 core checks, rather than final packaged helper/Main pin verification or privileged hardware behavior. The PR's 11 Windows and 13 Mac skips remain skips. Helper **1.0.15 remains unreleased**, and the exact DEVNOTIFY-only cause remains unobserved.
+
+**Remaining gates.** Remaining broad PR/integration jobs and final cross-platform packaging are open, including the actual final packaged helper/Main pin verifiers. Owner-device Windows calibration/takeover and ARM64 privileged/device checks, Mac grants, signing/notarization and owner publication remain required. No merge, package release, granted OS permission or hardware-delivery pass is claimed. The current machine-readable record is [hands-windows-validation-2026-11-13.json](./evidence/hands-windows-validation-2026-11-13.json).
 
 **Historical checkpoints below retain their exact source/run scope.** Their then-pending candidates and failures are preserved; the current `60300433` results above supersede pending assertions about the hosted x64 native checks.
 

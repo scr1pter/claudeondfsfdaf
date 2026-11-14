@@ -101,7 +101,7 @@
     "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
     "stagedStop": "not run because units failed"
   },
-  "pending": "Broad PR/integration CI and final cross-platform packaging, including final packaged helper/Main pin verification; owner-device calibration/takeover and ARM64 checks, Mac grants, signing/notarization and owner publication. Helper 1.0.15 remains unreleased. Current 60300433 hosted x64 native checks, passive listener health and normal baseline Stop passed.",
+  "pending": "Remaining broad PR/integration jobs and final cross-platform packaging, including final packaged helper/Main pin verification; owner-device calibration/takeover and ARM64 privileged/device checks, Mac grants, signing/notarization and owner publication. Helper 1.0.15 remains unreleased. Hosted x64 native checks, passive listener health and normal baseline Stop passed; separate preview x64/ARM64 and Mac core reports passed within their recorded scope.",
   "native6fObservation": {
     "revision": "6f53a6ec9130220bf3fe7a03cc256802d227ee89",
     "run": 43547207683,
@@ -259,5 +259,220 @@
     "stageHelperSourceDigest": "c814ce315e0759ec39d5b0d52ff23af1d75fbdfbeaa739a317478746f3c239b9",
     "artifactVerification": "Core, isolated and overlay archives downloaded and SHA-256 verified against GitHub artifact metadata; Stop result and native-os-stop row read from the baseline archive log.",
     "qualification": "Hosted x64 compilation, units, core, passive listener health and independent normal Stop passed at this exact revision. All 11 named isolated skips remain skips. Real hardware calibration, foreground input/takeover, ARM64 runtime and OS grants are not inferred. Exact DEVNOTIFY-only diagnostic never executed."
+  },
+  "fullPR603PlatformProof": {
+    "run": 43552396408,
+    "headRevision": "60300433519493740408b2971a778ce3926730a5",
+    "testedMergeRevision": "dad7b450bbfd30a561f742925a1733d22362f30c",
+    "sourceVerification": "GitHub artifact metadata associates both report archives with PR head 60300433; the Windows checkout log and artifact suffix identify tested merge dad7b450. Head and tested merge are distinct.",
+    "windows": {
+      "artifact": 14098981011,
+      "artifactBytes": 1367,
+      "archiveSha256": "b57e7fc237b0e8d05ba033412ad3e8da1498bc7c7e0b2fc2ace640fa6cd101ec",
+      "archiveVerified": true,
+      "job": 132329351436,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "passed": 37,
+        "failed": 0,
+        "skipped": 11
+      },
+      "isolatedTopLevelCode": 0,
+      "healthRow": "privileged.input-listener-health: passed",
+      "normalStop": "passed: stop.ok=true, exit 0, native-os-stop=true; later source-bound native-stage invocation",
+      "nativeCaptureExclusion": "skipped: not_applicable",
+      "stopEvidence": "Cached job 132329351436 log: actual result line 1021 and native-os-stop row line 1025; the report ZIP contains core/isolated JSON only.",
+      "ordinaryOverlayNativeStop": "Earlier ordinary overlay report retained native_harness_unavailable skip; it is not counted as a native Stop pass.",
+      "qualification": "Independent PR VM corroborates passive listener health and staged Stop. The 11 isolated skips exactly match native603Baseline.isolatedSkips and remain skips. No hardware calibration/takeover or final packaged-helper proof."
+    },
+    "macOS": {
+      "artifact": 14099110979,
+      "artifactBytes": 2219,
+      "archiveSha256": "b15a121280c06440c1673e9d5357feeea7dfa6c71a0fb5e0956e53a2a2485b64",
+      "archiveVerified": true,
+      "job": 132329351433,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "passed": 33,
+        "failed": 0,
+        "skipped": 13
+      },
+      "isolatedTopLevelCode": 0,
+      "isolatedSkips": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "native-skip"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.capture-overlay-exclusion",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.ax-counter-increment",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.ax-value-set-and-readback",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-ax-without-pointer-or-focus",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-selection-insertion",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.helper-tagged-escape-ignored",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.foreign-escape-stops",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        }
+      ],
+      "skipReasonCounts": {
+        "native-skip": 1,
+        "screen_denied": 2,
+        "accessibility_denied": 10
+      },
+      "qualification": "Screen/accessibility denial rows are explicit skips, not granted-permission, pixel capture, AX input or hardware proof. The 13 named skipped rows remain skipped."
+    },
+    "unitJobs": {
+      "linux": {
+        "job": 132320745960,
+        "name": "unit (linux)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      "windows": {
+        "job": 132320745989,
+        "name": "unit (windows)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      "proof": "GitHub job metadata, not counts inferred from native reports."
+    },
+    "qualification": "These completed native/unit jobs do not establish overall PR completion, final package verification, granted owner permissions, signing or release. Exact DEVNOTIFY-only stripping remains unobserved."
+  },
+  "previewD9fPlatformProof": {
+    "run": 43552031298,
+    "revision": "d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb",
+    "sourceScope": "d9f and 603 have identical application/native source but different whole revisions; preview evidence retains its exact d9f scope.",
+    "windowsX64Core": {
+      "artifact": 14097913631,
+      "artifactBytes": 554,
+      "archiveSha256": "dd7cbb165302e296e38596f85488a595fb6e00a2cb72537678e64da4b4e3fb17",
+      "archiveVerified": true,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "Preview helper core report only; no final packaged helper/Main pin verification or privileged/device behavior is established."
+    },
+    "windowsARM64Core": {
+      "artifact": 14098903110,
+      "artifactBytes": 556,
+      "archiveSha256": "e5c9749c1b186afb5391f9a6be371aafc1dc67f648955fea49a21b3c45dfe16e",
+      "archiveVerified": true,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "Preview helper core report only; no final packaged helper/Main pin verification or privileged/device behavior is established."
+    },
+    "macOSBuildCore": {
+      "artifact": 14098836330,
+      "artifactBytes": 993,
+      "archiveSha256": "cbd63c9740adcb8bf014e862ec2891a9f69435bf19a7932c49ac7d1ed45ad503",
+      "archiveVerified": true,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "Actual core report with privileged checks disabled; no granted Mac permission proof."
+    },
+    "macOSIntelCore": {
+      "artifact": 14098921377,
+      "artifactBytes": 1000,
+      "archiveSha256": "2cc1f866239da3996ef2c48d51bdacff4a33735e1778ed11a5873cc2a76e6d43",
+      "archiveVerified": true,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "macos-15-intel actual core report; privileged checks disabled, no granted Mac permission proof."
+    },
+    "macOS26Core": {
+      "artifact": 14098363130,
+      "artifactBytes": 1002,
+      "archiveSha256": "7fc0809dd9403521865052f70ebe975f47cafa6567ea79322fd48e5977952075",
+      "archiveVerified": true,
+      "core": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "topLevelCode": 0,
+      "qualification": "macos-26 actual core report; privileged checks disabled, no granted Mac permission proof."
+    },
+    "desktopTests": {
+      "job": 132320487075,
+      "name": "Test (desktop)",
+      "status": "completed",
+      "conclusion": "success",
+      "proof": "GitHub job metadata."
+    },
+    "qualification": "All five small core-report archives were independently rehashed and parsed. Core execution and desktop-test success are not final installer/package, granted-permission, hardware calibration, signing or publication proof. Helper 1.0.15 remains unreleased."
   }
 }
