@@ -1,0 +1,251 @@
+{
+  "reviewer": "reviewer-one /root/headless_stage",
+  "lockedAtUtc": "2026-11-05T03:53:00.936994+00:00",
+  "identityMappingKnown": false,
+  "costsOrResultsKnown": false,
+  "sides": {
+    "A": {
+      "dimensions": [
+        {
+          "name": "Functional completeness and coherent API semantics",
+          "score": 7,
+          "maximum": 8,
+          "evidence": [
+            "A/backend/api.mjs:113-154 implements invoices, immutable original amounts and credit limits.",
+            "A/backend/api.mjs:93-105 resolves an invoice replay from the current invoice collection; 149-152 subsequently changes that same invoice balance.",
+            "A/backend/api.mjs:175-177 authenticates before the final unknown-route failure at 270."
+          ],
+          "rationale": "All requested core workflows are implemented, including scoped request identities and racing issuance/credit constraints. Exact invoice replay returns the current credited/balance fields after a later credit, rather than the original issue response. Unknown unauthenticated routes also return 401 rather than the required 404. These are bounded contract gaps, not absence of the product."
+        },
+        {
+          "name": "Transactional integrity, recovery and corruption handling",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "A/backend/store.mjs:31-50 fsyncs a same-directory exclusive temporary file, atomically replaces the ledger and synchronizes the directory where supported.",
+            "A/backend/store.mjs:130-161 validates complete legacy data, preserves original backup bytes, verifies canonical SHA256 and validates v2 before serving.",
+            "A/backend/store.mjs:177-196 clones transactions, validates against prior history, poisons the store after persistence failure and publishes only after persistence.",
+            "A/backend/validation.mjs:144-237 validates relationships, safe totals, immutable prior records and durable idempotency records."
+          ],
+          "rationale": "Strong observable persistence and recovery design. The operation and idempotency entry share one copy-on-write commit. Migration validates before backup/replacement, preserves IDs and exact backup bytes, and corruption fails closed. Historical invoice amounts, credits and revoked keys are protected from later transaction mutation. No material storage-integrity issue was found in this static review; this is not a power-loss or filesystem certification."
+        },
+        {
+          "name": "Authorization boundaries and input/error validation",
+          "score": 7,
+          "maximum": 8,
+          "evidence": [
+            "A/backend/api.mjs:11-40 authenticates hash-only dynamic keys and hides workspace/account scope misses.",
+            "A/backend/api.mjs:157-163 reauthenticates inside the synchronous commit after reading the body; 250-267 stores hashes and persists revocation.",
+            "A/backend/api.mjs:137-144 accepts an untrimmed reason and normalizes it rather than rejecting it.",
+            "A/backend/validation.mjs:25-35 validates timestamp calendar components and timezone; api.mjs:53-64 rejects unsafe quote arithmetic."
+          ],
+          "rationale": "Workspace, account, role and dynamic-key boundaries are implemented coherently; authorization precedes cached results at commit and raw dynamic keys are not persisted. Strict timestamp, integer and object checks are present. A bounded literal input-contract discrepancy remains: a supplied reason with surrounding whitespace is accepted and silently trimmed although the contract requires a trimmed reason and invalid inputs to fail. This is a validation discrepancy, not a demonstrated authorization leak."
+        },
+        {
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "A/backend/store.mjs:71-127 uses fsynced unique ownership candidates, atomic hard links and separately fenced recovery claims; it checks PID liveness before removal.",
+            "A/backend/store.mjs:177-196 uses synchronous non-nested transactions, serializing commit-boundary checks and writes.",
+            "A/backend/api.mjs:204-215,119-134,144-154 performs duplicate/uniqueness/credit checks within those transactions.",
+            "A/app.mjs:22-37 bounds graceful shutdown and releases the lock after HTTP close; 55-58 handles signals and loopback binding."
+          ],
+          "rationale": "The single-process store and synchronous transaction boundary prevent overlapping business mutation. Live-lock ownership is preserved and stale recovery is fenced rather than blindly unlinking a replacement lock. The application creates no descendants, binds loopback, and handles shutdown with a bounded incomplete-body deadline. No material concurrency or lifecycle issue was found by inspection; concurrent process and OS behavior were not executed by this reviewer."
+        },
+        {
+          "name": "CLI usability and typed SDK contract accuracy",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "A/cli.mjs:25-57 implements all required existing/new commands, exact argument counts, numeric checks and environment-backed HTTP use; 60-66 separates JSON stdout/stderr and redacts credentials.",
+            "A/sdk.mjs:14-35 uses real HTTP, rejects redirects, returns API objects and propagates structured ApiError failures.",
+            "A/sdk.mjs:37-58 exposes all eleven required methods.",
+            "A/sdk.d.mts:1-95 exports precise inputs/results, literal roles/status and fully typed Promise returns without any or blanket index signatures.",
+            "A/client-tests/types.mts:45-102 provides genuine negative role, argument and result-type consumers."
+          ],
+          "rationale": "The CLI and typed SDK cover every required workflow, encode resource paths, preserve public return objects, and keep credentials out of failure text. The declarations match observable API shapes and provide strong literal/parameter/result typing. No material required-client gap was found in the bounded static review. Optional invalid JavaScript options are not treated as a missing required typed workflow."
+        },
+        {
+          "name": "Maintainability and meaningful independent verification",
+          "score": 7,
+          "maximum": 8,
+          "evidence": [
+            "A/backend/api.test.mjs:193-209 expects each unsafe-aggregate usage ingestion to return 201.",
+            "A/backend/validation.mjs:118-122 rejects those same unsafe monthly totals during the precommit validation invoked at store.mjs:191.",
+            "A/backend/data.test.mjs:392-440 includes actual fsync/rename fault injection and failed-backup preservation.",
+            "A/backend/api.test.mjs:215-385 tests invoice/credit races, scope and delayed-body revocation; client-tests/transport.test.mjs:68-234 exercises real loopback SDK/CLI transport.",
+            "A/README.md:143-160 distinguishes runtime/live/restart checks and client-tests/README.md:27-36 describes compile-only positive/negative fixtures."
+          ],
+          "rationale": "Clear API/store/validation separation, extensive real behavioral tests, explicit recovery documentation, transport checks and strict type fixtures support maintainability. However, the authored API overflow test contradicts current validation and would fail by static control-flow reasoning: it expects successful ingestion before quote rejection while the store rejects that ingestion during validatePayload. This review did not run the suite and does not claim an observed test result. Replay tests also omit comparing the full original issue response after credits, allowing the reported semantic gap to escape their assertions."
+        }
+      ],
+      "total": 45
+    },
+    "B": {
+      "dimensions": [
+        {
+          "name": "Functional completeness and coherent API semantics",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "B/backend/api.mjs:139-231 exposes legacy and invoice/credit/key routes with complete method/path matching.",
+            "B/backend/data.mjs:329-403 implements usage deduplication, scoped idempotency, immutable invoice amounts, racing credit limits, generated keys and revocation.",
+            "B/backend/data.mjs:317-327 stores a copy of the original result for exact replay; validatePayload:148-154 validates the original invoice response independently of current credit balances.",
+            "B/backend/api.mjs:149-163 returns unknown routes as 404 before authentication."
+          ],
+          "rationale": "The full requested maintenance scope is observable. Accounts, usage, quotations, migration, invoices, credits, scope and keys connect end to end; exact issuance replay retains the original issue result while GET exposes current balances. Request identities separate actors/resources/operations and distinct invoice requests cannot bypass account-period uniqueness. No material functional gap was found by inspection, without assuming external test completion."
+        },
+        {
+          "name": "Transactional integrity, recovery and corruption handling",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "B/backend/data.mjs:36-41 implements recursive lexicographic canonical JSON.",
+            "B/backend/data.mjs:208-227 fsyncs exclusive temporary bytes before atomic replacement.",
+            "B/backend/data.mjs:231-268 validates legacy records before an exact-byte immutable backup and verifies v2 checksum/shape/relationships before use.",
+            "B/backend/data.mjs:437-450 clones, validates and persists the complete business/idempotency state before publishing the new payload.",
+            "B/backend/data.mjs:77-161 validates invoice lines, credits, scope, relationship identities and stored original idempotent results."
+          ],
+          "rationale": "The authoritative ledger is complete and checksummed, with validated migration, preserved original backup bytes and copy-on-write serialized durable commits. Idempotency data is part of the same replacement. Corrupt/unknown schemas are refused without rewriting the ledger. Directory fsync is an additional best-effort operation here (explicitly skipped on Windows); fsynced-file-plus-atomic-replacement satisfies the stated mechanism, but this static review cannot establish hardware/power-loss guarantees."
+        },
+        {
+          "name": "Authorization boundaries and input/error validation",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "B/backend/api.mjs:12-32,107-135 validates body shapes, calendar/timezone fields, safe integers, trimmed reasons and key scopes.",
+            "B/backend/api.mjs:165-180 authenticates before body processing, again after body completion/errors and inside serialized mutation.",
+            "B/backend/data.mjs:275-285 hides foreign/account-scoped resources; 383-402 applies owner-only scope creation and revocation.",
+            "B/backend/data.mjs:414-419 authenticates only unrevoked hash-matched dynamic keys; api.mjs:234-241 returns stable generic internal errors.",
+            "B/sdk.mjs:10-25 validates HTTP base URLs and redacts key echoes in ApiError."
+          ],
+          "rationale": "Observed authorization and error behavior is coherent for the synthetic fixture contract. Dynamic permissions and current revocation are rechecked at commit before replay, owner-only key creation cannot grant a new owner, generated raw keys are not stored, and invalid business data is checked before persistence. No material boundary or input-validation gap was found; public fixture keys remain explicitly nonproduction credentials."
+        },
+        {
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "B/backend/data.mjs:172-199 uses unique immutable per-process claims, PID liveness and removal only of dead uniquely named claims.",
+            "B/backend/data.mjs:437-451 serializes mutations through a failure-tolerant queue and authenticates within each queued operation.",
+            "B/backend/data.mjs:338-380 checks usage duplicates, invoice period uniqueness and remaining balance inside that queue.",
+            "B/app.mjs:32-42 closes HTTP connections before releasing ownership; 45-60 binds loopback and handles errors/signals."
+          ],
+          "rationale": "Concurrent identical usage/invoice submissions and over-credit races share one serialized state transition. Ownership claims prevent a second live process from sharing an in-memory state, and stale unique claims can be recovered without deleting another live claimant. Conservative overlapping startups may both fail, which the source documents and is preferable to dual ownership. The application launches no descendants and has bounded socket shutdown. No material lifecycle/concurrency issue was found statically."
+        },
+        {
+          "name": "CLI usability and typed SDK contract accuracy",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "B/cli.mjs:30-73 covers required commands plus additional account/usage/key workflows through the HTTP SDK; 76-81 emits one success JSON or a nonzero structured stderr error.",
+            "B/sdk.mjs:26-52 converts HTTP/transport failures to ApiError and returns public response objects; 56-69 implements all required client methods.",
+            "B/sdk.d.mts:1-96 provides accurate named client/plan/account/usage/quote/invoice/credit/key types and typed method returns.",
+            "B/sdk-types.test.mts:36-55 tests strict negative roles, required arguments and wrong result types; verify-types.mjs:6-20 invokes the real local compiler without dependency downloads."
+          ],
+          "rationale": "Required legacy and new CLI methods are connected to real HTTP, with numeric argument validation, environment configuration and correct output channels. The SDK includes all requested methods, encodes paths, validates options, redacts errors, and exposes precise declarations with no any/index-signature shortcut. No material required-client issue was found by static inspection."
+        },
+        {
+          "name": "Maintainability and meaningful independent verification",
+          "score": 8,
+          "maximum": 8,
+          "evidence": [
+            "B/verify.mjs:142-226 exercises API/SDK usage races, invalid data, invoice snapshots, credit races and failed request-ID reuse.",
+            "B/verify.mjs:327-382 verifies different-port lock contention, forced restart, exact original invoice replay after credits, exact-byte migration and corruption refusal.",
+            "B/qa-verify.mjs:146-229 separately tests actor/account/workspace/operation boundaries and streaming mutation/replay revocation without business changes.",
+            "B/qa-verify.mjs:271-325 covers correctly-checksummed invalid relationships, preserved migration bytes and simultaneous process contenders.",
+            "B/verify-types.mjs:6-20 and sdk-types.test.mts:36-55 provide runnable strict declaration verification; README.md:101-137 documents storage, recovery and test limits."
+          ],
+          "rationale": "The implementation is compact and separated into HTTP, store/business logic and clients, with readable operational documentation. Real self-contained behavioral harnesses test substantive negative cases and process restart, and an additional QA script tests boundaries beyond ordinary happy paths. The strict compile fixture checks semantic failures. No material verification inconsistency was found in the inspected source. These are test implementations, not independent evidence that this reviewer ran them or that external acceptance/native audits passed."
+        }
+      ],
+      "total": 48
+    }
+  },
+  "findings": [
+    {
+      "id": "A-API-1",
+      "side": "A",
+      "severity": "medium",
+      "material": true,
+      "title": "Invoice issue replay returns a changed balance after credits",
+      "evidence": [
+        "A/backend/api.mjs:93-105",
+        "A/backend/api.mjs:119-120",
+        "A/backend/api.mjs:149-152"
+      ],
+      "expected": "An exact replay returns the original issue result, per the original-result requirement; current balances remain available through GET invoice.",
+      "actualStatic": "The idempotency entry stores only resultId. Replay fetches the current invoice, whose creditedCents and balanceCents are mutated by subsequent credits. Issue an invoice, credit it, and replay the original issue request: the response balance differs from the original successful issue response.",
+      "verification": "Static control-flow conclusion only; no application execution by reviewer.",
+      "scope": "Original invoice amounts and lines remain protected; no duplicate invoice or over-credit bypass is alleged."
+    },
+    {
+      "id": "A-API-2",
+      "side": "A",
+      "severity": "low",
+      "material": false,
+      "title": "Unknown routes authenticate before returning 404",
+      "evidence": [
+        "A/backend/api.mjs:175-177",
+        "A/backend/api.mjs:270",
+        "A/backend/api.test.mjs:138-139"
+      ],
+      "expected": "Unknown routes return404.",
+      "actualStatic": "For a request such as unauthenticated GET /missing, identity fails401 before route matching reaches the404 fallback. Existing unknown-route assertions use the fixture default authenticated key, so they do not cover this case.",
+      "verification": "Static only; not a runtime security disclosure finding."
+    },
+    {
+      "id": "A-VAL-1",
+      "side": "A",
+      "severity": "low",
+      "material": false,
+      "title": "Credit input normalizes surrounding reason whitespace rather than rejecting it",
+      "evidence": [
+        "A/backend/api.mjs:140-144",
+        "A/backend/api.test.mjs:263-266"
+      ],
+      "expected": "The credit reason input is a trimmed nonempty string; invalid input returns400.",
+      "actualStatic": "The API accepts a reason with leading/trailing whitespace, trims it and treats the trimmed replay as identical. This differs from a literal trimmed-input contract.",
+      "verification": "Source explicitly tests this normalization policy; the finding is a bounded contract interpretation and not an authorization failure."
+    },
+    {
+      "id": "A-TEST-1",
+      "side": "A",
+      "severity": "medium",
+      "material": false,
+      "title": "Authored API overflow test contradicts final precommit validation",
+      "evidence": [
+        "A/backend/api.test.mjs:193-204",
+        "A/backend/validation.mjs:118-122",
+        "A/backend/store.mjs:191"
+      ],
+      "expected": "The supplied behavior tests agree with the implementation and do not claim successful ingestion when their store rejects it.",
+      "actualStatic": "The API test expects201 for a usage event that makes an account-month sum or currency total unsafe. validatePayload runs before every durable transaction and rejects exactly those unsafe totals, so the assertion cannot hold for the final source.",
+      "verification": "Deduced from the two source paths; this reviewer did not execute the test and does not report an observed test failure.",
+      "scope": "Whether rejection should occur at ingestion or quotation is separate; the internal test/code disagreement is unambiguous."
+    }
+  ],
+  "limits": [
+    "Independent bounded static review only. No Node/Bun application execution, native runtime, provider/controller calls, browser calls, generated runtime logs, receipts, costs or external acceptance results were used. No source copy was changed.",
+    "Reviewer identity /root/headless_stage (reviewer-one). Before this review I knew and helped qualify the generic seven-role headless instrument, its source-hash bridge and seeded maintenance task baseline/negative-control setup, and peer-reviewed the task-author generic wrapper. I did not read the withheld R3 BUILD_SPEC/evaluator/private reference implementation before the paid candidate freeze; the present requirements are now read as allowed review input.",
+    "I knew the public task shape and qualified seed outcome (16/50 business rows plus four prerequisites), reference54/54 and five targeted mutant-control mechanics from free instrument qualification. I had source-only familiarity with the prospective production cancellation-accounting candidate and both free native fake proofs. These are instrument/seed qualification facts, not R3 paid application results.",
+    "I reviewed prior R2 exact-source A/B outputs, locked scores independently, and learned that prior mapping only after both reviewers locked. I have general prior runtime/instrument familiarity and retain that disclosed R2 knowledge; I did not use it to assign current runtime identities.",
+    "An earlier inventory call before the R2 review inadvertently exposed aggregate completed-agent tool counts, without source/runtime mapping/cost/outcome; this was disclosed to root then. No such inventory or other reviewer/mapping data was read for R3.",
+    "Runtime identities for current A/B, current costs, current acceptance/native outcomes, and the other reviewer scores were concealed when this lock was written. Source style may still permit unconscious inference; blinding is procedural rather than a guarantee that outputs are unrecognizable.",
+    "Authored tests and documentation were inspected as implementation evidence, not accepted as proof of successful execution. Not every test line was exhaustively traced, and this is not a security audit, power-loss guarantee, production-auth endorsement or universal coding-quality judgment.",
+    "The original-result replay reading is based on the explicit issue idempotency requirement. Current GET invoice balances are expected to change after credits. The trim-reason observation is expressly a bounded literal-contract interpretation and does not alone establish a material regression.",
+    "All six dimensions are scored separately; totals are descriptive. Full external functional/financial/native gates and both reviewers per-dimension comparisons remain separate preregistered decisions for the study operator."
+  ],
+  "sourceHashesVerified": true,
+  "sourceHashVerification": {
+    "files": 32,
+    "sideCounts": {
+      "A": 19,
+      "B": 13
+    },
+    "mismatches": [],
+    "manifestSha256": "b62d29a0a325094fe254a68dc7622ecac9b74b21378c674690b0c38d74ab95ec",
+    "verifiedInitiallyAndImmediatelyBeforeLock": true
+  }
+}

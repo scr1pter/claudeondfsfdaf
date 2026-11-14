@@ -1,0 +1,134 @@
+{
+  "kind": "maintenance-integrated-qualification-v1",
+  "status": "runtime_qualified",
+  "frozenInstrumentSourceHead": "9b34d8e6e4ed9aafccf1f54a3f08bba537a054a0",
+  "productionCandidate": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+  "expectedChecks": {
+    "api": 50,
+    "browser": 0,
+    "prerequisite": 4,
+    "total": 54
+  },
+  "referenceChecksPassed": 54,
+  "workingSeedBusinessPasses": 16,
+  "workingSeedBusinessTotal": 50,
+  "workingSeedPrerequisitesPassed": 4,
+  "negativeControlsRejected": 5,
+  "negativeControlsTotal": 5,
+  "allNegativeRawRowsRetained": true,
+  "allNegativePrerequisitesPassed": true,
+  "allIntendedNegativeTargetsFailed": true,
+  "sourceQualifiedAggregate": "c45c883bf4467fff724c9498e72813450b92a172527e3cc39f7d288be1492f2d",
+  "qualificationReportSha256": "595085d2eb30630c9a18d6ea1164b0e6564b6faf8b1c15d90573a661ee81ef87",
+  "nativeProofs": {
+    "codex": {
+      "runtime": "codex",
+      "sourceRevision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+      "profileSha256": "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226",
+      "fakeRequests": 38,
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "unchangedRealSeed": true,
+      "actualWorkingSeedBaselinePreserved": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 5,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": false
+      },
+      "nativeImagePreviewRequests": 9,
+      "knownFailedCommandExecutions": 1,
+      "intentionalExitSevenObservedInOwnedRoot": true,
+      "postJudgeApiCliSdkSucceeded": true,
+      "trustedRgAndGitAvailable": true,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 38,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "privateProofSha256": "047ec9b1781e7864878665ebbad34d23706559f5b8113ffe5670839f7713e190"
+    },
+    "vector": {
+      "runtime": "vector",
+      "sourceRevision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+      "profileSha256": "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226",
+      "fakeRequests": 33,
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "unchangedRealSeed": true,
+      "actualWorkingSeedBaselinePreserved": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 5,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": true,
+        "backgroundTaskLaunches": 1,
+        "ownedCompletionNotifications": 1
+      },
+      "nativeImagePreviewRequests": 7,
+      "knownFailedCommandExecutions": 1,
+      "intentionalExitSevenObservedInOwnedRoot": true,
+      "postJudgeApiCliSdkSucceeded": true,
+      "trustedRgAndGitAvailable": true,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 33,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "privateProofSha256": "753dc546eb3b72f1f0b0b38475e27b9b7d3bbaf45739b3af15b591337411f808"
+    }
+  },
+  "nativeInstrumentSha256": "e08d396a7acaa598b357fae8f3829b8252f7e6905d9a19f9ab6d13643ccc6de8",
+  "taskInstrumentSha256": "e0ea0d834a36a440f92106b1de660d0e4eb8950ee1f7deeb6a9ae44bef6ca1d6",
+  "wrapperInstrumentSha256": "37a5c5e81b07d4a3c972b096152a2c4945c3e7591e49606874293622d4198247",
+  "profileSha256": "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226",
+  "binarySha256": {
+    "bun": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+    "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+    "codex_bin": "925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99",
+    "chrome": "46461accbdc87dc88a5bdd6d611be095dd6147db009863d794f742ca90662efa",
+    "typescript": "2cffde0b8c6760dfb0b5b0382bbb7e00ba6a8b2d981b9205b256a700a481d983",
+    "rg": "098027275423e375dca64f25accbd3c165e275c8220db0208ff3f1e3064392e1",
+    "git": "c53279919fdea03474bb23b465b3a82287157491f1bd69a5eb82dd9831582333",
+    "python": "f8b45d63047da9d9adf09892e4cc4317b859e86a93a478cc9616bc69d3b176e5",
+    "playwright_package": "f5c873af32da3a56849a77a73eb4e6acf9629d58564ba420077feea88800225c",
+    "codex_package": {
+      "codex-code-mode-host.exe": "ddd144291738f99b3f2254e0d9759fd7f8adac057405883ed8f1ccd9ad4502b4",
+      "codex-command-runner.exe": "c7accb2c88250ed936e97905db5d0fb5feeed5b3d7b8252f545d076d95867e92",
+      "codex-windows-sandbox-setup.exe": "6b2fc892154c86ba977eb486f91977d3580b89ab3cec7ca71379aeb535261b94"
+    }
+  },
+  "freeProspectiveTests": {
+    "run": 14,
+    "passed": 14,
+    "failed": 0,
+    "skipped": 0
+  },
+  "rootAndIndependentSourcePeerReview": "completed before actual qualification",
+  "realProviderOrFundedControllerCalls": 0,
+  "anyPaidMaintenanceAdmission": false,
+  "runtimeSourceBytesChangedDuringFinalProofs": false,
+  "qualityOrSavingsClaim": false,
+  "notes": [
+    "Working seed is intentionally partial; the original16business+4prerequisites baseline must remain unchanged in fake capability proofs",
+    "Real exit7 remains an observed known failed command, not a fabricated success or an unknown fatal",
+    "Positive API/CLI/SDK checks require actual integer-zero execution after the judge and are fail-fast",
+    "Original model/high reasoning/context/output/images/7-role DAG/tools/prices/caps/held liabilities unchanged",
+    "The Legacy accounting fix was authored and baseline-tested by a coder withheld from maintenance task requirements before candidate freeze",
+    "No private reference implementation, credential, raw native ID, execution trace or generated paid source is included"
+  ]
+}

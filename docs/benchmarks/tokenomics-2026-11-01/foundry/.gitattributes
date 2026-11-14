@@ -1,0 +1,5 @@
+# Preserve measured snapshot bytes and original whitespace across checkouts.
+instrument/** -text -whitespace
+submissions/** -text -whitespace
+evaluation-results.json -text
+snapshot-manifest.json -text

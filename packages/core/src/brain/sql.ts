@@ -1,8 +1,12 @@
 import { sql } from "drizzle-orm"
 import { blob, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { Research } from "@vectordevai/schema/research"
+import type { RunBudget } from "@vectordevai/schema/run-budget"
+import type { CostKind } from "../review/types"
+import type { TaskSize } from "../task-size"
 import type { BrainCode } from "./code"
 import type { BrainSchema } from "./schema"
+import type { BrainWorkflow } from "./workflow"
 
 // brain.db, a SQLite file of its own beside vector.db: erasing all memory deletes one folder, session repair, export
 // and sharing never touch it, and secure_delete costs the session database nothing. `repository_id` is "" for the
@@ -129,6 +133,8 @@ export const BrainSourceTable = sqliteTable("brain_source", {
 export const BrainStateTable = sqliteTable("brain_state", {
   repository_id: text().primaryKey(),
   revision: integer().notNull().default(0),
+  // Explicit withdrawals and corrections only. Never reset by event retention or erasing a scope's content.
+  revocation_revision: integer().notNull().default(0),
   learning: integer({ mode: "boolean" }).notNull().default(true),
   consolidated_at: integer(),
   // Documents keep a revision of their own, so a memory write never invalidates what is cached about documents.
@@ -149,6 +155,15 @@ export const BrainStateTable = sqliteTable("brain_state", {
   // The personal row only: the facets Vector may learn (all of them when unset), and when the model learner runs.
   learn_facets: text({ mode: "json" }).$type<Partial<Record<BrainSchema.Facet, boolean>>>(),
   model_learner: text().$type<"local-only" | "always" | "off">(),
+  // The personal row only, all unset until the owner chooses (migrations 20261210000000_learned_skills and
+  // 20261211000000_workflow): skills wait for review, the skill drafter runs only with Vector Local on, learned workflow
+  // defaults apply, and exploration is off.
+  skill_learning: text().$type<BrainSchema.SkillLearning>(),
+  skill_drafter: text().$type<BrainSchema.SkillDrafter>(),
+  codium_helpers: text().$type<BrainSchema.CodiumHelpers>(),
+  knowledge_distill: integer({ mode: "boolean" }),
+  workflow_learning: text().$type<BrainSchema.WorkflowLearning>(),
+  workflow_explore: integer({ mode: "boolean" }),
 })
 
 // Which entries reached which session, and through which tier. Pruned after 30 days.
@@ -169,6 +184,166 @@ export const BrainUseTable = sqliteTable(
     outcome: text().$type<"pass" | "revert">(),
   },
   (table) => [index("brain_use_session_idx").on(table.session_id)],
+)
+
+// Learned skills (migration 20261210000000_learned_skills). A skill is a brain_entry of kind "skill" under the repository
+// id "skill:<repository>", which no memory query of this or an older build reads; these tables hold what the entry does
+// not: its procedure, the commands it names, its versions, its loads and the listing each session chose. `repository_id`
+// here is the real repository's.
+
+export const BrainSkillTable = sqliteTable(
+  "brain_skill",
+  {
+    entry_id: text()
+      .primaryKey()
+      .references(() => BrainEntryTable.id, { onDelete: "cascade" }),
+    repository_id: text().notNull(),
+    skill_key: text().notNull(),
+    name: text().notNull(),
+    description: text().notNull(),
+    procedure: text().notNull(),
+    checks: text({ mode: "json" }).$type<string[]>().notNull(),
+    commands: text({ mode: "json" }).$type<string[]>().notNull(),
+    // The failing output's redacted tail. Never shared, and never part of the procedure.
+    failure: text(),
+    version: integer().notNull(),
+    drafter: text().$type<"rules" | "model" | "user" | "import">().notNull(),
+    session_id: text(),
+    request_id: text(),
+    approved_by: text().$type<"user" | "vector">(),
+    approved_at: integer(),
+    shared_path: text(),
+    shared_at: integer(),
+    // 1 exactly when the entry is active, written in the same transaction as its status, so a unique index keeps one
+    // live entry per key.
+    live: integer({ mode: "boolean" }).notNull().default(false),
+    // Lifetime counters: brain_use keeps 30 days.
+    loads: integer().notNull().default(0),
+    passes: integer().notNull().default(0),
+    fails: integer().notNull().default(0),
+    reverts: integer().notNull().default(0),
+    ignored: integer().notNull().default(0),
+  },
+  (table) => [
+    index("brain_skill_key_idx").on(table.repository_id, table.skill_key),
+    uniqueIndex("brain_skill_live_idx")
+      .on(table.repository_id, table.skill_key)
+      .where(sql`${table.live} = 1`),
+  ],
+)
+
+// Every text a skill had. No foreign key: each path that deletes an entry deletes its versions too.
+export const BrainSkillVersionTable = sqliteTable(
+  "brain_skill_version",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    repository_id: text().notNull(),
+    skill_key: text().notNull(),
+    version: integer().notNull(),
+    entry_id: text().notNull(),
+    // The session whose run produced this text; none for the owner's edits, imports and rollbacks.
+    session_id: text(),
+    name: text().notNull(),
+    description: text().notNull(),
+    procedure: text().notNull(),
+    checks: text({ mode: "json" }).$type<string[]>().notNull(),
+    commands: text({ mode: "json" }).$type<string[]>().notNull(),
+    failure: text(),
+    actor: text().$type<"agent" | "user" | "vector" | "import">().notNull(),
+    reason: text().$type<"learned" | "edited" | "imported" | "rollback">().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("brain_skill_version_key_idx").on(table.repository_id, table.skill_key, table.version),
+    index("brain_skill_version_session_idx").on(table.session_id),
+  ],
+)
+
+// A load of a skill, credited once per request when the run ends.
+export const BrainSkillUseTable = sqliteTable(
+  "brain_skill_use",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    repository_id: text().notNull(),
+    entry_id: text().notNull(),
+    version: integer().notNull(),
+    session_id: text().notNull(),
+    request_id: text().notNull(),
+    at: integer().notNull(),
+    outcome: text().$type<"pass" | "fail" | "ignored" | "revert">(),
+  },
+  (table) => [
+    uniqueIndex("brain_skill_use_request_idx").on(table.request_id, table.entry_id),
+    index("brain_skill_use_session_idx").on(table.session_id),
+  ],
+)
+
+// The skills a session was offered, chosen once so the system prompt stays the same for the provider's cache, across
+// restarts too.
+export const BrainSkillListingTable = sqliteTable(
+  "brain_skill_listing",
+  {
+    session_id: text().notNull(),
+    position: integer().notNull(),
+    repository_id: text().notNull(),
+    entry_id: text().notNull(),
+    version: integer().notNull(),
+    name: text().notNull(),
+    description: text().notNull(),
+    private: integer({ mode: "boolean" }).notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.position] })],
+)
+
+// Workflow insights (migration 20261211000000_workflow): one row per request of the build agent, numbers only, which
+// BrainWorkflow turns into cheaper defaults.
+export const BrainWorkflowRunTable = sqliteTable(
+  "brain_workflow_run",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    repository_id: text().notNull(),
+    session_id: text().notNull(),
+    request_id: text().notNull(),
+    at: integer().notNull(),
+    tier: text().$type<TaskSize.Tier>().notNull(),
+    // The tier that set effort: the offered tier on a provider that caches, else the request's.
+    effort_tier: text().$type<TaskSize.Tier>().notNull(),
+    agent: text().$type<"build">().notNull(),
+    provider_id: text().notNull(),
+    model_id: text().notNull(),
+    effort: text().notNull(),
+    effort_source: text().$type<BrainWorkflow.EffortSource>().notNull(),
+    subagents: integer().notNull(),
+    subagent_model: text().$type<"parent" | "small" | "mixed">(),
+    subagent_models: text({ mode: "json" }).$type<Record<string, number>>().notNull(),
+    judge_rounds: integer().notNull(),
+    outcome: text().$type<BrainWorkflow.Outcome>().notNull(),
+    signal: text().$type<"recovered" | "judged" | "judge-fail" | "check-fail">(),
+    // Unknown unless every step of the run was priced; unknown is never zero.
+    cost_usd: real(),
+    // Relative catalog-weighted usage, only when every recorded step ran on Codium with a known weight.
+    codium_units: real(),
+    cost_kinds: text({ mode: "json" }).$type<Partial<Record<CostKind, number>>>().notNull(),
+    steps: integer().notNull(),
+    unpriced_steps: integer().notNull(),
+    // The root session's and every child session's of the run.
+    tokens_input: integer().notNull(),
+    tokens_output: integer().notNull(),
+    tokens_reasoning: integer().notNull(),
+    tokens_cache_read: integer().notNull(),
+    // Background subagents were still running when it was recorded, so its cost is never used.
+    partial: integer({ mode: "boolean" }).notNull().default(false),
+    runs: integer().notNull().default(1),
+    stop: text().$type<RunBudget.StopReason>(),
+    taint: text().$type<BrainSchema.Hold>(),
+    advice: text({ mode: "json" }).$type<BrainWorkflow.Advice>(),
+  },
+  (table) => [
+    uniqueIndex("brain_workflow_run_request_idx").on(table.repository_id, table.request_id),
+    index("brain_workflow_run_tier_idx").on(table.repository_id, table.effort_tier, table.at),
+    index("brain_workflow_run_session_idx").on(table.session_id),
+  ],
 )
 
 // Documents, and everything Vector reads from them. Created empty by the knowledge migration. A passage or a record is
@@ -634,6 +809,7 @@ export const ResearchNoteTable = sqliteTable(
     // Whether the quote states the claim (BrainLexical.states); false is a paraphrase.
     support: integer({ mode: "boolean" }).notNull(),
     verdict: text().$type<Research.Verdict>(),
+    measurement: text({ mode: "json" }).$type<Research.Measurement>(),
     created_at: integer().notNull(),
   },
   (table) => [

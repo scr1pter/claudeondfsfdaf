@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { createRoot, createSignal } from "solid-js"
+import { createRoot, createSignal, type Accessor } from "solid-js"
 import type { AssistantMessage, Message, Part, Session, ToolPart, VectorClient } from "@vectordevai/sdk/v2/client"
 import type { Task } from "@vectordevai/schema/task"
 import type { retry } from "@vectordevai/core/util/retry"
 import type { DirectorySync } from "@/context/sync"
 import { createServerSession } from "@/context/server-session"
 import { createBackgroundTasks, type BackgroundTasksInput } from "@/features/background-tasks/background-tasks"
+import { NO_CAPABILITIES, type EngineCapabilities } from "@/features/background-tasks/engine-capabilities"
 
 /*
  * A background subagent finishes, or its run is lost to an engine restart, while the app's event stream is down.
@@ -16,6 +17,7 @@ import { createBackgroundTasks, type BackgroundTasksInput } from "@/features/bac
 
 const ROOT = "ses_root"
 const CHILD = "ses_child"
+const RUN = "ses_run"
 
 const retryImmediately: typeof retry = (task) => task()
 
@@ -123,11 +125,22 @@ function engine() {
   // Every request, as "route:session".
   const calls: string[] = []
   const unreachable = new Set<string>()
-  const state: { abortFails: boolean; truncated: boolean; invalidBoard: boolean; task?: Task.Info } = {
+  const state: {
+    abortFails: boolean
+    truncated: boolean
+    invalidBoard: boolean
+    task?: Task.Info
+    shells?: Task.Shell[]
+  } = {
     abortFails: false,
     truncated: false,
     invalidBoard: false,
   }
+  // Each board request's shells query, "" when it asked for none.
+  const boards: string[] = []
+  // Each workflow run's list request, and what a run's list answers.
+  const runs: { sessionID: string; limit?: string }[] = []
+  const run: { truncated: boolean } = { truncated: false }
   const reach = (route: string, sessionID: string) => {
     calls.push(`${route}:${sessionID}`)
     if (unreachable.has(sessionID)) throw new Error("engine unreachable")
@@ -140,9 +153,16 @@ function engine() {
   const client = {
     experimental: {
       task: {
-        list: async () => ({
-          data: state.invalidBoard ? [] : { tasks: state.task ? [state.task] : [], truncated: state.truncated },
-        }),
+        list: async (input?: { sessionID?: string; shells?: string; limit?: string }) => {
+          if (input?.sessionID === RUN) {
+            runs.push({ sessionID: input.sessionID, ...(input.limit ? { limit: input.limit } : {}) })
+            return { data: { tasks: [], truncated: run.truncated } }
+          }
+          boards.push(input?.shells ?? "")
+          if (state.invalidBoard) return { data: [] }
+          const shells = input?.shells === "true" && state.shells ? { shells: state.shells } : {}
+          return { data: { tasks: state.task ? [state.task] : [], truncated: state.truncated, ...shells } }
+        },
       },
     },
     session: {
@@ -171,6 +191,9 @@ function engine() {
   return {
     client,
     calls,
+    boards,
+    runs,
+    run,
     unreachable,
     state,
     count: (call: string) => calls.filter((item) => item === call).length,
@@ -200,6 +223,7 @@ async function open(
   fake: ReturnType<typeof engine>,
   loaded: readonly string[],
   desktop?: BackgroundTasksInput["desktop"],
+  capabilities?: Accessor<EngineCapabilities>,
 ) {
   const store = createServerSession(fake.client as unknown as VectorClient, { retry: retryImmediately })
   for (const id of loaded) await store.sync(id)
@@ -236,6 +260,7 @@ async function open(
       unpin: () => undefined,
       open: () => undefined,
       desktop,
+      capabilities,
     }),
   }))
   return {
@@ -255,6 +280,30 @@ async function until(condition: () => boolean, ms = 2_000) {
 }
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+describe("a workflow run's agents", () => {
+  // A run may have up to 1000 agents (max_agents), and the engine lists at most 200, the active and newest first.
+  test("are asked for as many as one list returns, and the pane learns when the list was cut", async () => {
+    for (const truncated of [true, false]) {
+      const fake = engine()
+      fake.run.truncated = truncated
+      const page = await open(fake, [ROOT])
+      const [shown, setShown] = createSignal<string | undefined>(undefined)
+      const watcher = createRoot((dispose) => {
+        page.tasks.watchRun(shown)
+        return dispose
+      })
+      setShown(RUN)
+      await until(() => fake.runs.length === 1 && !page.tasks.runLoading(RUN))
+      expect(fake.runs).toEqual([{ sessionID: RUN, limit: "200" }])
+      await until(() => page.tasks.runTruncated(RUN) === truncated)
+      // Closing the stages forgets the run, and what its list said with it.
+      watcher()
+      expect(page.tasks.runTruncated(RUN)).toBe(false)
+      page.dispose()
+    }
+  })
+})
 
 describe("Background tasks after the event stream dropped", () => {
   test("an unavailable task-list shape preserves the last valid observation", async () => {
@@ -424,6 +473,36 @@ describe("Stop", () => {
     expect(fake.count("abort:ses_child")).toBe(1)
     expect(fake.count("messages:ses_child")).toBe(3)
     expect(page.agent()?.status).toBe("running")
+    page.dispose()
+  })
+})
+
+describe("Background commands", () => {
+  // The flags can answer after the board's first load (a cold start, a restored tab), and an idle conversation with
+  // only a dev server running sends no event that would load it again.
+  test("flags that arrive after the first board load bring the conversation's commands", async () => {
+    const fake = engine()
+    fake.state.shells = [
+      {
+        id: "shl_dev",
+        title: "bun run dev",
+        command: "bun run dev",
+        status: "running",
+        startedAt: 1_000,
+        outputBytes: 0,
+      },
+    ]
+    const [capabilities, setCapabilities] = createSignal<EngineCapabilities>(NO_CAPABILITIES)
+    const page = await open(fake, [ROOT, CHILD], undefined, capabilities)
+    await until(() => fake.boards.length > 0)
+    await pause(200)
+    expect(fake.boards.every((shells) => shells === "")).toBe(true)
+    expect(page.tasks.shells()).toEqual([])
+
+    setCapabilities({ ...NO_CAPABILITIES, backgroundSubagents: true, backgroundShells: true })
+    await until(() => page.tasks.shells().length === 1)
+    expect(fake.boards.at(-1)).toBe("true")
+    expect(page.tasks.shells()[0]?.id).toBe("shl_dev")
     page.dispose()
   })
 })

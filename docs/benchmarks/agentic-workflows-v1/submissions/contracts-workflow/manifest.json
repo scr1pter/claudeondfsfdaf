@@ -1,0 +1,246 @@
+{
+  "kind": "workflow-runner-contracts-workflow-original-source-publication",
+  "atUtc": "2026-11-02T04:13:52.129546+00:00",
+  "scope": "Original synthetic Workflow Runner sources from both complete contracts-workflow arms; every settled attempt, no review normalization or result selection",
+  "bytePreservation": "Every included byte matches its original attempt archive and contemporaneous source-manifest.json; source Git attributes disable line-ending normalization. Sources are not edited or formatted.",
+  "candidateProductGitRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "candidateSourceDirty": false,
+  "exclusionPolicy": {
+    "rationale": "All archive paths, including hidden paths, were inspected. Neither archive contains generated runtime artifacts; all source files are included. Authored hidden files are retained. No generic dot-directory, build, or dist exclusion is applied.",
+    "excludedContentsPublished": false,
+    "excludedHashesPublished": true,
+    "otherExclusions": []
+  },
+  "scan": {
+    "includedSourceFilesScanned": 34,
+    "blockedFindings": 0,
+    "categories": [
+      "absoluteWindowsUserPath",
+      "absolutePosixUserPath",
+      "providerKey",
+      "privateKey",
+      "credentialAssignment",
+      "privateStudyIdentifier"
+    ],
+    "method": "Complete byte/hash inventory, UTF-8 source pattern scan and hidden-file inspection before copying; no runtime configuration, raw logs or credential files read or copied",
+    "limitations": "Pattern scanning is bounded evidence, not a formal secret audit."
+  },
+  "executionByPublicationAuthor": {
+    "bunRuns": 0,
+    "providerCalls": 0,
+    "modelCalls": 0,
+    "applicationTestsRun": 0
+  },
+  "taskAndEvaluator": {
+    "agentVisibleTaskSha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+    "taskSha256": "bc418928e76adaebed02f7de9339d23c881c0d10bca33adb7b4b5002b6de7547",
+    "instrumentGitRevision": "c027c80637c993fb9e873407403f2c4f6a1333c3",
+    "rootManifestSha256": "26627463d87bb6a251ebdf50e91efea43084fb8949095b966af458841717a62f",
+    "apiEvaluatorSha256": "ce4837bff913f1670a6c1f7d2b2bd7323cc667b422aee2b4ae343bbc21c93cc4",
+    "browserCheckSha256": "d68122e788b73e7e70b541a9c9807ae3b6962d0fe496987fb49243558caa0562",
+    "instrumentRevision": "postlaunch-keyboard-v2",
+    "browserAccessMode": "shared-client",
+    "browserProfileAuditAssessment": "no_clear_bypass_observed",
+    "browserBoundaryLimit": "Bounded shared-client profile audit; not a hard execution fence or proof that every bypass is impossible."
+  },
+  "gitBlobVerification": {
+    "statusAtPreparation": "Not asserted staged or committed",
+    "afterStagingCommand": "python verify.py --git-index",
+    "meaning": "Default verification checks worktree bytes and source attributes. --git-index additionally compares every included source byte with the actual staged Git blob and checks staged -text attributes."
+  },
+  "interpretation": "Recorded gate results are those of the settled original arms. Source publication runs no applications. Passing synthetic gates and source file counts do not establish universal quality or production readiness; per-task quality and cost conclusions are reported separately.",
+  "submissions": [
+    {
+      "id": "codex-first",
+      "runtime": "codex",
+      "attempt": "attempt-00",
+      "allSettledRunAttemptsPublished": true,
+      "settledRunAttemptCount": 1,
+      "originalArchiveId": "aw4/codex/attempts/attempt-00/source",
+      "sourceDirectory": "codex-first/source",
+      "originalArchiveFileCount": 19,
+      "includedFileCount": 19,
+      "excludedFileCount": 0,
+      "originalArchiveInventorySha256": "71b35f3af9919880ede6fd1a93605fd7a9e357702a8e3e161f1e831547d8d106",
+      "publishedSourceInventorySha256": "71b35f3af9919880ede6fd1a93605fd7a9e357702a8e3e161f1e831547d8d106",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+          "bytes": 41
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/app.js": {
+          "sha256": "5d3662741464691b730e5827b320ecff47d237b323e51fa45a5284cca0324536",
+          "bytes": 12252
+        },
+        "public/index.html": {
+          "sha256": "251e77e54c024f023dc8a6ea3bb3e4acb8a1914d9821cf067329a1f8c876776c",
+          "bytes": 5801
+        },
+        "public/styles.css": {
+          "sha256": "23e90cd44903ef67ff51f419448cf36932106c905153345eacff91e68d4ac4a8",
+          "bytes": 12949
+        },
+        "README.md": {
+          "sha256": "ff4448360896d0933ed86273fc8ad4e2f66459a2f8fada98d6e6966d119db7c8",
+          "bytes": 3135
+        },
+        "scripts/build.ts": {
+          "sha256": "f05381d552d98cc44eba45840817f9065791f87ad0aad4ffdaaa45d117ed0fc3",
+          "bytes": 369
+        },
+        "server/index.ts": {
+          "sha256": "bb75a51f618c9744d712820894b0e9e5905459e0e9389d730af3d827bc4afeac",
+          "bytes": 6266
+        },
+        "server/runner.ts": {
+          "sha256": "3e7008d14a5d08a98068c850c8f5b23ad1351e9436370022a5a651c9a0603287",
+          "bytes": 7362
+        },
+        "server/store.ts": {
+          "sha256": "e465eca3113ea8be06d8538c566007cf0af229cb6ec76519fc42329f02d6d226",
+          "bytes": 6485
+        },
+        "server/types.ts": {
+          "sha256": "f4f51d15b6b27c1271d66cfaafa011f9acbfe305ca8fecb2931199a85de37a4a",
+          "bytes": 714
+        },
+        "server/validation.ts": {
+          "sha256": "e2f1d94847e00ab8d0aef9382d311bc59e91b545e0483eb4ffa183d50696f0f5",
+          "bytes": 2927
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflow.test.ts": {
+          "sha256": "be209ba8b757da1d409d55524364d43517a8f442fe7cd711668cc43d0b3d09ea",
+          "bytes": 20708
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {},
+      "authoredVerificationFiles": [],
+      "hiddenAuthoredFilesInspectedAndIncluded": [
+        ".gitignore"
+      ],
+      "independentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true
+      }
+    },
+    {
+      "id": "vector-first",
+      "runtime": "vector",
+      "attempt": "attempt-00",
+      "allSettledRunAttemptsPublished": true,
+      "settledRunAttemptCount": 1,
+      "originalArchiveId": "aw4/vector/attempts/attempt-00/source",
+      "sourceDirectory": "vector-first/source",
+      "originalArchiveFileCount": 15,
+      "includedFileCount": 15,
+      "excludedFileCount": 0,
+      "originalArchiveInventorySha256": "35dfbc4d610d032ffa82a9db390b58a93d77c241e10ae44f11c07dd733bcdaf1",
+      "publishedSourceInventorySha256": "35dfbc4d610d032ffa82a9db390b58a93d77c241e10ae44f11c07dd733bcdaf1",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+          "bytes": 41
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/index.html": {
+          "sha256": "377bcbf653d94649a3db15dc7e820a00f4871e55dd33919a8e289dc34119d9e1",
+          "bytes": 17436
+        },
+        "README.md": {
+          "sha256": "ec12a619bdb777be08e87a6aca4251e4c164f85c2fa396fd7513259de9c55936",
+          "bytes": 2657
+        },
+        "scripts/build.ts": {
+          "sha256": "6e5c03f3e0ad72cb4c17ba1c23153212e460ef546cf64c8de28a62e4d98fbd04",
+          "bytes": 222
+        },
+        "server/index.ts": {
+          "sha256": "21ddf682cca39bb3f98297281898781e24c6bb9f790d4dc2e305a58f088a26b0",
+          "bytes": 5111
+        },
+        "server/runner.ts": {
+          "sha256": "71fdf3e4164deef1e8e349cda76d9cd01fc239ef9d74f1d73b1c9cb10dd5829d",
+          "bytes": 7936
+        },
+        "server/store.ts": {
+          "sha256": "6f8cc493a37ec6167cc54070721e2dab6ea5909eab08cabb9b6f396ac192b03c",
+          "bytes": 11010
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflow.test.ts": {
+          "sha256": "cb4adb511d31719e83823c2ca57c7070fb70b6b6bc9c1da0e7a51ef82740594e",
+          "bytes": 18427
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {},
+      "authoredVerificationFiles": [],
+      "hiddenAuthoredFilesInspectedAndIncluded": [
+        ".gitignore"
+      ],
+      "independentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true
+      }
+    }
+  ]
+}

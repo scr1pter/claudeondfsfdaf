@@ -12,12 +12,14 @@ type PanelEntry = RunFooterMenuItem & {
   keywords?: string
 }
 
-type CommandEntry =
+export type CommandEntry =
   | (PanelEntry & { action: "model" })
   | (PanelEntry & { action: "editor" })
   | (PanelEntry & { action: "skill" })
   | (PanelEntry & { action: "queued" })
   | (PanelEntry & { action: "subagent" })
+  | (PanelEntry & { action: "interrupt.all" })
+  | (PanelEntry & { action: "resume.interrupted" })
   | (PanelEntry & { action: "variant.cycle" })
   | (PanelEntry & { action: "variant.list" })
   | (PanelEntry & { action: "slash"; name: string })
@@ -333,6 +335,176 @@ function PanelShell(props: {
   )
 }
 
+/** The command palette's rows, in display order. Pure, so the rows can be checked without a renderer. */
+export function runCommandEntries(input: {
+  commands: RunCommand[] | undefined
+  subagents: FooterSubagentTab[]
+  queued: FooterQueuedPrompt[]
+  variants: string[]
+  variantCycle: string
+  // "Stop including helpers" and "Resume interrupted helpers" (5.I.6), when the runtime offers them.
+  interruptAll?: { shortcut?: string }
+  resumeInterrupted?: boolean
+}): CommandEntry[] {
+  const builtins = ["editor", "new"]
+  const skills = (input.commands ?? []).filter((item) => item.source === "skill")
+  const activeSubagentCount = input.subagents.filter((item) => item.status === "running").length
+  const session: CommandEntry[] = [
+    {
+      action: "editor",
+      category: "Session",
+      display: "Open editor",
+      footer: "/editor",
+      keywords: "editor compose draft external editor",
+    },
+    ...(input.subagents.length > 0
+      ? [
+          {
+            action: "subagent" as const,
+            category: "Session",
+            display: "View subagents",
+            footer: activeSubagentCount > 0 ? `${activeSubagentCount} active` : `${input.subagents.length} recent`,
+            keywords: input.subagents.map((item) => `${item.label} ${item.description} ${item.title ?? ""}`).join(" "),
+          },
+        ]
+      : []),
+    // Offered whether or not the main turn runs: helpers keep working after it ends.
+    ...(input.interruptAll
+      ? [
+          {
+            action: "interrupt.all" as const,
+            category: "Session",
+            display: "Stop including helpers",
+            footer:
+              input.interruptAll.shortcut || (activeSubagentCount > 0 ? `${activeSubagentCount} active` : undefined),
+            keywords: "stop interrupt abort helpers subagents background commands all",
+          },
+        ]
+      : []),
+    ...(input.resumeInterrupted
+      ? [
+          {
+            action: "resume.interrupted" as const,
+            category: "Session",
+            display: "Resume interrupted helpers",
+            keywords: "resume interrupted helpers subagents restart",
+          },
+        ]
+      : []),
+    {
+      action: "slash",
+      category: "Session",
+      name: "new",
+      display: "New session",
+      footer: "/new",
+      keywords: "new session clear",
+    },
+  ]
+  const prompt: CommandEntry[] =
+    input.commands === undefined || skills.length > 0
+      ? [
+          {
+            action: "skill" as const,
+            category: "Prompt",
+            display: "Skills",
+            footer: "/skills",
+            keywords: `skill skills ${skills.map((item) => `${item.name} ${item.description ?? ""}`).join(" ")}`.trim(),
+          },
+        ]
+      : []
+  const agent: CommandEntry[] = [
+    {
+      action: "model",
+      category: "Agent",
+      display: "Switch model",
+    },
+    ...(input.queued.length > 0
+      ? [
+          {
+            action: "queued" as const,
+            category: "Agent",
+            display: "Manage queued prompts",
+            footer: `${input.queued.length} queued`,
+            keywords: input.queued.map((item) => item.prompt.text).join(" "),
+          },
+        ]
+      : []),
+    {
+      action: "variant.cycle",
+      category: "Agent",
+      display: "Variant cycle",
+      footer: input.variantCycle,
+      keywords: "variant cycle",
+    },
+    ...(input.variants.length > 0
+      ? [
+          {
+            action: "variant.list" as const,
+            category: "Agent",
+            display: "Switch model variant",
+            keywords: `variant variants ${input.variants.join(" ")}`,
+          },
+        ]
+      : []),
+  ]
+  const commands = (input.commands ?? [])
+    .filter((item) => item.source !== "skill" && !builtins.includes(item.name))
+    .map(
+      (item) =>
+        ({
+          action: "slash",
+          category: item.source === "mcp" ? "MCP Commands" : "Repository Commands",
+          name: item.name,
+          display: item.name,
+          footer: `/${item.name}`,
+          keywords:
+            item.source === "mcp"
+              ? `/${item.name} ${item.name} mcp ${item.description ?? ""}`
+              : `/${item.name} ${item.name} ${item.description ?? ""}`,
+        }) satisfies CommandEntry,
+    )
+    .sort((a, b) => categoryRank(a.category) - categoryRank(b.category) || a.display.localeCompare(b.display))
+
+  return [
+    ...session,
+    ...prompt,
+    ...agent,
+    ...commands,
+    { action: "exit", category: "System", display: "Exit", footer: "/exit", keywords: "/exit exit" },
+  ]
+}
+
+type CommandHandlers = {
+  onModel: () => void
+  onEditor: () => void
+  onSkill: () => void
+  onSubagent: () => void
+  onQueued: () => void
+  onVariant: () => void
+  onVariantCycle: () => void
+  onCommand: (name: string) => void
+  onNew: () => void
+  onExit: () => void
+  onInterruptAll?: () => void
+  onResumeInterrupted?: () => void
+}
+
+/** Runs the handler a palette row stands for. */
+export function runCommandPick(item: CommandEntry, handlers: CommandHandlers) {
+  if (item.action === "model") return handlers.onModel()
+  if (item.action === "editor") return handlers.onEditor()
+  if (item.action === "skill") return handlers.onSkill()
+  if (item.action === "subagent") return handlers.onSubagent()
+  if (item.action === "queued") return handlers.onQueued()
+  if (item.action === "interrupt.all") return handlers.onInterruptAll?.()
+  if (item.action === "resume.interrupted") return handlers.onResumeInterrupted?.()
+  if (item.action === "variant.cycle") return handlers.onVariantCycle()
+  if (item.action === "variant.list") return handlers.onVariant()
+  if (item.action === "exit") return handlers.onExit()
+  if (item.name === "new") return handlers.onNew()
+  handlers.onCommand(item.name)
+}
+
 export function RunCommandMenuBody(props: {
   theme: Accessor<RunFooterTheme>
   commands: Accessor<RunCommand[] | undefined>
@@ -351,173 +523,26 @@ export function RunCommandMenuBody(props: {
   onCommand: (name: string) => void
   onNew: () => void
   onExit: () => void
+  onInterruptAll?: () => void
+  onResumeInterrupted?: () => void
+  interruptAllShortcut?: string
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
-  const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
-  const activeSubagentCount = createMemo(() => props.subagents().filter((item) => item.status === "running").length)
-  const entries = createMemo<CommandEntry[]>(() => {
-    const builtins = ["editor", "new"]
-    const session: CommandEntry[] = [
-      {
-        action: "editor",
-        category: "Session",
-        display: "Open editor",
-        footer: "/editor",
-        keywords: "editor compose draft external editor",
-      },
-      ...(props.subagents().length > 0
-        ? [
-            {
-              action: "subagent" as const,
-              category: "Session",
-              display: "View subagents",
-              footer:
-                activeSubagentCount() > 0 ? `${activeSubagentCount()} active` : `${props.subagents().length} recent`,
-              keywords: props
-                .subagents()
-                .map((item) => `${item.label} ${item.description} ${item.title ?? ""}`)
-                .join(" "),
-            },
-          ]
-        : []),
-      {
-        action: "slash",
-        category: "Session",
-        name: "new",
-        display: "New session",
-        footer: "/new",
-        keywords: "new session clear",
-      },
-    ]
-    const prompt: CommandEntry[] =
-      props.commands() === undefined || skills().length > 0
-        ? [
-            {
-              action: "skill" as const,
-              category: "Prompt",
-              display: "Skills",
-              footer: "/skills",
-              keywords: `skill skills ${skills()
-                .map((item) => `${item.name} ${item.description ?? ""}`)
-                .join(" ")}`.trim(),
-            },
-          ]
-        : []
-    const agent: CommandEntry[] = [
-      {
-        action: "model",
-        category: "Agent",
-        display: "Switch model",
-      },
-      ...(props.queued().length > 0
-        ? [
-            {
-              action: "queued" as const,
-              category: "Agent",
-              display: "Manage queued prompts",
-              footer: `${props.queued().length} queued`,
-              keywords: props
-                .queued()
-                .map((item) => item.prompt.text)
-                .join(" "),
-            },
-          ]
-        : []),
-      {
-        action: "variant.cycle",
-        category: "Agent",
-        display: "Variant cycle",
-        footer: props.variantCycle,
-        keywords: "variant cycle",
-      },
-      ...(props.variants().length > 0
-        ? [
-            {
-              action: "variant.list" as const,
-              category: "Agent",
-              display: "Switch model variant",
-              keywords: `variant variants ${props.variants().join(" ")}`,
-            },
-          ]
-        : []),
-    ]
-    const commands = (props.commands() ?? [])
-      .filter((item) => item.source !== "skill" && !builtins.includes(item.name))
-      .map(
-        (item) =>
-          ({
-            action: "slash",
-            category: item.source === "mcp" ? "MCP Commands" : "Repository Commands",
-            name: item.name,
-            display: item.name,
-            footer: `/${item.name}`,
-            keywords:
-              item.source === "mcp"
-                ? `/${item.name} ${item.name} mcp ${item.description ?? ""}`
-                : `/${item.name} ${item.name} ${item.description ?? ""}`,
-          }) satisfies CommandEntry,
-      )
-      .sort((a, b) => categoryRank(a.category) - categoryRank(b.category) || a.display.localeCompare(b.display))
-
-    return [
-      ...session,
-      ...prompt,
-      ...agent,
-      ...commands,
-      { action: "exit", category: "System", display: "Exit", footer: "/exit", keywords: "/exit exit" },
-    ]
-  })
+  const entries = createMemo<CommandEntry[]>(() =>
+    runCommandEntries({
+      commands: props.commands(),
+      subagents: props.subagents(),
+      queued: props.queued(),
+      variants: props.variants(),
+      variantCycle: props.variantCycle,
+      interruptAll: props.onInterruptAll ? { shortcut: props.interruptAllShortcut } : undefined,
+      resumeInterrupted: props.onResumeInterrupted !== undefined,
+    }),
+  )
   const items = createMemo<CommandEntry[]>(() => match(query(), entries()))
   const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
-  const pick = (item: CommandEntry) => {
-    if (item.action === "model") {
-      props.onModel()
-      return
-    }
-
-    if (item.action === "editor") {
-      props.onEditor()
-      return
-    }
-
-    if (item.action === "skill") {
-      props.onSkill()
-      return
-    }
-
-    if (item.action === "subagent") {
-      props.onSubagent()
-      return
-    }
-
-    if (item.action === "queued") {
-      props.onQueued()
-      return
-    }
-
-    if (item.action === "variant.cycle") {
-      props.onVariantCycle()
-      return
-    }
-
-    if (item.action === "variant.list") {
-      props.onVariant()
-      return
-    }
-
-    if (item.action === "exit") {
-      props.onExit()
-      return
-    }
-
-    if (item.name === "new") {
-      props.onNew()
-      return
-    }
-
-    props.onCommand(item.name)
-  }
+  const pick = (item: CommandEntry) => runCommandPick(item, props)
   const select = () => {
     const item = items()[menu.selected()]
     if (!item) {

@@ -180,14 +180,19 @@ test("the investor page's cost claim dates the runtime the efficiency archive fr
   ).toEqual([])
 })
 
-test("Vector Velocity is in development and branded by one size, 550B parameters", () => {
-  expect(lander).toContain('"is building a 550B model of its own."')
-  expect(lander).toContain("and is building a 550B-parameter model of its own.")
-  expect(lander).toContain("Velocity, the 550B-parameter model we're building")
-  // One size, and nothing about how many of its parameters run per token.
-  expect(new Set(visible.flatMap((text) => Array.from(text.matchAll(/(\d+)B(?:-parameter| model)/g), (match) => match[1])))).toEqual(
-    new Set(["550"]),
-  )
+test("Vector Velocity is planned with 550B+ parameters and no availability or performance claim", () => {
+  expect(lander).toContain('"is planning Vector Velocity, a 550B+ parameter model."')
+  expect(lander).toContain("and is planning Vector Velocity, a model with 550B+ parameters.")
+  expect(lander).toContain("Vector Velocity, our planned model with 550B+ parameters")
+  expect(lander).not.toMatch(/is building a 550B|550B-parameter model we're building/)
+  // One planned size, and nothing about how many of its parameters run per token.
+  expect(
+    new Set(
+      visible.flatMap((text) =>
+        Array.from(text.matchAll(/(\d+B\+?)(?:[- ]parameter| parameters| model)/g), (match) => match[1]),
+      ),
+    ),
+  ).toEqual(new Set(["550B+"]))
   expect(
     visible.filter((text) =>
       /\bactive (?:per token|param\w*)|parameters active|\bactivated\b|\bA\d+B\b|\bunder \d+B\b|\d+B (?:active|per token|for every token)|parameters (?:per|for every) token|300B|300 billion/i.test(

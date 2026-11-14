@@ -42,6 +42,8 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  // Sent as promptCacheKey or prompt_cache_key, where the options carry one, instead of the session ID.
+  readonly cacheKey?: string
 }
 
 export type Prepared = {
@@ -93,6 +95,29 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.push(header, rest.join("\n"))
   }
 
+  const breakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
+    setting: input.provider.options.promptCacheBreakpoints,
+    providerID: input.provider.id,
+    npm: input.model.api.npm,
+    modelID: input.model.api.id,
+    apiKey:
+      input.auth?.type === "api" ||
+      (!input.auth && (typeof input.provider.options.apiKey === "string" || typeof input.provider.key === "string")),
+    url: input.provider.options.baseURL ?? input.model.api.url,
+  })
+  const stablePrefix = breakpoints ? prompt.filter(Boolean).join("\n") : undefined
+  const cachePrefix =
+    breakpoints &&
+    !input.small &&
+    !input.isWorkflow &&
+    !input.flags.experimentalNativeLlm &&
+    input.stableSystem?.length &&
+    stablePrefix?.trim() &&
+    system[0] === header &&
+    system[0]?.startsWith(stablePrefix)
+      ? ProviderTransform.promptCachePrefix(stablePrefix)
+      : undefined
+
   const picked =
     !input.small && input.model.variants && input.user.model.variant
       ? input.model.variants[input.user.model.variant]
@@ -114,6 +139,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     mergeOptions(mergeOptions(mergeOptions(base, input.model.options), sized), input.agent.options),
     variant,
   )
+  // A fork's first request of a run names its root's key, so it is routed to the cache that holds the parent's prefix.
+  if (input.cacheKey)
+    for (const key of ["promptCacheKey", "prompt_cache_key"]) if (key in options) options[key] = input.cacheKey
   if (
     input.model.api.npm === "@ai-sdk/azure" &&
     (input.provider.options.useCompletionUrls || input.model.options.useCompletionUrls || options.useCompletionUrls)
@@ -159,16 +187,30 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       topK: ProviderTransform.topK(input.model),
       maxOutputTokens: ProviderTransform.maxOutputTokens(
         input.model,
-        // A document's suggestions are capped at what their estimate was given for.
-        input.agent.name === "distill"
-          ? BrainDistill.LIMIT.output
-          : input.user.executionMode === "fast"
-            ? Math.floor((input.flags.outputTokenMax ?? ProviderTransform.OUTPUT_TOKEN_MAX) * 1.5)
-            : input.flags.outputTokenMax,
+        // An automatic title keeps its provisional fallback if generation runs out of room. It must not inherit a
+        // task-sized reasoning/output allowance, including Fast mode's increase.
+        input.small && input.agent.name === "title"
+          ? Math.min(input.flags.outputTokenMax ?? ProviderTransform.OUTPUT_TOKEN_MAX, 512)
+          : input.agent.name === "distill"
+            ? BrainDistill.LIMIT.output
+            : input.user.executionMode === "fast"
+              ? Math.floor((input.flags.outputTokenMax ?? ProviderTransform.OUTPUT_TOKEN_MAX) * 1.5)
+              : input.flags.outputTokenMax,
       ),
       options,
     },
   )
+
+  // Provider hooks may omit a normal task's limit. An automatic title must keep its smaller ceiling afterwards.
+  if (input.small && input.agent.name === "title")
+    params.maxOutputTokens = ProviderTransform.maxOutputTokens(
+      input.model,
+      Math.min(
+        params.maxOutputTokens ?? Infinity,
+        input.flags.outputTokenMax ?? ProviderTransform.OUTPUT_TOKEN_MAX,
+        512,
+      ),
+    )
 
   const { headers } = yield* input.plugin.trigger(
     "chat.headers",
@@ -230,9 +272,17 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           "User-Agent": USER_AGENT,
           ...input.model.headers,
           ...headers,
-        }).filter(([key]) => !["x-session-id", "x-vector-purpose"].includes(key.toLowerCase())),
+        }).filter(
+          ([key]) =>
+            !["x-session-id", "x-vector-purpose", ProviderTransform.PROMPT_CACHE_PREFIX_HEADER].includes(
+              key.toLowerCase(),
+            ),
+        ),
       ),
-      { "X-Session-Id": input.sessionID },
+      {
+        "X-Session-Id": input.sessionID,
+        ...(cachePrefix ? { [ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]: cachePrefix } : {}),
+      },
       input.model.providerID === ModelPlanStatus.PROVIDER_ID
         ? { "X-Vector-Purpose": input.purpose ?? (input.agent.name === "judge" ? "judge" : "chat") }
         : {},
@@ -245,7 +295,21 @@ export function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "perm
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
-  return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  const offered = Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  // A workflow launches its agents through the task tool, so it is withheld whenever task is (G.3, G.9).
+  if (!Object.hasOwn(offered, "task")) delete offered.workflow
+  return offered
+}
+
+/**
+ * Where the message at `index` of a request's messages lands in the prompt the AI SDK builds from them, which merges
+ * each run of tool messages into one.
+ */
+export function promptIndex(messages: readonly ModelMessage[], index: number): number {
+  let at = -1
+  for (let i = 0; i <= index && i < messages.length; i++)
+    if (messages[i]!.role !== "tool" || messages[i - 1]?.role !== "tool") at++
+  return at
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {

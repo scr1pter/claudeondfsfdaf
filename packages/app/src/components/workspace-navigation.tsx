@@ -863,7 +863,7 @@ export function WorkspaceNavigation(props: {
               data-vector-account-chip
               class="flex min-w-0 items-center gap-2 rounded-[6px] px-1 py-1 text-left transition hover:bg-white/[0.05]"
               title={account().email}
-              aria-label={`Account: ${chip().name}${chip().plan ? `, ${chip().plan} plan` : ""}. Open account settings`}
+              aria-label={`Account: ${chip().name}${chip().plan ? `, ${chip().plan} plan` : ""}${chip().founding ? `, founding member #${chip().founding}` : ""}. Open account settings`}
               onClick={props.onAccount}
             >
               <Show
@@ -899,6 +899,18 @@ export function WorkspaceNavigation(props: {
                         {" · "}
                       </span>
                       {plan()}
+                    </span>
+                  )}
+                </Show>
+                <Show when={chip().founding}>
+                  {(number) => (
+                    <span
+                      data-vector-account-founding
+                      aria-hidden="true"
+                      title={`Founding member #${number()}`}
+                      class="ml-1.5 shrink-0 self-center rounded-full border border-[color:var(--vx-purple)] px-1.5 text-[10px] leading-[16px] text-[color:var(--vx-workspace-text-secondary)]"
+                    >
+                      Founding
                     </span>
                   )}
                 </Show>

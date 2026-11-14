@@ -15,11 +15,13 @@ export function stepForOutput(part: StepFinishPart, billing?: "codium" | "own") 
 
 /** Editable lifecycle metadata cannot certify aggregate figures in machine output. Step events report own usage. */
 export function toolForOutput(part: ToolPart) {
-  if (part.tool !== "task" || (part.state.status !== "completed" && part.state.status !== "error")) return part
+  if (!["task", "workflow"].includes(part.tool) || (part.state.status !== "completed" && part.state.status !== "error"))
+    return part
   return { ...part, state: { ...part.state, metadata: taskMetadata(part.state.metadata) } }
 }
 
-function taskMetadata(value: unknown): unknown {
+/** Lifecycle records keep dollars and counts but lose aggregate token figures and their proof, wherever nested. */
+export function taskMetadata(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(taskMetadata)
   if (!value || typeof value !== "object") return value
   const item = value as Record<string, unknown>
@@ -38,5 +40,16 @@ function taskMetadata(value: unknown): unknown {
         ? taskMetadata(item.tasks)
         : Object.fromEntries(Object.entries(item.tasks).map(([key, child]) => [key, taskMetadata(child)]))
   if (item.subagent && typeof item.subagent === "object") next.subagent = taskMetadata(item.subagent)
+  if (item.workflow && typeof item.workflow === "object" && !Array.isArray(item.workflow)) {
+    const workflow = { ...item.workflow } as Record<string, unknown>
+    if (workflow.progress && typeof workflow.progress === "object" && !Array.isArray(workflow.progress)) {
+      const progress = { ...workflow.progress } as Record<string, unknown>
+      // Runtime checkpoints hold enforcement counters and are never a public usage receipt.
+      delete progress.runtime
+      delete progress.tokens
+      workflow.progress = progress
+    }
+    next.workflow = workflow
+  }
   return next
 }

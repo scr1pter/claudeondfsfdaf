@@ -1,0 +1,20 @@
+{
+  "agent": "build",
+  "model": {
+    "providerID": "openai",
+    "modelID": "gpt-6.1-sol"
+  },
+  "variant": "medium",
+  "executionMode": "normal",
+  "size": "standard",
+  "judge": "off",
+  "budget": {
+    "steps": 1
+  },
+  "parts": [
+    {
+      "type": "text",
+      "text": "This is a request-cache instrumentation check. Reply only with CACHE_CHECK_DONE. Do not call tools, edit files, delegate, or research."
+    }
+  ]
+}

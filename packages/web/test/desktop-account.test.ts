@@ -51,6 +51,29 @@ const upstream = Bun.serve({
     if (state.unavailable) return new Response(null, { status: 503 })
     const parts = (await request.json()) as string[]
     const grantKey = parts[1]?.startsWith("vector:deletion-grant:")
+    // Account deletion's Codium records (WP A57): the tombstone, its lease and the cleanup cron's list. This store holds
+    // no other Codium record, so its scans find nothing.
+    if (parts[1]?.startsWith("vector:codium:")) {
+      if (parts[0] === "GET") return Response.json({ result: records.get(parts[1]) ?? null })
+      if (parts[0] === "SET") {
+        const taken = parts.includes("NX") && records.has(parts[1])
+        if (!taken) records.set(parts[1], parts[2])
+        return Response.json({ result: taken ? null : "OK" })
+      }
+      if (parts[0] === "DEL") return Response.json({ result: Number(records.delete(parts[1])) })
+      if (parts[0] === "ZADD" || parts[0] === "ZREM") return Response.json({ result: 1 })
+      if (["SMEMBERS", "HGETALL", "LRANGE", "ZRANGE", "ZRANGEBYSCORE", "HKEYS"].includes(parts[0]))
+        return Response.json({ result: [] })
+      if (["HGET", "LPOP", "RPOP"].includes(parts[0])) return Response.json({ result: null })
+      if (["EXISTS", "SREM", "HDEL", "SCARD", "ZCARD", "LLEN", "UNLINK"].includes(parts[0]))
+        return Response.json({ result: 0 })
+    }
+    if (parts[0] === "SCAN" || parts[0] === "ZSCAN") return Response.json({ result: ["0", []] })
+    if (parts[0] === "EVAL" && parts[3]?.startsWith("vector:codium:")) {
+      // The deletion lease's release script.
+      if (records.get(parts[3]) === parts[4]) records.delete(parts[3])
+      return Response.json({ result: 1 })
+    }
     if (parts[0] === "GET")
       return Response.json({ result: grantKey ? (records.get(parts[1]) ?? null) : state.revoked ? "1" : null })
     if (parts[0] === "SET") {
@@ -59,7 +82,7 @@ const upstream = Bun.serve({
       expect(parts.slice(3)).toEqual(["EX", grantKey ? "900" : "300", "NX"])
       return Response.json({ result: "OK" })
     }
-    if (parts[0] !== "EVAL") throw new Error("Unexpected fixture command")
+    if (parts[0] !== "EVAL") throw new Error(`Unexpected fixture command ${parts[0]} ${parts[1]}`)
     if (parts[1].includes("'INCR'")) {
       const count = (counts.get(parts[3]) ?? 0) + 1
       counts.set(parts[3], count)

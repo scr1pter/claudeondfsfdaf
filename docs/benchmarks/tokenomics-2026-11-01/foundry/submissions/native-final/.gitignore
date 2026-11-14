@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.foundry-data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

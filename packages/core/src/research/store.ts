@@ -2,7 +2,7 @@ export * as ResearchStore from "./store"
 
 import { createHash, randomBytes } from "node:crypto"
 import { and, asc, desc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Option, Queue, Scope, Semaphore } from "effect"
+import { Context, Effect, Layer, Option, Queue, Schema, Scope, Semaphore } from "effect"
 import { Research } from "@vectordevai/schema/research"
 import type { Brain } from "../brain/brain"
 import { BrainCard } from "../brain/card"
@@ -36,6 +36,7 @@ import { Location } from "../location"
 import { AbsolutePath } from "../schema"
 import { Token } from "../util/token"
 import { ResearchDedupe } from "./dedupe"
+import { ResearchClaim } from "./claim"
 import { ResearchQuote } from "./quote"
 import type { ResearchReader } from "./reader"
 import { ResearchReport } from "./report"
@@ -158,10 +159,13 @@ export type NoteInput = {
   readonly quote: string
   readonly page?: number
   readonly stance?: Research.Stance
+  readonly measurement?: Research.Measurement
+  /** Researchers cannot receive comparison signals derived from the lead's private pages. */
+  readonly publicOnly?: boolean
 }
 
 export type Noted =
-  | { readonly type: "saved"; readonly note: Research.Note }
+  | { readonly type: "saved"; readonly note: Research.Note; readonly comparisons?: readonly ResearchClaim.Comparison[] }
   | { readonly type: "refused"; readonly message: string }
 
 export type ReportOptions = {
@@ -968,7 +972,7 @@ function make(input: {
     return yield* quotedIn(found.db, row, quote)
   })
 
-  const quotedIn = Effect.fnUntraced(function* (store: Database, row: SourceRow, quote: string) {
+  const quotedIn = Effect.fnUntraced(function* (store: Database, row: SourceRow, quote: string, page?: number) {
     const id = `S${row.ordinal}`
     if (!row.document_id)
       return {
@@ -978,8 +982,16 @@ function make(input: {
           ? `${id} was forgotten, so its text is gone.`
           : `${id} has no saved text (${row.status === "duplicate" ? `it is a copy of ${row.duplicate_of}` : "it was skipped"}).`,
       }
-    const chunks = yield* chunksOf(store, row.document_id)
+    const chunks = (yield* chunksOf(store, row.document_id)).filter(
+      (chunk) => page === undefined || chunk.page === page,
+    )
     const found = ResearchQuote.found({ source: id, parts: chunks, quote })
+    if (!found.ok && page !== undefined)
+      return {
+        ok: false as const,
+        reason: "missing" as const,
+        message: "That quote was not found on the supplied source page. Use its actual page or omit page.",
+      }
     if (!found.ok) return found
     return { ...found, passage: chunks.find((chunk) => chunk.chunk === found.chunk)?.passage } satisfies Quoted
   })
@@ -1004,8 +1016,10 @@ function make(input: {
           return { type: "refused" as const, message: "A quote is at most 600 characters." }
         const row = yield* sourceByRef(found.db, runID, request.source)
         if (!row) return { type: "refused" as const, message: `There is no ${request.source} in this run.` }
-        const checked = yield* quotedIn(found.db, row, request.quote)
+        const checked = yield* quotedIn(found.db, row, request.quote, request.page)
         if (!checked.ok) return { type: "refused" as const, message: checked.message }
+        const invalidMeasurement = request.measurement && ResearchClaim.check(request.measurement, checked.quote)
+        if (invalidMeasurement) return { type: "refused" as const, message: invalidMeasurement }
         const last = yield* found.db
           .select({ ordinal: sql<number | null>`max(${ResearchNoteTable.ordinal})` })
           .from(ResearchNoteTable)
@@ -1026,6 +1040,7 @@ function make(input: {
           stance: request.stance ?? ("supports" as const),
           support: ResearchQuote.supports(claim, checked.quote),
           verdict: null,
+          measurement: request.measurement ? Schema.decodeUnknownSync(Research.Measurement)(request.measurement) : null,
           created_at: Date.now(),
         } satisfies typeof ResearchNoteTable.$inferInsert
         yield* found.db.insert(ResearchNoteTable).values(values).run().pipe(Effect.orDie)
@@ -1033,7 +1048,26 @@ function make(input: {
         if (!found.guest) yield* wake()
         const saved = toNote(values, row.ordinal)
         yield* publish(place, runID, found.row.status, { noteID: saved.id })
-        return { type: "saved" as const, note: saved }
+        const comparisonSources = request.measurement
+          ? (yield* sourcesOf(found.db, runID))
+              .filter(
+                (item) =>
+                  item.document_id !== null &&
+                  (!request.publicOnly || (!item.private && item.signals?.signed_in !== true)),
+              )
+              .map(toSource)
+          : []
+        const allowed = new Set(comparisonSources.map((item) => item.id))
+        const comparisons = request.measurement
+          ? ResearchClaim.comparisons(
+              [
+                saved,
+                ...(yield* notesOf(found.db, runID)).filter((item) => item.id !== saved.id && allowed.has(item.source)),
+              ],
+              comparisonSources,
+            ).filter((item) => item.left === saved.id || item.right === saved.id)
+          : []
+        return { type: "saved" as const, note: saved, ...(comparisons.length ? { comparisons } : {}) }
       }),
     )
   })
@@ -1953,6 +1987,7 @@ function toNote(row: typeof ResearchNoteTable.$inferInsert, source: number): Res
     stance: row.stance,
     support: row.support,
     ...(row.verdict ? { verdict: row.verdict } : {}),
+    ...(row.measurement ? { measurement: row.measurement } : {}),
     created_at: row.created_at,
   }
 }

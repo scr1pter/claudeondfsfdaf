@@ -1,11 +1,11 @@
 import { Billing } from "@vectordevai/schema/billing"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
-import type { AssistantMessage } from "@vectordevai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi } from "@vectordevai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createResource, For, Show } from "solid-js"
 import { Locale } from "../../util/locale"
 import { delegatedSpendLines } from "../../util/session"
+import { getSessionContext } from "../../util/session-context"
 import { useSync } from "../../context/sync"
 
 const id = "internal:sidebar-context"
@@ -64,8 +64,8 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const spend = createMemo(() => sync.data.session_spend[props.session_id])
 
   const state = createMemo(() => {
-    const last = msg().findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) {
+    const context = getSessionContext(msg())
+    if (!context) {
       return {
         tokens: 0,
         percent: null,
@@ -74,13 +74,14 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       }
     }
 
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    const model = props.api.state.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const tokens = context.tokens
+    const model = props.api.state.provider.find((item) => item.id === context.message.providerID)?.models[
+      context.message.modelID
+    ]
     return {
       tokens,
-      codium: Boolean(Billing.of(last)),
-      own: Billing.hasOwnIdentity(last),
+      codium: Boolean(Billing.of(context.message)),
+      own: Billing.hasOwnIdentity(context.message),
       percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : null,
     }
   })

@@ -1,0 +1,955 @@
+{
+  "kind": "safe-blinded-static-report-projection",
+  "sourceReportSha256": "af482e2f7f2f5892e2cca0e387f1feb23ddd9c9cbed2e8fdd3c4972cde14c583",
+  "projection": "Only absolute evidence paths mapped to published locations and renamed publishedPath; scores/rationales remain unchanged. Windows path separators normalized.",
+  "opaqueAlias": "willow",
+  "publishedSubmission": "codex-interrupted",
+  "report": {
+    "label": "willow",
+    "reviewType": "independent blinded static source and native screenshot review",
+    "elmAlreadyLocked": true,
+    "scope": {
+      "read": "All executable source, configuration, dependency lock, authored verification script/browser wrapper and nine native PNGs within willow; package BUILD_SPEC and both rubrics.",
+      "excluded": "review-provenance.json; no parent folders, Git, alias map, external tooling, runtime/API/browser/build execution.",
+      "claims": "Static source design and delivered visual evidence only. Authored tests were read but not run. No runtime pass, task completion, delivery quality or production-readiness conclusion is inferred from screenshots or authored prose."
+    },
+    "code": {
+      "max": 48,
+      "total": 31,
+      "axes": [
+        {
+          "axis": 1,
+          "name": "Real architecture",
+          "score": 2,
+          "rationale": "A real React/Bun/SQLite application has separate API, persistence, common helpers, routes, views and forms. TypeScript is enabled, but Record<string,any>, any[] and unversioned JSON records carry most domain data; domain constraints and relationships are not expressed in the schema.",
+          "evidence": [
+            {
+              "relative": "source/package.json",
+              "line": 7,
+              "publishedPath": "../submissions/codex-interrupted/source/package.json"
+            },
+            {
+              "relative": "source/tsconfig.json",
+              "line": 14,
+              "publishedPath": "../submissions/codex-interrupted/source/tsconfig.json"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 38,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 51,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/src/api.ts",
+              "line": 12,
+              "publishedPath": "../submissions/codex-interrupted/source/src/api.ts"
+            }
+          ]
+        },
+        {
+          "axis": 2,
+          "name": "Authentication",
+          "score": 3,
+          "rationale": "Real Argon2id hashing and verification, random64-character persisted sessions, server-side logout and correct local cookie flags are present. Sessions have no server expiration and authentication abuse controls are absent; no runtime pass is inferred.",
+          "evidence": [
+            {
+              "relative": "source/server/data.ts",
+              "line": 30,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 84,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 92,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 132,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 153,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 167,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            }
+          ]
+        },
+        {
+          "axis": 3,
+          "name": "Workspace/role boundaries",
+          "score": 2,
+          "rationale": "Scoped record lookups and entry-point membership checks cover ordinary tenant reads/downloads, with author/manager delete guards. However, session/membership/role context is captured before asynchronous request-body reads and is not rechecked inside mutations, creating a stale-authority risk after concurrent revocation.",
+          "evidence": [
+            {
+              "relative": "source/server/api.ts",
+              "line": 17,
+              "publishedPath": "../submissions/codex-interrupted/source/server/api.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 98,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 228,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 29,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 114,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 214,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            }
+          ]
+        },
+        {
+          "axis": 4,
+          "name": "Inventory transactions",
+          "score": 3,
+          "rationale": "Integer quantity/price validation, bounded resulting stock, guarded product deletion and immutable movement API routes are implemented within immediate transactions. Business stock/movement constraints remain application-enforced JSON state.",
+          "evidence": [
+            {
+              "relative": "source/server/common.ts",
+              "line": 32,
+              "publishedPath": "../submissions/codex-interrupted/source/server/common.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 50,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 129,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 144,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 149,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            }
+          ]
+        },
+        {
+          "axis": 5,
+          "name": "Fulfillment idempotency",
+          "score": 4,
+          "rationale": "Durable workspace/key uniqueness, saved response JSON, all-stock validation before mutation, linked immutable movements and fulfilled state commit in one synchronous immediate transaction. Insufficient stock precedes key insertion and replays return saved snapshots without activity.",
+          "evidence": [
+            {
+              "relative": "source/server/data.ts",
+              "line": 42,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 50,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 169,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 174,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 178,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            }
+          ]
+        },
+        {
+          "axis": 6,
+          "name": "Financial correctness",
+          "score": 3,
+          "rationale": "Bounded integer cents, stored line snapshots, transactional workspace counters, one-invoice checks and terminal invoice guards are present. Dedicated financial-table uniqueness and relational constraints are absent; serialized application logic bears those guarantees.",
+          "evidence": [
+            {
+              "relative": "source/server/data.ts",
+              "line": 67,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 94,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 158,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 184,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 186,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            }
+          ]
+        },
+        {
+          "axis": 7,
+          "name": "Projects/collaboration",
+          "score": 3,
+          "rationale": "Tasks/comments are durable, validated member assignees and real calendar dates are enforced, patches are atomic, filters compose and author permissions/cascades exist. Cascades are manual scans and membership deletion does not reconcile existing assignees.",
+          "evidence": [
+            {
+              "relative": "source/server/routes.ts",
+              "line": 53,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 66,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 87,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 192,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 200,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 223,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            }
+          ]
+        },
+        {
+          "axis": 8,
+          "name": "CSV and file handling",
+          "score": 2,
+          "rationale": "CSV quoting, all-row validation, duplicate rollback, formula defense, UUID file paths and exact byte reads are substantial. Multipart filename checks run only after platform parsing, so raw CR/LF rejection is not established statically; filesystem/database crash consistency and cleanup retry are incomplete.",
+          "evidence": [
+            {
+              "relative": "source/server/common.ts",
+              "line": 45,
+              "publishedPath": "../submissions/codex-interrupted/source/server/common.ts"
+            },
+            {
+              "relative": "source/server/common.ts",
+              "line": 72,
+              "publishedPath": "../submissions/codex-interrupted/source/server/common.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 204,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 34,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 214,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 218,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 221,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            }
+          ]
+        },
+        {
+          "axis": 9,
+          "name": "API correctness",
+          "score": 2,
+          "rationale": "Structured errors and strict allowed-field/integer/enum checks cover the main operations. Lists and derived analytics scan unbounded JSON records; some filter references simply return an empty result rather than validating same-workspace existence, and business schema constraints are thin.",
+          "evidence": [
+            {
+              "relative": "source/server/common.ts",
+              "line": 14,
+              "publishedPath": "../submissions/codex-interrupted/source/server/common.ts"
+            },
+            {
+              "relative": "source/server/common.ts",
+              "line": 37,
+              "publishedPath": "../submissions/codex-interrupted/source/server/common.ts"
+            },
+            {
+              "relative": "source/server/api.ts",
+              "line": 24,
+              "publishedPath": "../submissions/codex-interrupted/source/server/api.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 51,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 87,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            },
+            {
+              "relative": "source/server/routes.ts",
+              "line": 228,
+              "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+            }
+          ]
+        },
+        {
+          "axis": 10,
+          "name": "Client state and live updates",
+          "score": 2,
+          "rationale": "A real1.3-second revision/session poll and workspace-ID guard protect basic tenant loading. Entire workspaces are fetched for every revision, overlapping same-workspace loads lack generation ordering, open editing forms survive role changes, and stock history does not subscribe to revision changes. Three-second behavior was not measured.",
+          "evidence": [
+            {
+              "relative": "source/src/main.tsx",
+              "line": 22,
+              "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+            },
+            {
+              "relative": "source/src/main.tsx",
+              "line": 25,
+              "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+            },
+            {
+              "relative": "source/src/main.tsx",
+              "line": 27,
+              "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+            },
+            {
+              "relative": "source/src/main.tsx",
+              "line": 37,
+              "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+            },
+            {
+              "relative": "source/src/forms.tsx",
+              "line": 45,
+              "publishedPath": "../submissions/codex-interrupted/source/src/forms.tsx"
+            }
+          ]
+        },
+        {
+          "axis": 11,
+          "name": "Maintainability and useful tests",
+          "score": 2,
+          "rationale": "An authored API suite exercises rollback, same-key/competing fulfillment, snapshots, tenant denial and restart. No tests were run here. Very long JSX/CSS/router lines, broad any types and centralized all-domain state make refactors harder to verify; focused UI/authorization-race tests are not present.",
+          "evidence": [
+            {
+              "relative": "source/scripts/verify-api.ts",
+              "line": 80,
+              "publishedPath": "../submissions/codex-interrupted/source/scripts/verify-api.ts"
+            },
+            {
+              "relative": "source/scripts/verify-api.ts",
+              "line": 107,
+              "publishedPath": "../submissions/codex-interrupted/source/scripts/verify-api.ts"
+            },
+            {
+              "relative": "source/scripts/verify-api.ts",
+              "line": 33,
+              "publishedPath": "../submissions/codex-interrupted/source/scripts/verify-api.ts"
+            },
+            {
+              "relative": "source/src/main.tsx",
+              "line": 37,
+              "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+            },
+            {
+              "relative": "source/src/views.tsx",
+              "line": 29,
+              "publishedPath": "../submissions/codex-interrupted/source/src/views.tsx"
+            },
+            {
+              "relative": "source/src/styles.css",
+              "line": 1,
+              "publishedPath": "../submissions/codex-interrupted/source/src/styles.css"
+            }
+          ]
+        },
+        {
+          "axis": 12,
+          "name": "Operational honesty",
+          "score": 3,
+          "rationale": "Real typecheck/build/start scripts, a single loopback server, direct-route fallback and explicit local/payment limitations are provided. Static review does not establish successful install/build/restart. Default DATA_DIR is a sibling, differing from the supplied .foundry-data default.",
+          "evidence": [
+            {
+              "relative": "source/package.json",
+              "line": 7,
+              "publishedPath": "../submissions/codex-interrupted/source/package.json"
+            },
+            {
+              "relative": "source/server/index.ts",
+              "line": 8,
+              "publishedPath": "../submissions/codex-interrupted/source/server/index.ts"
+            },
+            {
+              "relative": "source/server/index.ts",
+              "line": 27,
+              "publishedPath": "../submissions/codex-interrupted/source/server/index.ts"
+            },
+            {
+              "relative": "source/server/data.ts",
+              "line": 10,
+              "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+            },
+            {
+              "relative": "source/README.md",
+              "line": 7,
+              "publishedPath": "../submissions/codex-interrupted/source/README.md"
+            },
+            {
+              "relative": "source/README.md",
+              "line": 37,
+              "publishedPath": "../submissions/codex-interrupted/source/README.md"
+            }
+          ]
+        }
+      ]
+    },
+    "visual": {
+      "max": 40,
+      "total": 24,
+      "axes": [
+        {
+          "axis": 1,
+          "name": "Coherent Foundry identity",
+          "score": 3,
+          "rationale": "A consistent lavender/plum system, custom stacked mark, matching local icons, pastel surfaces and card geometry span the captured domains.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 2,
+          "name": "Information hierarchy",
+          "score": 2,
+          "rationale": "Business cards, actual invoice counts and next-step links are clearly grouped. A large promotional hero precedes business state and consumes much of the first mobile screen; much secondary text is very small.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-overview.png"
+            }
+          ]
+        },
+        {
+          "axis": 3,
+          "name": "Navigation and workspace context",
+          "score": 3,
+          "rationale": "Selected desktop navigation, breadcrumbs and persistent workspace/owner context orient the user. Mobile preserves the workspace breadcrumb and navigation toggle; the desktop selector truncates a fairly short workspace name.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-orders.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-orders.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 4,
+          "name": "Tables and forms",
+          "score": 3,
+          "rationale": "Populated desktop customer and inventory tables have consistent alignment, compact action placement and clear search/action bars. Mobile confines wide customer/inventory tables to panels; later columns are offscreen. No form/validation dialog screenshots were supplied.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/mobile-customers.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-inventory.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-inventory.png"
+            }
+          ]
+        },
+        {
+          "axis": 5,
+          "name": "Order-to-invoice workflow",
+          "score": 2,
+          "rationale": "The mobile order row shows number, customer, fulfilled status, date and complete amount. Quantity editing, invoice snapshots and invoice transitions are not visually evidenced; screenshot polish does not demonstrate those flows.",
+          "evidence": [
+            {
+              "relative": "screenshots/mobile-orders.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-orders.png"
+            }
+          ]
+        },
+        {
+          "axis": 6,
+          "name": "Project board and collaboration",
+          "score": 3,
+          "rationale": "The desktop board contains readable status columns, priorities, task descriptions, due dates and assignee avatars, plus composed filters. Mobile uses a contained horizontally cropped board. Comments and task detail dialogs are absent from visual evidence.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-project-board.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 7,
+          "name": "Interaction finish",
+          "score": 2,
+          "rationale": "An empty board column, clear actions and a success toast are captured. Error, loading, disabled, confirmation and dialog states are mostly absent, so their visual finish cannot be established.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 8,
+          "name": "Mobile composition",
+          "score": 2,
+          "rationale": "All five mobile PNGs are390px wide, with reflowed cards, wrapped action bars and contained table/board regions. The hero illustration is awkwardly cropped, important table columns need horizontal travel, and many touch controls/text labels remain small.",
+          "evidence": [
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-overview.png"
+            },
+            {
+              "relative": "screenshots/mobile-customers.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-inventory.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-inventory.png"
+            },
+            {
+              "relative": "screenshots/mobile-orders.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-orders.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 9,
+          "name": "Accessibility",
+          "score": 1,
+          "rationale": "Small pale status/priority badges, fine print and tiny icon actions weaken contrast and target size in visible captures. Native labelled dialogs and focus styles exist in source, but the collapsed mobile sidebar is only translated offscreen and remains focusable; keyboard/dialog usability is untested.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-project-board.png"
+            },
+            {
+              "relative": "screenshots/mobile-orders.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-orders.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 10,
+          "name": "Overall craft and originality",
+          "score": 3,
+          "rationale": "The connected illustration, consistent pastel identity and populated domain screens form a considered product. Promotional space, restrained contrast and compact controls hold it below exceptional craft.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/desktop-project-board.png"
+            },
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/codex-interrupted/screenshots/mobile-overview.png"
+            }
+          ]
+        }
+      ]
+    },
+    "findings": [
+      {
+        "id": "willow-1",
+        "severity": "high",
+        "type": "inferred-security-risk-not-executed",
+        "title": "Mutations retain pre-body authorization after revocation",
+        "detail": "handleApi captures ctx once; routes check its role, await JSON or multipart bytes, then transact using the same ctx. mutate does not call getUser/getContext again. A request held while its session is logged out or its membership/role revoked can therefore retain old write authority by source reasoning. This was not executed in this review.",
+        "evidence": [
+          {
+            "relative": "source/server/api.ts",
+            "line": 17,
+            "publishedPath": "../submissions/codex-interrupted/source/server/api.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 29,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 114,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 214,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/data.ts",
+            "line": 228,
+            "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+          }
+        ]
+      },
+      {
+        "id": "willow-2",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "Unbounded records and all-domain refetch",
+        "detail": "listRecords reads/parses all records of a type; validation, summary, exports and cascades scan arrays. The client reloads nine collections on each workspace revision even on unrelated pages. Scale, request timing and resource use are unmeasured risks.",
+        "evidence": [
+          {
+            "relative": "source/server/data.ts",
+            "line": 51,
+            "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 43,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 228,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/src/main.tsx",
+            "line": 22,
+            "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+          }
+        ]
+      },
+      {
+        "id": "willow-3",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "File cleanup has no durable recovery",
+        "detail": "Metadata deletion commits first and unlink errors are only logged. Process interruption can leave unreferenced files; upload writes the file before its database mutation. No cleanup queue/reconciliation is present.",
+        "evidence": [
+          {
+            "relative": "source/server/routes.ts",
+            "line": 29,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 36,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 221,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          }
+        ]
+      },
+      {
+        "id": "willow-4",
+        "severity": "medium",
+        "type": "inferred-validation-risk-not-executed",
+        "title": "Raw multipart filename rejection is not established",
+        "detail": "The route delegates parsing to request.formData and checks the resulting File.name for CR/LF. If the parser truncates or normalizes a raw CR/LF-bearing filename, this check cannot establish the required raw injection rejection. Parser behavior was not tested here; UUID storage paths still constrain ordinary filenames.",
+        "evidence": [
+          {
+            "relative": "source/server/routes.ts",
+            "line": 214,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 218,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 220,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          }
+        ]
+      },
+      {
+        "id": "willow-5",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "Stock history does not refresh with workspace revision",
+        "detail": "StockHistory fetches only when base or product.id changes. An already-open history dialog can remain stale while other clients add movements, even though the outer workspace polls revisions.",
+        "evidence": [
+          {
+            "relative": "source/src/forms.tsx",
+            "line": 45,
+            "publishedPath": "../submissions/codex-interrupted/source/src/forms.tsx"
+          },
+          {
+            "relative": "source/src/main.tsx",
+            "line": 27,
+            "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+          }
+        ]
+      },
+      {
+        "id": "willow-6",
+        "severity": "medium",
+        "type": "inferred-client-risk-not-executed",
+        "title": "Role changes leave existing editing forms available",
+        "detail": "Polling updates role props but the dialog is not cleared on role changes; product/customer/task form branches render their submit buttons based on dialog type rather than current permission. Server enforcement ordinarily denies a new unauthorized request, but the visible role-change contract is incomplete.",
+        "evidence": [
+          {
+            "relative": "source/src/main.tsx",
+            "line": 25,
+            "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+          },
+          {
+            "relative": "source/src/main.tsx",
+            "line": 27,
+            "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+          },
+          {
+            "relative": "source/src/forms.tsx",
+            "line": 33,
+            "publishedPath": "../submissions/codex-interrupted/source/src/forms.tsx"
+          },
+          {
+            "relative": "source/src/forms.tsx",
+            "line": 34,
+            "publishedPath": "../submissions/codex-interrupted/source/src/forms.tsx"
+          },
+          {
+            "relative": "source/src/forms.tsx",
+            "line": 38,
+            "publishedPath": "../submissions/codex-interrupted/source/src/forms.tsx"
+          }
+        ]
+      },
+      {
+        "id": "willow-7",
+        "severity": "medium",
+        "type": "observed-static-accessibility-limitation",
+        "title": "Hidden mobile navigation remains in the tab order",
+        "detail": "The closed sidebar is moved with transform:translateX(-100%) without hidden/inert/visibility handling. Its links and controls remain focusable by source semantics; no keyboard sequence was executed. Modal focus return also assumes the old trigger remains connected.",
+        "evidence": [
+          {
+            "relative": "source/src/styles.css",
+            "line": 5,
+            "publishedPath": "../submissions/codex-interrupted/source/src/styles.css"
+          },
+          {
+            "relative": "source/src/main.tsx",
+            "line": 37,
+            "publishedPath": "../submissions/codex-interrupted/source/src/main.tsx"
+          },
+          {
+            "relative": "source/src/components.tsx",
+            "line": 9,
+            "publishedPath": "../submissions/codex-interrupted/source/src/components.tsx"
+          }
+        ]
+      },
+      {
+        "id": "willow-8",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "Dense source and pervasive any weaken change safety",
+        "detail": "Domain records use any through storage, routes, forms and views despite strict TypeScript. Most rendering and styling are compressed into long lines. The API suite is meaningful, but these boundaries leave substantial compile-time and review gaps.",
+        "evidence": [
+          {
+            "relative": "source/src/api.ts",
+            "line": 12,
+            "publishedPath": "../submissions/codex-interrupted/source/src/api.ts"
+          },
+          {
+            "relative": "source/server/data.ts",
+            "line": 51,
+            "publishedPath": "../submissions/codex-interrupted/source/server/data.ts"
+          },
+          {
+            "relative": "source/server/routes.ts",
+            "line": 23,
+            "publishedPath": "../submissions/codex-interrupted/source/server/routes.ts"
+          },
+          {
+            "relative": "source/src/views.tsx",
+            "line": 29,
+            "publishedPath": "../submissions/codex-interrupted/source/src/views.tsx"
+          },
+          {
+            "relative": "source/src/styles.css",
+            "line": 1,
+            "publishedPath": "../submissions/codex-interrupted/source/src/styles.css"
+          }
+        ]
+      }
+    ],
+    "screenshots": [
+      {
+        "relative": "screenshots/desktop-overview.png",
+        "width": 1440,
+        "height": 1639,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/desktop-customers.png",
+        "width": 1440,
+        "height": 960,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/desktop-inventory.png",
+        "width": 1440,
+        "height": 960,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/desktop-project-board.png",
+        "width": 1440,
+        "height": 960,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-overview.png",
+        "width": 390,
+        "height": 2035,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-customers.png",
+        "width": 390,
+        "height": 844,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-inventory.png",
+        "width": 390,
+        "height": 844,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-orders.png",
+        "width": 390,
+        "height": 844,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-project-board.png",
+        "width": 390,
+        "height": 844,
+        "viewedNative": true
+      }
+    ],
+    "residualRisks": [
+      "Build/typecheck/start/restart, live-update timing and keyboard/browser behavior were not executed.",
+      "The stale-authority scenario and raw multipart parser behavior are source-derived risks, not demonstrated exploits.",
+      "No production-scale performance, crash-recovery or session-abuse safety is established.",
+      "Screenshots do not evidence invoice/form/comment/destructive flows, and cannot establish functional completion."
+    ]
+  }
+}

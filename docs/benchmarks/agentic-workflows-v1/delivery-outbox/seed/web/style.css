@@ -1,0 +1,19 @@
+:root { font: 16px/1.5 system-ui, sans-serif; color: #182b38; background: #f4f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1100px; margin: auto; padding: 24px; }
+header { margin-bottom: 24px; }
+h1, h2 { margin-bottom: 8px; }
+button, textarea { font: inherit; }
+button { padding: 8px 12px; margin: 4px; cursor: pointer; border: 1px solid #a8b7c1; border-radius: 5px; background: white; overflow-wrap: anywhere; }
+button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #2675c9; outline-offset: 2px; }
+.workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; }
+nav button { display: block; width: 100%; text-align: left; }
+section { min-width: 0; }
+article { background: white; border: 1px solid #d1dce3; border-radius: 7px; padding: 16px; margin: 16px 0; overflow-wrap: anywhere; }
+label { display: block; font-weight: 600; }
+textarea { width: 100%; padding: 10px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+[role=alert] { padding: 12px; background: #fff0ee; color: #8c261c; }
+summary { cursor: pointer; padding: 8px 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { main { padding: 16px; } .workspace { grid-template-columns: 1fr; gap: 12px; } nav button { width: auto; display: inline-block; } }

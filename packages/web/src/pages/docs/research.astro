@@ -140,11 +140,34 @@ export const prerender = true
             setting changes that, and <code>"off"</code> turns it off. The judge and the researchers can run on a model
             of their own, set as <code>agent.research-judge.model</code> and <code>agent.researcher.model</code>.
           </p>
+
+          <h2 id="comparing-claims">Comparing measurements</h2>
+          <p class="note">In development builds: research notes can carry structured measurements alongside their source quotes.</p>
+          <p>
+            A measurement names what was measured, its value and unit, with the period, geography, population,
+            methodology and definition when the source gives them. Vector compares notes about the same quantity:
+            different periods or definitions are shown as different scopes, while differing values in a comparable
+            scope are flagged for review. Values within 2% are labelled as approximate agreement; this is a review
+            tolerance, not statistical equivalence. Missing context remains a limitation rather than an assumed match.
+          </p>
+          <p>
+            The report keeps both source references so you can inspect the disagreement. Copies of one source do not
+            become independent confirmation. These comparisons help locate differences; they do not decide which
+            scientific result or market estimate is true.
+          </p>
           <p>
             The report card offers <strong>Keep in brain</strong>, <strong>Export</strong> (Markdown with its sources),
             <strong>Export JSON</strong>, <strong>Save to repository</strong>, which writes
             <code>.vector/research/&lt;date&gt;-&lt;question&gt;.md</code>, <strong>Keep this format</strong> and
             <strong>Forget this research</strong>.
+          </p>
+          <p>
+            Development builds also offer <strong>Word</strong> and <strong>PDF</strong> exports from the report card
+            and Memory's Research view. They include the report's headings, tables, citations, sources and method.
+            Export happens on the engine without a conversion service, remote fonts or downloaded images. Unsupported
+            PDF characters produce a clear error rather than being silently removed; Word retains the text for the
+            reader's installed fonts. The CLI selects the format from <code>--report report.docx</code>,
+            <code>report.pdf</code>, <code>report.json</code> or <code>report.md</code>.
           </p>
           <p>
             {release112.since} asking Vector to save or keep the research does what <strong>Keep in brain</strong> does,

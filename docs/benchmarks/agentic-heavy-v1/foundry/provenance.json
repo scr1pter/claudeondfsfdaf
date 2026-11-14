@@ -1,0 +1,45 @@
+{
+  "kind": "exact-foundry-heavy-instrument-copy-v1",
+  "classification": "development replication; prior task and outputs already observed",
+  "originalPublicDirectory": "docs/benchmarks/tokenomics-2026-11-01/foundry",
+  "originalFullFreezeSha256": "fcc3611fc1a5ca397405e00073936c51a60c5d2327ac93373563dc11d89966bd",
+  "copiedFiles": {
+    "instrument/browser-eval.cjs": "b6784542f7ac1d943e96f58029e1f890a92a0bb8ec039dd1ce345ab47bd8a262",
+    "instrument/browser-eval.test.cjs": "7a027c669350c57f3650a0af4e6e4e0435e52826c390e6bb6c9a2ef395075416",
+    "instrument/browser-instrument-validation.json": "378b5e4e9f360f6f1e62a733ec76c3a6ba1d475c499c6cba3442f9f2e058f643",
+    "instrument/browser-invoice-control.cjs": "032213c2baec1c64f20aa9e1616c5151906fa38ec9c46ab2b0158da6535e42da",
+    "instrument/browser-navigation-control.cjs": "b726c7de72e0d46b57feb867b18f92bf6cfe3ab72cbc74d98894468f7ce66a84",
+    "instrument/browser-state-control.cjs": "e6f0d56e3318b6ad8d3f7587b946f0c1f2cc42b1c804deede208deeaebea1323",
+    "instrument/build-output.cjs": "750621a2481622099c7f3dbff405ab5a86d3f706a7eb97a35787709ac78e3a35",
+    "instrument/BUILD_SPEC.md": "62c42361ffec2b6cf91ef3ef5fb49706503aa05ff420ecf315e270904467c35a",
+    "instrument/code-quality-rubric.md": "cc556b60fa83cb4a0c0f2db3a1d654978645ad2d42b9a876acdf884ad31f54f9",
+    "instrument/evaluate.py": "ebaa5108a5493b737a61f3f6f7edb013626f6af762a7415271e0fb9a00df68cc",
+    "instrument/prepare.py": "399ed1bcdd503df67cce4246e45816f38facd6bc3c3a3b13c44572f93d52237d",
+    "instrument/README.md": "bc0f0d0d511d637400fc3e524e5ca2ec426250b5ece7fde2fc6972131cdf7ed1",
+    "instrument/test_instrument.py": "5de1baa18a9480f9f6fae34258752803b60ed0e224c17b5f4b844e6693b4027b",
+    "instrument/visual-rubric.md": "42418c193dd17ac228b7dd0b6cc7e320eaa10bd64393769ab12271394dec21a5",
+    "instrument/seed/.gitignore": "b51be4624adc7e02eeef930f3ddf9c8e3110892e7efc3e81114cf2ab850b58a5",
+    "instrument/seed/bun.lock": "472e9ec37725ad3fda42738a5650c9660bec4a06881c91f257324380eeba0a90",
+    "instrument/seed/package.json": "c038f9fb6b7ab91b3db31f52aa04ddf3f2f0ffe2b92889c0af2e1942cf550632",
+    "instrument/seed/tsconfig.json": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860"
+  },
+  "copiedFileCount": 18,
+  "sourceFilesManuallyChanged": false,
+  "priorSubmissionImplementationCopied": false,
+  "applicationImplementationSeeded": false,
+  "seedFileCountBeforePrompt": 4,
+  "workspacePromptFile": "BUILD_SPEC.md",
+  "publicScaffoldFilesAfterPrompt": [
+    ".gitignore",
+    "BUILD_SPEC.md",
+    "bun.lock",
+    "package.json",
+    "tsconfig.json"
+  ],
+  "adapterOwnedProcessDependency": {
+    "source": "scripts/benchmarks/agentic-study/owned_process.py",
+    "copy": "owned_process.py",
+    "sha256": "c3c7ea92c3aff03867c8d20757e03b5e6266992a5724de2bb2db787d9725054c",
+    "byteIdentical": true
+  }
+}

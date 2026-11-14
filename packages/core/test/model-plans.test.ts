@@ -146,6 +146,11 @@ test("a fresh engine lists the account's last catalog while vectordev.ai is slow
   const restarted = ModelPlans.createClient({ file, timeout: 5, request: slow })
   expect(await restarted.catalog(account)).toEqual(active)
   expect(await restarted.catalog("vct_another-account.token")).toEqual(off)
+  // Both late answers are still on their way and each saves the file when it lands, which on a slow machine could be
+  // after the refusal below is saved. A forced read settles each account's refresh (the older read then saves nothing,
+  // and this one saves before it resolves), so nothing from this launch writes the file after this point.
+  await restarted.catalog(account, { force: true })
+  await restarted.catalog("vct_another-account.token", { force: true })
   // A refused token replaces what was saved.
   await ModelPlans.createClient({ file, request: async () => new Response("revoked", { status: 403 }) }).catalog(
     account,

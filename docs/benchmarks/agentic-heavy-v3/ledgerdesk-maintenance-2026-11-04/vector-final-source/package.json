@@ -1,0 +1,12 @@
+{
+  "name": "ledgerdesk",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local transactional usage billing with auditable migration, invoices and credits",
+  "scripts": {
+    "start": "node app.mjs",
+    "test": "node --test backend/*.test.mjs client-tests/*.test.mjs",
+    "verify:live": "node tests/verify-final.mjs"
+  }
+}

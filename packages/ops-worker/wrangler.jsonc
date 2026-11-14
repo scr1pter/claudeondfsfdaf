@@ -1,0 +1,24 @@
+// Vector's ops Worker (Codium build WP A46, contract §6.1): On Call checks and Release Guard watches, one Durable Object
+// per account. Nothing here is a secret. The owner sets these once with `wrangler secret put`
+// (owner-actions/hosted-ops.md), never in this file and never from a workflow:
+//   INTERNAL_SECRET     the same value as the API's VECTOR_OPS_SHARED_SECRET (at least 32 characters); it signs the
+//                       API's calls to the Worker and the Worker's reports back to the API
+//   ACCOUNT_KEY         a random key of at least 32 characters that names each account's Durable Object; keep it
+//                       stable, because changing it starts every account's checks over with nothing configured
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vector-ops",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "OPS_ACCOUNT", "class_name": "OpsAccount" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["OpsAccount"] }],
+  // The Worker's own kill flag: key "kill" set to "1" stops every check, watch and report (read on every alarm).
+  // Replace the id with the OPS_FLAGS namespace the owner creates (owner step 11); this placeholder matches no
+  // namespace, so a deploy that still carries it fails instead of writing anywhere.
+  "kv_namespaces": [{ "binding": "OPS_FLAGS", "id": "00000000000000000000000000000000" }],
+  // Where the Worker reports what it found (POST <API_ORIGIN>/api/ops/worker, signed). Not a secret.
+  "vars": { "API_ORIGIN": "https://vectordev.ai" }
+}

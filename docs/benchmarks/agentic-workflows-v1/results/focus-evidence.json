@@ -1,0 +1,330 @@
+{
+  "kind": "focus-evidence-results-v1",
+  "sourceRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "task": "evidence-workbench",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "autonomousAgentsPerRuntime": 1,
+  "costBasis": "Usage-derived provider receipts, not invoice reconciliation",
+  "allChargesRetained": true,
+  "cases": {
+    "codex": {
+      "providerRequests": 31,
+      "usd": 0.7953841,
+      "completedModelDeliveries": 1,
+      "abortedRepairLaunches": 1,
+      "originalGate": {
+        "apiPassed": 18,
+        "browserPassed": 7,
+        "failed": "browser.import",
+        "verdict": "product_failure"
+      },
+      "correctedGate": {
+        "apiPassed": 18,
+        "browserPassed": 8,
+        "verdict": "passed",
+        "sourceUnchanged": true,
+        "modelCalls": 0
+      },
+      "originalCoordinatorStop": "coordinator_review_required: read-only status transport timeout interrupted repair after two provider requests; scoped disarm acknowledged and settled",
+      "codeScore": 47,
+      "codeDimensions": [
+        12,
+        10,
+        8,
+        6,
+        6,
+        5
+      ],
+      "sourcePublication": "../submissions/focus-evidence/codex-first/source",
+      "firstSubmissionProviderRequests": 29,
+      "firstSubmissionUsd": 0.7455959,
+      "firstSubmissionAgentWallMs": 489016,
+      "completeEpisodeWallMs": null,
+      "interruptedRepairWallMs": null,
+      "wallTimeLimitation": "Only the completed first delivery wall time was returned; interrupted repair duration is unmeasured, not zero.",
+      "paidModelRepairAttempts": 1,
+      "completedModelRepairs": 0,
+      "interruptedRepairProviderRequests": 2,
+      "interruptedRepairUsd": 0.0497882,
+      "interruptedRepairSourceUnchanged": true
+    },
+    "vector": {
+      "providerRequests": 53,
+      "usd": 0.7697271,
+      "agentWallMs": 498515,
+      "completedModelDeliveries": 1,
+      "gate": {
+        "apiPassed": 18,
+        "browserPassed": 8,
+        "verdict": "passed",
+        "sourceUnchanged": true
+      },
+      "validatedMissingArmContinuation": true,
+      "codeScore": 45,
+      "codeDimensions": [
+        11,
+        10,
+        8,
+        5,
+        5,
+        6
+      ],
+      "sourcePublication": "../submissions/focus-evidence/vector-first/source",
+      "firstSubmissionProviderRequests": 53,
+      "firstSubmissionUsd": 0.7697271,
+      "completeEpisodeWallMs": 498515,
+      "paidModelRepairAttempts": 0
+    }
+  },
+  "instrumentCorrection": {
+    "originalTaskSha256": "0090ff679a4989b34b59ea51c5910794c322dc7805fffadc203e0da083523920",
+    "correctedTaskSha256": "1c9887ee0aacb62830942559ac845dda8c3e5d9a5765f20a17e38b67a0e20094",
+    "correctedInstrumentRevision": "e7394e79cecee4ed8049fe18ee6ea56fc54a7068",
+    "visibleMessage": "Batch import failed: Source must be a nonblank string.",
+    "serverError": "HTTP 400 invalid_batch",
+    "classification": "Instrument false negative; useful message visible and entered text preserved. An interrupted paid repair made two requests without source changes; corrected free evaluation passed the original first source.",
+    "oldReportsFreeFailuresFreePassesAndChargesRetained": true,
+    "codexCorrectionAppliedToUnchangedSource": true,
+    "continuationPublicPromptSeedProductBinariesModelAndPolicyPinsMatched": true
+  },
+  "comparison": {
+    "vectorCostSavingPercent": 3.225737099848991,
+    "twentyPercentCostTargetMet": false,
+    "noLowerCodeScoreMet": false,
+    "criticalFindingsEstablished": {
+      "codex": 0,
+      "vector": 0
+    },
+    "firstSubmissionVectorCostSavingPercent": -3.2364984839643007,
+    "wallComparisonScope": "Completed first deliveries only; Codex complete-episode duration is unknown.",
+    "firstSubmissionVectorWallReductionPercent": -1.9424722299474784
+  },
+  "review": {
+    "method": "Same reviewer and48-point rubric, blinded exact selected source+2independent end-state screenshots per delivery",
+    "independentExecution": false,
+    "codeScoreMaximum": 48,
+    "mapping": {
+      "maple": "codex",
+      "spruce": "vector"
+    },
+    "limits": "Screenshots cover paginated search; other interaction states were unobserved. Static review is not production assurance.",
+    "materialRisks": {
+      "codex": [
+        "Earlier citation fetch can replace a later user selection; no incorrect byte binding or persistent stale index established."
+      ],
+      "vector": [
+        "Transport cap can exclude valid JSON-escaped batches whose decoded bodies satisfy the public limits.",
+        "Validating oversized short fields allocates avoidable large arrays.",
+        "Added tests bypass the real server transport entrypoint and use store reopenings rather than process restart."
+      ]
+    }
+  },
+  "usageAndActivity": {
+    "kind": "Sanitized evidence holdout provider usage and CLI projections",
+    "costBasis": "usage-derived,notinvoicereconciled",
+    "allChargesRetained": true,
+    "cases": {
+      "codex": {
+        "providerRequests": 31,
+        "measuredUsd": 0.7953841,
+        "tokens": {
+          "inputTokens": 1695394,
+          "cachedInputTokens": 1603581,
+          "cacheWriteTokens": 91720,
+          "cacheWrite30mTokens": 91720,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 93,
+          "outputTokens": 40554,
+          "reasoningTokens": 9741,
+          "totalTokens": 1735948
+        },
+        "ratesInputUsdPerMillionRequestCounts": {
+          "2.0": 31
+        },
+        "model": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "activity": {
+          "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+          "observedToolCalls": 60,
+          "recognizedEventRecords": {
+            "codex": 60
+          },
+          "invalidRecords": 0,
+          "tools": {
+            "shell": {
+              "calls": 48,
+              "errors": 8,
+              "knownInputBytes": 25039,
+              "inputObservations": 48,
+              "knownTextOutputBytes": 154978,
+              "textOutputObservations": 48,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "file_change": {
+              "calls": 12,
+              "errors": 0,
+              "knownInputBytes": 0,
+              "inputObservations": 0,
+              "knownTextOutputBytes": 0,
+              "textOutputObservations": 0,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            }
+          },
+          "terminalActions": {},
+          "repeatedIdenticalToolInputs": 10,
+          "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+        }
+      },
+      "vector": {
+        "providerRequests": 53,
+        "measuredUsd": 0.7697271,
+        "tokens": {
+          "inputTokens": 2428394,
+          "cachedInputTokens": 2356841,
+          "cacheWriteTokens": 71394,
+          "cacheWrite30mTokens": 71394,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 159,
+          "outputTokens": 35524,
+          "reasoningTokens": 10153,
+          "totalTokens": 2463918
+        },
+        "ratesInputUsdPerMillionRequestCounts": {
+          "2.0": 53
+        },
+        "model": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "activity": {
+          "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+          "observedToolCalls": 71,
+          "recognizedEventRecords": {
+            "vector": 71
+          },
+          "invalidRecords": 0,
+          "tools": {
+            "read": {
+              "calls": 19,
+              "errors": 0,
+              "knownInputBytes": 1020,
+              "inputObservations": 19,
+              "knownTextOutputBytes": 66664,
+              "textOutputObservations": 19,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "shell": {
+              "calls": 24,
+              "errors": 7,
+              "knownInputBytes": 15357,
+              "inputObservations": 24,
+              "knownTextOutputBytes": 25837,
+              "textOutputObservations": 24,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "glob": {
+              "calls": 4,
+              "errors": 0,
+              "knownInputBytes": 148,
+              "inputObservations": 4,
+              "knownTextOutputBytes": 165,
+              "textOutputObservations": 4,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "todowrite": {
+              "calls": 3,
+              "errors": 0,
+              "knownInputBytes": 1444,
+              "inputObservations": 3,
+              "knownTextOutputBytes": 117,
+              "textOutputObservations": 3,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "apply_patch": {
+              "calls": 12,
+              "errors": 0,
+              "knownInputBytes": 66567,
+              "inputObservations": 12,
+              "knownTextOutputBytes": 2760,
+              "textOutputObservations": 12,
+              "knownPatchBytes": 63947,
+              "patchObservations": 12
+            },
+            "grep": {
+              "calls": 2,
+              "errors": 1,
+              "knownInputBytes": 183,
+              "inputObservations": 2,
+              "knownTextOutputBytes": 509,
+              "textOutputObservations": 1,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "terminal": {
+              "calls": 6,
+              "errors": 0,
+              "knownInputBytes": 896,
+              "inputObservations": 6,
+              "knownTextOutputBytes": 864,
+              "textOutputObservations": 6,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "memory": {
+              "calls": 1,
+              "errors": 0,
+              "knownInputBytes": 329,
+              "inputObservations": 1,
+              "knownTextOutputBytes": 207,
+              "textOutputObservations": 1,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            }
+          },
+          "terminalActions": {
+            "open": 2,
+            "keys": 2,
+            "close": 2
+          },
+          "repeatedIdenticalToolInputs": 6,
+          "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+        }
+      }
+    },
+    "activityScope": "Completed first delivery CLI tools only; Codex provider usage includes two interrupted repair calls not in that first log."
+  },
+  "browserProvisioning": {
+    "offeredCapabilitiesIdentical": true,
+    "strictCommonClientOnlyProved": false,
+    "instructionConflict": "The old runner explicitly advertised Playwright/Chrome while task wording requested the common client. This is an instrument conflict, not assumed agent misconduct.",
+    "independentAcceptanceBrowserFencedSeparately": true
+  },
+  "financialCheckpoint": {
+    "requests": 674,
+    "usageDerivedUsd": 16.155328,
+    "active": 0,
+    "reservedUsd": 0,
+    "checkpointNotCurrentFutureBill": true
+  },
+  "accountingCorrection": {
+    "all31CodexCallsAndEpisodeCostWereAlwaysIncluded": true,
+    "priorWrongInference": "Unchanged source and absent final agent result were incorrectly treated as proof no repair requests were admitted.",
+    "verifiedBreakdown": {
+      "firstDeliveryRequests": 29,
+      "firstDeliveryUsd": 0.7455959,
+      "interruptedRepairRequests": 2,
+      "interruptedRepairUsd": 0.0497882,
+      "episodeRequests": 31,
+      "episodeUsd": 0.7953841
+    },
+    "sourceChangedDuringInterruptedRepair": false,
+    "noPublicCliUsageGapEstablished": true
+  }
+}

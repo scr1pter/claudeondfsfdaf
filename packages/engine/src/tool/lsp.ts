@@ -46,6 +46,8 @@ export const LspTool = Tool.define(
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
           const file = path.isAbsolute(args.filePath) ? args.filePath : path.join(instance.directory, args.filePath)
+          // A guest family may not ask the language server, or be asked for an outside folder, about a private task file.
+          if (ctx.assertReadable) yield* ctx.assertReadable({ files: [file] })
           yield* assertExternalDirectoryEffect(ctx, file)
           const meta =
             args.operation === "workspaceSymbol"

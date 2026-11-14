@@ -1,0 +1,268 @@
+name: Vector hosted image
+
+# Builds the cloud computer's base image and bakes the snapshot every computer starts from (contract WP A58, §6.2; the
+# image is WP A54's packages/hosted-computer). The owner dispatches it with the image generation and the exact
+# published Vector CLI version to put in it, only after Vercel's written OK (owner step 14).
+#
+# - The preflight job holds no secret. It requires the hosted-production environment to have a required reviewer and to
+#   take protected branches only, main to be a protected branch and the commit to be on main, and checks the inputs.
+# - The image job runs in hosted-production, so it waits for the owner's approval. It builds hostd and the viewer
+#   proxy, takes the musl CLI from that published release (checked against its manifest; the release's own source
+#   must be on main too), builds the image for linux/amd64, boots it in Docker and runs the image checks from inside,
+#   and only then signs in to the hosted team's registry, pushes it under its generation (a generation already in the
+#   registry is refused), and runs script/bake-snapshot.ts on the digest it pushed. The bake starts one sandbox with no
+#   network, checks the image there, saves the snapshot and prints VECTOR_HOSTED_BASE_SNAPSHOT=<id>; the owner sets it
+#   in Vercel (owner-actions/hosted-computer.md, "The image").
+#
+# Settings, all in the hosted-production environment: the secret VECTOR_HOSTED_VERCEL_TOKEN (the hosted team's token,
+# never the main team's); the variables VECTOR_HOSTED_VERCEL_TEAM_ID, VECTOR_HOSTED_VERCEL_PROJECT_ID and
+# VECTOR_HOSTED_IMAGE_REPOSITORY (vcr.vercel.com/<team>/<project>/<name>). VECTOR_CLI_BLOB_ORIGIN is the repository
+# variable the CLI release already uses.
+on:
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: Image generation, a whole number raised with every rebuild
+        required: true
+        type: string
+      min_disk_generation:
+        description: Oldest disk generation this image accepts (raise only when older disks are unsafe)
+        required: true
+        default: "1"
+        type: string
+      cli_version:
+        description: Exact published Vector CLI version to put in the image
+        required: true
+        type: string
+
+concurrency:
+  group: vector-hosted-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  preflight:
+    name: Require hosted-production and protected main
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      generation: ${{ steps.inputs.outputs.generation }}
+      min_disk_generation: ${{ steps.inputs.outputs.min_disk_generation }}
+      cli_version: ${{ steps.inputs.outputs.cli_version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require protected hosted-production environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/hosted-production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length') || {
+            echo "Create the hosted-production environment with the owner as required reviewer before building."
+            exit 1
+          }
+          test "$reviewers" -gt 0 || {
+            echo "hosted-production must have at least one required reviewer before anything is built or baked."
+            exit 1
+          }
+
+      # A workflow file changed on another branch could drop these checks, so the environment itself must refuse
+      # every branch that is not protected.
+      - name: Require hosted-production to take protected branches only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branches=$(gh api "repos/$GITHUB_REPOSITORY/environments/hosted-production" \
+            --jq '.deployment_branch_policy.protected_branches // false') || {
+            echo "Could not read hosted-production's deployment branches."
+            exit 1
+          }
+          test "$branches" = true || {
+            echo "Set hosted-production's deployment branches to protected branches only before anything is built."
+            exit 1
+          }
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a commit on protected main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "No commit to build."; exit 1; }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "The checkout is not the dispatched commit."; exit 1; }
+          protected=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected') || {
+            echo "Could not read main's protection."
+            exit 1
+          }
+          test "$protected" = true || { echo "Protect main before anything is built from it."; exit 1; }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Build only a commit on protected main."
+            exit 1
+          }
+          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check the inputs
+        id: inputs
+        env:
+          VECTOR_IMAGE_GENERATION: ${{ inputs.generation }}
+          VECTOR_MIN_DISK_GENERATION: ${{ inputs.min_disk_generation }}
+          VECTOR_HOSTED_CLI_VERSION: ${{ inputs.cli_version }}
+        run: |
+          set -euo pipefail
+          [[ "$VECTOR_IMAGE_GENERATION" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "The generation must be a whole number from 1."; exit 1; }
+          [[ "$VECTOR_MIN_DISK_GENERATION" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "The minimum disk generation must be a whole number from 1."; exit 1; }
+          (( VECTOR_MIN_DISK_GENERATION <= VECTOR_IMAGE_GENERATION )) || {
+            echo "The minimum disk generation cannot be above the image's generation."
+            exit 1
+          }
+          [[ "$VECTOR_HOSTED_CLI_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "Name an exact published CLI release, such as 1.99.120."
+            exit 1
+          }
+          {
+            echo "generation=$VECTOR_IMAGE_GENERATION"
+            echo "min_disk_generation=$VECTOR_MIN_DISK_GENERATION"
+            echo "cli_version=$VECTOR_HOSTED_CLI_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Build, check, push and bake the image
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: hosted-production
+    timeout-minutes: 75
+    env:
+      VECTOR_IMAGE_GENERATION: ${{ needs.preflight.outputs.generation }}
+      VECTOR_MIN_DISK_GENERATION: ${{ needs.preflight.outputs.min_disk_generation }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm the commit is still on protected main
+        env:
+          VECTOR_BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$VECTOR_BUILD_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$VECTOR_BUILD_SHA" origin/main
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      # From the lockfile, with no shared dependency cache that another run could have written.
+      - name: Install the locked dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build hostd and the viewer proxy for Node
+        working-directory: packages/hosted-computer
+        run: bun run build
+
+      - name: Take the Vector CLI from its published release
+        id: cli
+        env:
+          VECTOR_CLI_BLOB_ORIGIN: ${{ vars.VECTOR_CLI_BLOB_ORIGIN }}
+          VECTOR_HOSTED_CLI_VERSION: ${{ needs.preflight.outputs.cli_version }}
+        run: bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector
+
+      - name: Require the CLI's source on protected main
+        env:
+          VECTOR_CLI_SOURCE: ${{ steps.cli.outputs.source }}
+        run: |
+          set -euo pipefail
+          [[ "$VECTOR_CLI_SOURCE" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$VECTOR_CLI_SOURCE" origin/main || {
+            echo "That CLI release was not built from protected main."
+            exit 1
+          }
+
+      - name: Build the image
+        working-directory: packages/hosted-computer
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --file image/Dockerfile \
+            --build-arg "VECTOR_IMAGE_GENERATION=$VECTOR_IMAGE_GENERATION" \
+            --build-arg "VECTOR_MIN_DISK_GENERATION=$VECTOR_MIN_DISK_GENERATION" \
+            --tag "vector-hosted-computer:g$VECTOR_IMAGE_GENERATION" .
+
+      # The same checks the CI image job runs, on the image about to be pushed: nothing is pushed if one fails.
+      - name: Boot the image and check it from inside
+        working-directory: packages/hosted-computer
+        run: VECTOR_TEST_HOSTED_IMAGE="vector-hosted-computer:g$VECTOR_IMAGE_GENERATION" bun test --timeout 600000 ./test/image.test.ts
+
+      - name: Push the image to the hosted team's registry
+        id: push
+        env:
+          VECTOR_HOSTED_VERCEL_TOKEN: ${{ secrets.VECTOR_HOSTED_VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VECTOR_HOSTED_VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VECTOR_HOSTED_VERCEL_PROJECT_ID }}
+          VECTOR_HOSTED_IMAGE_REPOSITORY: ${{ vars.VECTOR_HOSTED_IMAGE_REPOSITORY }}
+          DOCKER_CONFIG: ${{ runner.temp }}/vector-registry-auth
+        run: |
+          set -euo pipefail
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          tag=$(bun packages/cloud/src/hosted-image.ts tag)
+          bun packages/cloud/src/hosted-image.ts login
+          if docker manifest inspect "$tag" > /dev/null 2> "$RUNNER_TEMP/registry-error.txt"; then
+            echo "Generation $VECTOR_IMAGE_GENERATION is already in the registry; dispatch again with a higher generation."
+            exit 1
+          fi
+          grep -Eiq 'manifest unknown|manifest_unknown|no such manifest|not found' "$RUNNER_TEMP/registry-error.txt" || {
+            echo "The registry lookup failed; refusing to assume generation $VECTOR_IMAGE_GENERATION is new."
+            exit 1
+          }
+          docker tag "vector-hosted-computer:g$VECTOR_IMAGE_GENERATION" "$tag"
+          docker push "$tag"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" | bun packages/cloud/src/hosted-image.ts digest)
+          echo "Pushed $digest"
+          echo "image=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Bake the base snapshot
+        working-directory: packages/hosted-computer
+        env:
+          VECTOR_HOSTED_VERCEL_TOKEN: ${{ secrets.VECTOR_HOSTED_VERCEL_TOKEN }}
+          VECTOR_HOSTED_VERCEL_TEAM_ID: ${{ vars.VECTOR_HOSTED_VERCEL_TEAM_ID }}
+          VECTOR_HOSTED_VERCEL_PROJECT_ID: ${{ vars.VECTOR_HOSTED_VERCEL_PROJECT_ID }}
+          VECTOR_HOSTED_IMAGE: ${{ steps.push.outputs.image }}
+        run: |
+          set -euo pipefail
+          bun script/bake-snapshot.ts --image "$VECTOR_HOSTED_IMAGE" --generation "$VECTOR_IMAGE_GENERATION" | tee "$RUNNER_TEMP/bake.txt"
+          snapshot=$(grep -E '^VECTOR_HOSTED_BASE_SNAPSHOT=[A-Za-z0-9_-]+$' "$RUNNER_TEMP/bake.txt" | tail -n 1)
+          test -n "$snapshot" || { echo "The bake printed no snapshot id."; exit 1; }
+          {
+            echo "### Cloud computer image, generation $VECTOR_IMAGE_GENERATION"
+            echo
+            echo "- Image: \`$VECTOR_HOSTED_IMAGE\`"
+            echo "- Set in Vercel (Production): \`$snapshot\`"
+          } >> "$GITHUB_STEP_SUMMARY"

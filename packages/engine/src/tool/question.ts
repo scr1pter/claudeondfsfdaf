@@ -21,11 +21,18 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
-          const answers = yield* question.ask({
-            sessionID: ctx.sessionID,
-            questions: params.questions,
-            tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
-          })
+          const answers = yield* question
+            .ask({
+              sessionID: ctx.sessionID,
+              questions: params.questions,
+              tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
+            })
+            .pipe(
+              Effect.catchTag("QuestionRejectedError", (error) =>
+                error.timedOut ? Effect.succeed(undefined) : Effect.fail(error),
+              ),
+            )
+          if (!answers) return { title: "No answer", output: Question.TIMED_OUT, metadata: { answers: [] } }
 
           const formatted = params.questions
             .map((q, i) => `"${q.question}"="${answers[i]?.length ? answers[i].join(", ") : "Unanswered"}"`)

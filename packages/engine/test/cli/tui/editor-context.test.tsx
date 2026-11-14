@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, expect, spyOn, test } from "bun:test"
+import { afterEach, expect, mock, spyOn, test } from "bun:test"
 import { createRoot } from "solid-js"
 import { EditorContextProvider, useEditorContext, type EditorIntegration } from "@vectordevai/tui/context/editor"
 import { tmpdir } from "../../fixture/fixture"
@@ -9,16 +9,29 @@ import { FakeWebSocket } from "../../lib/websocket"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { discoverEditorConnection } from "@vectordevai/tui/editor"
 
-const originalClaudePort = process.env.CLAUDE_CODE_SSE_PORT
-const originalVectorPort = process.env.VECTOR_EDITOR_SSE_PORT
-const originalClaudeToken = process.env.CLAUDE_CODE_IDE_AUTH_TOKEN
-const originalVectorToken = process.env.VECTOR_EDITOR_AUTH_TOKEN
+// What these tests change, as the file found it.
+const startup = {
+  cwd: process.cwd(),
+  home: os.homedir(),
+  env: Object.fromEntries(
+    ["CLAUDE_CODE_SSE_PORT", "VECTOR_EDITOR_SSE_PORT", "CLAUDE_CODE_IDE_AUTH_TOKEN", "VECTOR_EDITOR_AUTH_TOKEN"].map(
+      (key) => [key, process.env[key]],
+    ),
+  ),
+}
 
 afterEach(() => {
-  process.env.CLAUDE_CODE_SSE_PORT = originalClaudePort
-  process.env.VECTOR_EDITOR_SSE_PORT = originalVectorPort
-  process.env.CLAUDE_CODE_IDE_AUTH_TOKEN = originalClaudeToken
-  process.env.VECTOR_EDITOR_AUTH_TOKEN = originalVectorToken
+  // Bun keeps a spy for the rest of the shared test process. A leaked process.cwd names a test's deleted temp folder
+  // for every later file in the shard, and on Windows cross-spawn changes back into it around each spawn.
+  mock.restore()
+  for (const [key, value] of Object.entries(startup.env)) {
+    // Assigning undefined leaves the variable present in Bun, so an unset one is deleted.
+    if (value === undefined) {
+      delete process.env[key]
+      continue
+    }
+    process.env[key] = value
+  }
 })
 
 function nextTick() {
@@ -317,4 +330,13 @@ test("useEditorContext connects with VECTOR_EDITOR_SSE_PORT", async () => {
   expect(socket.closed).toBeFalse()
 
   mounted.dispose()
+})
+
+test("the editor tests leave process.cwd, os.homedir and the editor variables as they found them", () => {
+  expect(process.cwd()).toBe(startup.cwd)
+  expect(os.homedir()).toBe(startup.home)
+  for (const [key, value] of Object.entries(startup.env)) {
+    expect(process.env[key]).toBe(value)
+    expect(key in process.env).toBe(value !== undefined)
+  }
 })

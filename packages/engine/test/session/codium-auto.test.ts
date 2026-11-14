@@ -546,7 +546,7 @@ it.instance("a Codium conversation without a helper model gets no title and no m
     const sessions = yield* Session.Service
     const brain = yield* Brain.Service
     // The model learner runs with any model here; by default it runs only with Vector Local on, where Codium is off.
-    yield* brain.setLearnSettings({ learning: true, modelLearner: "always" })
+    yield* brain.setLearnSettings({ learning: true, modelLearner: "always", codiumHelpers: "on" })
     const purposes = Effect.fn("test.purposes")(function* () {
       const session = yield* sessions.create({})
       yield* prompt.prompt({
@@ -571,7 +571,7 @@ it.instance("a Codium conversation without a helper model gets no title and no m
     Effect.ensuring(
       Effect.gen(function* () {
         const brain = yield* Brain.Service
-        yield* brain.setLearnSettings({ modelLearner: "local-only" })
+        yield* brain.setLearnSettings({ modelLearner: "local-only", codiumHelpers: "off" })
       }),
     ),
   ),

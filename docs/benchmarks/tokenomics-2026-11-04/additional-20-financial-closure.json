@@ -1,0 +1,34 @@
+{
+  "kind": "additional-20-final-financial-projection-v1",
+  "atUtc": "2026-11-05T03:46:50.937790+00:00",
+  "additionalAuthorizationUsd": 20,
+  "knownNewRoundMeasuredUsd": 16.613850900000006,
+  "newRoundUnresolvedHoldUsd": 1.447765,
+  "allHistoricalUnresolvedHoldUsd": 7.177765,
+  "unusedUpperExposureAllowanceUsd": 1.9383840999999942,
+  "currentActive": 0,
+  "currentReservedUsd": 0,
+  "currentBatchCallsRemaining": 0,
+  "allCurrentPhaseAdmissionsSettled": true,
+  "allHistoricalAdmissionsSettled": false,
+  "currentPhaseAttempts": 768,
+  "overallKnownMeasuredUsd": 46.192945900000005,
+  "overallUpperExposureUsd": 53.370710900000006,
+  "currentLedgerHashes": {
+    "admissions-v2.jsonl": "7f2abb0ea045971d548c3c28271444939e19fa2f6ed4d14e8e97bca09a3d7e3c",
+    "receipts.jsonl": "024f788f3f835f6fd611f6cce556637145c549473eeaf21029c64424cf7c23b8",
+    "status.json": "c4f6721fdb5f71167f31fce557e2368ed6323e997118db1b19a562b3d9e2a3eb",
+    "phase-anchor-v7.json": "4861779215d336d44eaf43cf1b46557cc853bce1ee749fece7357fda2a0fba27"
+  },
+  "reasonNoFurtherPaidRun": "Both final arms stopped on request-reservation affordability. Remaining allowance cannot cover their rejected calls. No further partial workflow or padding spend is planned.",
+  "pricesAreRecordedUsageAtStudyRatesNotInvoiceReconciliation": true,
+  "keyHoldingGatewayStopped": true,
+  "keyHoldingProcessExited": true,
+  "loopbackListenerAbsent": true,
+  "currentLedgerHashesAfterStop": {
+    "admissions-v2.jsonl": "7f2abb0ea045971d548c3c28271444939e19fa2f6ed4d14e8e97bca09a3d7e3c",
+    "receipts.jsonl": "024f788f3f835f6fd611f6cce556637145c549473eeaf21029c64424cf7c23b8",
+    "status.json": "c4f6721fdb5f71167f31fce557e2368ed6323e997118db1b19a562b3d9e2a3eb",
+    "phase-anchor-v7.json": "4861779215d336d44eaf43cf1b46557cc853bce1ee749fece7357fda2a0fba27"
+  }
+}

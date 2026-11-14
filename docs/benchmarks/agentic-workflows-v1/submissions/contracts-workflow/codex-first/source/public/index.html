@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#f6f7f9" />
+    <title>Workflow Runner</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span> RUNNER <span class="brand-divider">/</span> <span class="workspace">Local workspace</span></a>
+      <span class="environment">LOCAL</span>
+    </header>
+    <main>
+      <div class="page-heading">
+        <div><p class="eyebrow">YOUR WORK, IN MOTION</p><h1>Workflow Runner</h1><p class="subtitle">Small tasks. Connected steps. Every attempt accounted for.</p></div>
+        <a class="button primary new-workflow" href="#workflow-name"><span aria-hidden="true">＋</span> New workflow</a>
+      </div>
+      <div class="metrics" aria-label="Workflow overview">
+        <div><span class="metric-icon orange" aria-hidden="true">↗</span><div><span class="metric-label">Active workflows</span><strong id="active-count">—</strong></div></div>
+        <div><span class="metric-icon green" aria-hidden="true">✓</span><div><span class="metric-label">Succeeded</span><strong id="success-count">—</strong></div></div>
+        <div><span class="metric-icon blue" aria-hidden="true">≋</span><div><span class="metric-label">Total attempts</span><strong id="attempt-count">—</strong></div></div>
+      </div>
+      <nav class="section-nav" aria-label="Dashboard sections"><a href="#workflow-list" class="selected">Workflows <span id="workflow-count">0</span></a><a href="#legacy">Legacy jobs <span id="legacy-count">0</span></a><p id="sync-state" role="status">Connecting to local runner…</p></nav>
+      <p id="connection-error" class="error" role="alert" hidden></p>
+      <div class="dashboard-grid">
+        <aside class="composer">
+          <form id="workflow-form" novalidate>
+            <div class="panel-title"><span class="small-symbol" aria-hidden="true">＋</span><h2>Build a workflow</h2></div>
+            <p class="muted form-intro">Define the steps. We’ll handle the order.</p>
+            <label for="workflow-name">Workflow name</label>
+            <input id="workflow-name" name="name" placeholder="e.g. Publish checks" required maxlength="120" autocomplete="off" />
+            <label for="concurrency">Concurrency</label>
+            <select id="concurrency" name="concurrency"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select>
+            <p class="field-hint">Maximum jobs running together in this workflow.</p>
+            <div class="definition-label"><label for="definition">Workflow definition</label><span>JSON</span></div>
+            <textarea id="definition" name="definition" spellcheck="false" rows="16" aria-describedby="definition-hint">[
+  {
+    "key": "lint",
+    "name": "Lint",
+    "kind": "succeed"
+  },
+  {
+    "key": "test",
+    "name": "Tests",
+    "kind": "fail_once",
+    "dependsOn": ["lint"],
+    "maxAttempts": 2
+  }
+]</textarea>
+            <p id="definition-hint" class="field-hint">An array of jobs. Connect steps with <code>dependsOn</code> and set retries with <code>maxAttempts</code>.</p>
+            <p id="workflow-error" class="error" role="alert" hidden></p>
+            <button class="primary create-button" type="submit" aria-label="Create workflow">Create workflow <span aria-hidden="true">→</span></button>
+            <p class="form-footnote">Saved locally. Executed by real workers.</p>
+          </form>
+          <div class="help-note"><span aria-hidden="true">↳</span><p><strong>Built to pick up where you left off.</strong> Completed steps stay complete. Interrupted work resumes with its history intact.</p></div>
+        </aside>
+        <section id="workflow-list" aria-label="Workflow list">
+          <div class="list-heading"><div><h2>Workflows</h2><p class="muted">Follow every step, from queued to complete.</p></div><span class="list-caption">LATEST ACTIVITY</span></div>
+          <div id="workflows"><div class="empty-state"><span class="empty-icon" aria-hidden="true">⌘</span><h3>Your next workflow starts here</h3><p>Create a workflow to see its jobs, attempts,<br />and event history in one place.</p><span class="empty-arrow" aria-hidden="true">←</span></div></div>
+        </section>
+      </div>
+      <section id="legacy" aria-label="Legacy jobs">
+        <div class="legacy-heading"><div><p class="eyebrow">THE ORIGINAL QUEUE</p><h2>Legacy jobs</h2><p class="muted">Your existing jobs, right where you left them.</p></div></div>
+        <div class="legacy-layout">
+          <form id="job-form" class="legacy-form" novalidate>
+            <h3>Run a single job</h3><label for="job-name">Job name</label><input id="job-name" name="name" required maxlength="120" placeholder="Name your job" />
+            <label for="job-kind">Job behavior</label><select id="job-kind" name="kind"><option value="succeed">Succeed</option><option value="fail">Fail</option><option value="fail_once">Fail once</option><option value="block">Wait for release</option></select>
+            <p class="error" role="alert" id="job-error" hidden></p><button type="submit" class="secondary" aria-label="Create job">Create job <span aria-hidden="true">→</span></button>
+          </form>
+          <div id="jobs"><p class="legacy-empty">No legacy jobs yet. Single jobs will appear here.</p></div>
+        </div>
+      </section>
+      <footer><span class="footer-mark" aria-hidden="true">↗</span> Workflow Runner <span>Local by design. Durable by default.</span></footer>
+    </main>
+  </body>
+</html>

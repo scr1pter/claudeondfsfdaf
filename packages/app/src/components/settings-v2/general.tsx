@@ -1,8 +1,5 @@
 import { Component, JSX, Show, createResource, createSignal, onCleanup } from "solid-js"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
-import { Switch } from "@vectordevai/ui/v2/switch-v2"
-import { SelectV2 } from "@vectordevai/ui/v2/select-v2"
-import { Icon, type IconProps } from "@vectordevai/ui/icon"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
 import { useShellPicker } from "./shell-picker"
@@ -10,10 +7,13 @@ import "./settings-v2.css"
 
 import { usePlatform } from "@/context/platform"
 import { observeTelemetryPreference, setTelemetryEnabled, telemetryEnabled } from "@/features/privacy/telemetry"
+import { onCodiumChange } from "@/vector-account"
+import { SECOND_OPINION_DESCRIPTION, SECOND_OPINION_TITLE, secondOpinionOffered } from "./second-opinion-model"
+import { Card, Page, RangeRow, SelectRow, ToggleRow } from "./parts/page"
+import { followupDescriptionKeys } from "@/features/followup/followup-model"
+import { navigatorLocks } from "@/features/followup/followup-store"
 
 export type SettingsSection = "general" | "notifications" | "accessibility"
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
 const localKeys = () => {
   if (typeof localStorage === "undefined") return []
@@ -27,137 +27,7 @@ const removeMatchingLocalKeys = (patterns: RegExp[]) => {
   return keys.length
 }
 
-const Page: Component<{
-  eyebrow: string
-  title: string
-  description: string
-  children: JSX.Element
-}> = (props) => (
-  <section class="settings-v2-page">
-    <div class="settings-v2-page-hero">
-      <div>
-        <p class="settings-v2-page-kicker">{props.eyebrow}</p>
-        <h2 class="settings-v2-page-title">{props.title}</h2>
-        <p class="settings-v2-page-subtitle">{props.description}</p>
-      </div>
-    </div>
-    {props.children}
-  </section>
-)
-
-const Card: Component<{
-  icon?: IconProps["name"]
-  title: string
-  description?: string
-  wide?: boolean
-  children: JSX.Element
-}> = (props) => (
-  <div class="settings-v2-card" classList={{ "settings-v2-card--wide": !!props.wide }}>
-    <div class="settings-v2-card-head">
-      <Show when={props.icon} keyed>
-        {(icon) => (
-          <div class="settings-v2-card-icon">
-            <Icon name={icon} />
-          </div>
-        )}
-      </Show>
-      <div class="settings-v2-card-copy">
-        <h3 class="settings-v2-card-title">{props.title}</h3>
-        <Show when={props.description}>
-          <p class="settings-v2-card-description">{props.description}</p>
-        </Show>
-      </div>
-    </div>
-    <div class="settings-v2-card-body">{props.children}</div>
-  </div>
-)
-
-const ToggleRow: Component<{
-  title: string
-  description?: string
-  checked: boolean
-  onChange: (value: boolean) => void
-}> = (props) => (
-  <div class="settings-v2-row-modern">
-    <div class="settings-v2-row-copy">
-      <div class="settings-v2-row-title">{props.title}</div>
-      <Show when={props.description}>
-        <div class="settings-v2-row-description">{props.description}</div>
-      </Show>
-    </div>
-    <div class="settings-v2-row-control settings-v2-row-control--compact">
-      <Switch checked={props.checked} onChange={props.onChange} />
-    </div>
-  </div>
-)
-
-type Option = {
-  value: string
-  label: string
-}
-
-const pickOption = (options: Option[], value: string) => options.find((option) => option.value === value) ?? options[0]
-
-const SelectRow: Component<{
-  title: string
-  description?: string
-  options: Option[]
-  value: string
-  onChange: (value: string) => void
-}> = (props) => (
-  <div class="settings-v2-row-modern">
-    <div class="settings-v2-row-copy">
-      <div class="settings-v2-row-title">{props.title}</div>
-      <Show when={props.description}>
-        <div class="settings-v2-row-description">{props.description}</div>
-      </Show>
-    </div>
-    <div class="settings-v2-row-control">
-      <SelectV2
-        appearance="inline"
-        options={props.options}
-        current={pickOption(props.options, props.value)}
-        value={(option) => option.value}
-        label={(option) => option.label}
-        onSelect={(option) => option && props.onChange(option.value)}
-      />
-    </div>
-  </div>
-)
-
-const RangeRow: Component<{
-  title: string
-  description?: string
-  value: number
-  min: number
-  max: number
-  step?: number
-  format?: (value: number) => string
-  onInput: (value: number) => void
-}> = (props) => (
-  <div class="settings-v2-row-modern settings-v2-row-modern--stacked">
-    <div class="settings-v2-row-copy">
-      <div class="settings-v2-row-title">{props.title}</div>
-      <Show when={props.description}>
-        <div class="settings-v2-row-description">{props.description}</div>
-      </Show>
-    </div>
-    <div class="settings-v2-range-row">
-      <input
-        class="settings-v2-range"
-        type="range"
-        min={props.min}
-        max={props.max}
-        step={props.step ?? 1}
-        value={props.value}
-        onInput={(event) => props.onInput(clamp(Number(event.currentTarget.value), props.min, props.max))}
-      />
-      <span class="settings-v2-range-value">{props.format ? props.format(props.value) : props.value}</span>
-    </div>
-  </div>
-)
-
-// Its own component so only the General page asks the server for its shells, not Notifications or Accessibility.
+// Its own component so only the General page asks the server for its shells, not Accessibility.
 const TerminalCard: Component = () => {
   const language = useLanguage()
   const shell = useShellPicker()
@@ -183,6 +53,7 @@ export const SettingsGeneralV2: Component<{
   section?: SettingsSection
 }> = (props) => {
   const settings = useSettings()
+  const language = useLanguage()
   const platform = usePlatform()
   const [status, setStatus] = createSignal("")
   const [crashDiagnostics, setCrashDiagnostics] = createSignal(telemetryEnabled())
@@ -192,6 +63,13 @@ export const SettingsGeneralV2: Component<{
     () => platform.getUsageSharing?.().catch(() => true) ?? true,
     { initialValue: true },
   )
+  // Second opinion (WP A35) is offered only while vectordev.ai says the signed-in account's plan includes it and lists
+  // it; Codium plan changes read it again.
+  const [codiumPlan, { refetch: refetchCodiumPlan }] = createResource(
+    () => (platform.vectorAccount?.codium ? true : false),
+    () => platform.vectorAccount?.codium?.().catch(() => undefined),
+  )
+  onCleanup(onCodiumChange(() => void refetchCodiumPlan()))
   let statusTimeout: ReturnType<typeof setTimeout> | undefined
 
   const section = () => props.section ?? "general"
@@ -216,9 +94,41 @@ export const SettingsGeneralV2: Component<{
     <Page
       eyebrow="General"
       title="General"
-      description="Manage Vector's local behavior, diagnostics, verification defaults, and terminal shell. Memory has a page of its own."
+      description="Manage what Vector does while it works, diagnostics, verification defaults, and the terminal shell. Memory has a page of its own."
     >
       <div class="settings-v2-section-grid">
+        <Card
+          icon="task"
+          title={language.t("settings.general.section.whileWorking.title")}
+          description={language.t("settings.general.section.whileWorking.description")}
+        >
+          <SelectRow
+            title={language.t("settings.general.row.followup.title")}
+            description={
+              // The queue drains while a Vector window is open (R6); without Web Locks (plain-http `vector web`) only on
+              // the page showing its session (5.I.1).
+              followupDescriptionKeys(navigatorLocks() !== undefined)
+                .map((key) => language.t(key))
+                .join(" ")
+            }
+            options={[
+              { value: "steer", label: language.t("settings.general.row.followup.option.steer") },
+              { value: "queue", label: language.t("settings.general.row.followup.option.queue") },
+            ]}
+            value={settings.general.followup()}
+            onChange={(value) => settings.general.setFollowup(value === "queue" ? "queue" : "steer")}
+          />
+          <SelectRow
+            title={language.t("settings.general.row.stopScope.title")}
+            description={language.t("settings.general.row.stopScope.description")}
+            options={[
+              { value: "turn", label: language.t("settings.general.row.stopScope.option.turn") },
+              { value: "all", label: language.t("settings.general.row.stopScope.option.all") },
+            ]}
+            value={settings.general.stopScope()}
+            onChange={(value) => settings.general.setStopScope(value === "all" ? "all" : "turn")}
+          />
+        </Card>
         <Card
           icon="status"
           title="Crash diagnostics"
@@ -294,7 +204,7 @@ export const SettingsGeneralV2: Component<{
           <Show when={settings.general.llmJudge()}>
             <SelectRow
               title="Tasks the judge checks"
-              description="Large tasks are the ones Vector runs with subagents: when you ask it to be thorough, or when the agent finds the work is large. Every task that changes files also includes small fixes."
+              description='Large tasks are the ones Vector runs as Thorough: when you ask it to be thorough, or when the agent raises an exceptionally hard request to Thorough. Ordinary work, even when Vector hands parts of it to subagents, is checked only with "Every task that changes files", which also covers small fixes.'
               options={[
                 { value: "thorough", label: "Large tasks" },
                 { value: "changes", label: "Every task that changes files" },
@@ -302,39 +212,17 @@ export const SettingsGeneralV2: Component<{
               value={settings.general.judgeScope()}
               onChange={(value) => settings.general.setJudgeScope(value === "changes" ? "changes" : "thorough")}
             />
+            <Show when={secondOpinionOffered(codiumPlan())}>
+              <ToggleRow
+                title={SECOND_OPINION_TITLE}
+                description={SECOND_OPINION_DESCRIPTION}
+                checked={settings.general.secondOpinion()}
+                onChange={settings.general.setSecondOpinion}
+              />
+            </Show>
           </Show>
         </Card>
         <TerminalCard />
-      </div>
-    </Page>
-  )
-
-  const renderNotifications = () => (
-    <Page eyebrow="Notifications" title="Local alerts" description="Tune desktop notifications and sounds.">
-      <div class="settings-v2-section-grid">
-        <Card
-          icon="status"
-          title="Signals"
-          description="All options persist locally and use existing notification hooks."
-        >
-          <ToggleRow
-            title="Enable notifications"
-            description="Desktop notification when the agent finishes or needs input."
-            checked={settings.notifications.agent()}
-            onChange={settings.notifications.setAgent}
-          />
-          <ToggleRow
-            title="Error notifications"
-            checked={settings.notifications.errors()}
-            onChange={settings.notifications.setErrors}
-          />
-          <ToggleRow
-            title="Sound effects"
-            description="Master switch for agent, permission, and error sounds."
-            checked={settings.notifications.soundEffects()}
-            onChange={settings.notifications.setSoundEffects}
-          />
-        </Card>
       </div>
     </Page>
   )
@@ -381,9 +269,10 @@ export const SettingsGeneralV2: Component<{
     </Page>
   )
 
-  const pages: Record<SettingsSection, () => JSX.Element> = {
+  // Notifications has a component of its own (notifications.tsx, WP A38); Settings opens it directly.
+  const pageFor = (value: SettingsSection) => (value === "notifications" ? "general" : value)
+  const pages: Record<Exclude<SettingsSection, "notifications">, () => JSX.Element> = {
     general: renderGeneral,
-    notifications: renderNotifications,
     accessibility: renderAccessibility,
   }
 
@@ -394,7 +283,7 @@ export const SettingsGeneralV2: Component<{
           {status()}
         </div>
       </Show>
-      {pages[section()]()}
+      {pages[pageFor(section())]()}
     </div>
   )
 }

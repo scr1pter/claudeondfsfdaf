@@ -5,6 +5,31 @@ export default {
   up(tx) {
     return Effect.gen(function* () {
       yield* tx.run(`
+        CREATE TABLE \`background_job\` (
+          \`id\` text PRIMARY KEY,
+          \`type\` text NOT NULL,
+          \`title\` text,
+          \`parent_session_id\` text NOT NULL,
+          \`session_id\` text,
+          \`directory\` text NOT NULL,
+          \`status\` text NOT NULL,
+          \`background\` integer DEFAULT false NOT NULL,
+          \`attempt\` integer,
+          \`owner_runtime\` text NOT NULL,
+          \`owner_pid\` integer NOT NULL,
+          \`owner_boot\` integer NOT NULL,
+          \`owner_machine\` text NOT NULL,
+          \`error\` text,
+          \`started_at\` integer NOT NULL,
+          \`completed_at\` integer,
+          \`reported_at\` integer,
+          \`metadata\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_background_job_parent_session_id_session_id_fk\` FOREIGN KEY (\`parent_session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`workspace\` (
           \`id\` text PRIMARY KEY,
           \`type\` text NOT NULL,
@@ -21,6 +46,27 @@ export default {
         CREATE TABLE \`data_migration\` (
           \`name\` text PRIMARY KEY,
           \`time_completed\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_audience\` (
+          \`session_id\` text PRIMARY KEY,
+          \`owner_only\` integer DEFAULT false NOT NULL,
+          \`guest_input\` integer DEFAULT false NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_lineage\` (
+          \`session_id\` text NOT NULL,
+          \`parent_id\` text NOT NULL,
+          \`fork\` integer DEFAULT false NOT NULL,
+          CONSTRAINT \`session_lineage_pk\` PRIMARY KEY(\`session_id\`, \`parent_id\`)
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_private_directory\` (
+          \`directory\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL
         );
       `)
       yield* tx.run(`
@@ -47,6 +93,17 @@ export default {
           \`dirty\` integer DEFAULT true NOT NULL,
           \`state\` text NOT NULL,
           CONSTRAINT \`fk_session_public_share_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE RESTRICT
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`workflow_checkpoint\` (
+          \`session_id\` text PRIMARY KEY,
+          \`attempt\` integer NOT NULL,
+          \`digest\` text NOT NULL,
+          \`data\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_workflow_checkpoint_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`
@@ -276,6 +333,14 @@ export default {
           CONSTRAINT \`fk_session_share_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
+      yield* tx.run(
+        `CREATE INDEX \`background_job_status_directory_idx\` ON \`background_job\` (\`status\`,\`directory\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`background_job_parent_idx\` ON \`background_job\` (\`parent_session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_lineage_parent_idx\` ON \`session_lineage\` (\`parent_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_private_directory_session_idx\` ON \`session_private_directory\` (\`session_id\`);`,
+      )
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(

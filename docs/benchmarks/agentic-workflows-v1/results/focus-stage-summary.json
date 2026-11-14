@@ -1,0 +1,130 @@
+{
+  "kind": "fixed-focus-candidate-stage-summary-v1",
+  "atUtc": "2026-11-02T03:03:06.980609+00:00",
+  "sourceRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "autonomousAgentsPerRuntime": 1,
+  "costBasis": "usage-derived provider receipts, not invoice reconciliation",
+  "allHistoricalChargesRetained": true,
+  "cases": [
+    {
+      "task": "workflow-runner",
+      "vector": {
+        "requests": 34,
+        "usd": 0.6689756,
+        "wallMs": 439640,
+        "checksPassed": 24,
+        "checksRequired": 24,
+        "codeScore": 45
+      },
+      "codex": {
+        "requests": 25,
+        "usd": 0.8063259,
+        "wallMs": 548609,
+        "checksPassed": 24,
+        "checksRequired": 24,
+        "codeScore": 46
+      },
+      "modelRepairs": 0
+    },
+    {
+      "task": "evidence-workbench",
+      "vector": {
+        "requests": 53,
+        "usd": 0.7697271,
+        "wallMs": 498515,
+        "checksPassed": 26,
+        "checksRequired": 26,
+        "codeScore": 45
+      },
+      "codex": {
+        "requests": 31,
+        "usd": 0.7953841,
+        "wallMs": 489016,
+        "checksPassed": 26,
+        "checksRequired": 26,
+        "codeScore": 47,
+        "wallTimeScope": "Completed first delivery only",
+        "completeEpisodeWallMs": null
+      },
+      "originalCodexCheckerFalseNegativeRetained": true,
+      "correctedUnchangedCodexFreeGatePassed": 26,
+      "codexAbortedRepairLaunches": 1,
+      "providerRequestsAfterOriginalCodexDeliveryBeforeClosure": 2,
+      "missingVectorArmExecutedByValidatedManualContinuation": true,
+      "paidModelRepairAttempts": {
+        "vector": 0,
+        "codex": 1
+      },
+      "completedModelRepairs": {
+        "vector": 0,
+        "codex": 0
+      },
+      "codexFirstDeliveryRequests": 29,
+      "codexFirstDeliveryUsd": 0.7455959,
+      "codexInterruptedRepairRequests": 2,
+      "codexInterruptedRepairUsd": 0.0497882
+    }
+  ],
+  "aggregate": {
+    "vectorUsd": 1.4387027,
+    "codexUsd": 1.60171,
+    "vectorCostSavingPercent": 10.177079496288355,
+    "vectorRequests": 87,
+    "codexRequests": 56,
+    "vectorWallMs": 938155,
+    "codexWallMs": 1037625,
+    "checksPassedPerRuntime": 50,
+    "checksRequiredPerRuntime": 50,
+    "vectorCodeScore": 90,
+    "codexCodeScore": 93,
+    "codeScoreMaximum": 96,
+    "criticalFindingsEstablishedPerRuntime": {
+      "vector": 0,
+      "codex": 0
+    },
+    "wallTimeScope": "Sums of recorded completed first-delivery wall times; Codex interrupted repair time is unmeasured.",
+    "recordedFirstDeliveryVectorWallReductionPercent": 9.58631490181906,
+    "completeEpisodeCodexWallMs": null,
+    "firstSubmissionCodexUsd": 1.5519218,
+    "firstSubmissionVectorCostSavingPercent": 7.295412694118997
+  },
+  "decision": {
+    "minimumCostSavingPercent": 20,
+    "costCriterionMet": false,
+    "noLowerAggregateCodeScoreMet": false,
+    "functionalCriterionMet": true,
+    "broaderObjectiveMet": false,
+    "interpretation": "The fixed candidate passed all required functional checks at lower cost, but missed the cost target and scored lower under bounded static review. This does not establish equal quality or universal superiority."
+  },
+  "methodology": {
+    "reviewerAnd48PointRubricSameForBothArmsOfEachTask": true,
+    "independentReviewExecution": false,
+    "screenshotsPerSubmission": 2,
+    "developmentTaskPairs": 1,
+    "newHoldoutPairs": 1,
+    "postlaunchGateCorrectionsPreserveOriginalsAndEveryCharge": true,
+    "browserInstructionConflict": "The old runner explicitly advertised Playwright/Chrome while task wording requested the common client. Both had equal host capabilities; strict common-client adherence was not established. Do not infer agent misconduct or unseen external actions.",
+    "limits": "Small adaptive study, bounded source/screenshots/gates; no statistical or production security assurance."
+  },
+  "financialCheckpoint": {
+    "requests": 674,
+    "usageDerivedUsd": 16.155328,
+    "active": 0,
+    "reservedUsd": 0,
+    "batchCallsRemaining": 0,
+    "checkpointNotCurrentFutureBill": true,
+    "globalHardCapUsd": 48,
+    "actorHardCapsUsd": {
+      "foundry-vector": 20,
+      "foundry-codex": 20
+    }
+  },
+  "nextCandidate": {
+    "sourceRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+    "paidResultsAvailable": false,
+    "plan": "../followup-stage.md",
+    "claims": "Validated patch-envelope recovery and generic compatibility guidance; cost/quality effects unproven."
+  }
+}

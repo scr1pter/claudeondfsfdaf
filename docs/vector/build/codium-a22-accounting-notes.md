@@ -15,6 +15,16 @@ touched. **Shared files with the @vector lane: none.** Scratch, mutation backups
 **Owner step 9 (merge codium into self-evolving, build spec §8.2 step 9) is still pending the owner's go-ahead; not
 performed.** See "Merge into self-evolving" below.
 
+**Status on 8 Nov 2026 (P4a).** A22's commit `4fde1a49` has since run in GitHub CI: Vector Codium run 41184766251 (run
+30, push) passed all 10 jobs. Its Codium tests job 124489334009 shows 101 of 101 picked files passing, including the
+two CI-only files: `packages/core/test/database-migration.test.ts` (19 pass, with "adds the Codium step counts to
+existing sessions at 0 and leaves their totals as they were" and "declared schema has no ungenerated migrations") and
+`packages/engine/test/session/prompt.test.ts` (138 pass, 1 skip, with both Codium cases named under "CI only"). The
+changed files in "Tests" pass there with the counts recorded in that table; `compaction.test.ts`, which A22 did not
+change, is not picked. A22 has since been merged into self-evolving (owner step 9) as the second parent of `d36a3607`
+("feat(integration): combine Codium accounting with isolated agents", 1 Nov), and it is in PR #20. The P4 phase review
+(`codium-p4-repairs.md`, P4a) covered A22 and found no code defect.
+
 ## CI evidence before the change
 
 Branch `codium`, workflow `.github/workflows/vector-codium.yml`, read through the GitHub API in this package: run

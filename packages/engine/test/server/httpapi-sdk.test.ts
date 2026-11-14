@@ -29,6 +29,7 @@ import { testProviderConfig } from "../lib/test-provider"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { Database } from "@vectordevai/core/database/database"
+import { sql } from "drizzle-orm"
 import { httpApiLayer } from "./httpapi-layer"
 import { executeTaskCommand } from "../../src/cli/cmd/tasks"
 
@@ -55,6 +56,7 @@ type TestServices =
   | ChildProcessSpawner.ChildProcessSpawner
   | InstanceStore.Service
   | SessionNs.Service
+  | Database.Service
   | HttpServer.HttpServer
 type TestScope = Scope.Scope | TestServices
 
@@ -969,6 +971,10 @@ httpapiInstance(
           },
         }),
       )).data!
+      // An older Vector's helper reads as stopped once its session has been idle (nothing wrote to it for an hour).
+      yield* (yield* Database.Service).db.run(
+        sql`UPDATE session SET time_updated = ${Date.now() - 60 * 60_000} WHERE id = ${interrupted.id}`,
+      )
       const listed = yield* call(() => executeTaskCommand(sdk, { action: "list", session: parent.id }))
       expect(listed).toMatchObject({
         tasks: expect.arrayContaining([

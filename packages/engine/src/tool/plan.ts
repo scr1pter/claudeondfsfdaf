@@ -27,21 +27,28 @@ export const PlanExitTool = Tool.define(
           const instance = yield* InstanceState.context
           const info = yield* session.get(ctx.sessionID)
           const plan = path.relative(instance.worktree, Session.plan(info, instance))
-          const answers = yield* question.ask({
-            sessionID: ctx.sessionID,
-            questions: [
-              {
-                question: `Plan at ${plan} is complete. Would you like to switch to the build agent and start implementing?`,
-                header: "Build Agent",
-                custom: false,
-                options: [
-                  { label: "Yes", description: "Switch to build agent and start implementing the plan" },
-                  { label: "No", description: "Stay with plan agent to continue refining the plan" },
-                ],
-              },
-            ],
-            tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
-          })
+          const answers = yield* question
+            .ask({
+              sessionID: ctx.sessionID,
+              questions: [
+                {
+                  question: `Plan at ${plan} is complete. Would you like to switch to the build agent and start implementing?`,
+                  header: "Build Agent",
+                  custom: false,
+                  options: [
+                    { label: "Yes", description: "Switch to build agent and start implementing the plan" },
+                    { label: "No", description: "Stay with plan agent to continue refining the plan" },
+                  ],
+                },
+              ],
+              tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
+            })
+            .pipe(
+              Effect.catchTag("QuestionRejectedError", (error) =>
+                error.timedOut ? Effect.succeed(undefined) : Effect.fail(error),
+              ),
+            )
+          if (!answers) return { title: "No answer", output: Question.TIMED_OUT, metadata: {} }
 
           if (answers[0]?.[0] === "No") yield* new Question.RejectedError()
 

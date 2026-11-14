@@ -18,6 +18,9 @@
     "./performance/timeline/session-timeline-stress.fixture.ts",
     "./performance/timeline/timeline-test-helpers.ts",
     "./regression/account-settings.spec.ts",
+    "./regression/race.spec.ts",
+    "./regression/playbooks-settings.spec.ts",
+    "./regression/hosted-result-note.spec.ts",
     "./regression/agent-launcher.spec.ts",
     "./regression/external-agent-chat.spec.ts",
     "./regression/free-models.spec.ts",
@@ -26,6 +29,7 @@
     "./regression/public-share-consent.spec.ts",
     "./regression/public-share-delete.spec.ts",
     "./regression/public-share-viewer.spec.ts",
+    "./regression/remote-phone.spec.ts",
     "./regression/support-report.spec.ts",
     "./regression/swarm-stop.spec.ts",
     "./regression/teams.spec.ts",
@@ -33,6 +37,15 @@
     "./regression/settings-workspace.spec.ts",
     "./regression/workspace-global-tabs.spec.ts",
     "./regression/session-timeline-context-resize.spec.ts",
+    "./regression/background-commands.spec.ts",
+    "./regression/background-tasks-controls.spec.ts",
+    "./regression/background-tasks-details.spec.ts",
+    "./regression/followup-steer-queue.spec.ts",
+    "./regression/isolated-subagent.spec.ts",
+    "./regression/stop-helpers.spec.ts",
+    "./regression/subagent-limits.spec.ts",
+    "./regression/workflow-permission.spec.ts",
+    "./regression/workflow-progress.spec.ts",
     "./utils/**/*.ts"
   ]
 }

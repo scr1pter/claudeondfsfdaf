@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -31,6 +32,22 @@ export const prerender = true
           <p class="note is-caution">
             Two agents should not intentionally edit the same lines at the same time. Split work by
             responsibility to reduce conflicts and make review easier.
+          </p>
+
+          <h2 id="isolated-subagents">Isolated subagents and agent workspaces</h2>
+          <p>
+            {release113.since} a subagent the main agent launches with <code>isolation: "worktree"</code> also works in
+            a git worktree of its own, but it is not an agent workspace. It starts inside your session, reports to the
+            main agent, and its changes come back to Background tasks as "N files changed · branch" for you or the agent
+            to review, merge or discard; when it changes nothing, its worktree is removed. An agent workspace or a Swarm
+            worker is a session you start, watch in the Agent Dashboard and merge yourself. See
+            <a href="/docs/subagents#worktrees">Helpers in their own worktree</a>.
+          </p>
+          <p>
+            {release113.since} the subagents that an agent workspace or a Swarm worker starts share the limits of the
+            conversation it was started from: 8 running at once, 32 per request and one $25 spend ceiling, so a fan-out
+            across workspaces does not multiply them. Stop including helpers in that conversation leaves agent
+            workspaces and Swarm workers running; stop them from the Agent Dashboard.
           </p>
 
           <h2 id="change-branch">Change an agent's branch</h2>

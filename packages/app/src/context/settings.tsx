@@ -3,11 +3,20 @@ import { createEffect, createMemo } from "solid-js"
 import { createSimpleContext } from "@vectordevai/ui/context"
 import { persisted } from "@/utils/persist"
 
+/** The events a computer may alert the account's phones about (WP A38; A41 sends them, end to end encrypted). */
+export type PhoneAlertEvent = "finished" | "needsYou" | "runGuard" | "usage"
+/** Local times ("HH:MM") between which no phone alert is sent; `end` before `start` runs past midnight. */
+export type QuietHours = { start: string; end: string }
+
 export interface NotificationSettings {
   agent: boolean
   permissions: boolean
   errors: boolean
   soundEffects: boolean
+  /** Which events reach the account's phones (contract §4.15 `notifications.events`). */
+  events: Record<PhoneAlertEvent, boolean>
+  /** No phone alerts between these times; null when off (contract §4.15 `notifications.quietHours`). */
+  quietHours: QuietHours | null
 }
 
 export interface SoundSettings {
@@ -30,6 +39,10 @@ export type VectorLandingPreference = "home" | "last-project" | "new-chat"
 export type VectorAnimationSpeedPreference = "off" | "calm" | "normal" | "fast"
 export type VectorChatWidthPreference = "focused" | "wide" | "full"
 export type VectorMessageSpacingPreference = "compact" | "comfortable" | "relaxed"
+/** What Enter does while Vector works: steer the running turn, or wait in the queue until it ends. */
+export type FollowupPreference = "steer" | "queue"
+/** What Stop, Esc and Ctrl+G stop: the main turn only, or the main turn and every helper it started. */
+export type StopScopePreference = "turn" | "all"
 
 export interface Settings {
   general: {
@@ -49,6 +62,11 @@ export interface Settings {
     llmJudge: boolean
     // Which runs the judge checks while llmJudge is on: large (Thorough) tasks that changed files, or every task that did.
     judgeScope: "thorough" | "changes"
+    // Second opinion (WP A35): while the judge is on, Vector Codium work is judged on the plan's judge from another lab.
+    secondOpinion: boolean
+    // While Vector works (5.I.1, 5.I.2). Client settings, never engine config: saving that would dispose instances.
+    followup: FollowupPreference
+    stopScope: StopScopePreference
     autoModelRouting: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
@@ -178,6 +196,10 @@ const defaultSettings: Settings = {
     showReasoningSummaries: false,
     llmJudge: false,
     judgeScope: "thorough",
+    // Off by default: a judge from another lab spends more of the Codium month than the worker's own model would.
+    secondOpinion: false,
+    followup: "steer",
+    stopScope: "turn",
     // Off by default: this spends the user's own BYOK budget on a model they
     // did not choose, so it has to be something they opt into.
     autoModelRouting: false,
@@ -232,6 +254,9 @@ const defaultSettings: Settings = {
     permissions: true,
     errors: false,
     soundEffects: true,
+    // The usage alert stays off by default, like Codium's own 80% alert (codium.alert80).
+    events: { finished: true, needsYou: true, runGuard: true, usage: false },
+    quietHours: null,
   },
   sounds: {
     agentEnabled: true,
@@ -255,6 +280,27 @@ export function restoredSettings(current: Pick<Settings, "editor">): Settings {
   const next = structuredClone(defaultSettings)
   if (current.editor?.aiAutocomplete === false) next.editor.aiAutocomplete = false
   return next
+}
+
+/** Quiet hours as saved, or null when they are off or not valid. */
+export function validQuietHours(value: unknown): QuietHours | null {
+  if (!value || typeof value !== "object") return null
+  const { start, end } = value as Record<string, unknown>
+  const time = (text: unknown) => typeof text === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(text)
+  return time(start) && time(end) && start !== end ? { start: start as string, end: end as string } : null
+}
+
+/**
+ * The follow-up mode a saved settings.v3 holds. An earlier version's migration wrote "steer" for everyone, and a value
+ * this version does not know reads as the default, so only an explicit "queue" queues.
+ */
+export function readFollowup(value: unknown): FollowupPreference {
+  return value === "queue" ? "queue" : "steer"
+}
+
+/** The Stop scope a saved settings.v3 holds; only an explicit "all" stops helpers by default. */
+export function readStopScope(value: unknown): StopScopePreference {
+  return value === "all" ? "all" : "turn"
 }
 
 function withFallback<T>(read: () => T | undefined, fallback: T) {
@@ -441,6 +487,18 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setJudgeScope(value: "thorough" | "changes") {
           setStore("general", "judgeScope", value)
         },
+        secondOpinion: withFallback(() => store.general?.secondOpinion, defaultSettings.general.secondOpinion),
+        setSecondOpinion(value: boolean) {
+          setStore("general", "secondOpinion", value)
+        },
+        followup: createMemo(() => readFollowup(store.general?.followup)),
+        setFollowup(value: FollowupPreference) {
+          setStore("general", "followup", value)
+        },
+        stopScope: createMemo(() => readStopScope(store.general?.stopScope)),
+        setStopScope(value: StopScopePreference) {
+          setStore("general", "stopScope", value)
+        },
         setAutoModelRouting(value: boolean) {
           setStore("general", "autoModelRouting", value)
         },
@@ -592,6 +650,21 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         soundEffects: withFallback(() => store.notifications?.soundEffects, defaultSettings.notifications.soundEffects),
         setSoundEffects(value: boolean) {
           setStore("notifications", "soundEffects", value)
+        },
+        // Phone alerts (WP A38). Settings saved before these existed read as the defaults.
+        event(name: PhoneAlertEvent) {
+          return store.notifications?.events?.[name] ?? defaultSettings.notifications.events[name]
+        },
+        setEvent(name: PhoneAlertEvent, value: boolean) {
+          setStore("notifications", "events", (current) => ({
+            ...defaultSettings.notifications.events,
+            ...current,
+            [name]: value,
+          }))
+        },
+        quietHours: createMemo(() => validQuietHours(store.notifications?.quietHours)),
+        setQuietHours(value: QuietHours | null) {
+          setStore("notifications", "quietHours", value === null ? null : validQuietHours(value))
         },
       },
       sounds: {

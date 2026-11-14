@@ -27,6 +27,12 @@ import type {
   ConfigGetData,
   ConfigGetErrors,
   ConfigGetResponses,
+  ConfigPromptTrustApproveData,
+  ConfigPromptTrustApproveErrors,
+  ConfigPromptTrustApproveResponses,
+  ConfigPromptTrustGetData,
+  ConfigPromptTrustGetErrors,
+  ConfigPromptTrustGetResponses,
   ConfigProvidersData,
   ConfigProvidersErrors,
   ConfigProvidersResponses,
@@ -42,6 +48,12 @@ import type {
   EventSubscribeData,
   EventSubscribeErrors,
   EventSubscribeResponses,
+  ExperimentalBrainImportProposalsData,
+  ExperimentalBrainImportProposalsErrors,
+  ExperimentalBrainImportProposalsResponses,
+  ExperimentalBrainPreviewData,
+  ExperimentalBrainPreviewErrors,
+  ExperimentalBrainPreviewResponses,
   ExperimentalCapabilitiesGetData,
   ExperimentalCapabilitiesGetErrors,
   ExperimentalCapabilitiesGetResponses,
@@ -57,6 +69,18 @@ import type {
   ExperimentalControlPlaneMoveSessionData,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalHostedAttachData,
+  ExperimentalHostedAttachErrors,
+  ExperimentalHostedAttachResponses,
+  ExperimentalHostedJobsData,
+  ExperimentalHostedJobsErrors,
+  ExperimentalHostedJobsResponses,
+  ExperimentalPlaybooksInstallData,
+  ExperimentalPlaybooksInstallErrors,
+  ExperimentalPlaybooksInstallResponses,
+  ExperimentalPlaybooksListData,
+  ExperimentalPlaybooksListErrors,
+  ExperimentalPlaybooksListResponses,
   ExperimentalProjectCopyGenerateNameData,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
@@ -69,9 +93,15 @@ import type {
   ExperimentalSessionListData,
   ExperimentalSessionListErrors,
   ExperimentalSessionListResponses,
+  ExperimentalSessionStopData,
+  ExperimentalSessionStopErrors,
+  ExperimentalSessionStopResponses,
   ExperimentalSessionUsageData,
   ExperimentalSessionUsageErrors,
   ExperimentalSessionUsageResponses,
+  ExperimentalTaskBackgroundData,
+  ExperimentalTaskBackgroundErrors,
+  ExperimentalTaskBackgroundResponses,
   ExperimentalTaskBridgePollData,
   ExperimentalTaskBridgePollErrors,
   ExperimentalTaskBridgePollResponses,
@@ -81,21 +111,51 @@ import type {
   ExperimentalTaskBridgeRegisterData,
   ExperimentalTaskBridgeRegisterErrors,
   ExperimentalTaskBridgeRegisterResponses,
+  ExperimentalTaskChangesData,
+  ExperimentalTaskChangesErrors,
+  ExperimentalTaskChangesResponses,
+  ExperimentalTaskDiscardData,
+  ExperimentalTaskDiscardErrors,
+  ExperimentalTaskDiscardResponses,
   ExperimentalTaskInspectData,
   ExperimentalTaskInspectErrors,
   ExperimentalTaskInspectResponses,
   ExperimentalTaskListData,
   ExperimentalTaskListErrors,
   ExperimentalTaskListResponses,
+  ExperimentalTaskMergeData,
+  ExperimentalTaskMergeErrors,
+  ExperimentalTaskMergeResponses,
   ExperimentalTaskMessageData,
   ExperimentalTaskMessageErrors,
   ExperimentalTaskMessageResponses,
+  ExperimentalTaskResumeData,
+  ExperimentalTaskResumeErrors,
+  ExperimentalTaskResumeResponses,
   ExperimentalTaskStopData,
   ExperimentalTaskStopErrors,
   ExperimentalTaskStopResponses,
   ExperimentalTaskWaitData,
   ExperimentalTaskWaitErrors,
   ExperimentalTaskWaitResponses,
+  ExperimentalWorkflowGetData,
+  ExperimentalWorkflowGetErrors,
+  ExperimentalWorkflowGetResponses,
+  ExperimentalWorkflowListData,
+  ExperimentalWorkflowListErrors,
+  ExperimentalWorkflowListResponses,
+  ExperimentalWorkflowResumeData,
+  ExperimentalWorkflowResumeErrors,
+  ExperimentalWorkflowResumeResponses,
+  ExperimentalWorkflowSavedData,
+  ExperimentalWorkflowSavedErrors,
+  ExperimentalWorkflowSavedResponses,
+  ExperimentalWorkflowStartData,
+  ExperimentalWorkflowStartErrors,
+  ExperimentalWorkflowStartResponses,
+  ExperimentalWorkflowValidateData,
+  ExperimentalWorkflowValidateErrors,
+  ExperimentalWorkflowValidateResponses,
   ExperimentalWorkspaceAdapterListData,
   ExperimentalWorkspaceAdapterListErrors,
   ExperimentalWorkspaceAdapterListResponses,
@@ -255,6 +315,12 @@ import type {
   McpStatusData,
   McpStatusErrors,
   McpStatusResponses,
+  MemoryBackupData,
+  MemoryBackupErrors,
+  MemoryBackupResponses,
+  MemoryBootstrapPrepareData,
+  MemoryBootstrapPrepareErrors,
+  MemoryBootstrapPrepareResponses,
   MemoryCreateData,
   MemoryCreateErrors,
   MemoryCreateResponses,
@@ -363,6 +429,9 @@ import type {
   MemoryResearchSourceData,
   MemoryResearchSourceErrors,
   MemoryResearchSourceResponses,
+  MemoryRestoreData,
+  MemoryRestoreErrors,
+  MemoryRestoreResponses,
   MemoryReviewListData,
   MemoryReviewListErrors,
   MemoryReviewListResponses,
@@ -375,12 +444,36 @@ import type {
   MemorySettingsUpdateData,
   MemorySettingsUpdateErrors,
   MemorySettingsUpdateResponses,
+  MemorySkillsForgetData,
+  MemorySkillsForgetErrors,
+  MemorySkillsForgetResponses,
+  MemorySkillsGetData,
+  MemorySkillsGetErrors,
+  MemorySkillsGetResponses,
+  MemorySkillsListData,
+  MemorySkillsListErrors,
+  MemorySkillsListResponses,
+  MemorySkillsShareData,
+  MemorySkillsShareErrors,
+  MemorySkillsSharePreviewData,
+  MemorySkillsSharePreviewErrors,
+  MemorySkillsSharePreviewResponses,
+  MemorySkillsShareResponses,
+  MemorySkillsUpdateData,
+  MemorySkillsUpdateErrors,
+  MemorySkillsUpdateResponses,
   MemoryTidyData,
   MemoryTidyErrors,
   MemoryTidyResponses,
   MemoryUpdateData,
   MemoryUpdateErrors,
   MemoryUpdateResponses,
+  MemoryWorkflowGetData,
+  MemoryWorkflowGetErrors,
+  MemoryWorkflowGetResponses,
+  MemoryWorkflowResetData,
+  MemoryWorkflowResetErrors,
+  MemoryWorkflowResetResponses,
   PartDeleteData,
   PartDeleteErrors,
   PartDeleteResponses,
@@ -1104,6 +1197,26 @@ export class Session extends HeyApiClient {
       ThrowOnError
     >({ url: "/experimental/session/{sessionID}/background", ...options })
   }
+
+  /**
+   * Stop a session
+   *
+   * Stop the session's main turn and, with helpers, every subagent working under it. No new turn starts until the next user message; partial work is kept.
+   */
+  public stop<ThrowOnError extends boolean = false>(options: Options<ExperimentalSessionStopData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalSessionStopResponses,
+      ExperimentalSessionStopErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/stop",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
 }
 
 export class Bridge extends HeyApiClient {
@@ -1257,9 +1370,299 @@ export class Task extends HeyApiClient {
     })
   }
 
+  /**
+   * Move session tasks to the background
+   *
+   * Move the session's running foreground subagents, or the selected ones, to the background, batch entries included. Each keeps running and reports later on its own.
+   */
+  public background<ThrowOnError extends boolean = false>(
+    options: Options<ExperimentalTaskBackgroundData, ThrowOnError>,
+  ) {
+    return (options.client ?? this.client).post<
+      ExperimentalTaskBackgroundResponses,
+      ExperimentalTaskBackgroundErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/background",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Resume session tasks
+   *
+   * Continue the session's stopped, failed or interrupted subagents in the background, each in a new attempt. A completed subagent continues only with text. Nothing resumes on its own.
+   */
+  public resume<ThrowOnError extends boolean = false>(options: Options<ExperimentalTaskResumeData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalTaskResumeResponses,
+      ExperimentalTaskResumeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/resume",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Review an isolated task's changes
+   *
+   * Read an isolated child's changed files and, with diff=true, its bounded patch. Only the authenticated owner receives paths and the patch; other viewers receive counts.
+   */
+  public changes<ThrowOnError extends boolean = false>(options: Options<ExperimentalTaskChangesData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalTaskChangesResponses,
+      ExperimentalTaskChangesErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/tasks/{taskID}/changes", ...options })
+  }
+
+  /**
+   * Merge an isolated task
+   *
+   * Owner only. Bring an isolated child's saved changes, or the selected files, into the parent checkout after a checkpoint.
+   */
+  public merge<ThrowOnError extends boolean = false>(options: Options<ExperimentalTaskMergeData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalTaskMergeResponses,
+      ExperimentalTaskMergeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/{taskID}/merge",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Discard an isolated task
+   *
+   * Owner only. Keep a recovery artifact, then remove an isolated child's checkout and branch.
+   */
+  public discard<ThrowOnError extends boolean = false>(options: Options<ExperimentalTaskDiscardData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalTaskDiscardResponses,
+      ExperimentalTaskDiscardErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/{taskID}/discard",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
   private _bridge?: Bridge
   get bridge(): Bridge {
     return (this._bridge ??= new Bridge({ client: this.client }))
+  }
+}
+
+export class Brain extends HeyApiClient {
+  /**
+   * Preview explicitly selected repository Brain bytes without uploading
+   */
+  public preview<ThrowOnError extends boolean = false>(options?: Options<ExperimentalBrainPreviewData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainPreviewResponses,
+      ExperimentalBrainPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-bundle/preview",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Stage owner-selected returned Brain drafts for review
+   */
+  public importProposals<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalBrainImportProposalsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainImportProposalsResponses,
+      ExperimentalBrainImportProposalsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-proposals/import",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Playbooks extends HeyApiClient {
+  /**
+   * List owner Playbooks for personal installation
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ExperimentalPlaybooksListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ExperimentalPlaybooksListResponses,
+      ExperimentalPlaybooksListErrors,
+      ThrowOnError
+    >({ url: "/experimental/workflow/playbooks", ...options })
+  }
+
+  /**
+   * Install a selected Playbook in owner configuration
+   */
+  public install<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalPlaybooksInstallData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalPlaybooksInstallResponses,
+      ExperimentalPlaybooksInstallErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks/install",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Hosted extends HeyApiClient {
+  /**
+   * Reconnect hosted jobs to their original owner conversation
+   */
+  public jobs<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedJobsData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalHostedJobsResponses,
+      ExperimentalHostedJobsErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/hosted-jobs", ...options })
+  }
+
+  /**
+   * Return a current-account hosted job report to this owner conversation
+   */
+  public attach<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedAttachData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalHostedAttachResponses,
+      ExperimentalHostedAttachErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
+export class Workflow extends HeyApiClient {
+  /**
+   * List trusted saved workflows
+   */
+  public saved<ThrowOnError extends boolean = false>(options?: Options<ExperimentalWorkflowSavedData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowSavedResponses,
+      ExperimentalWorkflowSavedErrors,
+      ThrowOnError
+    >({ url: "/experimental/workflow/saved", ...options })
+  }
+
+  /**
+   * Validate a workflow without starting it
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalWorkflowValidateData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowValidateResponses,
+      ExperimentalWorkflowValidateErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/validate",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * List workflow runs
+   */
+  public list<ThrowOnError extends boolean = false>(options: Options<ExperimentalWorkflowListData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalWorkflowListResponses,
+      ExperimentalWorkflowListErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/workflow", ...options })
+  }
+
+  /**
+   * Start an owner-approved workflow
+   */
+  public start<ThrowOnError extends boolean = false>(options: Options<ExperimentalWorkflowStartData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalWorkflowStartResponses,
+      ExperimentalWorkflowStartErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Get workflow progress and results
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ExperimentalWorkflowGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalWorkflowGetResponses,
+      ExperimentalWorkflowGetErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/workflow/{runID}", ...options })
+  }
+
+  /**
+   * Resume an owner-approved workflow
+   */
+  public resume<ThrowOnError extends boolean = false>(options: Options<ExperimentalWorkflowResumeData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalWorkflowResumeResponses,
+      ExperimentalWorkflowResumeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow/{runID}/resume",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
   }
 }
 
@@ -1450,6 +1853,26 @@ export class Experimental extends HeyApiClient {
     return (this._task ??= new Task({ client: this.client }))
   }
 
+  private _brain?: Brain
+  get brain(): Brain {
+    return (this._brain ??= new Brain({ client: this.client }))
+  }
+
+  private _playbooks?: Playbooks
+  get playbooks(): Playbooks {
+    return (this._playbooks ??= new Playbooks({ client: this.client }))
+  }
+
+  private _hosted?: Hosted
+  get hosted(): Hosted {
+    return (this._hosted ??= new Hosted({ client: this.client }))
+  }
+
+  private _workflow?: Workflow
+  get workflow(): Workflow {
+    return (this._workflow ??= new Workflow({ client: this.client }))
+  }
+
   private _resource?: Resource
   get resource(): Resource {
     return (this._resource ??= new Resource({ client: this.client }))
@@ -1595,6 +2018,41 @@ export class Trust extends HeyApiClient {
   }
 }
 
+export class PromptTrust extends HeyApiClient {
+  /**
+   * Get held prompt files
+   *
+   * The prompt files outside this repository (global agents, commands, skills and instruction files, and the prompt settings of global config) that changed since the owner last approved them. Vector does not load them until the owner approves. Owner only.
+   */
+  public get<ThrowOnError extends boolean = false>(options?: Options<ConfigPromptTrustGetData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ConfigPromptTrustGetResponses,
+      ConfigPromptTrustGetErrors,
+      ThrowOnError
+    >({ url: "/config/prompt-trust", ...options })
+  }
+
+  /**
+   * Approve held prompt files
+   *
+   * Approve the held prompt files the owner was shown, as GET returned them, and reload the instance so Vector loads them. When the files held now are not exactly those, unchanged, nothing is approved and the request fails with 409: read the list again. Owner only.
+   */
+  public approve<ThrowOnError extends boolean = false>(options?: Options<ConfigPromptTrustApproveData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      ConfigPromptTrustApproveResponses,
+      ConfigPromptTrustApproveErrors,
+      ThrowOnError
+    >({
+      url: "/config/prompt-trust/approve",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
 export class Config2 extends HeyApiClient {
   /**
    * Get configuration
@@ -1639,6 +2097,11 @@ export class Config2 extends HeyApiClient {
   private _trust?: Trust
   get trust(): Trust {
     return (this._trust ??= new Trust({ client: this.client }))
+  }
+
+  private _promptTrust?: PromptTrust
+  get promptTrust(): PromptTrust {
+    return (this._promptTrust ??= new PromptTrust({ client: this.client }))
   }
 }
 
@@ -2476,7 +2939,7 @@ export class Settings extends HeyApiClient {
   /**
    * Change memory settings
    *
-   * Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.
+   * Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, learned skills and their drafter, workflow insights and their exploration, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.
    */
   public update<ThrowOnError extends boolean = false>(options?: Options<MemorySettingsUpdateData, ThrowOnError>) {
     return (options?.client ?? this.client).patch<
@@ -2490,6 +2953,118 @@ export class Settings extends HeyApiClient {
         "Content-Type": "application/json",
         ...options?.headers,
       },
+    })
+  }
+}
+
+export class Skills extends HeyApiClient {
+  /**
+   * List learned skills
+   *
+   * Skills Vector drafted for the repository at `directory` after a run turned a failing check green: in use, waiting for your review (`filter=review`), put away (`filter=archived`) or all of them. Each carries its procedure, checks, commands, version and counts.
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<MemorySkillsListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<MemorySkillsListResponses, MemorySkillsListErrors, ThrowOnError>({
+      url: "/memory/skills",
+      ...options,
+    })
+  }
+
+  /**
+   * Forget a learned skill
+   *
+   * Delete every version of the skill, its uses and the sessions' listings of it, and keep only a hash of its key so Vector does not draft it again.
+   */
+  public forget<ThrowOnError extends boolean = false>(options: Options<MemorySkillsForgetData, ThrowOnError>) {
+    return (options.client ?? this.client).delete<MemorySkillsForgetResponses, MemorySkillsForgetErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Get a learned skill
+   *
+   * One learned skill: the runs that vouch for it, every version of its text, and how its loads fared.
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<MemorySkillsGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<MemorySkillsGetResponses, MemorySkillsGetErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Change a learned skill
+   *
+   * Edit its description, steps, checks or commands (a new version, checked like a draft), approve or reject a draft, archive it, restore it, undo the version in use, or roll back to `version`. Checks and commands must be on the allow lists.
+   */
+  public update<ThrowOnError extends boolean = false>(options: Options<MemorySkillsUpdateData, ThrowOnError>) {
+    return (options.client ?? this.client).patch<MemorySkillsUpdateResponses, MemorySkillsUpdateErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Preview sharing a learned skill
+   *
+   * The file sharing the skill would write and where, after the same checks sharing makes, or the refusal it would give. Writes nothing.
+   */
+  public sharePreview<ThrowOnError extends boolean = false>(
+    options: Options<MemorySkillsSharePreviewData, ThrowOnError>,
+  ) {
+    return (options.client ?? this.client).get<
+      MemorySkillsSharePreviewResponses,
+      MemorySkillsSharePreviewErrors,
+      ThrowOnError
+    >({ url: "/memory/skills/{memoryID}/share", ...options })
+  }
+
+  /**
+   * Share a learned skill to the repository
+   *
+   * Write a skill you approved to `.vector/skills/<name>/SKILL.md` for your team to commit, with no error excerpt, session ids or counts, after checking it against your personal memory (refused with reason `personal` and the sentences to edit). It changes the repository's settings, so the app reloads the directory once no session in it is busy and you trust them again. Refused with reason `exists` unless `force`.
+   */
+  public share<ThrowOnError extends boolean = false>(options: Options<MemorySkillsShareData, ThrowOnError>) {
+    return (options.client ?? this.client).post<MemorySkillsShareResponses, MemorySkillsShareErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}/share",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
+export class Workflow2 extends HeyApiClient {
+  /**
+   * Reset workflow insights
+   *
+   * Forget the runs workflow insights learned from in this repository, for one size (`tier`) or every size. Learned defaults start again from nothing.
+   */
+  public reset<ThrowOnError extends boolean = false>(options?: Options<MemoryWorkflowResetData, ThrowOnError>) {
+    return (options?.client ?? this.client).delete<
+      MemoryWorkflowResetResponses,
+      MemoryWorkflowResetErrors,
+      ThrowOnError
+    >({ url: "/memory/workflow", ...options })
+  }
+
+  /**
+   * Get workflow insights
+   *
+   * For each size, the effort, subagent split and subagent model the build agent ran with in this repository, how often their checks passed and what they cost, and the cheaper default the runs support. Runs where you, the agent or config chose the effort are left out, and unknown cost stays unknown.
+   */
+  public get<ThrowOnError extends boolean = false>(options?: Options<MemoryWorkflowGetData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<MemoryWorkflowGetResponses, MemoryWorkflowGetErrors, ThrowOnError>({
+      url: "/memory/workflow",
+      ...options,
     })
   }
 }
@@ -2684,6 +3259,28 @@ export class Documents extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Prepare a repository Brain bootstrap
+   *
+   * Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<MemoryBootstrapPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      MemoryBootstrapPrepareResponses,
+      MemoryBootstrapPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/memory/bootstrap",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
 export class Distill extends HeyApiClient {
   /**
    * Estimate finding more with a model
@@ -2701,7 +3298,7 @@ export class Distill extends HeyApiClient {
   /**
    * Find more with a model
    *
-   * Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
+   * Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
    */
   public run<ThrowOnError extends boolean = false>(options: Options<MemoryDistillRunData, ThrowOnError>) {
     return (options.client ?? this.client).post<MemoryDistillRunResponses, MemoryDistillRunErrors, ThrowOnError>({
@@ -2875,7 +3472,7 @@ export class Research extends HeyApiClient {
   /**
    * Export a research run
    *
-   * The run as an attachment: the report with a bibliography as Markdown, or with `format=json` the run, its queries, sources, notes and report.
+   * The run as an attachment: the report with a bibliography as Markdown (default), Word (`format=docx`) or PDF (`format=pdf`). JSON contains the run, queries, sources, notes and report. Word and PDF are generated locally from saved text; no image or URL is fetched.
    */
   public export<ThrowOnError extends boolean = false>(options: Options<MemoryResearchExportData, ThrowOnError>) {
     return (options.client ?? this.client).get<MemoryResearchExportResponses, MemoryResearchExportErrors, ThrowOnError>(
@@ -2942,7 +3539,7 @@ export class Memory extends HeyApiClient {
   /**
    * Forget a memory entry
    *
-   * Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file.
+   * Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file. A learned skill is refused with reason `skill-entry`: forget it under /memory/skills.
    */
   public remove<ThrowOnError extends boolean = false>(options: Options<MemoryRemoveData, ThrowOnError>) {
     return (options.client ?? this.client).delete<MemoryRemoveResponses, MemoryRemoveErrors, ThrowOnError>({
@@ -2966,7 +3563,7 @@ export class Memory extends HeyApiClient {
   /**
    * Change a memory entry
    *
-   * Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again.
+   * Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again. A learned skill is refused with reason `skill-entry`: change it under /memory/skills.
    */
   public update<ThrowOnError extends boolean = false>(options: Options<MemoryUpdateData, ThrowOnError>) {
     return (options.client ?? this.client).patch<MemoryUpdateResponses, MemoryUpdateErrors, ThrowOnError>({
@@ -2982,7 +3579,7 @@ export class Memory extends HeyApiClient {
   /**
    * Erase learned memory
    *
-   * Erase what Vector learned for this repository, for the user, or everywhere. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.
+   * Erase what Vector learned for this repository, for the user, or everywhere. Erasing a repository or everything also erases its learned skills and workflow insights. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.
    */
   public erase<ThrowOnError extends boolean = false>(options?: Options<MemoryEraseData, ThrowOnError>) {
     return (options?.client ?? this.client).post<MemoryEraseResponses, MemoryEraseErrors, ThrowOnError>({
@@ -2998,7 +3595,7 @@ export class Memory extends HeyApiClient {
   /**
    * Erase what Vector learned in a session
    *
-   * Forget every entry Vector learned whose only evidence is this session, so it is not learned again. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.
+   * Forget every entry Vector learned whose only evidence is this session, so it is not learned again, with its workflow records; a learned skill that session taught goes back to the text other sessions taught, or goes. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.
    */
   public eraseSession<ThrowOnError extends boolean = false>(options: Options<MemoryEraseSessionData, ThrowOnError>) {
     return (options.client ?? this.client).delete<MemoryEraseSessionResponses, MemoryEraseSessionErrors, ThrowOnError>({
@@ -3027,6 +3624,34 @@ export class Memory extends HeyApiClient {
   public import<ThrowOnError extends boolean = false>(options?: Options<MemoryImportData, ThrowOnError>) {
     return (options?.client ?? this.client).post<MemoryImportResponses, MemoryImportErrors, ThrowOnError>({
       url: "/memory/import",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Memory for a Brain Vault backup
+   *
+   * Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.
+   */
+  public backup<ThrowOnError extends boolean = false>(options?: Options<MemoryBackupData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<MemoryBackupResponses, MemoryBackupErrors, ThrowOnError>({
+      url: "/memory/backup",
+      ...options,
+    })
+  }
+
+  /**
+   * Restore memory from your Brain Vault
+   *
+   * Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.
+   */
+  public restore<ThrowOnError extends boolean = false>(options?: Options<MemoryRestoreData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<MemoryRestoreResponses, MemoryRestoreErrors, ThrowOnError>({
+      url: "/memory/restore",
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -3076,6 +3701,16 @@ export class Memory extends HeyApiClient {
     return (this._settings ??= new Settings({ client: this.client }))
   }
 
+  private _skills?: Skills
+  get skills(): Skills {
+    return (this._skills ??= new Skills({ client: this.client }))
+  }
+
+  private _workflow?: Workflow2
+  get workflow(): Workflow2 {
+    return (this._workflow ??= new Workflow2({ client: this.client }))
+  }
+
   private _model?: Model
   get model(): Model {
     return (this._model ??= new Model({ client: this.client }))
@@ -3084,6 +3719,11 @@ export class Memory extends HeyApiClient {
   private _documents?: Documents
   get documents(): Documents {
     return (this._documents ??= new Documents({ client: this.client }))
+  }
+
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
   }
 
   private _distill?: Distill

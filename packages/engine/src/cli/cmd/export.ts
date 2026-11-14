@@ -9,6 +9,7 @@ import { Effect, Schema } from "effect"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { SessionArchive } from "@vectordevai/core/share/archive"
+import { taskMetadata } from "./run/usage-output"
 
 function redact(kind: string, id: string, value: string) {
   return value.trim() ? `[redacted:${kind}:${id}]` : value
@@ -178,9 +179,18 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
   const info = { ...data.info }
   if (data.info.tokensOwnOnly !== true) delete info.tokens
   if (data.info.subagentTokensOwnOnly !== true) delete info.subagentTokens
+  const archive = { ...data }
+  // Receipt records can include Codium title and memory tokens. Sanitized output is not a receipt backup.
+  delete archive.ancillaryUsage
   return {
+    // The privacy, guest-input and usage markers travel with the archive: an import may only tighten them.
+    ...archive,
     info: {
       ...info,
+      // A child's lifecycle record copies its session totals and proof; editable metadata never certifies them.
+      ...(data.info.metadata?.subagent === undefined
+        ? {}
+        : { metadata: { ...data.info.metadata, subagent: taskMetadata(data.info.metadata.subagent) } }),
       title: redact("session-title", data.info.id, data.info.title),
       directory: redact("session-directory", data.info.id, data.info.directory),
       summary: !data.info.summary
@@ -324,17 +334,23 @@ const run = Effect.fn("Cli.export.body")(function* (args: {
   }
 
   return yield* Effect.gen(function* () {
-    const local = args.public ? undefined : yield* shares.export({ sessionID: sessionID! })
-    const output =
-      !local || (args.sanitize && "engine" in local)
-        ? yield* shares
-            .preview({ sessionID: sessionID! })
-            .pipe(Effect.map((archive) => (args.sanitize ? sanitizePublic(archive) : archive)))
-        : "engine" in local
-          ? Schema.encodeSync(SessionArchive.Native)(local)
-          : args.sanitize
-            ? sanitizeLegacy(local)
-            : local
+    const local = yield* shares.export({ sessionID: sessionID! })
+    const portable = args.public || (args.sanitize && "engine" in local)
+    // The portable format has no owner-only marker, and an import treats it as ordinary guest input. A conversation
+    // with isolated work would lose its restriction, so it is exported only in the local format, which keeps it.
+    if (portable && local.privacy === "owner-only")
+      return yield* fail(
+        "This conversation has owner-only isolated work, so it cannot be exported in the portable format. Export it without --public or --sanitize to keep its owner-only marker.",
+      )
+    const output = portable
+      ? yield* shares
+          .preview({ sessionID: sessionID! })
+          .pipe(Effect.map((archive) => (args.sanitize ? sanitizePublic(archive) : archive)))
+      : "engine" in local
+        ? Schema.encodeSync(SessionArchive.Native)(local)
+        : args.sanitize
+          ? sanitizeLegacy(local)
+          : local
     process.stdout.write(JSON.stringify(output, null, 2))
     process.stdout.write(EOL)
   }).pipe(Effect.catchTag("PublicSessionError", (error) => fail(error.message)))

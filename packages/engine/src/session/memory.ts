@@ -5,10 +5,14 @@ import { fileURLToPath } from "url"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { BrainAnchor } from "@vectordevai/core/brain/anchor"
 import { BrainFuse } from "@vectordevai/core/brain/fuse"
+import { BrainPaths } from "@vectordevai/core/brain/paths"
 import { BrainSchema } from "@vectordevai/core/brain/schema"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { LocalCommand } from "@vectordevai/core/local-mode/command"
 import { attachedMemory, links, type Asking } from "./instruction"
+import { SessionTaskSize } from "./task-size"
 
 // What the session runtime and the memory tool read from a conversation to use and to grow Vector's memory: the user's
 // own words (evidence for what they said), the checks that went from failing to passing (evidence for a lesson), the
@@ -50,14 +54,228 @@ export const REMEMBER = "vector.memory.remember"
 export const KNOWLEDGE = "vector.memory.knowledge"
 
 /**
- * A client's part metadata without the keys only the engine writes. Recall, document knowledge and personal ids record
- * what a request was given; a client's copy of them would skip recall for its request, or pass off ids it was never
- * shown as delivered (and so as verified citations).
+ * Metadata key of a `skill` tool part that loaded a learned skill: `{ id, version, checks }`. The transcript keeps only
+ * the placeholder; each request fills the procedure in from that version where personal memory may go.
+ */
+export const SKILL = "vector.memory.skill"
+
+/**
+ * A client's part metadata without the keys only the engine writes. Recall, document knowledge, personal ids and learned
+ * skill loads record what a request was given; a client's copy of them would skip recall for its request, or pass off
+ * ids it was never shown as delivered (and so as verified citations).
  */
 export function admitted(metadata: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(metadata).filter(([key]) => key !== RECALL && key !== KNOWLEDGE && key !== PERSONAL),
+    Object.entries(metadata).filter(
+      ([key]) => key !== RECALL && key !== KNOWLEDGE && key !== PERSONAL && key !== SKILL,
+    ),
   )
+}
+
+/** The learned skill a `skill` tool part loaded, with the checks it was loaded for. */
+export function skill(part: SessionV1.Part) {
+  if (part.type !== "tool" || part.tool !== "skill" || part.state.status !== "completed") return undefined
+  const value = part.state.metadata?.[SKILL]
+  if (!value || typeof value !== "object" || !("id" in value) || !("version" in value)) return undefined
+  if (typeof value.id !== "string" || typeof value.version !== "number") return undefined
+  const checks: unknown[] = "checks" in value && Array.isArray(value.checks) ? value.checks : []
+  return {
+    id: value.id,
+    version: value.version,
+    checks: checks.filter((check): check is string => typeof check === "string"),
+  }
+}
+
+/** The learned skills a request's turn loaded, each once, with when it was loaded. */
+export function skills(turn: readonly SessionV1.WithParts[]) {
+  const loads = turn.flatMap((message) =>
+    message.parts.flatMap((part) => {
+      const loaded = skill(part)
+      return loaded && part.type === "tool" && part.state.status === "completed"
+        ? [{ ...loaded, at: part.state.time.start }]
+        : []
+    }),
+  )
+  return loads.filter((load, index) => loads.findIndex((item) => item.id === load.id) === index)
+}
+
+/**
+ * How each loaded skill fared, by its own checks alone: `pass` when one of them ran after the load and its last run
+ * passed, `fail` when the last run of one failed or the judge's last verdict after it ran was FAIL or INCONCLUSIVE,
+ * and `ignored` when none of them ran after the load. Another check going green says nothing about the skill.
+ */
+export function skillOutcomes(
+  turn: readonly SessionV1.WithParts[],
+  loads: ReturnType<typeof skills>,
+): BrainSkill.Outcome[] {
+  const all = runs(turn)
+  const verdicts = judges(turn)
+  return loads.map((load) => {
+    const targets = new Set(load.checks.map((command) => checkTarget(normal(command))))
+    const ran = [
+      ...Map.groupBy(
+        all.filter((run) => run.at >= load.at && targets.has(checkTarget(run.command))),
+        (run) => checkTarget(run.command),
+      ).values(),
+    ].map((same) => same.at(-1)!)
+    const last = Math.max(0, ...ran.map((run) => run.at))
+    const verdict = verdicts.findLast((item) => item.at >= last)?.verdict
+    const outcome =
+      ran.length === 0
+        ? ("ignored" as const)
+        : ran.some(failing) || verdict === "FAIL" || verdict === "INCONCLUSIVE"
+          ? ("fail" as const)
+          : ran.some((run) => run.exit === 0)
+            ? ("pass" as const)
+            : ("ignored" as const)
+    return { id: load.id, version: load.version, outcome }
+  })
+}
+
+/**
+ * Whether a turn ended with its work failing: the judge's last verdict was FAIL or INCONCLUSIVE, or a test, lint,
+ * build or typecheck run was still failing the last time it ran.
+ */
+export function failed(turn: readonly SessionV1.WithParts[]) {
+  const verdict = judges(turn).at(-1)?.verdict
+  if (verdict === "FAIL" || verdict === "INCONCLUSIVE") return "judge-fail" as const
+  const checks = runs(turn).filter((run) => CHECK.test(run.command))
+  const ended = [...Map.groupBy(checks, (run) => checkTarget(run.command)).values()].map((same) => same.at(-1)!)
+  return ended.some(failing) ? ("check-fail" as const) : undefined
+}
+
+/**
+ * What one run showed, for drafting a learned skill: the check that went from failing to passing in the request that
+ * started at `start` (its raw command, as the agent typed it, and the tail of its failing output), the read-only
+ * helper commands run on the way, and the files it read and changed, relative to `root`. A run the judge passed with
+ * no such check gives a trace without one. A check that went green but that `BrainSkill.check` refuses (`make deploy`)
+ * gives no trace at all.
+ */
+export function trace(
+  messages: readonly SessionV1.WithParts[],
+  start: number,
+  root: string,
+  loaded?: BrainSkill.Trace["loaded"],
+): BrainSkill.Trace | undefined {
+  const index = messages.findLastIndex(
+    (message) => message.info.role === "user" && asked(message) && message.info.time.created <= start,
+  )
+  const request = messages[index]
+  if (!request) return undefined
+  const turn = messages.slice(index)
+  const all = runs(messages)
+  const found = [
+    ...Map.groupBy(
+      all.filter((run) => CHECK.test(run.command)),
+      (run) => checkTarget(run.command),
+    ).values(),
+  ]
+    .flatMap((same) => {
+      if (same.at(-1)?.exit !== 0) return []
+      const pass = same.findLastIndex(
+        (run, at) => run.at >= start && run.exit === 0 && at > 0 && failing(same[at - 1]!),
+      )
+      if (pass < 0) return []
+      // The failures this pass ended, from the first of them.
+      const first = same.slice(0, pass).findLastIndex((run) => !failing(run)) + 1
+      return [{ pass: same[pass]!, failure: same[pass - 1]!, first: same[first]! }]
+    })
+    .toSorted((a, b) => a.pass.at - b.pass.at)
+  const allowed = found.filter((item) => BrainSkill.check(item.pass.raw))
+  if (found.length > 0 && allowed.length === 0) return undefined
+  const chosen = allowed.at(-1)
+  if (!chosen && !judged(turn)) return undefined
+  const from = Math.max(chosen?.first.at ?? start, start)
+  const to = chosen?.pass.at ?? Infinity
+  const files = (list: readonly string[]) =>
+    [
+      ...new Set(
+        list
+          .map((file) => BrainPaths.relative(root, file))
+          .filter((file) => file && !file.startsWith("..") && !path.isAbsolute(file)),
+      ),
+    ].slice(0, BrainSkill.LIMIT.paths)
+  return {
+    sessionID: request.info.sessionID,
+    requestID: request.info.id,
+    signal: chosen ? "recovered" : "judged",
+    ...(chosen
+      ? {
+          check: {
+            command: chosen.pass.raw,
+            target: BrainSkill.target(chosen.pass.raw),
+            failure: chosen.failure.output.trim().slice(-BrainSkill.LIMIT.failure),
+          },
+        }
+      : {}),
+    commands: [
+      ...new Set(
+        all.filter((run) => run.at >= from && run.at < to && BrainSkill.helper(run.raw)).map((run) => run.raw),
+      ),
+    ].slice(0, BrainSkill.LIMIT.commands),
+    edited: files(edited(turn)),
+    read: files(
+      turn.flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "tool" &&
+          part.tool === "read" &&
+          part.state.status === "completed" &&
+          typeof part.state.input.filePath === "string"
+            ? [part.state.input.filePath]
+            : [],
+        ),
+      ),
+    ),
+    closing: SessionTaskSize.closingText(turn).slice(-600),
+    ...(loaded ? { loaded } : {}),
+    at: chosen?.pass.at ?? turn.at(-1)?.info.time.created ?? start,
+  }
+}
+
+/** Why a document's content counts as outside content: how it came in. */
+const OUTSIDE: readonly BrainSchema.Hold[] = ["web", "mcp", "subagent", "guest", "untrusted-repository"]
+
+/**
+ * Whether what a session writes to memory waits for the user, and whether it is private: a guest's session, an
+ * untrusted repository, outside content in the session (`taint`) or a document read from outside holds it, and a
+ * private document read in it (or one forgotten since) makes it private. `sources` are the documents the session read,
+ * as `BrainKnowledge.sources` resolved them, and `missing` how many of them are gone. The memory tool and the skill
+ * learner both decide with this.
+ */
+export function writeHold(input: {
+  readonly guest: boolean
+  /** This Vector was started by an agent, a program it ran or Vector's own terminal (`agentStarted`). */
+  readonly agent: boolean
+  readonly held: boolean
+  readonly messages: readonly SessionV1.WithParts[]
+  readonly sources: readonly { readonly hold?: BrainSchema.Hold; readonly visibility: string }[]
+  readonly missing: number
+}): { readonly hold?: BrainSchema.Hold; readonly private: boolean } {
+  const hold = input.guest
+    ? ("guest" as const)
+    : input.agent
+      ? ("subagent" as const)
+      : input.held
+        ? ("untrusted-repository" as const)
+        : (taint(input.messages) ??
+          input.sources.flatMap((document) =>
+            document.hold && OUTSIDE.includes(document.hold) ? [document.hold] : [],
+          )[0])
+  return {
+    ...(hold ? { hold } : {}),
+    private: input.missing > 0 || input.sources.some((document) => document.visibility === "private"),
+  }
+}
+
+/**
+ * Whether an agent started this Vector: a `vector run` from an agent's shell (or a program it ran, or Vector's own
+ * terminal) carries the marker every child of a process that runs agents gets. Its prompt is text that agent wrote, not
+ * the owner's, whatever the outer session read, so what its sessions teach waits for the owner as a subagent's does,
+ * and never counts as a second, independent sighting. The marker is advisory: a program that clears its children's
+ * environment drops it, and the shell asks before a command that does (PermissionPolicy.AGENT_MARKER).
+ */
+export function agentStarted() {
+  return process.env[ChildEnvironment.AGENT_MARKER] !== undefined
 }
 
 /** How a memory tool result stands in for a document card or passage; each request renders it again. */
@@ -134,6 +352,8 @@ const LOCAL_TOOLS = new Set([
   "StructuredOutput",
 ])
 
+const DELEGATION_TOOLS = new Set(["task", "workflow", "task_manage", "send_teammate_message"])
+
 // Tools whose output is the web's: pages, search results, the browsers, Vector Cloud's logs, and every research tool
 // (a research run reads the web by design, and its notes and reports quote pages; research_browser is the research
 // agents' own browser, and research is the build agent's way to start a run).
@@ -157,6 +377,17 @@ const WEB_AGENTS = new Set(["research", "researcher"])
 
 /** Metadata key of a task call's part that says what the subagent it ran took in, so its hold passes up. */
 export const HOLD = "hold"
+
+/**
+ * Metadata for a note or message part from another agent that carries what that agent took in (D.6): web or MCP
+ * content marks the part as outside content, keeping which, so the recipient is held for the same reason.
+ */
+export function carried(hold: BrainSchema.Hold | undefined): Record<string, string> {
+  return hold === "web" || hold === "mcp" ? { [BrainSchema.OUTSIDE]: "subagent", [HOLD]: hold } : {}
+}
+
+// Note parts Vector writes about the work a subagent did: its report, its note up, its waiting, its interruption.
+const SUBAGENT_NOTES = ["taskNotification", "taskMessage", "taskAttention", "taskInterrupted"]
 
 /**
  * What the user typed in a message, without Vector's synthetic notes or attached file contents. A slash command's text
@@ -340,7 +571,10 @@ export function injected(messages: readonly SessionV1.WithParts[]) {
   const shown = messages.flatMap((message) =>
     message.parts.flatMap((part) => {
       const known = knowledge(part)
-      return [...(known ? [...known.cards, ...known.get.map((item) => item.id)] : []), ...links(part).flatMap((item) => item.ids)]
+      return [
+        ...(known ? [...known.cards, ...known.get.map((item) => item.id)] : []),
+        ...links(part).flatMap((item) => item.ids),
+      ]
     }),
   )
   return new Set([...recalled, ...shown, ...attachedMemory([...messages])])
@@ -380,7 +614,10 @@ export function workingSet(messages: readonly SessionV1.WithParts[], root: strin
   const touched = recent.flatMap((message) =>
     message.parts.flatMap((part): BrainFuse.Seed[] => {
       if (part.type === "file" && part.url.startsWith("file:"))
-        return files({ ...message, parts: [part] }).map((file) => ({ path: relative(file), weight: BrainFuse.SEED.attached }))
+        return files({ ...message, parts: [part] }).map((file) => ({
+          path: relative(file),
+          weight: BrainFuse.SEED.attached,
+        }))
       if (part.type !== "tool") return []
       const input = part.state.input
       if ((part.tool === "edit" || part.tool === "write") && typeof input.filePath === "string")
@@ -422,7 +659,10 @@ export function recalled(message: SessionV1.WithParts) {
 }
 
 function normal(text: string) {
-  return text.toLowerCase().replace(/[\s"'`]+/g, " ").trim()
+  return text
+    .toLowerCase()
+    .replace(/[\s"'`]+/g, " ")
+    .trim()
 }
 
 /** The request message this step answers: what the user sent last. */
@@ -438,7 +678,15 @@ export function quoted(messages: readonly SessionV1.WithParts[], quote: string) 
   return messages.some((message) => message.info.role === "user" && normal(typed(message)).includes(wanted))
 }
 
-type Run = { readonly command: string; readonly exit: number | undefined; readonly at: number }
+// `command` is lowercased and unquoted for matching runs to a check; `raw` is what the agent typed, which a learned
+// skill keeps.
+type Run = {
+  readonly command: string
+  readonly raw: string
+  readonly exit: number | undefined
+  readonly at: number
+  readonly output: string
+}
 
 function runs(messages: readonly SessionV1.WithParts[]): Run[] {
   return messages.flatMap((message) =>
@@ -448,13 +696,40 @@ function runs(messages: readonly SessionV1.WithParts[]): Run[] {
       const command = typeof part.state.input?.command === "string" ? part.state.input.command : undefined
       if (!command) return []
       const exit = part.state.status === "completed" ? part.state.metadata?.exit : 1
-      return [{ command: normal(command), exit: typeof exit === "number" ? exit : undefined, at: part.state.time.start }]
+      return [
+        {
+          command: normal(command),
+          raw: command,
+          exit: typeof exit === "number" ? exit : undefined,
+          at: part.state.time.start,
+          output: part.state.status === "completed" ? part.state.output : part.state.error,
+        },
+      ]
     }),
   )
 }
 
-// The check a command runs, without its flags: `bun test --isolate a.test.ts` checks what `bun test a.test.ts` did.
-function check(command: string) {
+function failing(run: Run) {
+  return run.exit !== undefined && run.exit !== 0
+}
+
+// The verdicts Vector's judge gave in these messages, oldest first.
+function judges(messages: readonly SessionV1.WithParts[]) {
+  return messages.flatMap((message) =>
+    message.parts.flatMap((part) => {
+      if (part.type !== "tool") return []
+      const judge = part.metadata?.judge
+      if (!judge || typeof judge !== "object" || !("verdict" in judge) || typeof judge.verdict !== "string") return []
+      return [{ verdict: judge.verdict, at: part.state.status === "pending" ? 0 : part.state.time.start }]
+    }),
+  )
+}
+
+/**
+ * The check a lowercased, unquoted command runs, without its flags: `bun test --isolate a.test.ts` checks what
+ * `bun test a.test.ts` did.
+ */
+export function checkTarget(command: string) {
   return command
     .split(" ")
     .filter((word) => word && !word.startsWith("-"))
@@ -476,10 +751,10 @@ export function checked(messages: readonly SessionV1.WithParts[], command: strin
   const all = runs(messages)
   const passed = all.findLastIndex((run) => run.exit === 0 && (run.command === wanted || run.command.includes(wanted)))
   if (passed < 0) return false
-  const target = check(all[passed]!.command)
+  const target = checkTarget(all[passed]!.command)
   return all
     .slice(0, passed)
-    .some((run) => run.exit !== undefined && run.exit !== 0 && check(run.command) === target)
+    .some((run) => run.exit !== undefined && run.exit !== 0 && checkTarget(run.command) === target)
 }
 
 /**
@@ -489,13 +764,17 @@ export function checked(messages: readonly SessionV1.WithParts[], command: strin
  */
 export function recovered(messages: readonly SessionV1.WithParts[], since: number) {
   const all = runs(messages).filter((run) => CHECK.test(run.command))
-  const targets = new Set(all.filter((run) => run.at >= since).map((run) => check(run.command)))
+  const targets = new Set(all.filter((run) => run.at >= since).map((run) => checkTarget(run.command)))
   return [...targets].some((target) => {
-    const same = all.filter((run) => check(run.command) === target)
+    const same = all.filter((run) => checkTarget(run.command) === target)
     if (same.at(-1)?.exit !== 0) return false
     return same.some(
       (run, index) =>
-        run.at >= since && run.exit === 0 && index > 0 && same[index - 1]!.exit !== undefined && same[index - 1]!.exit !== 0,
+        run.at >= since &&
+        run.exit === 0 &&
+        index > 0 &&
+        same[index - 1]!.exit !== undefined &&
+        same[index - 1]!.exit !== 0,
     )
   })
 }
@@ -545,7 +824,12 @@ export function delivered(messages: readonly SessionV1.WithParts[]) {
  */
 export function finished(turn: readonly SessionV1.WithParts[]) {
   const last = turn.at(-1)?.info
-  return last?.role === "assistant" && last.time.completed !== undefined && last.finish !== undefined && last.finish !== "tool-calls"
+  return (
+    last?.role === "assistant" &&
+    last.time.completed !== undefined &&
+    last.finish !== undefined &&
+    last.finish !== "tool-calls"
+  )
 }
 
 /** The ids an answer cited as [id] that it was given: a made-up or mistyped id is no citation. */
@@ -589,9 +873,12 @@ export function edited(messages: readonly SessionV1.WithParts[]) {
         message.parts.flatMap((part) => {
           if (part.type !== "tool" || part.state.status !== "completed") return []
           const input = part.state.input
-          if ((part.tool === "edit" || part.tool === "write") && typeof input.filePath === "string") return [input.filePath]
+          if ((part.tool === "edit" || part.tool === "write") && typeof input.filePath === "string")
+            return [input.filePath]
           if (part.tool === "apply_patch" && typeof input.patchText === "string")
-            return [...input.patchText.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)].map((match) => match[1]!.trim())
+            return [...input.patchText.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)].map((match) =>
+              match[1]!.trim(),
+            )
           return []
         }),
       ),
@@ -626,7 +913,8 @@ export function touched(messages: readonly SessionV1.WithParts[], file: string, 
  * text from outside (an imported transcript, an issue or pull request), used the browser or Vector Cloud, ran an MCP
  * tool or an MCP server's prompt, or took a subagent's report. Memory poisoning works by planting text the agent later
  * saves as its own, so once outside content is in the history, every write is held for review. A research session is
- * held as web throughout, and a subagent that read the web passes that up: its parent is held as web, not subagent.
+ * held as web throughout, and a subagent that read the web or ran an MCP tool passes that up: its parent is held as web
+ * or mcp, not subagent.
  */
 export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hold | undefined {
   const calls = messages.flatMap((message) => message.parts.flatMap((part) => (part.type === "tool" ? [part] : [])))
@@ -636,7 +924,7 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
   if (messages.some((message) => WEB_AGENTS.has(message.info.agent))) return "web"
   if (calls.some((part) => part.state.status !== "pending" && part.state.metadata?.[HOLD] === "web")) return "web"
   // A local file an editor embedded is this computer's, like what the read tool returns, and what the user pasted they
-  // chose to send; other outside text is not.
+  // chose to send; other outside text is not. A note from an agent that only ran an MCP tool is held as MCP (below).
   if (
     messages.some((message) =>
       message.parts.some(
@@ -644,29 +932,51 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
           part.type === "text" &&
           outside(part) &&
           part.metadata?.[BrainSchema.OUTSIDE] !== "file" &&
-          part.metadata?.[BrainSchema.OUTSIDE] !== BrainSchema.PASTE,
+          part.metadata?.[BrainSchema.OUTSIDE] !== BrainSchema.PASTE &&
+          !(part.metadata?.[BrainSchema.OUTSIDE] === "subagent" && part.metadata?.[HOLD] === "mcp"),
       ),
     )
   )
     return "web"
-  if (calls.some((part) => part.tool === "skill" && part.state.status === "completed" && part.state.metadata?.remote === true))
+  if (
+    calls.some(
+      (part) => part.tool === "skill" && part.state.status === "completed" && part.state.metadata?.remote === true,
+    )
+  )
     return "web"
   if (
     commands.includes("web") ||
     calls.some(
-      (part) => part.tool === "bash" && typeof part.state.input.command === "string" && !local(part.state.input.command),
+      (part) =>
+        part.tool === "bash" && typeof part.state.input.command === "string" && !local(part.state.input.command),
     )
   )
     return "web"
-  // A background subagent's report arrives as a synthetic note in a user message, after its task call.
+  // A subagent that ran an MCP tool passes that up, on its task call or on a note about it, and is not held as less.
   if (
-    tools.some((tool) => tool === "task" || tool === "task_manage" || tool === "send_teammate_message") ||
     messages.some((message) =>
-      message.parts.some((part) => part.type === "text" && part.metadata?.["taskNotification"] !== undefined),
+      message.parts.some((part) =>
+        part.type === "tool"
+          ? part.state.status !== "pending" && part.state.metadata?.[HOLD] === "mcp"
+          : part.type === "text" && part.metadata?.[HOLD] === "mcp",
+      ),
+    )
+  )
+    return "mcp"
+  // Direct MCP content keeps its stronger hold when the same history also contains delegation.
+  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool) && !DELEGATION_TOOLS.has(tool)))
+    return "mcp"
+  // A background subagent's report, note up, waiting or interruption arrives as a synthetic note in a user message. A
+  // background command's exit note adds nothing, like a foreground command's result.
+  if (
+    tools.some((tool) => DELEGATION_TOOLS.has(tool)) ||
+    messages.some((message) =>
+      message.parts.some(
+        (part) => part.type === "text" && SUBAGENT_NOTES.some((key) => part.metadata?.[key] !== undefined),
+      ),
     )
   )
     return "subagent"
-  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool))) return "mcp"
   return undefined
 }
 
@@ -678,7 +988,8 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
 export function source(file: string, personal: { readonly memory: string; readonly rules: string }) {
   const own = [personal.memory, personal.rules].map((item) => FSUtil.realpath(item))
   return [file, FSUtil.realpath(file)].some(
-    (item) => /(?:^|\/)(?:\.vector\/(?:rules|brain)|brain)\.md$/i.test(item.split(path.sep).join("/")) || own.includes(item),
+    (item) =>
+      /(?:^|\/)(?:\.vector\/(?:rules|brain)|brain)\.md$/i.test(item.split(path.sep).join("/")) || own.includes(item),
   )
 }
 

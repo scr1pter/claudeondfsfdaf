@@ -1,0 +1,36 @@
+{
+  "kind": "private-read-only-native-audit-diagnostic-v1",
+  "modelCalls": 0,
+  "browsersStarted": 0,
+  "originalWrites": false,
+  "commonInstrumentMatchesFrozenPlan": true,
+  "teamInstrumentMatchesFrozenPlan": true,
+  "copiedTranscriptCount": 7,
+  "outcome": "raised",
+  "failureType": "StudyError",
+  "message": "linked paths are not part of a frozen input",
+  "originalHashesUnchanged": true,
+  "frames": [
+    {
+      "file": "paired_runner.py",
+      "function": "audit_descendants",
+      "line": 746
+    },
+    {
+      "file": "runner.py",
+      "function": "manifest",
+      "line": 82
+    },
+    {
+      "file": "runner.py",
+      "function": "inside",
+      "line": 67
+    },
+    {
+      "file": "runner.py",
+      "function": "require",
+      "line": 44
+    }
+  ],
+  "originalVerdictRetained": "review_required"
+}

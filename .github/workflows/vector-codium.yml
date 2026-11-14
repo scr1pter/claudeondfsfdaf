@@ -62,6 +62,18 @@ jobs:
           - name: cloud
             directory: packages/cloud
             command: bun typecheck
+          # WP A39: Vector Remote's relay Worker.
+          - name: relay
+            directory: packages/relay
+            command: bun typecheck
+          # WP A46: the ops Worker (On Call and Release Guard).
+          - name: ops-worker
+            directory: packages/ops-worker
+            command: bun typecheck
+          # WP A54: the cloud computer's image, hostd and the viewer proxy.
+          - name: hosted-computer
+            directory: packages/hosted-computer
+            command: bun typecheck
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -137,6 +149,12 @@ jobs:
           GITHUB_ACTIONS=false bun turbo run build --log-order=stream
           --filter='@vectordevai/engine^...' --filter='@vectordevai/core^...' --filter='@vectordevai/app^...'
 
+      # WP A38: test/phone-app.test.ts checks that the real phone build survives the website's prune.
+      - name: Build the phone app
+        timeout-minutes: 10
+        working-directory: packages/app
+        run: bun run build:phone
+
       # The hosted API suite in test/, every test whose path names Codium, and every test file this branch added or
       # changed since main, one Bun process per file (packages/cloud/src/codium-ci-tests.ts).
       - name: Run the Codium test files
@@ -157,6 +175,15 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: packages/client
         run: bun run check:generated
+
+  # WP A39, A46 and A54: the relay and ops Workers' deploy dry runs and smoke tests, and the cloud computer's image
+  # built and booted in Docker. They live in vector-hosted-ci.yml (WP A58), which pull requests touching the hosted
+  # services run too; here it runs only those jobs, with no secret.
+  hosted:
+    name: Hosted services
+    uses: ./.github/workflows/vector-hosted-ci.yml
+    with:
+      services_only: true
 
   browser:
     name: Codium browser specs

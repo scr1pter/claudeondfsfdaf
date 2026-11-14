@@ -146,6 +146,74 @@ export function splitTurn(input: {
   })
 }
 
+const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
+  messages: SessionV1.WithParts[]
+  model: Provider.Model
+}) {
+  const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
+  return Token.estimate(JSON.stringify(msgs))
+})
+
+/**
+ * The recent turns a summary keeps word for word, within the preserve budget. With a `floor` (a fork's first own
+ * message) the kept tail starts at or after it: the history before it is the parent's, which the fork's own messages
+ * cannot point back to.
+ */
+export const select = Effect.fn("SessionCompaction.select")(function* (input: {
+  messages: SessionV1.WithParts[]
+  cfg: ConfigV1.Info
+  model: Provider.Model
+  floor?: MessageID
+}) {
+  const limit = input.cfg.compaction?.tail_turns ?? DEFAULT_TAIL_TURNS
+  if (limit <= 0) return { head: input.messages, tail_start_id: undefined }
+  const budget = preserveRecentBudget({ cfg: input.cfg, model: input.model })
+  const floor = input.floor
+  const all = turns(input.messages).filter((turn) => floor === undefined || turn.id >= floor)
+  if (!all.length) return { head: input.messages, tail_start_id: undefined }
+  const recent = all.slice(-limit)
+  const sizes = yield* Effect.forEach(
+    recent,
+    (turn) =>
+      estimate({
+        messages: input.messages.slice(turn.start, turn.end),
+        model: input.model,
+      }),
+    { concurrency: 1 },
+  )
+
+  let total = 0
+  let keep: Tail | undefined
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const turn = recent[i]!
+    const size = sizes[i]
+    if (total + size <= budget) {
+      total += size
+      keep = { start: turn.start, id: turn.id }
+      continue
+    }
+    const remaining = budget - total
+    const split = yield* splitTurn({
+      messages: input.messages,
+      turn,
+      model: input.model,
+      budget: remaining,
+      estimate,
+    })
+    if (split) keep = split
+    else if (!keep) {
+      yield* Effect.logInfo("tail fallback", { budget, size, total })
+    }
+    break
+  }
+
+  if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
+  return {
+    head: input.messages.slice(0, keep.start),
+    tail_start_id: keep.id,
+  }
+})
+
 export interface Interface {
   readonly isOverflow: (input: {
     tokens: SessionV1.Assistant["tokens"]
@@ -162,6 +230,8 @@ export interface Interface {
     overflow?: boolean
     /** What the summary must keep besides the conversation, such as a research run's digest. */
     context?: readonly string[]
+    /** A fork's first own message: the kept tail and an overflow's replayed message come from it or after it. */
+    floor?: MessageID
   }) => Effect.Effect<"continue" | "stop">
   readonly create: (input: {
     sessionID: SessionID
@@ -213,67 +283,6 @@ const layer = Layer.effect(
         model: input.model,
         outputTokenMax: flags.outputTokenMax,
       })
-    })
-
-    const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
-      messages: SessionV1.WithParts[]
-      model: Provider.Model
-    }) {
-      const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-      return Token.estimate(JSON.stringify(msgs))
-    })
-
-    const select = Effect.fn("SessionCompaction.select")(function* (input: {
-      messages: SessionV1.WithParts[]
-      cfg: ConfigV1.Info
-      model: Provider.Model
-    }) {
-      const limit = input.cfg.compaction?.tail_turns ?? DEFAULT_TAIL_TURNS
-      if (limit <= 0) return { head: input.messages, tail_start_id: undefined }
-      const budget = preserveRecentBudget({ cfg: input.cfg, model: input.model })
-      const all = turns(input.messages)
-      if (!all.length) return { head: input.messages, tail_start_id: undefined }
-      const recent = all.slice(-limit)
-      const sizes = yield* Effect.forEach(
-        recent,
-        (turn) =>
-          estimate({
-            messages: input.messages.slice(turn.start, turn.end),
-            model: input.model,
-          }),
-        { concurrency: 1 },
-      )
-
-      let total = 0
-      let keep: Tail | undefined
-      for (let i = recent.length - 1; i >= 0; i--) {
-        const turn = recent[i]!
-        const size = sizes[i]
-        if (total + size <= budget) {
-          total += size
-          keep = { start: turn.start, id: turn.id }
-          continue
-        }
-        const remaining = budget - total
-        const split = yield* splitTurn({
-          messages: input.messages,
-          turn,
-          model: input.model,
-          budget: remaining,
-          estimate,
-        })
-        if (split) keep = split
-        else if (!keep) {
-          yield* Effect.logInfo("tail fallback", { budget, size, total })
-        }
-        break
-      }
-
-      if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
-      return {
-        head: input.messages.slice(0, keep.start),
-        tail_start_id: keep.id,
-      }
     })
 
     // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
@@ -342,6 +351,7 @@ const layer = Layer.effect(
       auto: boolean
       overflow?: boolean
       context?: readonly string[]
+      floor?: MessageID
     }) {
       const parent = input.messages.findLast((m) => m.info.id === input.parentID)
       if (!parent || parent.info.role !== "user") {
@@ -361,6 +371,7 @@ const layer = Layer.effect(
         const idx = input.messages.findIndex((m) => m.info.id === input.parentID)
         for (let i = idx - 1; i >= 0; i--) {
           const msg = input.messages[i]
+          if (input.floor !== undefined && msg.info.id < input.floor) break
           if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction")) {
             replay = { info: msg.info, parts: msg.parts }
             messages = input.messages.slice(0, i)
@@ -402,6 +413,7 @@ const layer = Layer.effect(
         messages: history.filter((_, index) => !hidden.has(index)),
         cfg,
         model,
+        floor: input.floor,
       })
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(

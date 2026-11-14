@@ -3,8 +3,8 @@ import { useRouteData } from "../../context/route"
 import { useSync } from "../../context/sync"
 import { useTheme } from "../../context/theme"
 import { SplitBorder } from "../../ui/border"
-import type { AssistantMessage } from "@vectordevai/sdk/v2"
 import { Locale } from "../../util/locale"
+import { getSessionContext } from "../../util/session-context"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useCommandShortcut, useVectorKeymap } from "../../keymap"
 
@@ -32,14 +32,13 @@ export function SubagentFooter() {
 
   const usage = createMemo(() => {
     const msg = messages()
-    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) return
+    const context = getSessionContext(msg)
+    if (!context) return
 
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    if (tokens <= 0) return
-
-    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const tokens = context.tokens
+    const model = sync.data.provider.find((item) => item.id === context.message.providerID)?.models[
+      context.message.modelID
+    ]
     const spend = Locale.sessionSpend(
       session(),
       msg,
@@ -47,7 +46,7 @@ export function SubagentFooter() {
     )
 
     return {
-      context: Locale.context(tokens, model?.limit.context, last),
+      context: Locale.context(tokens, model?.limit.context, context.message),
       cost:
         spend.cost > 0 || spend.unpriced > 0 || spend.codium > 0
           ? Locale.spend(spend.cost, spend.unpriced, spend.codium)

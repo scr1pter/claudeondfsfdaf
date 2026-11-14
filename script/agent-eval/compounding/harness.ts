@@ -71,6 +71,10 @@ export type ArmOptions = {
   readonly dump?: string
   /** Runs in a task's home before the task: the tests plant a brain.db where brain off must not read it. */
   readonly beforeTask?: (input: { readonly home: string; readonly task: Task }) => Promise<void>
+  /** Configuration added to VECTOR_CONFIG_CONTENT: prompt evolution sets a variant's `agent.<agent>.prompt` here. */
+  readonly config?: Record<string, unknown>
+  /** A scripted model in place of policy.ts's; prompt evolution's also reads which clauses the system prompt states. */
+  readonly decide?: typeof decide
 }
 
 export async function runArm(options: ArmOptions): Promise<TaskRun[]> {
@@ -97,7 +101,7 @@ export async function runArm(options: ArmOptions): Promise<TaskRun[]> {
     await mkdir(home, { recursive: true })
     await reset(dir, index, task)
     await options.beforeTask?.({ home, task })
-    const env = (url?: string) => environment({ arm: options.arm, home, dir, bin, registry, url, provider: options.provider })
+    const env = (url?: string) => environment({ arm: options.arm, home, dir, bin, registry, url, provider: options.provider, config: options.config })
     if (options.arm !== "off") {
       // The owner's own steps, before the task: Vector reads no repository docs here (so what it knows came from the
       // sessions and the one document added), and keeps the document the owner adds this week.
@@ -117,7 +121,7 @@ export async function runArm(options: ArmOptions): Promise<TaskRun[]> {
       for (const data of attachments(body))
         if (!documents.has(data)) documents.set(data, await pdfText(Buffer.from(data, "base64")))
       try {
-        return decide(task, start, body, { dir, blind: options.arm === "blind", documents })
+        return (options.decide ?? decide)(task, start, body, { dir, blind: options.arm === "blind", documents })
       } catch (error) {
         errors.push(String(error))
         return { text: `Stopping: ${String(error)}` }
@@ -279,7 +283,7 @@ async function installTools(bin: string, registry: string) {
 // Where `vector run` finds everything: an isolated home (one per task with the brain off), the fake server or the
 // owner's provider, the stand-in package managers first on a PATH without the machine's own npm, and no network
 // downloads. PWD is the repository, since `vector run` takes its directory from it.
-function environment(input: {
+export function environment(input: {
   arm: Arm
   home: string
   dir: string
@@ -287,6 +291,7 @@ function environment(input: {
   registry: string
   url?: string
   provider?: Provider
+  config?: Record<string, unknown>
 }) {
   const offline = {
     anthropic: {
@@ -321,11 +326,13 @@ function environment(input: {
     XDG_STATE_HOME: join(input.home, ".local/state"),
     XDG_CACHE_HOME: join(input.home, ".cache"),
     // Brain off has no memory tool, so it pays nothing for one: the brain's whole cost is charged to the brain-on arm.
+    // A caller's configuration adds to brain off's permission rules and never lifts its memory deny.
     VECTOR_CONFIG_CONTENT: JSON.stringify({
       formatter: false,
       lsp: false,
       provider: input.provider?.config ?? offline,
-      ...(input.arm === "off" ? { permission: { memory: "deny" } } : {}),
+      ...input.config,
+      ...(input.arm === "off" ? { permission: { ...(input.config?.permission as object | undefined), memory: "deny" } } : {}),
     }),
     VECTOR_DISABLE_PROJECT_CONFIG: "1",
     VECTOR_PURE: "1",
@@ -340,7 +347,7 @@ function environment(input: {
   }
 }
 
-async function cli(engine: string, dir: string, env: Record<string, string>, args: string[]) {
+export async function cli(engine: string, dir: string, env: Record<string, string>, args: string[]) {
   const result = await exec(process.execPath, ["run", "--conditions=browser", engine, ...args], dir, env)
   if (result.exitCode !== 0) throw new Error(`vector ${args.join(" ")} failed (${result.exitCode}): ${result.output.slice(-600)}`)
   return result.output

@@ -3,10 +3,13 @@ import type { Config } from "@vectordevai/sdk/v2/client"
 import { NATIVE_SPECIALISTS } from "@vectordevai/core/agent/specialists"
 import { GENERAL_SUBAGENT_ID, SUBAGENT_IDENTITIES } from "@vectordevai/session-ui/subagent-identity"
 import {
+  COMMAND_ROOTS,
   SPECIALIST_IDS,
   agentEnabled,
   agentSwitchPatch,
+  commandRoots,
   createAgentSwitchSaver,
+  nothingRunning,
   runningWork,
   stopWorkDescription,
 } from "./subagent-switches"
@@ -38,27 +41,82 @@ describe("runningWork", () => {
 })
 
 describe("stopWorkDescription", () => {
-  test("says how many sessions the change stops", () => {
-    expect(stopWorkDescription({ sessions: 1, helpers: [] })).toContain("1 session is working right now")
-    expect(stopWorkDescription({ sessions: 1, helpers: [] })).toContain("stops it")
-    expect(stopWorkDescription({ sessions: 4, helpers: [] })).toContain(
-      "4 sessions are working right now, subagents included",
+  // A save reloads each folder once its turns and subagents end (global-lifecycle.ts): nothing stops that work, so the
+  // dialog never says it does, nor that the new setting applies from the next message.
+  test("says how many sessions are working, and that they finish with the current setting", () => {
+    expect(stopWorkDescription({ sessions: 1, helpers: [] })).toBe(
+      "1 session is working right now. That work keeps the current setting until it ends; the new setting applies after that.",
     )
-    expect(stopWorkDescription({ sessions: 4, helpers: [] })).toContain("stops all of them")
+    const four = stopWorkDescription({ sessions: 4, helpers: [] })
+    expect(four).toContain("4 sessions are working right now, subagents included")
+    for (const text of [stopWorkDescription({ sessions: 1, helpers: [] }), four]) {
+      expect(text).not.toContain("stops")
+      expect(text).not.toContain("next message")
+    }
   })
 
-  test("says which of Vector's helpers stop, never calling them sessions", () => {
+  test("names Vector's helpers, never calling them sessions", () => {
     const helpersOnly = stopWorkDescription({ sessions: 0, helpers: ["Vectorscope review"] })
     expect(helpersOnly).toBe(
-      "One of Vector's helpers is working right now (Vectorscope review). Changing this setting stops it, and the new setting applies from your next message.",
+      "One of Vector's helpers is working right now (Vectorscope review). That work keeps the current setting until it ends; the new setting applies after that.",
     )
     expect(helpersOnly).not.toContain("session")
     expect(stopWorkDescription({ sessions: 0, helpers: ["Vectorscope review", "Autocomplete"] })).toBe(
-      "Vector's helpers are working right now (Vectorscope review, Autocomplete). Changing this setting stops all of them, and the new setting applies from your next message.",
+      "Vector's helpers are working right now (Vectorscope review, Autocomplete). That work keeps the current setting until it ends; the new setting applies after that.",
     )
     expect(stopWorkDescription({ sessions: 1, helpers: ["Vectorscope review", "Autocomplete"] })).toBe(
-      "1 session is working right now. Vector's helpers are working too (Vectorscope review, Autocomplete). Changing this setting stops all of them, and the new setting applies from your next message.",
+      "1 session is working right now. Vector's helpers are working too (Vectorscope review, Autocomplete). That work keeps the current setting until it ends; the new setting applies after that.",
     )
+  })
+})
+
+// A save reloads every folder, which stops background commands too (5.H), and they run in idle conversations.
+describe("background commands", () => {
+  test("count as running work, so the page asks before a save stops them", () => {
+    expect(nothingRunning({ sessions: 0, helpers: [] })).toBe(true)
+    expect(nothingRunning({ sessions: 0, helpers: [], commands: 0 })).toBe(true)
+    expect(nothingRunning({ sessions: 0, helpers: [], commands: 1 })).toBe(false)
+    expect(stopWorkDescription({ sessions: 0, helpers: [], commands: 1 })).toBe(
+      "1 background command is running. Changing this setting stops it, and the new setting applies from your next message.",
+    )
+    expect(stopWorkDescription({ sessions: 0, helpers: [], commands: 2 })).toBe(
+      "2 background commands are running. Changing this setting stops them, and the new setting applies from your next message.",
+    )
+    // A working session holds its folder's reload, so only the commands stop at once.
+    expect(stopWorkDescription({ sessions: 1, helpers: [], commands: 2 })).toBe(
+      "1 session is working right now. 2 background commands are running. Changing this setting stops the background commands. Other work keeps the current setting until it ends; the new setting applies after that.",
+    )
+  })
+
+  test("are asked of the recent conversations the app has seen work, never of subagents or Vector's helpers", () => {
+    const sessions: Record<
+      string,
+      { id: string; directory: string; parentID?: string; internal?: string; time: { updated: number } }
+    > = {
+      old: { id: "old", directory: "/a", time: { updated: 1 } },
+      recent: { id: "recent", directory: "/b", time: { updated: 9 } },
+      child: { id: "child", directory: "/a", parentID: "old", time: { updated: 10 } },
+      review: { id: "review", directory: "/a", internal: "vectorscope", time: { updated: 11 } },
+    }
+    const roots = commandRoots(
+      { old: { type: "idle" }, recent: { type: "idle" }, child: { type: "busy" }, review: { type: "busy" }, gone: {} },
+      (id) => sessions[id],
+      (session) => session.internal !== undefined,
+    )
+    expect(roots.map((session) => session.id)).toEqual(["recent", "old"])
+    const many = Object.fromEntries(
+      Array.from({ length: COMMAND_ROOTS + 5 }, (_, index) => [
+        `s${index}`,
+        { id: `s${index}`, directory: "/a", time: { updated: index } },
+      ]),
+    )
+    const picked = commandRoots(
+      many,
+      (id) => many[id],
+      () => false,
+    )
+    expect(picked).toHaveLength(COMMAND_ROOTS)
+    expect(picked[0]?.id).toBe(`s${COMMAND_ROOTS + 4}`)
   })
 })
 

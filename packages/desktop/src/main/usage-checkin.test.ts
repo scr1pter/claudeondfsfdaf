@@ -259,6 +259,33 @@ test("sends the local usage report with the check-in, read with the same engine 
   })
 })
 
+test("learned skills and workflow insights leave the check-in's values as they were", async () => {
+  const sessions = [
+    { id: "ses_root", updated: at(9) },
+    { id: "ses_child", parentID: "ses_root", updated: at(10) },
+  ]
+  const plain = fixture()
+  plain.state.usage = summary()
+  plain.state.sessions = sessions
+  // The same history from an engine whose summary also carried what Vector learned, as a later one might: the skill
+  // drafter runs in the session it learned from, and workflow insights start no session, so the counts match too.
+  const learning = fixture()
+  learning.state.usage = {
+    ...summary(),
+    skills: { active: 2, review: 1, names: ["learned-bun-typecheck-src"] },
+    workflow: { tiers: [{ tier: "thorough", advice: { effort: "default", reason: "passed 9 of 10" } }] },
+  }
+  learning.state.sessions = sessions
+
+  expect(await plain.usage.checkin()).toBe(true)
+  expect(await learning.usage.checkin()).toBe(true)
+
+  const values = (body: unknown) => ({ ...(body as Record<string, unknown>), installId: undefined })
+  expect(values(learning.checkins[0].body)).toEqual(values(plain.checkins[0].body))
+  expect(JSON.stringify(learning.checkins[0].body)).not.toMatch(/skill|workflow|learned/i)
+  expect(learning.store.get("sent")).toEqual(plain.store.get("sent"))
+})
+
 test("sends Codium activity with zero own usage and no Codium-specific fields", async () => {
   const app = fixture()
   app.state.usage = {

@@ -1,0 +1,3828 @@
+{
+  "date": "2026-10-30",
+  "mode": "offline scripted, not live inference",
+  "source_main": "78526052c0d576adec2904dc221fb67fdde573b0",
+  "harness_source_main": "78526052c0d576adec2904dc221fb67fdde573b0",
+  "adapter_hashes": {
+    "footprint.ts": {
+      "source_sha256": "375e170d4c7cdb4409579d7348b4ef36a3d4e31836c05e65ff8b2278094c7a69",
+      "adapter_sha256": "9a27b6da4fa66ffe5eef33c0899789bfeabccc06bb9617e5a3221d842b5c84de"
+    },
+    "footprint-actors.ts": {
+      "source_sha256": "be218aaaecc0cca932d84565c5b03e3e185891d9ba8daa55b144a6564039c20e",
+      "adapter_sha256": "be218aaaecc0cca932d84565c5b03e3e185891d9ba8daa55b144a6564039c20e"
+    },
+    "prompt-cache.ts": {
+      "source_sha256": "7924ad444a5655f8bde8a2b87d1151a7973c4acd5760e95625a218948c0bf28b",
+      "adapter_sha256": "7924ad444a5655f8bde8a2b87d1151a7973c4acd5760e95625a218948c0bf28b"
+    },
+    "tasks.ts": {
+      "source_sha256": "d2d4cefc701933bff39a0a40bf82dad5b937577afcf3499bdcd066473bbd0e22",
+      "adapter_sha256": "d2d4cefc701933bff39a0a40bf82dad5b937577afcf3499bdcd066473bbd0e22"
+    },
+    "score.ts": {
+      "source_sha256": "7b91cf39a9152b2e0c4a766fa375639df05fc87cc941072a39896cbd40f40a1f",
+      "adapter_sha256": "7b91cf39a9152b2e0c4a766fa375639df05fc87cc941072a39896cbd40f40a1f"
+    }
+  },
+  "models": {
+    "anthropic": "claude-sonnet-4-5",
+    "openai": "gpt-6.1-sol",
+    "codex": "gpt-6.1-sol"
+  },
+  "frozen_rates": {
+    "messages": {
+      "input": 3,
+      "cacheWrite": 3.75,
+      "cacheRead": 0.3,
+      "output": 15
+    },
+    "responses": {
+      "input": 2,
+      "cacheWrite": 0,
+      "cacheRead": 0.1,
+      "output": 10
+    }
+  },
+  "caveats": [
+    "characters/4 estimates; no provider routing or TTL modeled",
+    "Windows bootstrap variables added; TEMP stable across sessions",
+    "POSIX RSS unavailable, not zero",
+    "explicit Standard/Thorough; coding judge off, matching default",
+    "generic CLI fixture does not trigger Codium Auto, GitHub-only policy, desktop autocomplete or Hands bridge",
+    "diverged branches do not isolate feature causality",
+    "earlier invalid/native and per-session TEMP sensitivity attempts retained privately and excluded from successful matrix"
+  ],
+  "reports": [
+    {
+      "tree": "main",
+      "size": "standard",
+      "revision": "78526052c0d576adec2904dc221fb67fdde573b0",
+      "source_report_sha256": "2aae932f9ec61bd80851ae517d33b9e5c8e150a9e76d1206953e19c455fe5c22",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3048,
+            "toolTokens": 6915,
+            "messageTokens": 174,
+            "inputTokens": 10137,
+            "cacheRead": 0,
+            "cacheWrite": 10137,
+            "uncached": 0,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 52906,
+            "cacheRead": 42026,
+            "cacheWrite": 10880,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 212919,
+            "cacheReadShare": 0.794,
+            "fixedTokensPerRequest": 9963,
+            "firstRequest": {
+              "inputTokens": 10137,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.038239
+            },
+            "costUsd": 0.055658,
+            "uncachedCostUsd": 0.160968
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10137,
+              "cache_read": 0,
+              "cache_write": 10137,
+              "uncached": 0,
+              "cost_usd": 0.038239
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10425,
+              "cache_read": 10137,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004511
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10670,
+              "cache_read": 10425,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005141
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10794,
+              "cache_read": 10670,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10880,
+              "cache_read": 10794,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003876
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3048,
+            "toolTokens": 6915,
+            "messageTokens": 174,
+            "inputTokens": 10137,
+            "cacheRead": 9693,
+            "cacheWrite": 444,
+            "uncached": 0,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 52906,
+            "cacheRead": 51719,
+            "cacheWrite": 1187,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 212919,
+            "cacheReadShare": 0.978,
+            "fixedTokensPerRequest": 9963,
+            "firstRequest": {
+              "inputTokens": 10137,
+              "cacheRead": 9693,
+              "uncached": 0,
+              "costUsd": 0.004798
+            },
+            "costUsd": 0.022217,
+            "uncachedCostUsd": 0.160968
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10137,
+              "cache_read": 9693,
+              "cache_write": 444,
+              "uncached": 0,
+              "cost_usd": 0.004798
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10425,
+              "cache_read": 10137,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004511
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10670,
+              "cache_read": 10425,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005141
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10794,
+              "cache_read": 10670,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10880,
+              "cache_read": 10794,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003876
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 6237,
+            "messageTokens": 2871,
+            "inputTokens": 9108,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 9108,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 51025,
+            "cacheRead": 39552,
+            "cacheWrite": 0,
+            "uncached": 11473,
+            "outputTokens": 139,
+            "sentBytes": 205423,
+            "cacheReadShare": 0.775,
+            "fixedTokensPerRequest": 6237,
+            "firstRequest": {
+              "inputTokens": 9108,
+              "cacheRead": 0,
+              "uncached": 9108,
+              "costUsd": 0.018366
+            },
+            "costUsd": 0.028291,
+            "uncachedCostUsd": 0.10344
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9108,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 9108,
+              "cost_usd": 0.018366
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9722,
+              "cache_read": 9088,
+              "cache_write": 0,
+              "uncached": 634,
+              "cost_usd": 0.002437
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10296,
+              "cache_read": 9600,
+              "cache_write": 0,
+              "uncached": 696,
+              "cost_usd": 0.002972
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10744,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 504,
+              "cost_usd": 0.002182
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 11155,
+              "cache_read": 10624,
+              "cache_write": 0,
+              "uncached": 531,
+              "cost_usd": 0.002334
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 6237,
+            "messageTokens": 2871,
+            "inputTokens": 9108,
+            "cacheRead": 8704,
+            "cacheWrite": 0,
+            "uncached": 404,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 51025,
+            "cacheRead": 48256,
+            "cacheWrite": 0,
+            "uncached": 2769,
+            "outputTokens": 139,
+            "sentBytes": 205423,
+            "cacheReadShare": 0.946,
+            "fixedTokensPerRequest": 6237,
+            "firstRequest": {
+              "inputTokens": 9108,
+              "cacheRead": 8704,
+              "uncached": 404,
+              "costUsd": 0.001828
+            },
+            "costUsd": 0.011753,
+            "uncachedCostUsd": 0.10344
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9108,
+              "cache_read": 8704,
+              "cache_write": 0,
+              "uncached": 404,
+              "cost_usd": 0.001828
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9722,
+              "cache_read": 9088,
+              "cache_write": 0,
+              "uncached": 634,
+              "cost_usd": 0.002437
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10296,
+              "cache_read": 9600,
+              "cache_write": 0,
+              "uncached": 696,
+              "cost_usd": 0.002972
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10744,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 504,
+              "cost_usd": 0.002182
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 11155,
+              "cache_read": 10624,
+              "cache_write": 0,
+              "uncached": 531,
+              "cost_usd": 0.002334
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "main",
+      "size": "thorough",
+      "revision": "78526052c0d576adec2904dc221fb67fdde573b0",
+      "source_report_sha256": "bbbbbd66b5cea373d6a794e3008329b6d8bf2b8b8cedbed36b50c3d290cde523",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3510,
+            "toolTokens": 9626,
+            "messageTokens": 150,
+            "inputTokens": 13286,
+            "cacheRead": 0,
+            "cacheWrite": 13286,
+            "uncached": 0,
+            "tools": 15
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 68651,
+            "cacheRead": 54622,
+            "cacheWrite": 14029,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 276179,
+            "cacheReadShare": 0.796,
+            "fixedTokensPerRequest": 13136,
+            "firstRequest": {
+              "inputTokens": 13286,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.050048
+            },
+            "costUsd": 0.071246,
+            "uncachedCostUsd": 0.208203
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13286,
+              "cache_read": 0,
+              "cache_write": 13286,
+              "uncached": 0,
+              "cost_usd": 0.050048
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13574,
+              "cache_read": 13286,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.005456
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13819,
+              "cache_read": 13574,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.006086
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13943,
+              "cache_read": 13819,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 14029,
+              "cache_read": 13943,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.00482
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3510,
+            "toolTokens": 9626,
+            "messageTokens": 150,
+            "inputTokens": 13286,
+            "cacheRead": 12866,
+            "cacheWrite": 420,
+            "uncached": 0,
+            "tools": 15
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 68651,
+            "cacheRead": 67488,
+            "cacheWrite": 1163,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 276179,
+            "cacheReadShare": 0.983,
+            "fixedTokensPerRequest": 13136,
+            "firstRequest": {
+              "inputTokens": 13286,
+              "cacheRead": 12866,
+              "uncached": 0,
+              "costUsd": 0.00566
+            },
+            "costUsd": 0.026858,
+            "uncachedCostUsd": 0.208203
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13286,
+              "cache_read": 12866,
+              "cache_write": 420,
+              "uncached": 0,
+              "cost_usd": 0.00566
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13574,
+              "cache_read": 13286,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.005456
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13819,
+              "cache_read": 13574,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.006086
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13943,
+              "cache_read": 13819,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 14029,
+              "cache_read": 13943,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.00482
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 8790,
+            "messageTokens": 3310,
+            "inputTokens": 12100,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 12100,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 65985,
+            "cacheRead": 51584,
+            "cacheWrite": 0,
+            "uncached": 14401,
+            "outputTokens": 139,
+            "sentBytes": 265273,
+            "cacheReadShare": 0.782,
+            "fixedTokensPerRequest": 8790,
+            "firstRequest": {
+              "inputTokens": 12100,
+              "cacheRead": 0,
+              "uncached": 12100,
+              "costUsd": 0.02435
+            },
+            "costUsd": 0.03535,
+            "uncachedCostUsd": 0.13336
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12100,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 12100,
+              "cost_usd": 0.02435
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12714,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 682,
+              "cost_usd": 0.002827
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13288,
+              "cache_read": 12672,
+              "cache_write": 0,
+              "uncached": 616,
+              "cost_usd": 0.003119
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13736,
+              "cache_read": 13184,
+              "cache_write": 0,
+              "uncached": 552,
+              "cost_usd": 0.002572
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 14147,
+              "cache_read": 13696,
+              "cache_write": 0,
+              "uncached": 451,
+              "cost_usd": 0.002482
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 8790,
+            "messageTokens": 3310,
+            "inputTokens": 12100,
+            "cacheRead": 11648,
+            "cacheWrite": 0,
+            "uncached": 452,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 65985,
+            "cacheRead": 63232,
+            "cacheWrite": 0,
+            "uncached": 2753,
+            "outputTokens": 139,
+            "sentBytes": 265273,
+            "cacheReadShare": 0.958,
+            "fixedTokensPerRequest": 8790,
+            "firstRequest": {
+              "inputTokens": 12100,
+              "cacheRead": 11648,
+              "uncached": 452,
+              "costUsd": 0.002219
+            },
+            "costUsd": 0.013219,
+            "uncachedCostUsd": 0.13336
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12100,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 452,
+              "cost_usd": 0.002219
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12714,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 682,
+              "cost_usd": 0.002827
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13288,
+              "cache_read": 12672,
+              "cache_write": 0,
+              "uncached": 616,
+              "cost_usd": 0.003119
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13736,
+              "cache_read": 13184,
+              "cache_write": 0,
+              "uncached": 552,
+              "cost_usd": 0.002572
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 14147,
+              "cache_read": 13696,
+              "cache_write": 0,
+              "uncached": 451,
+              "cost_usd": 0.002482
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "self",
+      "size": "standard",
+      "revision": "57f66561b4bc194db14439e55d4b3e4c2b936ac7",
+      "source_report_sha256": "99b27734a000fbe563620d87edfbec69538a2b6e9085d0cea74d79fcf09368e3",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3373,
+            "toolTokens": 7912,
+            "messageTokens": 161,
+            "inputTokens": 11446,
+            "cacheRead": 0,
+            "cacheWrite": 11446,
+            "uncached": 0,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 59451,
+            "cacheRead": 47262,
+            "cacheWrite": 12189,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 239109,
+            "cacheReadShare": 0.795,
+            "fixedTokensPerRequest": 11285,
+            "firstRequest": {
+              "inputTokens": 11446,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.043148
+            },
+            "costUsd": 0.062138,
+            "uncachedCostUsd": 0.180603
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11446,
+              "cache_read": 0,
+              "cache_write": 11446,
+              "uncached": 0,
+              "cost_usd": 0.043148
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11734,
+              "cache_read": 11446,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004904
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11979,
+              "cache_read": 11734,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005534
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12103,
+              "cache_read": 11979,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004284
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12189,
+              "cache_read": 12103,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.004268
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3373,
+            "toolTokens": 7912,
+            "messageTokens": 161,
+            "inputTokens": 11446,
+            "cacheRead": 11015,
+            "cacheWrite": 431,
+            "uncached": 0,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 59451,
+            "cacheRead": 58277,
+            "cacheWrite": 1174,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 239109,
+            "cacheReadShare": 0.98,
+            "fixedTokensPerRequest": 11285,
+            "firstRequest": {
+              "inputTokens": 11446,
+              "cacheRead": 11015,
+              "uncached": 0,
+              "costUsd": 0.005146
+            },
+            "costUsd": 0.024136,
+            "uncachedCostUsd": 0.180603
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11446,
+              "cache_read": 11015,
+              "cache_write": 431,
+              "uncached": 0,
+              "cost_usd": 0.005146
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11734,
+              "cache_read": 11446,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004904
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11979,
+              "cache_read": 11734,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005534
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12103,
+              "cache_read": 11979,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004284
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12189,
+              "cache_read": 12103,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.004268
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 7200,
+            "messageTokens": 3285,
+            "inputTokens": 10485,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 10485,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 57910,
+            "cacheRead": 45056,
+            "cacheWrite": 0,
+            "uncached": 12854,
+            "outputTokens": 139,
+            "sentBytes": 232948,
+            "cacheReadShare": 0.778,
+            "fixedTokensPerRequest": 7200,
+            "firstRequest": {
+              "inputTokens": 10485,
+              "cacheRead": 0,
+              "uncached": 10485,
+              "costUsd": 0.02112
+            },
+            "costUsd": 0.031604,
+            "uncachedCostUsd": 0.11721
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 10485,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 10485,
+              "cost_usd": 0.02112
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11099,
+              "cache_read": 10368,
+              "cache_write": 0,
+              "uncached": 731,
+              "cost_usd": 0.002759
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11673,
+              "cache_read": 11008,
+              "cache_write": 0,
+              "uncached": 665,
+              "cost_usd": 0.003051
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12121,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 473,
+              "cost_usd": 0.002261
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12532,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 500,
+              "cost_usd": 0.002413
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 7200,
+            "messageTokens": 3285,
+            "inputTokens": 10485,
+            "cacheRead": 9984,
+            "cacheWrite": 0,
+            "uncached": 501,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 57910,
+            "cacheRead": 55040,
+            "cacheWrite": 0,
+            "uncached": 2870,
+            "outputTokens": 139,
+            "sentBytes": 232948,
+            "cacheReadShare": 0.95,
+            "fixedTokensPerRequest": 7200,
+            "firstRequest": {
+              "inputTokens": 10485,
+              "cacheRead": 9984,
+              "uncached": 501,
+              "costUsd": 0.00215
+            },
+            "costUsd": 0.012634,
+            "uncachedCostUsd": 0.11721
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 10485,
+              "cache_read": 9984,
+              "cache_write": 0,
+              "uncached": 501,
+              "cost_usd": 0.00215
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11099,
+              "cache_read": 10368,
+              "cache_write": 0,
+              "uncached": 731,
+              "cost_usd": 0.002759
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11673,
+              "cache_read": 11008,
+              "cache_write": 0,
+              "uncached": 665,
+              "cost_usd": 0.003051
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12121,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 473,
+              "cost_usd": 0.002261
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12532,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 500,
+              "cost_usd": 0.002413
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "self",
+      "size": "thorough",
+      "revision": "57f66561b4bc194db14439e55d4b3e4c2b936ac7",
+      "source_report_sha256": "8e2e17b3644668747299346be66da9879c3498b42de1a299ed84ed98edb118df",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3373,
+            "toolTokens": 7912,
+            "messageTokens": 159,
+            "inputTokens": 11444,
+            "cacheRead": 0,
+            "cacheWrite": 11444,
+            "uncached": 0,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 59441,
+            "cacheRead": 47254,
+            "cacheWrite": 12187,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 239334,
+            "cacheReadShare": 0.795,
+            "fixedTokensPerRequest": 11285,
+            "firstRequest": {
+              "inputTokens": 11444,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.04314
+            },
+            "costUsd": 0.062127,
+            "uncachedCostUsd": 0.180573
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11444,
+              "cache_read": 0,
+              "cache_write": 11444,
+              "uncached": 0,
+              "cost_usd": 0.04314
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11732,
+              "cache_read": 11444,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004903
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11977,
+              "cache_read": 11732,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005533
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12101,
+              "cache_read": 11977,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004283
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12187,
+              "cache_read": 12101,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.004268
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3373,
+            "toolTokens": 7912,
+            "messageTokens": 159,
+            "inputTokens": 11444,
+            "cacheRead": 11015,
+            "cacheWrite": 429,
+            "uncached": 0,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 59441,
+            "cacheRead": 58269,
+            "cacheWrite": 1172,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 239334,
+            "cacheReadShare": 0.98,
+            "fixedTokensPerRequest": 11285,
+            "firstRequest": {
+              "inputTokens": 11444,
+              "cacheRead": 11015,
+              "uncached": 0,
+              "costUsd": 0.005138
+            },
+            "costUsd": 0.024125,
+            "uncachedCostUsd": 0.180573
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11444,
+              "cache_read": 11015,
+              "cache_write": 429,
+              "uncached": 0,
+              "cost_usd": 0.005138
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11732,
+              "cache_read": 11444,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004903
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 11977,
+              "cache_read": 11732,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005533
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12101,
+              "cache_read": 11977,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004283
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3373,
+              "tool_tokens": 7912,
+              "input_tokens": 12187,
+              "cache_read": 12101,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.004268
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 7200,
+            "messageTokens": 3283,
+            "inputTokens": 10483,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 10483,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 57900,
+            "cacheRead": 45056,
+            "cacheWrite": 0,
+            "uncached": 12844,
+            "outputTokens": 139,
+            "sentBytes": 232903,
+            "cacheReadShare": 0.778,
+            "fixedTokensPerRequest": 7200,
+            "firstRequest": {
+              "inputTokens": 10483,
+              "cacheRead": 0,
+              "uncached": 10483,
+              "costUsd": 0.021116
+            },
+            "costUsd": 0.031584,
+            "uncachedCostUsd": 0.11719
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 10483,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 10483,
+              "cost_usd": 0.021116
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11097,
+              "cache_read": 10368,
+              "cache_write": 0,
+              "uncached": 729,
+              "cost_usd": 0.002755
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11671,
+              "cache_read": 11008,
+              "cache_write": 0,
+              "uncached": 663,
+              "cost_usd": 0.003047
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12119,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 471,
+              "cost_usd": 0.002257
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12530,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 498,
+              "cost_usd": 0.002409
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 7200,
+            "messageTokens": 3283,
+            "inputTokens": 10483,
+            "cacheRead": 9984,
+            "cacheWrite": 0,
+            "uncached": 499,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 57900,
+            "cacheRead": 55040,
+            "cacheWrite": 0,
+            "uncached": 2860,
+            "outputTokens": 139,
+            "sentBytes": 232903,
+            "cacheReadShare": 0.951,
+            "fixedTokensPerRequest": 7200,
+            "firstRequest": {
+              "inputTokens": 10483,
+              "cacheRead": 9984,
+              "uncached": 499,
+              "costUsd": 0.002146
+            },
+            "costUsd": 0.012614,
+            "uncachedCostUsd": 0.11719
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 10483,
+              "cache_read": 9984,
+              "cache_write": 0,
+              "uncached": 499,
+              "cost_usd": 0.002146
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11097,
+              "cache_read": 10368,
+              "cache_write": 0,
+              "uncached": 729,
+              "cost_usd": 0.002755
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 11671,
+              "cache_read": 11008,
+              "cache_write": 0,
+              "uncached": 663,
+              "cost_usd": 0.003047
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12119,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 471,
+              "cost_usd": 0.002257
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7200,
+              "input_tokens": 12530,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 498,
+              "cost_usd": 0.002409
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "codium",
+      "size": "standard",
+      "revision": "2722736d53067c03701ee09ecc2477ff76698239",
+      "source_report_sha256": "d462b062463f33a509b6ef3f98323fc1791adcd85334cad9e6c10ddbcb8b61ac",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3048,
+            "toolTokens": 6915,
+            "messageTokens": 174,
+            "inputTokens": 10137,
+            "cacheRead": 0,
+            "cacheWrite": 10137,
+            "uncached": 0,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 52906,
+            "cacheRead": 42026,
+            "cacheWrite": 10880,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 212919,
+            "cacheReadShare": 0.794,
+            "fixedTokensPerRequest": 9963,
+            "firstRequest": {
+              "inputTokens": 10137,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.038239
+            },
+            "costUsd": 0.055658,
+            "uncachedCostUsd": 0.160968
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10137,
+              "cache_read": 0,
+              "cache_write": 10137,
+              "uncached": 0,
+              "cost_usd": 0.038239
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10425,
+              "cache_read": 10137,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004511
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10670,
+              "cache_read": 10425,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005141
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10794,
+              "cache_read": 10670,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10880,
+              "cache_read": 10794,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003876
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3048,
+            "toolTokens": 6915,
+            "messageTokens": 174,
+            "inputTokens": 10137,
+            "cacheRead": 9693,
+            "cacheWrite": 444,
+            "uncached": 0,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 52906,
+            "cacheRead": 51719,
+            "cacheWrite": 1187,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 212919,
+            "cacheReadShare": 0.978,
+            "fixedTokensPerRequest": 9963,
+            "firstRequest": {
+              "inputTokens": 10137,
+              "cacheRead": 9693,
+              "uncached": 0,
+              "costUsd": 0.004798
+            },
+            "costUsd": 0.022217,
+            "uncachedCostUsd": 0.160968
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10137,
+              "cache_read": 9693,
+              "cache_write": 444,
+              "uncached": 0,
+              "cost_usd": 0.004798
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10425,
+              "cache_read": 10137,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004511
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10670,
+              "cache_read": 10425,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005141
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10794,
+              "cache_read": 10670,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10880,
+              "cache_read": 10794,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003876
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 6237,
+            "messageTokens": 2871,
+            "inputTokens": 9108,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 9108,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 51025,
+            "cacheRead": 39552,
+            "cacheWrite": 0,
+            "uncached": 11473,
+            "outputTokens": 139,
+            "sentBytes": 205423,
+            "cacheReadShare": 0.775,
+            "fixedTokensPerRequest": 6237,
+            "firstRequest": {
+              "inputTokens": 9108,
+              "cacheRead": 0,
+              "uncached": 9108,
+              "costUsd": 0.018366
+            },
+            "costUsd": 0.028291,
+            "uncachedCostUsd": 0.10344
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9108,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 9108,
+              "cost_usd": 0.018366
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9722,
+              "cache_read": 9088,
+              "cache_write": 0,
+              "uncached": 634,
+              "cost_usd": 0.002437
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10296,
+              "cache_read": 9600,
+              "cache_write": 0,
+              "uncached": 696,
+              "cost_usd": 0.002972
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10744,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 504,
+              "cost_usd": 0.002182
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 11155,
+              "cache_read": 10624,
+              "cache_write": 0,
+              "uncached": 531,
+              "cost_usd": 0.002334
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 6237,
+            "messageTokens": 2871,
+            "inputTokens": 9108,
+            "cacheRead": 8704,
+            "cacheWrite": 0,
+            "uncached": 404,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 51025,
+            "cacheRead": 48256,
+            "cacheWrite": 0,
+            "uncached": 2769,
+            "outputTokens": 139,
+            "sentBytes": 205423,
+            "cacheReadShare": 0.946,
+            "fixedTokensPerRequest": 6237,
+            "firstRequest": {
+              "inputTokens": 9108,
+              "cacheRead": 8704,
+              "uncached": 404,
+              "costUsd": 0.001828
+            },
+            "costUsd": 0.011753,
+            "uncachedCostUsd": 0.10344
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9108,
+              "cache_read": 8704,
+              "cache_write": 0,
+              "uncached": 404,
+              "cost_usd": 0.001828
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9722,
+              "cache_read": 9088,
+              "cache_write": 0,
+              "uncached": 634,
+              "cost_usd": 0.002437
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10296,
+              "cache_read": 9600,
+              "cache_write": 0,
+              "uncached": 696,
+              "cost_usd": 0.002972
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10744,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 504,
+              "cost_usd": 0.002182
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 11155,
+              "cache_read": 10624,
+              "cache_write": 0,
+              "uncached": 531,
+              "cost_usd": 0.002334
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "codium",
+      "size": "thorough",
+      "revision": "2722736d53067c03701ee09ecc2477ff76698239",
+      "source_report_sha256": "fccb0571ea0f014d6028ffd2600b3c8394e6368bf20e45cdad71be2b5e21de8a",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3510,
+            "toolTokens": 9626,
+            "messageTokens": 150,
+            "inputTokens": 13286,
+            "cacheRead": 0,
+            "cacheWrite": 13286,
+            "uncached": 0,
+            "tools": 15
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 68651,
+            "cacheRead": 54622,
+            "cacheWrite": 14029,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 276179,
+            "cacheReadShare": 0.796,
+            "fixedTokensPerRequest": 13136,
+            "firstRequest": {
+              "inputTokens": 13286,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.050048
+            },
+            "costUsd": 0.071246,
+            "uncachedCostUsd": 0.208203
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13286,
+              "cache_read": 0,
+              "cache_write": 13286,
+              "uncached": 0,
+              "cost_usd": 0.050048
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13574,
+              "cache_read": 13286,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.005456
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13819,
+              "cache_read": 13574,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.006086
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13943,
+              "cache_read": 13819,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 14029,
+              "cache_read": 13943,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.00482
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3510,
+            "toolTokens": 9626,
+            "messageTokens": 150,
+            "inputTokens": 13286,
+            "cacheRead": 12866,
+            "cacheWrite": 420,
+            "uncached": 0,
+            "tools": 15
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 68651,
+            "cacheRead": 67488,
+            "cacheWrite": 1163,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 276179,
+            "cacheReadShare": 0.983,
+            "fixedTokensPerRequest": 13136,
+            "firstRequest": {
+              "inputTokens": 13286,
+              "cacheRead": 12866,
+              "uncached": 0,
+              "costUsd": 0.00566
+            },
+            "costUsd": 0.026858,
+            "uncachedCostUsd": 0.208203
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13286,
+              "cache_read": 12866,
+              "cache_write": 420,
+              "uncached": 0,
+              "cost_usd": 0.00566
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13574,
+              "cache_read": 13286,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.005456
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13819,
+              "cache_read": 13574,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.006086
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13943,
+              "cache_read": 13819,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 14029,
+              "cache_read": 13943,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.00482
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 8790,
+            "messageTokens": 3310,
+            "inputTokens": 12100,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 12100,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 65985,
+            "cacheRead": 51584,
+            "cacheWrite": 0,
+            "uncached": 14401,
+            "outputTokens": 139,
+            "sentBytes": 265273,
+            "cacheReadShare": 0.782,
+            "fixedTokensPerRequest": 8790,
+            "firstRequest": {
+              "inputTokens": 12100,
+              "cacheRead": 0,
+              "uncached": 12100,
+              "costUsd": 0.02435
+            },
+            "costUsd": 0.03535,
+            "uncachedCostUsd": 0.13336
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12100,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 12100,
+              "cost_usd": 0.02435
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12714,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 682,
+              "cost_usd": 0.002827
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13288,
+              "cache_read": 12672,
+              "cache_write": 0,
+              "uncached": 616,
+              "cost_usd": 0.003119
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13736,
+              "cache_read": 13184,
+              "cache_write": 0,
+              "uncached": 552,
+              "cost_usd": 0.002572
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 14147,
+              "cache_read": 13696,
+              "cache_write": 0,
+              "uncached": 451,
+              "cost_usd": 0.002482
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 8790,
+            "messageTokens": 3310,
+            "inputTokens": 12100,
+            "cacheRead": 11648,
+            "cacheWrite": 0,
+            "uncached": 452,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 65985,
+            "cacheRead": 63232,
+            "cacheWrite": 0,
+            "uncached": 2753,
+            "outputTokens": 139,
+            "sentBytes": 265273,
+            "cacheReadShare": 0.958,
+            "fixedTokensPerRequest": 8790,
+            "firstRequest": {
+              "inputTokens": 12100,
+              "cacheRead": 11648,
+              "uncached": 452,
+              "costUsd": 0.002219
+            },
+            "costUsd": 0.013219,
+            "uncachedCostUsd": 0.13336
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12100,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 452,
+              "cost_usd": 0.002219
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12714,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 682,
+              "cost_usd": 0.002827
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13288,
+              "cache_read": 12672,
+              "cache_write": 0,
+              "uncached": 616,
+              "cost_usd": 0.003119
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13736,
+              "cache_read": 13184,
+              "cache_write": 0,
+              "uncached": 552,
+              "cost_usd": 0.002572
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 14147,
+              "cache_read": 13696,
+              "cache_write": 0,
+              "uncached": 451,
+              "cost_usd": 0.002482
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "hands",
+      "size": "standard",
+      "revision": "f902502bf5f830e040a945bef3a6b274635ba8b4",
+      "source_report_sha256": "4def39d2d27a8113328e5c12f156dba09b282e313b7d9d5113f74793c8fc4d63",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 2796,
+            "toolTokens": 5193,
+            "messageTokens": 174,
+            "inputTokens": 8163,
+            "cacheRead": 0,
+            "cacheWrite": 8163,
+            "uncached": 0,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 43036,
+            "cacheRead": 34130,
+            "cacheWrite": 8906,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 173434,
+            "cacheReadShare": 0.793,
+            "fixedTokensPerRequest": 7989,
+            "firstRequest": {
+              "inputTokens": 8163,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.030836
+            },
+            "costUsd": 0.045887,
+            "uncachedCostUsd": 0.131358
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8163,
+              "cache_read": 0,
+              "cache_write": 8163,
+              "uncached": 0,
+              "cost_usd": 0.030836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8451,
+              "cache_read": 8163,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.003919
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8696,
+              "cache_read": 8451,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.004549
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8820,
+              "cache_read": 8696,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003299
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8906,
+              "cache_read": 8820,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003284
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 2796,
+            "toolTokens": 5193,
+            "messageTokens": 174,
+            "inputTokens": 8163,
+            "cacheRead": 7719,
+            "cacheWrite": 444,
+            "uncached": 0,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 43036,
+            "cacheRead": 41849,
+            "cacheWrite": 1187,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 173434,
+            "cacheReadShare": 0.972,
+            "fixedTokensPerRequest": 7989,
+            "firstRequest": {
+              "inputTokens": 8163,
+              "cacheRead": 7719,
+              "uncached": 0,
+              "costUsd": 0.004206
+            },
+            "costUsd": 0.019257,
+            "uncachedCostUsd": 0.131358
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8163,
+              "cache_read": 7719,
+              "cache_write": 444,
+              "uncached": 0,
+              "cost_usd": 0.004206
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8451,
+              "cache_read": 8163,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.003919
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8696,
+              "cache_read": 8451,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.004549
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8820,
+              "cache_read": 8696,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003299
+            },
+            {
+              "who": "agent",
+              "system_tokens": 2796,
+              "tool_tokens": 5193,
+              "input_tokens": 8906,
+              "cache_read": 8820,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003284
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 4641,
+            "messageTokens": 2619,
+            "inputTokens": 7260,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 7260,
+            "tools": 11
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 41785,
+            "cacheRead": 32256,
+            "cacheWrite": 0,
+            "uncached": 9529,
+            "outputTokens": 139,
+            "sentBytes": 168453,
+            "cacheReadShare": 0.772,
+            "fixedTokensPerRequest": 4641,
+            "firstRequest": {
+              "inputTokens": 7260,
+              "cacheRead": 0,
+              "uncached": 7260,
+              "costUsd": 0.01467
+            },
+            "costUsd": 0.023674,
+            "uncachedCostUsd": 0.08496
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 7260,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 7260,
+              "cost_usd": 0.01467
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 7874,
+              "cache_read": 7168,
+              "cache_write": 0,
+              "uncached": 706,
+              "cost_usd": 0.002389
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 8448,
+              "cache_read": 7808,
+              "cache_write": 0,
+              "uncached": 640,
+              "cost_usd": 0.002681
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 8896,
+              "cache_read": 8448,
+              "cache_write": 0,
+              "uncached": 448,
+              "cost_usd": 0.001891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 9307,
+              "cache_read": 8832,
+              "cache_write": 0,
+              "uncached": 475,
+              "cost_usd": 0.002043
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 4641,
+            "messageTokens": 2619,
+            "inputTokens": 7260,
+            "cacheRead": 6784,
+            "cacheWrite": 0,
+            "uncached": 476,
+            "tools": 11
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 41785,
+            "cacheRead": 39040,
+            "cacheWrite": 0,
+            "uncached": 2745,
+            "outputTokens": 139,
+            "sentBytes": 168453,
+            "cacheReadShare": 0.934,
+            "fixedTokensPerRequest": 4641,
+            "firstRequest": {
+              "inputTokens": 7260,
+              "cacheRead": 6784,
+              "uncached": 476,
+              "costUsd": 0.00178
+            },
+            "costUsd": 0.010784,
+            "uncachedCostUsd": 0.08496
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 7260,
+              "cache_read": 6784,
+              "cache_write": 0,
+              "uncached": 476,
+              "cost_usd": 0.00178
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 7874,
+              "cache_read": 7168,
+              "cache_write": 0,
+              "uncached": 706,
+              "cost_usd": 0.002389
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 8448,
+              "cache_read": 7808,
+              "cache_write": 0,
+              "uncached": 640,
+              "cost_usd": 0.002681
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 8896,
+              "cache_read": 8448,
+              "cache_write": 0,
+              "uncached": 448,
+              "cost_usd": 0.001891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 4641,
+              "input_tokens": 9307,
+              "cache_read": 8832,
+              "cache_write": 0,
+              "uncached": 475,
+              "cost_usd": 0.002043
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "hands",
+      "size": "thorough",
+      "revision": "f902502bf5f830e040a945bef3a6b274635ba8b4",
+      "source_report_sha256": "2b1e1165623ffebfc84eea6e381e7b4f9f97512289dec2cfb078249d8f940932",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3259,
+            "toolTokens": 7904,
+            "messageTokens": 150,
+            "inputTokens": 11313,
+            "cacheRead": 0,
+            "cacheWrite": 11313,
+            "uncached": 0,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 58786,
+            "cacheRead": 46730,
+            "cacheWrite": 12056,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 236694,
+            "cacheReadShare": 0.795,
+            "fixedTokensPerRequest": 11163,
+            "firstRequest": {
+              "inputTokens": 11313,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.042649
+            },
+            "costUsd": 0.06148,
+            "uncachedCostUsd": 0.178608
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11313,
+              "cache_read": 0,
+              "cache_write": 11313,
+              "uncached": 0,
+              "cost_usd": 0.042649
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11601,
+              "cache_read": 11313,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004864
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11846,
+              "cache_read": 11601,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005494
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11970,
+              "cache_read": 11846,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004244
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 12056,
+              "cache_read": 11970,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.004229
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3259,
+            "toolTokens": 7904,
+            "messageTokens": 150,
+            "inputTokens": 11313,
+            "cacheRead": 10893,
+            "cacheWrite": 420,
+            "uncached": 0,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 58786,
+            "cacheRead": 57623,
+            "cacheWrite": 1163,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 236694,
+            "cacheReadShare": 0.98,
+            "fixedTokensPerRequest": 11163,
+            "firstRequest": {
+              "inputTokens": 11313,
+              "cacheRead": 10893,
+              "uncached": 0,
+              "costUsd": 0.005068
+            },
+            "costUsd": 0.023899,
+            "uncachedCostUsd": 0.178608
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11313,
+              "cache_read": 10893,
+              "cache_write": 420,
+              "uncached": 0,
+              "cost_usd": 0.005068
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11601,
+              "cache_read": 11313,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004864
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11846,
+              "cache_read": 11601,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005494
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 11970,
+              "cache_read": 11846,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004244
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3259,
+              "tool_tokens": 7904,
+              "input_tokens": 12056,
+              "cache_read": 11970,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.004229
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 7194,
+            "messageTokens": 3058,
+            "inputTokens": 10252,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 10252,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 56745,
+            "cacheRead": 44160,
+            "cacheWrite": 0,
+            "uncached": 12585,
+            "outputTokens": 139,
+            "sentBytes": 228303,
+            "cacheReadShare": 0.778,
+            "fixedTokensPerRequest": 7194,
+            "firstRequest": {
+              "inputTokens": 10252,
+              "cacheRead": 0,
+              "uncached": 10252,
+              "costUsd": 0.020654
+            },
+            "costUsd": 0.030976,
+            "uncachedCostUsd": 0.11488
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 10252,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 10252,
+              "cost_usd": 0.020654
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 10866,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 626,
+              "cost_usd": 0.002536
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 11440,
+              "cache_read": 10752,
+              "cache_write": 0,
+              "uncached": 688,
+              "cost_usd": 0.003071
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 11888,
+              "cache_read": 11392,
+              "cache_write": 0,
+              "uncached": 496,
+              "cost_usd": 0.002281
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 12299,
+              "cache_read": 11776,
+              "cache_write": 0,
+              "uncached": 523,
+              "cost_usd": 0.002434
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 7194,
+            "messageTokens": 3058,
+            "inputTokens": 10252,
+            "cacheRead": 9856,
+            "cacheWrite": 0,
+            "uncached": 396,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 56745,
+            "cacheRead": 54016,
+            "cacheWrite": 0,
+            "uncached": 2729,
+            "outputTokens": 139,
+            "sentBytes": 228303,
+            "cacheReadShare": 0.952,
+            "fixedTokensPerRequest": 7194,
+            "firstRequest": {
+              "inputTokens": 10252,
+              "cacheRead": 9856,
+              "uncached": 396,
+              "costUsd": 0.001928
+            },
+            "costUsd": 0.01225,
+            "uncachedCostUsd": 0.11488
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 10252,
+              "cache_read": 9856,
+              "cache_write": 0,
+              "uncached": 396,
+              "cost_usd": 0.001928
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 10866,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 626,
+              "cost_usd": 0.002536
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 11440,
+              "cache_read": 10752,
+              "cache_write": 0,
+              "uncached": 688,
+              "cost_usd": 0.003071
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 11888,
+              "cache_read": 11392,
+              "cache_write": 0,
+              "uncached": 496,
+              "cost_usd": 0.002281
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 7194,
+              "input_tokens": 12299,
+              "cache_read": 11776,
+              "cache_write": 0,
+              "uncached": 523,
+              "cost_usd": 0.002434
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "mention",
+      "size": "standard",
+      "revision": "19cb3d5ab6a34c0cd5ffdf6ca5c623c7cefe6b71",
+      "source_report_sha256": "256cb4ea23933a3d405d40bd86d682bb77023feb440f0b06a48cb1e77b8c6d03",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3048,
+            "toolTokens": 6915,
+            "messageTokens": 174,
+            "inputTokens": 10137,
+            "cacheRead": 0,
+            "cacheWrite": 10137,
+            "uncached": 0,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 52906,
+            "cacheRead": 42026,
+            "cacheWrite": 10880,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 212919,
+            "cacheReadShare": 0.794,
+            "fixedTokensPerRequest": 9963,
+            "firstRequest": {
+              "inputTokens": 10137,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.038239
+            },
+            "costUsd": 0.055658,
+            "uncachedCostUsd": 0.160968
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10137,
+              "cache_read": 0,
+              "cache_write": 10137,
+              "uncached": 0,
+              "cost_usd": 0.038239
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10425,
+              "cache_read": 10137,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004511
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10670,
+              "cache_read": 10425,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005141
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10794,
+              "cache_read": 10670,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10880,
+              "cache_read": 10794,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003876
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3048,
+            "toolTokens": 6915,
+            "messageTokens": 174,
+            "inputTokens": 10137,
+            "cacheRead": 9693,
+            "cacheWrite": 444,
+            "uncached": 0,
+            "tools": 13
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 52906,
+            "cacheRead": 51719,
+            "cacheWrite": 1187,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 212919,
+            "cacheReadShare": 0.978,
+            "fixedTokensPerRequest": 9963,
+            "firstRequest": {
+              "inputTokens": 10137,
+              "cacheRead": 9693,
+              "uncached": 0,
+              "costUsd": 0.004798
+            },
+            "costUsd": 0.022217,
+            "uncachedCostUsd": 0.160968
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10137,
+              "cache_read": 9693,
+              "cache_write": 444,
+              "uncached": 0,
+              "cost_usd": 0.004798
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10425,
+              "cache_read": 10137,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.004511
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10670,
+              "cache_read": 10425,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.005141
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10794,
+              "cache_read": 10670,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.003891
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3048,
+              "tool_tokens": 6915,
+              "input_tokens": 10880,
+              "cache_read": 10794,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.003876
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 6237,
+            "messageTokens": 2871,
+            "inputTokens": 9108,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 9108,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 51025,
+            "cacheRead": 39552,
+            "cacheWrite": 0,
+            "uncached": 11473,
+            "outputTokens": 139,
+            "sentBytes": 205423,
+            "cacheReadShare": 0.775,
+            "fixedTokensPerRequest": 6237,
+            "firstRequest": {
+              "inputTokens": 9108,
+              "cacheRead": 0,
+              "uncached": 9108,
+              "costUsd": 0.018366
+            },
+            "costUsd": 0.028291,
+            "uncachedCostUsd": 0.10344
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9108,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 9108,
+              "cost_usd": 0.018366
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9722,
+              "cache_read": 9088,
+              "cache_write": 0,
+              "uncached": 634,
+              "cost_usd": 0.002437
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10296,
+              "cache_read": 9600,
+              "cache_write": 0,
+              "uncached": 696,
+              "cost_usd": 0.002972
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10744,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 504,
+              "cost_usd": 0.002182
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 11155,
+              "cache_read": 10624,
+              "cache_write": 0,
+              "uncached": 531,
+              "cost_usd": 0.002334
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 6237,
+            "messageTokens": 2871,
+            "inputTokens": 9108,
+            "cacheRead": 8704,
+            "cacheWrite": 0,
+            "uncached": 404,
+            "tools": 12
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 51025,
+            "cacheRead": 48256,
+            "cacheWrite": 0,
+            "uncached": 2769,
+            "outputTokens": 139,
+            "sentBytes": 205423,
+            "cacheReadShare": 0.946,
+            "fixedTokensPerRequest": 6237,
+            "firstRequest": {
+              "inputTokens": 9108,
+              "cacheRead": 8704,
+              "uncached": 404,
+              "costUsd": 0.001828
+            },
+            "costUsd": 0.011753,
+            "uncachedCostUsd": 0.10344
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9108,
+              "cache_read": 8704,
+              "cache_write": 0,
+              "uncached": 404,
+              "cost_usd": 0.001828
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 9722,
+              "cache_read": 9088,
+              "cache_write": 0,
+              "uncached": 634,
+              "cost_usd": 0.002437
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10296,
+              "cache_read": 9600,
+              "cache_write": 0,
+              "uncached": 696,
+              "cost_usd": 0.002972
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 10744,
+              "cache_read": 10240,
+              "cache_write": 0,
+              "uncached": 504,
+              "cost_usd": 0.002182
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 6237,
+              "input_tokens": 11155,
+              "cache_read": 10624,
+              "cache_write": 0,
+              "uncached": 531,
+              "cost_usd": 0.002334
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tree": "mention",
+      "size": "thorough",
+      "revision": "19cb3d5ab6a34c0cd5ffdf6ca5c623c7cefe6b71",
+      "source_report_sha256": "d4378d49b895cdd929394625725c833c59543fe0b18e744381c0ec651c54b666",
+      "rss": null,
+      "cells": [
+        {
+          "format": "vector",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3510,
+            "toolTokens": 9626,
+            "messageTokens": 150,
+            "inputTokens": 13286,
+            "cacheRead": 0,
+            "cacheWrite": 13286,
+            "uncached": 0,
+            "tools": 15
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 68651,
+            "cacheRead": 54622,
+            "cacheWrite": 14029,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 276179,
+            "cacheReadShare": 0.796,
+            "fixedTokensPerRequest": 13136,
+            "firstRequest": {
+              "inputTokens": 13286,
+              "cacheRead": 0,
+              "uncached": 0,
+              "costUsd": 0.050048
+            },
+            "costUsd": 0.071246,
+            "uncachedCostUsd": 0.208203
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13286,
+              "cache_read": 0,
+              "cache_write": 13286,
+              "uncached": 0,
+              "cost_usd": 0.050048
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13574,
+              "cache_read": 13286,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.005456
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13819,
+              "cache_read": 13574,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.006086
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13943,
+              "cache_read": 13819,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 14029,
+              "cache_read": 13943,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.00482
+            }
+          ]
+        },
+        {
+          "format": "vector",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 3510,
+            "toolTokens": 9626,
+            "messageTokens": 150,
+            "inputTokens": 13286,
+            "cacheRead": 12866,
+            "cacheWrite": 420,
+            "uncached": 0,
+            "tools": 15
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 68651,
+            "cacheRead": 67488,
+            "cacheWrite": 1163,
+            "uncached": 0,
+            "outputTokens": 150,
+            "sentBytes": 276179,
+            "cacheReadShare": 0.983,
+            "fixedTokensPerRequest": 13136,
+            "firstRequest": {
+              "inputTokens": 13286,
+              "cacheRead": 12866,
+              "uncached": 0,
+              "costUsd": 0.00566
+            },
+            "costUsd": 0.026858,
+            "uncachedCostUsd": 0.208203
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13286,
+              "cache_read": 12866,
+              "cache_write": 420,
+              "uncached": 0,
+              "cost_usd": 0.00566
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13574,
+              "cache_read": 13286,
+              "cache_write": 288,
+              "uncached": 0,
+              "cost_usd": 0.005456
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13819,
+              "cache_read": 13574,
+              "cache_write": 245,
+              "uncached": 0,
+              "cost_usd": 0.006086
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 13943,
+              "cache_read": 13819,
+              "cache_write": 124,
+              "uncached": 0,
+              "cost_usd": 0.004836
+            },
+            {
+              "who": "agent",
+              "system_tokens": 3510,
+              "tool_tokens": 9626,
+              "input_tokens": 14029,
+              "cache_read": 13943,
+              "cache_write": 86,
+              "uncached": 0,
+              "cost_usd": 0.00482
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 1,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 8790,
+            "messageTokens": 3310,
+            "inputTokens": 12100,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "uncached": 12100,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 65985,
+            "cacheRead": 51584,
+            "cacheWrite": 0,
+            "uncached": 14401,
+            "outputTokens": 139,
+            "sentBytes": 265273,
+            "cacheReadShare": 0.782,
+            "fixedTokensPerRequest": 8790,
+            "firstRequest": {
+              "inputTokens": 12100,
+              "cacheRead": 0,
+              "uncached": 12100,
+              "costUsd": 0.02435
+            },
+            "costUsd": 0.03535,
+            "uncachedCostUsd": 0.13336
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12100,
+              "cache_read": 0,
+              "cache_write": 0,
+              "uncached": 12100,
+              "cost_usd": 0.02435
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12714,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 682,
+              "cost_usd": 0.002827
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13288,
+              "cache_read": 12672,
+              "cache_write": 0,
+              "uncached": 616,
+              "cost_usd": 0.003119
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13736,
+              "cache_read": 13184,
+              "cache_write": 0,
+              "uncached": 552,
+              "cost_usd": 0.002572
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 14147,
+              "cache_read": 13696,
+              "cache_write": 0,
+              "uncached": 451,
+              "cost_usd": 0.002482
+            }
+          ]
+        },
+        {
+          "format": "vector-openai",
+          "session": 2,
+          "valid": true,
+          "exit_code": 0,
+          "unplayed": 0,
+          "fixture_exit": 0,
+          "first_request": {
+            "systemTokens": 0,
+            "toolTokens": 8790,
+            "messageTokens": 3310,
+            "inputTokens": 12100,
+            "cacheRead": 11648,
+            "cacheWrite": 0,
+            "uncached": 452,
+            "tools": 14
+          },
+          "totals": {
+            "requests": 5,
+            "subagentRequests": 0,
+            "sideRequests": 0,
+            "warmupRequests": 0,
+            "inputTokens": 65985,
+            "cacheRead": 63232,
+            "cacheWrite": 0,
+            "uncached": 2753,
+            "outputTokens": 139,
+            "sentBytes": 265273,
+            "cacheReadShare": 0.958,
+            "fixedTokensPerRequest": 8790,
+            "firstRequest": {
+              "inputTokens": 12100,
+              "cacheRead": 11648,
+              "uncached": 452,
+              "costUsd": 0.002219
+            },
+            "costUsd": 0.013219,
+            "uncachedCostUsd": 0.13336
+          },
+          "request_categories": [
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12100,
+              "cache_read": 11648,
+              "cache_write": 0,
+              "uncached": 452,
+              "cost_usd": 0.002219
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 12714,
+              "cache_read": 12032,
+              "cache_write": 0,
+              "uncached": 682,
+              "cost_usd": 0.002827
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13288,
+              "cache_read": 12672,
+              "cache_write": 0,
+              "uncached": 616,
+              "cost_usd": 0.003119
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 13736,
+              "cache_read": 13184,
+              "cache_write": 0,
+              "uncached": 552,
+              "cost_usd": 0.002572
+            },
+            {
+              "who": "agent",
+              "system_tokens": 0,
+              "tool_tokens": 8790,
+              "input_tokens": 14147,
+              "cache_read": 13696,
+              "cache_write": 0,
+              "uncached": 451,
+              "cost_usd": 0.002482
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

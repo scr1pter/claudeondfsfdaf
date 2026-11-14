@@ -10,6 +10,8 @@ Use this tool for terminal operations like git, npm, docker, and project scripts
 
 ${commandSection}
 
+A long command that ends on its own, such as a full build or test suite, can run with `background: true` instead of a long timeout, so you keep working while it runs.
+
 # Git and GitHub
 - Only commit, amend, push, or create PRs when explicitly requested.
 - Before committing, inspect `git status`, `git diff`, and `git log --oneline -10`; stage only intended files and never commit secrets.

@@ -114,7 +114,8 @@ for (const shared of [true, false])
         (model) => String(model.providerID) === ModelPlans.PROVIDER_ID,
       )
       expect(Object.fromEntries(listed.map((model) => [String(model.id), model.codium]))).toEqual({
-        [codiumModel.id]: { lab: "deepseek", role: "default" },
+        // WP A35: the listing also names the entry's part in the plan's review pair (the catalog's `review`).
+        [codiumModel.id]: { lab: "deepseek", role: "default", review: ["triage"] },
         [ModelPlans.AUTO_ID]: {
           lab: "deepseek",
           auto: { floor: codiumModel.id, default: codiumModel.id, ceiling: codiumModel.id },

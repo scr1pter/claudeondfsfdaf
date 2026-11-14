@@ -1,0 +1,203 @@
+{
+  "status": "reviewed_postlaunch_keyboard_v2_controls_and_unchanged_candidate_reevaluations_passed",
+  "atUtc": "2026-11-02T01:45:57.815925+00:00",
+  "modelCalls": 0,
+  "paidUsd": 0,
+  "seed": {
+    "typecheckExitCode": 0,
+    "buildExitCode": 0,
+    "protectedSmokePassed": 1,
+    "protectedSmokeFailed": 0,
+    "finalFormatting": "Applied before final typecheck/build/smoke; only formatting after seed negative gate",
+    "evidenceStage": "Original prelaunch v1; not rerun for keyboard-only revision"
+  },
+  "instrumentPureControls": {
+    "passed": 18,
+    "failed": 0,
+    "instrumentRevision": "postlaunch-keyboard-v2"
+  },
+  "realWorkerLifecycleControls": {
+    "passed": 5,
+    "failed": 0,
+    "checks": [
+      "real_success_output",
+      "fail_once_attempts",
+      "block_release_barrier",
+      "parent_death_exits_fixture",
+      "invalid_identity_rejected"
+    ],
+    "evidenceStage": "Original prelaunch v1; protected worker and API evaluator unchanged"
+  },
+  "unchangedSeedGate": {
+    "verdict": "product_failure",
+    "checks": 24,
+    "passed": 4,
+    "failed": 20,
+    "notRun": 0,
+    "apiPassed": 1,
+    "apiTotal": 16,
+    "browserPassed": 3,
+    "browserTotal": 8,
+    "sourceUnchanged": true,
+    "passingGroups": [
+      "legacy_post_compatibility",
+      "dashboard_boot",
+      "legacy_jobs_visible",
+      "mobile_layout_and_keyboard"
+    ],
+    "instrumentRevision": "Original v1 historical negative gate; not rerun under keyboard-v2"
+  },
+  "prelaunchInstrumentIssuesRetained": [
+    {
+      "attempt": "seed-gate-01",
+      "verdict": "instrument_failure",
+      "cause": "Chromium launch with virtualized native OS directories"
+    },
+    {
+      "attempt": "seed-gate-02",
+      "verdict": "instrument_failure",
+      "cause": "Browser launch did not complete under deep virtualized OS environment"
+    },
+    {
+      "attempt": "seed-gate-03",
+      "verdict": "instrument_failure",
+      "cause": "Short profile alone did not resolve native OS environment requirement"
+    }
+  ],
+  "prelaunchCorrections": [
+    "Build script declared a TypeScript module before baseline validation",
+    "Native select uses exact accessible combobox name rather than wrapping-label text",
+    "Browser uses native OS-directory environment allowlist without provider secrets, plus fresh owned profile",
+    "Browser uses reviewed exact-origin forwarding proxy, including redirect hops",
+    "Source inventory excludes only declared app-root dist, standard dependencies/cache/Git; nested dist remains authored",
+    "Invalid graph checks compare prior workflow identities and events, allowing legal legacy single-node workflow migration",
+    "Workflow form waits for actual visible DOM; later independent browser checks do not reuse a stale availability flag"
+  ],
+  "externalInstrumentDependencies": {
+    "scripts/benchmarks/browser-driver/proxy.cjs": "eaf075f2ddd585d188fff417a4478d8d0d25b9afbca5939b7318fbb9d15e163b",
+    "scripts/benchmarks/browser-driver/policy.cjs": "8a9f0a973d51c8951272912ef6dc4441188c7603b6005b39eb4243ec5cc7404f"
+  },
+  "fullGoldSchedulerBuilt": false,
+  "limitations": [
+    "A complete positive v2 scheduler was not built by the instrument author; the study owner independently reran all three actual unchanged delivered applications and each passed the full gate.",
+    "Synthetic browser controls validate instrument behavior, not production readiness.",
+    "Original prelaunch and charged outcomes are retained; corrected functional acceptance does not erase repair spend or establish the aggregate 20% cost/quality objective.",
+    "Raw transcripts, screenshots and machine runtime logs remain in the private execution archive; public files contain sanitized source and numerical/status evidence."
+  ],
+  "evidenceStages": "Unchanged prelaunch build/lifecycle/seed-negative evidence is historical v1; keyboard-v2 controls and all three unchanged-candidate full reevaluations are explicit below.",
+  "browserContractPositiveControls": [
+    {
+      "control": "positive_accessible_live_contract",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "control": "positive_delayed_form_with_early_legacy_content",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0,
+      "earlyLegacyVisible": true,
+      "formInitiallyAbsent": true,
+      "formDelayMs": 1508
+    },
+    {
+      "control": "positive_healthy_wrap_from_last_events_button",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0,
+      "keyboard": {
+        "startingControl": {
+          "tag": "button",
+          "text": "View events UI created"
+        },
+        "visibleCandidates": 8,
+        "tabLimit": 10,
+        "tabPresses": 4,
+        "bodyTransitions": 0,
+        "reachedControls": [
+          "Workflow name",
+          "Concurrency",
+          "Workflow definition",
+          "Create workflow"
+        ],
+        "missingControls": []
+      }
+    }
+  ],
+  "browserContractNegativeControls": [
+    {
+      "control": "negative_form_excluded_from_native_tab_order",
+      "verdict": "product_failure",
+      "passed": 7,
+      "failed": 1,
+      "keyboard": {
+        "startingControl": {
+          "tag": "button",
+          "text": "View events UI created"
+        },
+        "visibleCandidates": 8,
+        "tabLimit": 10,
+        "tabPresses": 10,
+        "bodyTransitions": 2,
+        "reachedControls": [],
+        "missingControls": [
+          "Workflow name",
+          "Concurrency",
+          "Workflow definition",
+          "Create workflow"
+        ]
+      }
+    },
+    {
+      "control": "negative_missing_exact_label",
+      "verdict": "product_failure",
+      "passed": 5,
+      "failed": 3
+    }
+  ],
+  "postlaunchKeyboardRevision": {
+    "directory": "instrument-revisions/postlaunch-keyboard-v2",
+    "originalTaskDigest": "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761",
+    "originalGitRevision": "44f93362a683d39198ead037beb639abc828fb63",
+    "originalSnapshotsPreservedVerbatim": true,
+    "originalChargedResultsAndRepairChargesRetained": true,
+    "apiAssertionsUnchanged": 16,
+    "otherBrowserChecksUnchanged": 7,
+    "cause": "A single Tab from the last page control can move focus into browser chrome and leave activeElement as body; the next Tab reaches a real native form field.",
+    "correction": "Ordinary heading click, then bounded native Tab traversal requiring all four exact workflow form controls; body transitions allowed; no forced DOM focus or tabindex mutation.",
+    "focusProof": "instrument-revisions/postlaunch-keyboard-v2/focus-proof.json",
+    "authorControlModelCalls": 0,
+    "authorControlPaidUsd": 0,
+    "ownerReevaluationModelCalls": 0,
+    "unchangedCandidateReevaluations": {
+      "codex-first": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 235,
+        "failedChecks": []
+      },
+      "vector-first": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 14,
+        "failedChecks": []
+      },
+      "vector-repair": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 15,
+        "failedChecks": []
+      }
+    }
+  }
+}

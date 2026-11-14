@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { noteTriageUnchecked } from "@vectordevai/core/review/format"
+import { noteSameLabPair } from "@vectordevai/core/review/second-lab"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
@@ -917,7 +918,7 @@ describe("runReview", () => {
     expect(unpriced).toContain("Double-checking 1 finding… 1.2k tokens so far.")
   })
 
-  test("runs on Vector Codium only when the person chose it, since it spends their credits", async () => {
+  test("runs on Vector Codium only when the person chose it, since it uses their Codium month", async () => {
     const codium: ReviewModel = {
       providerID: "vector-plan",
       modelID: "deepseek/deepseek-v4.1-flash",
@@ -1616,6 +1617,107 @@ describe("cheaper first pass", () => {
     expect(outcome.notes).toContain(
       "The triage model in .vector/review.json, openrouter/missing, is not connected, so the whole review ran on anthropic/claude-sonnet-4-5.",
     )
+  })
+})
+
+// WP A35: second-lab reviews and the panel on the desktop. Vector Codium's listing names each entry's part in the plan's
+// review pair, and the footer says how many labs checked what the review shows.
+describe("second-lab reviews and the panel", () => {
+  const codium = (modelID: string, lab: string | undefined, review?: string[]): ReviewModel => ({
+    providerID: "vector-plan",
+    modelID,
+    context: 128_000,
+    costKind: "codium",
+    ...(lab ? { lab } : {}),
+    ...(review ? { review } : {}),
+  })
+  const DEEPSEEK = codium("deepseek/deepseek-v4.1-flash-1017", "deepseek", ["triage"])
+  const DEEPSEEK_LONG = codium("deepseek/deepseek-v4.1-flash-1017:long", "deepseek")
+  const LUNA = codium("openai/gpt-6-luna", "openai", ["confirm"])
+  const HAIKU = codium("anthropic/claude-haiku-5.5", "anthropic", ["panelJudge"])
+  const AUTO = codium("vector/codium-auto", undefined)
+  const catalog = [sonnet, AUTO, DEEPSEEK, DEEPSEEK_LONG, LUNA, HAIKU]
+  const isJudge = (call: PromptCall) => (call.parts?.[0]?.text ?? "").startsWith("You are the judge on a review panel")
+  const fromModel = (call: PromptCall, structured: unknown): ReviewMessage => ({
+    info: {
+      role: "assistant",
+      providerID: call.model?.providerID,
+      modelID: call.model?.modelID,
+      billing: call.model?.providerID === "vector-plan" ? "codium" : undefined,
+      structured,
+    },
+    parts: [],
+  })
+
+  test("on Vector Codium the plan's pair runs: the first pass on one lab, the check on another", async () => {
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      reply: (call) => fromModel(call, isVerify(call) ? verdicts(call) : report()),
+    })
+    const outcome = (await run(client, { catalog, preferredModels: ["vector-plan/vector/codium-auto"] }))!
+    expect(calls.prompt.filter((call) => !isVerify(call)).map((call) => call.model?.modelID)).toEqual([
+      DEEPSEEK.modelID,
+    ])
+    expect(calls.prompt.filter(isVerify).map((call) => call.model?.modelID)).toEqual([LUNA.modelID])
+    expect(outcome.triage).toBe(`vector-plan/${DEEPSEEK.modelID}`)
+    expect(outcome.selection.inline[0]?.verified).toBe(true)
+    expect(outcome.cost?.labs).toBe(2)
+    expect(reviewFooter(outcome)).toContain("Checked by a second lab")
+    expect(buildDesktopSummary(outcome)).toContain("Checked by a second lab")
+    expect(outcome.notes).toEqual([])
+  })
+
+  test("the panel adds the plan's judge from a third lab, and its call is final", async () => {
+    const files = { "src/list.ts": HEAD, ".vector/review.json": '{"panel":true}' }
+    const rejecting = fakeClient({
+      files,
+      reply: (call) =>
+        fromModel(call, isJudge(call) ? verdicts(call, "rejected") : isVerify(call) ? verdicts(call) : report()),
+    })
+    const rejected = (await run(rejecting.client, { catalog, preferredModels: [`vector-plan/${DEEPSEEK.modelID}`] }))!
+    const judged = rejecting.calls.prompt.filter(isJudge)
+    expect(judged.map((call) => call.model?.modelID)).toEqual([HAIKU.modelID])
+    expect(judged[0]?.parts?.[0]?.text).toContain("Second reviewer: confirmed. Checked.")
+    expect(rejecting.calls.create.map((call) => call.internal)).toContain("vectorscope.judge")
+    expect(rejected.selection.inline).toEqual([])
+    expect(rejected.passes?.map((pass) => pass.name)).toEqual(["review", "verify", "judge"])
+    expect(rejected.cost?.labs).toBe(3)
+    expect(reviewFooter(rejected)).toContain("Checked by three labs")
+
+    const confirming = fakeClient({
+      files,
+      reply: (call) =>
+        fromModel(call, isJudge(call) ? verdicts(call) : isVerify(call) ? verdicts(call, "rejected") : report()),
+    })
+    const confirmed = (await run(confirming.client, { catalog, preferredModels: [`vector-plan/${DEEPSEEK.modelID}`] }))!
+    expect(confirmed.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([
+      [offByOne.title, true],
+    ])
+  })
+
+  test("a pair from one lab warns and runs one pass, with no second-lab line", async () => {
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      reply: (call) => fromModel(call, isVerify(call) ? verdicts(call) : report()),
+    })
+    const outcome = (await run(client, { catalog, preferredModels: [`vector-plan/${DEEPSEEK_LONG.modelID}`] }))!
+    expect(new Set(calls.prompt.map((call) => call.model?.modelID))).toEqual(new Set([DEEPSEEK_LONG.modelID]))
+    expect(outcome.triage).toBeUndefined()
+    expect(outcome.notes).toContain(noteSameLabPair("deepseek", `vector-plan/${DEEPSEEK_LONG.modelID}`))
+    expect(outcome.cost?.labs).toBeUndefined()
+    expect(reviewFooter(outcome)).not.toContain("Checked by")
+  })
+
+  test("the catalog carries the listing's lab and review parts", () => {
+    const listed = reviewCatalog([
+      {
+        id: "vector-plan",
+        models: {
+          [LUNA.modelID]: { id: LUNA.modelID, limit: { context: 128_000 }, codium: { lab: "openai", review: ["confirm"] } },
+        },
+      },
+    ])
+    expect(listed[0]).toMatchObject({ lab: "openai", review: ["confirm"] })
   })
 })
 

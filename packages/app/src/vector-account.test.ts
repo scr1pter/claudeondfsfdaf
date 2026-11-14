@@ -77,6 +77,31 @@ test("beside the name the chip says Free without a Codium plan, else the plan's 
   expect(accountChip(signedIn, { ...codium(), signedIn: false }).plan).toBeUndefined()
 })
 
+test("a founding member's number comes with the plan, from the site's status only", () => {
+  // The site's answer: the founding field is read in the decoder's lenient pass over the raw body.
+  const answer = {
+    enabled: true,
+    access: true,
+    plan: { id: "vector-50", name: "Pro", renewsAt: 1_790_000_000_000, cancelAtPeriodEnd: false },
+    founding: { number: 12 },
+    purchased: { bought: false },
+    empty: false,
+    low: false,
+  }
+  const founding = ModelPlanStatus.fromRemote(answer, answer)
+  expect(accountChip(signedIn, founding)).toMatchObject({ plan: "Pro", founding: 12 })
+  expect(accountChip(signedIn, codium("vector-50"))).not.toHaveProperty("founding")
+  // Never without a plan shown, nor when the status could not be read.
+  expect(accountChip(signedIn, { ...founding, plan: undefined })).not.toHaveProperty("founding")
+  expect(
+    accountChip(signedIn, { ...founding, error: "Vector could not load your Codium balance." }),
+  ).not.toHaveProperty("founding")
+  // A malformed number is dropped by the status decoder, never shown.
+  const forgedAnswer = { ...answer, founding: { number: "12" } }
+  const forged = ModelPlanStatus.fromRemote(forgedAnswer, forgedAnswer)
+  expect(accountChip(signedIn, forged)).not.toHaveProperty("founding")
+})
+
 test("a billing window tells every screen showing the plan to read it again", () => {
   const reads: string[] = []
   const stop = onCodiumChange(() => reads.push("chip"))

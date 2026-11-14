@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -51,6 +52,30 @@ export const prerender = true
             gives a skill a <code>version</code>, a changed version is downloaded whole and replaces the old folder;
             without one, files already downloaded are not fetched again. A downloaded skill too loads only from its
             <code>SKILL.md</code>. Skills are a Vector mechanism, not an MCP server.
+          </p>
+
+          <h2 id="learned">Learned skills</h2>
+          <p>
+            {release113.since} Vector can also draft a skill from your own runs: when a run turns a failing check green,
+            it keeps the steps that worked for this repository, in <code>brain.db</code> on this computer rather than as a
+            file. A draft waits for your review in Settings → Memory → Skills, and the agent sees a learned skill only
+            once it is in use. A learned skill is guidance the agent may load, never a rule. A disk or built-in skill of
+            the same name wins. See <a href="/docs/brain#learned-skills">Learned skills</a> in Vector Brain.
+          </p>
+          <p>
+            {release113.since} loading any skill asks the <code>skill</code> permission, as your rules set it. A learned
+            skill that Vector put in use on its own, after a second matching success with Apply automatically on, also
+            asks <code>learned_skill</code> before it loads; one you approved does not. Every command in a skill still
+            goes through your permission rules.
+          </p>
+          <p>
+            {release113.since} a learned skill reaches your team only when you choose <strong>Share to
+            repository</strong> in Settings → Memory → Skills, or run <code>vector memory skills share</code> in a
+            terminal outside Vector. Sharing writes one file in <code>.vector/skills/</code> that you commit yourself. It
+            carries no error excerpt, session ids, stats or evidence, and Vector checks it against your personal memory
+            first. The file is a skill like any other in the repository, so it changes the repository's settings: Vector
+            asks you to trust them again once your running sessions finish, and from the terminal you approve them with
+            <code>vector trust approve</code> in a terminal outside Vector.
           </p>
 
           <h2 id="commands">Custom commands</h2>

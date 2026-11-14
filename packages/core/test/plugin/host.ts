@@ -303,5 +303,7 @@ function modelInfo(value: ModelV2.Info | ModelV2.MutableInfo) {
     time: { ...value.time },
     cost: value.cost.map((cost) => ({ ...cost, tier: cost.tier && { ...cost.tier }, cache: { ...cost.cache } })),
     limit: { ...value.limit },
+    // WP A35's review parts are a list, which the plugin types hold as a mutable copy like the others above.
+    codium: value.codium && { ...value.codium, review: value.codium.review && [...value.codium.review] },
   }
 }

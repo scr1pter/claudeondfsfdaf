@@ -23,6 +23,26 @@ describe("Patch namespace", () => {
   })
 
   describe("parsePatch", () => {
+    test("reports a recovered opening marker without changing the parsed operations", () => {
+      const body =
+        "*** Add File: new.txt\n+created\n*** Update File: old.txt\n@@\n-old\n+new\n*** Delete File: gone.txt\n*** End Patch"
+      expect(Patch.parsePatch(body)).toEqual({
+        ...Patch.parsePatch("*** Begin Patch\n" + body),
+        recoveredMissingBegin: true,
+      })
+    })
+
+    test("leaves the legacy behavior of already marked patches unchanged", () => {
+      const marked = "```diff\n*** Begin Patch\n*** Add File: new.txt\n+created\n*** End Patch\n```"
+      expect(Patch.parsePatch(marked)).toEqual({ hunks: [{ type: "add", path: "new.txt", contents: "created" }] })
+      expect(
+        Patch.parsePatch("*** Begin Patch\n*** Add File: legacy.txt\n+kept\nignored legacy line\n*** End Patch"),
+      ).toEqual({ hunks: [{ type: "add", path: "legacy.txt", contents: "kept" }] })
+      expect(() => Patch.parsePatch("*** Add File: recovered.txt\n+kept\nignored legacy line\n*** End Patch")).toThrow(
+        "Invalid add file line",
+      )
+    })
+
     test("should parse simple add file patch", () => {
       const patchText = `*** Begin Patch
 *** Add File: test.txt

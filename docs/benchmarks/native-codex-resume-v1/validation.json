@@ -1,0 +1,84 @@
+{
+  "kind": "heavy-native-codex-resume-validation-v1",
+  "realProviderCalls": 0,
+  "fundedMeterCalls": 0,
+  "BunRuns": 0,
+  "ChromeRuns": 0,
+  "nativeProductQualityClaim": false,
+  "efficiencyClaimMet": false,
+  "provenWitnessCodeRevision": "4cfa1db6c68c458d33afa954b2981e6259be43e5",
+  "reviewedWitnessDocumentationRevision": "b86c3fbf4824d46b2203de5a09de61359cdc285b",
+  "witnessInstrumentSha256": "31357229ddb010df9eb764aa3b8dee5a001eff7122b2b1ed2a08c84beaa736dd",
+  "codexBinarySha256": "3097c909fb6d5cd63510d44aceb1d42df9f6e85722a3e447e477def1ecf60e16",
+  "qualificationArtifactSha256": "b6c1261c63c292e95645284967421e2ab7ee49e530fa39e8677830b493aa31dc",
+  "qualificationPassed": true,
+  "beforeLatestNativeOutcomes": {
+    "lead": "failed",
+    "backend_coordinator": "interrupted",
+    "frontend_worker": "failed"
+  },
+  "phases": [
+    {
+      "phase": "initial_failed_fixture",
+      "forwardedCalls": 6,
+      "knownReceiptCount": 6,
+      "measuredUsd": 7.200000000029405e-05,
+      "latestOutcome": "failed",
+      "reviewRequired": true
+    },
+    {
+      "phase": "new_binding_resume",
+      "forwardedCalls": 16,
+      "knownReceiptCount": 16,
+      "measuredUsd": 0.00019199999999930384,
+      "latestOutcome": "completed",
+      "reviewRequired": false
+    }
+  ],
+  "qualifiedCumulativeFakeCalls": 22,
+  "formalRepairCount": 0,
+  "nativeAutonomousIdentities": 7,
+  "maximumNativeDepth": 2,
+  "newEndpointAndAlias": true,
+  "rootAndExistingChildrenPreserved": true,
+  "codeModePreserved": true,
+  "historicalReviewRequired": true,
+  "retainedEarlierNegativeFixture": {
+    "knownFakeReceipts": 6,
+    "measuredSyntheticUsd": 7.200000000029405e-05,
+    "runtimeQuiesced": true,
+    "settlementComplete": true,
+    "reviewRequired": true,
+    "reason": "strict all-failed fixture gate rejected literal native coordinator interrupted projection; exact observed map explicitly reviewed before fresh whole qualification"
+  },
+  "actualRetainedArchive": {
+    "createdAndRoundtripVerified": true,
+    "manifestSha256": "4e854389ecfc9862c0235c18fa124d89a88e278422cec63ace24d476aadefa45",
+    "sourceAndCopiedDataVerified": true,
+    "manifestSha256ByRoot": {
+      "runtime-home": "1e5e9fbc42302bcfac47462dfdc0bf2d51ac902ee4fb166c98f0cb08721c6a3b",
+      "app": "9e639e2d4b7c1919d39a240e69912743d974a251888c879acfa683f6fd4c14ab",
+      "support-data": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "ownedEntryCounts": {
+      "runtime-home": 1085,
+      "app": 994,
+      "support-data": 0
+    },
+    "ownedBunCacheJunctionMetadataCount": 25,
+    "liveLinksInArchive": false,
+    "controllerOrCredentialFilesRead": false,
+    "modelCalls": 0
+  },
+  "actualAdoptionBounds": {
+    "oldCallsRetained": 9,
+    "oldMeasuredUsdRetained": 0.1423925,
+    "maximumNewCalls": 291,
+    "maximumCumulativeCalls": 300,
+    "remainingActiveSeconds": 7162.344,
+    "maximumCumulativeFormalRepairs": 1,
+    "newScopeRepairAdmissionThresholdUsd": 13.70569295,
+    "originalActualNativeGuard": "exact original three failed turns, exact identity hashes, empty native work queues, known closure/quiescence"
+  },
+  "proofAndFinalChanges": "The fresh native proof ran the exact-map harness against the proven matched bytes. Subsequent changes add provenance/ancestry checks, archive-only creation/reuse guards, and documentation; native_command, role configuration, collaboration script, and native binding mechanics were unchanged."
+}

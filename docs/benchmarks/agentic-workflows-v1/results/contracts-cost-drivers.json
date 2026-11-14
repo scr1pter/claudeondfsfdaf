@@ -1,0 +1,189 @@
+{
+  "kind": "matched-single-agent-cost-category-projection-v1",
+  "sourceRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "ratesBasis": "same unchanged rate schedule as original funded receipts; usage-derived, not invoice reconciled",
+  "scope": "all three contracts-stage matched pairs, every request retained",
+  "rows": {
+    "aw4-vector": {
+      "requests": 47,
+      "measuredUsd": 0.7512629,
+      "tokens": {
+        "input": 2203714,
+        "uncachedInput": 141,
+        "cacheRead": 2123084,
+        "cacheWrite30m": 80489,
+        "output": 33745,
+        "reasoningSubsetOfOutput": 9923,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.000282,
+        "cacheRead": 0.2123084,
+        "cacheWrite30m": 0.2012225,
+        "output": 0.33745,
+        "reasoningSubsetOfOutput": 0.09923
+      },
+      "cacheReadFractionOfInput": 0.963412,
+      "reasoningFractionOfOutput": 0.294058
+    },
+    "aw5-vector": {
+      "requests": 44,
+      "measuredUsd": 0.7276856,
+      "tokens": {
+        "input": 1953348,
+        "uncachedInput": 132,
+        "cacheRead": 1877091,
+        "cacheWrite30m": 76125,
+        "output": 34940,
+        "reasoningSubsetOfOutput": 10030,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.000264,
+        "cacheRead": 0.1877091,
+        "cacheWrite30m": 0.1903125,
+        "output": 0.3494,
+        "reasoningSubsetOfOutput": 0.1003
+      },
+      "cacheReadFractionOfInput": 0.960961,
+      "reasoningFractionOfOutput": 0.287064
+    },
+    "aw6-vector": {
+      "requests": 36,
+      "measuredUsd": 0.5419832,
+      "tokens": {
+        "input": 1398460,
+        "uncachedInput": 108,
+        "cacheRead": 1341547,
+        "cacheWrite30m": 56805,
+        "output": 26560,
+        "reasoningSubsetOfOutput": 6576,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.000216,
+        "cacheRead": 0.1341547,
+        "cacheWrite30m": 0.1420125,
+        "output": 0.2656,
+        "reasoningSubsetOfOutput": 0.06576
+      },
+      "cacheReadFractionOfInput": 0.959303,
+      "reasoningFractionOfOutput": 0.24759
+    },
+    "all-vector": {
+      "requests": 127,
+      "measuredUsd": 2.0209317,
+      "tokens": {
+        "input": 5555522,
+        "uncachedInput": 381,
+        "cacheRead": 5341722,
+        "cacheWrite30m": 213419,
+        "output": 95245,
+        "reasoningSubsetOfOutput": 26529,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.000762,
+        "cacheRead": 0.5341722,
+        "cacheWrite30m": 0.5335475,
+        "output": 0.95245,
+        "reasoningSubsetOfOutput": 0.26529
+      },
+      "cacheReadFractionOfInput": 0.961516,
+      "reasoningFractionOfOutput": 0.278534
+    },
+    "aw4-codex": {
+      "requests": 30,
+      "measuredUsd": 0.8919725,
+      "tokens": {
+        "input": 1733035,
+        "uncachedInput": 90,
+        "cacheRead": 1641525,
+        "cacheWrite30m": 91420,
+        "output": 49909,
+        "reasoningSubsetOfOutput": 11998,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.00018,
+        "cacheRead": 0.1641525,
+        "cacheWrite30m": 0.22855,
+        "output": 0.49909,
+        "reasoningSubsetOfOutput": 0.11998
+      },
+      "cacheReadFractionOfInput": 0.947197,
+      "reasoningFractionOfOutput": 0.240398
+    },
+    "aw5-codex": {
+      "requests": 35,
+      "measuredUsd": 0.7229352,
+      "tokens": {
+        "input": 1761353,
+        "uncachedInput": 105,
+        "cacheRead": 1679527,
+        "cacheWrite30m": 81721,
+        "output": 35047,
+        "reasoningSubsetOfOutput": 7430,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.00021,
+        "cacheRead": 0.1679527,
+        "cacheWrite30m": 0.2043025,
+        "output": 0.35047,
+        "reasoningSubsetOfOutput": 0.0743
+      },
+      "cacheReadFractionOfInput": 0.953544,
+      "reasoningFractionOfOutput": 0.212001
+    },
+    "aw6-codex": {
+      "requests": 23,
+      "measuredUsd": 0.5126617,
+      "tokens": {
+        "input": 834634,
+        "uncachedInput": 69,
+        "cacheRead": 778762,
+        "cacheWrite30m": 55803,
+        "output": 29514,
+        "reasoningSubsetOfOutput": 6603,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.000138,
+        "cacheRead": 0.0778762,
+        "cacheWrite30m": 0.1395075,
+        "output": 0.29514,
+        "reasoningSubsetOfOutput": 0.06603
+      },
+      "cacheReadFractionOfInput": 0.933058,
+      "reasoningFractionOfOutput": 0.223724
+    },
+    "all-codex": {
+      "requests": 88,
+      "measuredUsd": 2.1275694,
+      "tokens": {
+        "input": 4329022,
+        "uncachedInput": 264,
+        "cacheRead": 4099814,
+        "cacheWrite30m": 228944,
+        "output": 114470,
+        "reasoningSubsetOfOutput": 26031,
+        "longContextCalls": 0
+      },
+      "costUsd": {
+        "uncachedInput": 0.000528,
+        "cacheRead": 0.4099814,
+        "cacheWrite30m": 0.57236,
+        "output": 1.1447,
+        "reasoningSubsetOfOutput": 0.26031
+      },
+      "cacheReadFractionOfInput": 0.947053,
+      "reasoningFractionOfOutput": 0.227405
+    }
+  },
+  "notes": [
+    "All values usage-derived at unchanged recorded rates, not invoice reconciliation.",
+    "Input sums count replayed logical context; cache read still incurs a smaller cost.",
+    "Reasoning cost is a subset of output cost, never an additional category."
+  ]
+}

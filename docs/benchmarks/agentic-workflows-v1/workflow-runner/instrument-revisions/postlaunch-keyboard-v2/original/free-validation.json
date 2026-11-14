@@ -1,0 +1,102 @@
+{
+  "status": "root_reviewed_prelaunch_controls_passed",
+  "atUtc": "2026-11-02T00:37:18.810531+00:00",
+  "modelCalls": 0,
+  "paidUsd": 0,
+  "seed": {
+    "typecheckExitCode": 0,
+    "buildExitCode": 0,
+    "protectedSmokePassed": 1,
+    "protectedSmokeFailed": 0,
+    "finalFormatting": "Applied before final typecheck/build/smoke; only formatting after seed negative gate"
+  },
+  "instrumentPureControls": {
+    "passed": 14,
+    "failed": 0
+  },
+  "realWorkerLifecycleControls": {
+    "passed": 5,
+    "failed": 0,
+    "checks": [
+      "real_success_output",
+      "fail_once_attempts",
+      "block_release_barrier",
+      "parent_death_exits_fixture",
+      "invalid_identity_rejected"
+    ]
+  },
+  "browserContractPositiveControl": {
+    "passed": 8,
+    "failed": 0,
+    "verdict": "passed",
+    "productPassClaim": false
+  },
+  "browserContractNegativeControl": {
+    "passed": 6,
+    "failed": 2,
+    "verdict": "product_failure",
+    "expectedRejection": "Missing required exact workflow-name label"
+  },
+  "unchangedSeedGate": {
+    "verdict": "product_failure",
+    "checks": 24,
+    "passed": 4,
+    "failed": 20,
+    "notRun": 0,
+    "apiPassed": 1,
+    "apiTotal": 16,
+    "browserPassed": 3,
+    "browserTotal": 8,
+    "sourceUnchanged": true,
+    "passingGroups": [
+      "legacy_post_compatibility",
+      "dashboard_boot",
+      "legacy_jobs_visible",
+      "mobile_layout_and_keyboard"
+    ]
+  },
+  "prelaunchInstrumentIssuesRetained": [
+    {
+      "attempt": "seed-gate-01",
+      "verdict": "instrument_failure",
+      "cause": "Chromium launch with virtualized native OS directories"
+    },
+    {
+      "attempt": "seed-gate-02",
+      "verdict": "instrument_failure",
+      "cause": "Browser launch did not complete under deep virtualized OS environment"
+    },
+    {
+      "attempt": "seed-gate-03",
+      "verdict": "instrument_failure",
+      "cause": "Short profile alone did not resolve native OS environment requirement"
+    }
+  ],
+  "prelaunchCorrections": [
+    "Build script declared a TypeScript module before baseline validation",
+    "Native select uses exact accessible combobox name rather than wrapping-label text",
+    "Browser uses native OS-directory environment allowlist without provider secrets, plus fresh owned profile",
+    "Browser uses reviewed exact-origin forwarding proxy, including redirect hops",
+    "Source inventory excludes only declared app-root dist, standard dependencies/cache/Git; nested dist remains authored",
+    "Invalid graph checks compare prior workflow identities and events, allowing legal legacy single-node workflow migration",
+    "Workflow form waits for actual visible DOM; later independent browser checks do not reuse a stale availability flag"
+  ],
+  "externalInstrumentDependencies": {
+    "scripts/benchmarks/browser-driver/proxy.cjs": "eaf075f2ddd585d188fff417a4478d8d0d25b9afbca5939b7318fbb9d15e163b",
+    "scripts/benchmarks/browser-driver/policy.cjs": "8a9f0a973d51c8951272912ef6dc4441188c7603b6005b39eb4243ec5cc7404f"
+  },
+  "fullGoldSchedulerBuilt": false,
+  "limitations": [
+    "A complete positive v2 product has not been built by the instrument author",
+    "Browser positive control is a finite-state UI stand-in, not scheduler validation",
+    "Root review and source freeze are still required before paid runs",
+    "Original prelaunch logs remain in a private execution archive; only this numerical/status projection is public"
+  ],
+  "browserContractDelayedFormControl": {
+    "passed": 8,
+    "failed": 0,
+    "earlyLegacyVisible": true,
+    "formInitiallyAbsent": true,
+    "formMountDelayMs": 1499
+  }
+}

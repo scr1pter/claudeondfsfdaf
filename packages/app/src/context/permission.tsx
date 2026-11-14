@@ -1,10 +1,11 @@
-import { type Accessor, createEffect, createMemo, onCleanup } from "solid-js"
+import { type Accessor, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "@vectordevai/ui/context"
 import type { PermissionRequest } from "@vectordevai/sdk/v2/client"
 import { Persist, persisted } from "@/utils/persist"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "./server-sync"
+import { usePlatform } from "./platform"
 import { useParams } from "@solidjs/router"
 import { decode64 } from "@/utils/base64"
 import {
@@ -12,6 +13,8 @@ import {
   directoryAcceptKey,
   isDirectoryAutoAccepting,
   autoRespondsPermission,
+  phoneTurnAllows,
+  sessionLineage,
 } from "./permission-auto-respond"
 
 type PermissionRespondFn = (input: {
@@ -51,6 +54,9 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
     const params = useParams()
     const serverSDK = useServerSDK()
     const serverSync = useServerSync()
+    const platform = usePlatform()
+    // Requests auto-accept leaves to a person because a paired phone started their turn (Vector Remote, S6).
+    const [held, setHeld] = createSignal<ReadonlySet<string>>(new Set())
 
     const permissionsEnabled = createMemo(() => {
       const directory = props.directory?.() ?? decode64(params.dir)
@@ -151,8 +157,28 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
     }
 
     function shouldAutoRespond(permission: PermissionRequest, directory?: string) {
+      if (held().has(permission.id)) return false
       const session = directory ? serverSync().child(directory, { bootstrap: false })[0].session : []
       return autoRespondsPermission(store.autoAccept, session, permission, directory)
+    }
+
+    // Whether auto-accept answers this request: its settings say so and no paired phone started its turn. A request in
+    // a phone's turn is held for a person, shown here as any other request is (Vector Remote, S6).
+    async function willAutoRespond(permission: PermissionRequest, directory?: string) {
+      if (!shouldAutoRespond(permission, directory)) return false
+      const session = directory ? serverSync().child(directory, { bootstrap: false })[0].session : []
+      const allowed = await phoneTurnAllows(
+        platform.remote ? (ids) => platform.remote!.isPhoneTurn(ids) : undefined,
+        sessionLineage(session, permission.sessionID),
+      )
+      if (!allowed) setHeld((current) => new Set([...current].slice(-999)).add(permission.id))
+      return allowed && shouldAutoRespond(permission, directory)
+    }
+
+    function autoRespond(permission: PermissionRequest, directory?: string) {
+      void willAutoRespond(permission, directory).then((answer) => {
+        if (answer) respondOnce(permission, directory)
+      })
     }
 
     function bumpEnableVersion(sessionID: string, directory?: string) {
@@ -164,12 +190,14 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
 
     const unsubscribe = serverSDK().event.listen((e) => {
       const event = e.details
+      if (event?.type === "permission.replied") {
+        const requestID = (event.properties as { requestID?: string }).requestID
+        if (requestID && held().has(requestID))
+          setHeld((current) => new Set([...current].filter((id) => id !== requestID)))
+        return
+      }
       if (event?.type !== "permission.asked") return
-
-      const perm = event.properties
-      if (!shouldAutoRespond(perm, e.name)) return
-
-      respondOnce(perm, e.name)
+      autoRespond(event.properties, e.name)
     })
     onCleanup(unsubscribe)
 
@@ -187,8 +215,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
           if (!isAutoAcceptingDirectory(directory)) return
           for (const perm of x.data ?? []) {
             if (!perm?.id) continue
-            if (!shouldAutoRespond(perm, directory)) continue
-            respondOnce(perm, directory)
+            autoRespond(perm, directory)
           }
         })
         .catch(() => undefined)
@@ -220,8 +247,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
           if (!isAutoAccepting(sessionID, directory)) return
           for (const perm of x.data ?? []) {
             if (!perm?.id) continue
-            if (!shouldAutoRespond(perm, directory)) continue
-            respondOnce(perm, directory)
+            autoRespond(perm, directory)
           }
         })
         .catch(() => undefined)
@@ -245,6 +271,8 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       autoResponds(permission: PermissionRequest, directory?: string) {
         return shouldAutoRespond(permission, directory)
       },
+      /** As autoResponds, also asking the desktop whether a paired phone started the request's turn. */
+      willAutoRespond,
       isAutoAccepting,
       isAutoAcceptingDirectory,
       toggleAutoAccept(sessionID: string, directory: string) {

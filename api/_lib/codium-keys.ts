@@ -11,6 +11,11 @@ export function codiumKeyPrefix(mode: StripeMode = stripeMode()) {
   return `${ROOT}:${mode}:`
 }
 
+/** What every Codium key starts with, before its mode: for one SCAN over both modes (account deletion, WP A57). */
+export function codiumKeyRoot() {
+  return `${ROOT}:`
+}
+
 /** The store key for `parts` in the server's current mode, e.g. `codiumKey("account", id)`. */
 export function codiumKey(...parts: readonly (string | number)[]) {
   return codiumKeyIn(stripeMode(), ...parts)

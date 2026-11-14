@@ -90,14 +90,14 @@ export const Parameters = Schema.Struct({
     description: "read: without a cursor, how many of the last lines to show (200 by default, at most 2000)",
   }),
   pattern: Schema.optional(Schema.String).annotate({
-    description: "wait: a regular expression to wait for in the output",
+    description: "open, wait: a regular expression to wait for in the output; open waits for readiness when supplied",
   }),
   exit: Schema.optional(Schema.Boolean).annotate({ description: "wait: wait for the process to exit" }),
   quiet: Schema.optional(PositiveInt).annotate({
     description: "wait: wait until there is no new output for this many milliseconds",
   }),
   timeout: Schema.optional(PositiveInt).annotate({
-    description: "wait: give up after this many milliseconds (30000 by default, at most 60000)",
+    description: "open with pattern, wait: give up after this many milliseconds (30000 by default, at most 60000)",
   }),
   cols: Schema.optional(PositiveInt).annotate({ description: "open, resize: columns" }),
   rows: Schema.optional(PositiveInt).annotate({ description: "open, resize: rows" }),
@@ -255,13 +255,20 @@ export const TerminalTool = Tool.define<
           params,
           `Vector did not open the terminal: ${Shell.name(shell)} cannot pass one of the arguments literally. Run the command line instead.`,
         )
-      if (Sandbox.sandboxEnabled()) yield* ctx.ask(unsandboxed(line || shell))
-      yield* permission.ask(ctx, { command: line, cwd, shell })
+      // A terminal runs outside the shell sandbox: with it on, that is asked after the refusals, before the shell asks.
+      const scan = yield* permission.ask(ctx, {
+        command: line,
+        cwd,
+        shell,
+        ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line || shell) } : {}),
+      })
       const extra = yield* plugin.trigger(
         "shell.env",
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
+      // As the shell tool does before it spawns: the files the command line writes become this session's changes.
+      yield* permission.admit(ctx, [scan])
       const created = yield* pty.create(
         {
           title: params.title ?? (line.split("\n")[0].slice(0, 80) || undefined),
@@ -278,6 +285,8 @@ export const TerminalTool = Tool.define<
       if (params.cols !== undefined || params.rows !== undefined)
         yield* pty.update(created.id, { size: size(params.cols ?? 80, params.rows ?? 24) })
       if (params.reveal) yield* pty.reveal(created.id, { focus: false })
+      if (params.pattern !== undefined)
+        return yield* wait({ action: "open", pattern: params.pattern, timeout: params.timeout }, ctx, created)
       // Up to 500 ms for the first output, so the result shows a prompt, an error or a banner.
       for (let tries = 0; tries < 10; tries++) {
         const read = yield* pty.read(created.id, { limit: 0 })
@@ -350,23 +359,28 @@ export const TerminalTool = Tool.define<
         strokes,
         Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\",
       )
-      for (const line of typed.lines) {
-        if (Sandbox.sandboxEnabled()) yield* ctx.ask(unsandboxed(line.text))
-        const recalled = line.recalled === true || HISTORY.test(line.text)
-        yield* permission.ask(ctx, {
-          command: line.text,
-          cwd: info.cwd,
-          shell,
-          unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
-          // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
-          recalled:
-            recalled ||
-            (!line.exact &&
-              line.text
-                .split(/[\s;&|()`{}]+/)
-                .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
-        })
-      }
+      const scans = yield* Effect.forEach(typed.lines, (line) =>
+        Effect.gen(function* () {
+          const recalled = line.recalled === true || HISTORY.test(line.text)
+          return yield* permission.ask(ctx, {
+            command: line.text,
+            cwd: info.cwd,
+            shell,
+            ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line.text) } : {}),
+            unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
+            // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
+            recalled:
+              recalled ||
+              (!line.exact &&
+                line.text
+                  .split(/[\s;&|()`{}]+/)
+                  .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
+          })
+        }),
+      )
+      // One admission for every line the strokes submit, before the first keystroke: a line refused above or here types
+      // nothing, and leaves no claim on a file an earlier line of the same call names.
+      yield* permission.admit(ctx, scans)
       pending.set(info.id, typed.line)
       const from = (yield* pty.read(info.id, { limit: 0 })).end
       for (const [index, data] of writes.entries()) {

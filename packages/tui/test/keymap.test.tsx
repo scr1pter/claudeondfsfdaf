@@ -139,3 +139,48 @@ test("mode-less bindings stay active when vector mode changes", async () => {
     app.renderer.destroy()
   }
 })
+
+test("session_interrupt_all binds Stop including helpers to <leader>k, and an override replaces it", async () => {
+  expect(TuiKeybind.Definitions.session_interrupt_all.default).toBe("<leader>k")
+  expect(TuiKeybind.CommandMap.session_interrupt_all).toBe("session.interrupt.all")
+  const sequences: Record<string, string[][]> = {}
+
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    const config = createResolvedKeymapConfig()
+    const offKeymap = registerVectorKeymap(keymap, renderer, config)
+    const offLayer = keymap.registerLayer({
+      commands: [{ name: "session.interrupt.all", run() {} }],
+      bindings: config.keybinds.gather("session", ["session.interrupt.all"]),
+    })
+    sequences.default =
+      keymap
+        .getCommandBindings({ visibility: "registered", commands: ["session.interrupt.all"] })
+        .get("session.interrupt.all")
+        ?.map((binding) => binding.sequence.map((part) => `${part.stroke.ctrl ? "ctrl+" : ""}${part.stroke.name}`)) ??
+      []
+    onCleanup(() => {
+      offLayer()
+      offKeymap()
+    })
+    return (
+      <VectorKeymapProvider keymap={keymap}>
+        <box />
+      </VectorKeymapProvider>
+    )
+  }
+
+  const app = await testRender(() => <Harness />)
+  try {
+    expect(sequences.default).toEqual([["ctrl+x", "k"]])
+  } finally {
+    app.renderer.destroy()
+  }
+
+  const custom = createResolvedKeymapConfig({ session_interrupt_all: "ctrl+alt+s" })
+  expect(custom.keybinds.get("session.interrupt.all").map((binding) => binding.key)).toEqual(["ctrl+alt+s"])
+  expect(createResolvedKeymapConfig({ session_interrupt_all: "none" }).keybinds.get("session.interrupt.all")).toEqual(
+    [],
+  )
+})

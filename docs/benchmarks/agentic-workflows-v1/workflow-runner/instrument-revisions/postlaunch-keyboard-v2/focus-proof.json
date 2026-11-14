@@ -1,0 +1,61 @@
+{
+  "kind": "workflow-mobile-focus-assumption-control",
+  "modelCalls": 0,
+  "browserVersion": "156.0.8078.79",
+  "healthyLastControl": {
+    "tag": "button",
+    "id": "last",
+    "label": "View events UI created",
+    "currentSingleTabAssertion": true
+  },
+  "healthyFirstTab": {
+    "tag": "body",
+    "id": "",
+    "label": "Workflow RunnerWorkflow nameConcurrency123Workflow definitionCreate workflowUI c",
+    "currentSingleTabAssertion": false
+  },
+  "healthySecondTab": {
+    "tag": "input",
+    "id": "name",
+    "label": "Workflow name",
+    "currentSingleTabAssertion": true
+  },
+  "healthyNativeKeyboardFormTraversal": {
+    "startingControl": {
+      "tag": "input",
+      "text": ""
+    },
+    "visibleCandidates": 5,
+    "tabLimit": 7,
+    "tabPresses": 4,
+    "bodyTransitions": 0,
+    "reachedControls": [
+      "Workflow name",
+      "Concurrency",
+      "Workflow definition",
+      "Create workflow"
+    ],
+    "missingControls": []
+  },
+  "inaccessibleNativeKeyboardFormTraversal": {
+    "startingControl": {
+      "tag": "body",
+      "text": "Workflow RunnerWorkflow nameConcurrency123Workflow definitionCreate workflowUI createdView events UI"
+    },
+    "visibleCandidates": 5,
+    "tabLimit": 7,
+    "tabPresses": 7,
+    "bodyTransitions": 3,
+    "reachedControls": [],
+    "missingControls": [
+      "Workflow name",
+      "Concurrency",
+      "Workflow definition",
+      "Create workflow"
+    ]
+  },
+  "frozenCheckSha256": "c59ce38fc7d08a8585713721875dc56e695351a64dcc042f686ead75387bd30b",
+  "frozenCheckUnchanged": true,
+  "blockedNetworkRequests": 16,
+  "noProgrammaticFocusOrTabindexMutation": true
+}

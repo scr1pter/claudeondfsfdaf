@@ -58,8 +58,8 @@ export const Api = Schema.Union([
 export type Api = typeof Api.Type
 
 /**
- * What Vector Codium's model list says about one of its entries (§4.12): the lab, the Codium Auto role, and whether
- * the account's plan can use it. Codium Auto itself carries `auto`, the models it picks from. A `manualOnly` model is
+ * What Vector Codium's model list says about one of its entries (§4.12): the lab, the Codium Auto role, whether
+ * the account's plan can use it, and its Second opinion judge and review roles. Codium Auto itself carries `auto`, the models it picks from. A `manualOnly` model is
  * chosen only by name, and a `locked` one needs the plan it names; neither is ever picked automatically.
  */
 export interface Codium extends Schema.Schema.Type<typeof Codium> {}
@@ -74,6 +74,10 @@ export const Codium = Schema.Struct({
   }).pipe(optional),
   preview: Schema.Struct({ until: Schema.Finite }).pipe(optional),
   auto: Schema.Struct({ floor: Schema.String, default: Schema.String, ceiling: Schema.String }).pipe(optional),
+  // WP A35: the Second opinion judge for this worker, from another lab, and the parts it plays in the plan's review
+  // pair (the first pass, the check, the panel's judge). Both come from the catalog and only name usable entries.
+  judge: Schema.String.pipe(optional),
+  review: Schema.Array(Schema.Literals(["triage", "confirm", "panelJudge"])).pipe(optional),
 }).annotate({ identifier: "Model.Codium" })
 
 export interface Info extends Schema.Schema.Type<typeof Info> {}

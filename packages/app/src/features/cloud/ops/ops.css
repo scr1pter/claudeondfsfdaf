@@ -1,0 +1,256 @@
+/* Settings > Production (WP A50). The Settings workspace's charcoal tokens, like Settings > Remote and Roadmap vote;
+   Vector purple marks the chosen section, an open incident and the before and after slider. The slider's clip is set
+   through the element's style object by before-after.tsx. */
+.settings-ops {
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+}
+
+.settings-ops-parts {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  color: var(--settings-text, var(--vx-text));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.settings-ops-muted {
+  margin: 0;
+  color: var(--settings-muted, var(--vx-muted));
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.settings-ops-error {
+  margin: 0;
+  color: #fda4af;
+  font-size: 12px;
+}
+
+.settings-ops-warning {
+  margin: 0;
+  color: #fcd34d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-ops-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 10px;
+  color: var(--settings-text, var(--vx-text));
+  font-size: 12.5px;
+}
+
+.settings-ops-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-ops-tab {
+  padding: 6px 12px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--settings-muted, var(--vx-muted));
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.settings-ops-tab[aria-selected="true"] {
+  border-color: var(--vx-purple);
+  color: var(--settings-text, var(--vx-text));
+}
+
+.settings-ops-tab:focus-visible,
+.settings-ops-card--button:focus-visible,
+.settings-ops-input:focus-visible,
+.settings-ops-compare-range:focus-visible {
+  outline: 2px solid var(--vx-purple);
+  outline-offset: 1px;
+}
+
+.settings-ops-section,
+.settings-ops-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-ops-detail > button {
+  justify-self: start;
+}
+
+.settings-ops-heading {
+  margin: 8px 0 0;
+  color: var(--settings-text, var(--vx-text));
+  font-size: 13.5px;
+  font-weight: 560;
+}
+
+.settings-ops-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 10px;
+  background: var(--settings-control, var(--vx-control));
+  color: var(--settings-text, var(--vx-text));
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.settings-ops-card[data-state="resolved"] {
+  opacity: 0.75;
+}
+
+.settings-ops-card h3,
+.settings-ops-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-ops-card h3 {
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.settings-ops-card--button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-ops-card--button:hover {
+  background: var(--settings-control-hover, var(--vx-control));
+}
+
+.settings-ops-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-ops-badge {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 999px;
+  color: var(--settings-muted, var(--vx-muted));
+  font-size: 11px;
+}
+
+.settings-ops-badge[data-open] {
+  border-color: var(--vx-purple);
+  color: var(--settings-text, var(--vx-text));
+}
+
+.settings-ops-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-ops-commits,
+.settings-ops-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+  color: var(--settings-text, var(--vx-text));
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings-ops-commits code {
+  color: var(--settings-muted, var(--vx-muted));
+}
+
+.settings-ops-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-ops-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 8px;
+  background: var(--settings-control, var(--vx-control));
+  color: var(--settings-text, var(--vx-text));
+  font: inherit;
+  font-size: 13px;
+}
+
+.settings-ops-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--settings-line, var(--vx-line));
+  color: var(--settings-text, var(--vx-text));
+  font-size: 12.5px;
+}
+
+.settings-ops-row > span:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-ops-shots {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-ops-compare {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.settings-ops-compare-frame {
+  position: relative;
+  display: grid;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+}
+
+.settings-ops-compare-image {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.settings-ops-compare-image--after:not(.settings-ops-compare-image--alone) {
+  border-right: 2px solid var(--vx-purple);
+}
+
+.settings-ops-compare-range {
+  width: 100%;
+  accent-color: var(--vx-purple);
+}
+
+.settings-ops-compare-caption {
+  color: var(--settings-muted, var(--vx-muted));
+  font-size: 12px;
+}

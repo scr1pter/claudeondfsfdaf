@@ -185,6 +185,8 @@ describe("memory research routes", () => {
       ["POST", `/memory/research/${run}/keep`],
       ["GET", `/memory/research/${run}/export`],
       ["GET", `/memory/research/${run}/export?format=json`],
+      ["GET", `/memory/research/${run}/export?format=docx`],
+      ["GET", `/memory/research/${run}/export?format=pdf`],
       ["GET", `/memory/research/${run}/sources/S1`],
       ["DELETE", `/memory/research/${run}/sources/S1`],
     ]
@@ -206,6 +208,8 @@ describe("memory research routes", () => {
     const source = await get(directory, `/memory/research/${run}/sources/S1`)
     const markdown = await send(directory, `/memory/research/${run}/export`, "GET")
     const json = await send(directory, `/memory/research/${run}/export?format=json`, "GET")
+    const word = await send(directory, `/memory/research/${run}/export?format=docx`, "GET")
+    const pdf = await send(directory, `/memory/research/${run}/export?format=pdf`, "GET")
     const kept = await send(directory, `/memory/research/${run}/keep`, "POST")
     const forgotSource = await send(directory, `/memory/research/${run}/sources/S1`, "DELETE")
     const after = await get(directory, `/memory/research/${run}`)
@@ -236,6 +240,17 @@ describe("memory research routes", () => {
     expect((await json.json()).notes[0].quote).toBe(
       "Delivered heating energy fell by 61 percent compared with the gas boilers",
     )
+    expect(word.status).toBe(200)
+    expect(word.headers.get("content-type")).toContain(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    expect(word.headers.get("content-disposition")).toEndWith('.docx"')
+    expect(new TextDecoder().decode(new Uint8Array(await word.arrayBuffer()).slice(0, 2))).toBe("PK")
+    expect(pdf.status).toBe(200)
+    expect(pdf.headers.get("content-type")).toBe("application/pdf")
+    expect(pdf.headers.get("content-disposition")).toEndWith('.pdf"')
+    expect(new TextDecoder().decode(new Uint8Array(await pdf.arrayBuffer()).slice(0, 5))).toBe("%PDF-")
+    expect(pdf.headers.get("cache-control")).toBe("no-store")
     expect(kept.status).toBe(200)
     expect((await kept.json()).run.kept).toBe(true)
     expect(forgotSource.status).toBe(200)

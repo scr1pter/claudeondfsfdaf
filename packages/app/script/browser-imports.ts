@@ -25,8 +25,13 @@ const HANDLED = new RegExp(
 )
 // A worker started from a file next to the code, which Vite also bundles as an entry of its own.
 const WORKER = /new\s+(?:Shared)?Worker\(\s*new\s+URL\(\s*["'`]([^"'`]+)["'`]\s*,\s*import\.meta\.url/g
-// The pages the web app and the desktop renderer load.
-const PAGES = ["packages/app/index.html", "packages/desktop/src/renderer/index.html"]
+// The pages the web app, the desktop renderer and the phone app (WP A38) load. The phone's service worker is built on
+// its own (src/phone/build.ts); src/phone/phone.test.ts walks it by name.
+const PAGES = [
+  "packages/app/index.html",
+  "packages/desktop/src/renderer/index.html",
+  "packages/app/src/phone/index.html",
+]
 
 const entries =
   process.argv.length > 2

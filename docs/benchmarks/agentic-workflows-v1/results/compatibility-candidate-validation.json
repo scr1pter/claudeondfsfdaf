@@ -1,0 +1,44 @@
+{
+  "kind": "compatibility-candidate-validation-v1",
+  "parentRevision": "c0d310067729758026580e18feef76973962293f",
+  "scope": "Only the existing generic GPT compatibility instruction changes. Prior risk-based verification guidance, other provider prompts and TypeScript code are unchanged.",
+  "motivation": {
+    "blindReviewScores": {
+      "vector": 45,
+      "codex": 46
+    },
+    "finding": "The comparison identified compatibility and recovery omissions, including existing storage behavior, related state and owned-resource cleanup.",
+    "hypothesis": "Explicit preservation and lifecycle guidance may improve prioritization. Prompt causation and gains in quality, cost or speed are unproven."
+  },
+  "instruction": "Preserve existing public behavior, storage defaults and persisted data unless the request changes them. Trace related state and owned resources through failure, interruption and recovery. Add compatibility code for these concrete obligations; ask one short question when the intended behavior is unclear.",
+  "promptHash": {
+    "file": "packages/engine/src/session/prompt/gpt.txt",
+    "encoding": "SHA-256 of UTF-8 source with CRLF normalized to LF",
+    "sha256": "27dede70336e74cf1c70d0e5d43a320e668e54d6b7243f8493605352a69fc594"
+  },
+  "validation": [
+    {
+      "check": "Existing system-prompt and LLM-request regressions",
+      "passed": 52,
+      "failed": 0,
+      "assertions": 268,
+      "exitCode": 0,
+      "bun": "1.3.14"
+    },
+    {
+      "check": "Parser suites and package typechecks",
+      "status": "not rerun",
+      "reason": "No TypeScript changes; successful parent-candidate validation remains separately recorded."
+    }
+  ],
+  "requestCoverage": "Existing provider/system regressions and the real SDK request-layout regression for gpt-6.1-sol passed. No prompt-selection or request-mapping code changed.",
+  "limits": [
+    "This is generic guidance, without task-specific fixtures or domain hints.",
+    "The parent already contains focus observability, risk-based verification guidance and envelope recovery; a future combined-candidate result cannot isolate each change.",
+    "No new held-out task details were inspected while making this change.",
+    "Free regressions validate integration, not live model behavior or a measured cost reduction."
+  ],
+  "providerCalls": 0,
+  "cloudActions": 0,
+  "dependencyInstalls": 0
+}
