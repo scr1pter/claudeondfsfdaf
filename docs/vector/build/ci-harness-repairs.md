@@ -14,13 +14,22 @@ The current candidate job [132535483818](https://github.com/scr1pter/claudeondfs
 
 The standalone check now uses Solid DOM JSX and matches the App's type-import handling. Engine/App source, evaluation algorithms, costs, gates and model execution are unchanged. Validation runs only the TypeScript checker; it does not execute an evaluation.
 
+## Workspace deletion retry fixture
+
+Current-head cloud-workspace job [132535485451](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43623926606/job/132535485451), at `57f6bf0c1`, exposed another fixture mismatch: the closed-after-revoke/billing-retry case returned `true` from its revoke stub without storing the account fence. The integrated cloud-agent eraser correctly refused cleanup, leaving Codium, keys and identity pending.
+
+The case now uses its existing `markRevoked(w)` helper, which stores the exact account mark with the same 100-day expiry already used by the deletion-route and cron fixtures. It additionally checks that mark while billing is still unavailable. The explicit failed-revoke case and the original workspace-fencing and identity-completion assertions remain. No production revocation, erasure, readiness or identity guard changed.
+
 ## Validation
 
 Windows; Bun 1.3.14. Frozen installation with scripts disabled completed in 35.23 seconds; the lockfile did not change. The coordinated local Bun slot was released after these checks:
 
 - From `packages/web`, `bun test --timeout 30000 ./test/desktop-account.test.ts`: exit 0, 12 passed, 156 assertions, zero failures or skips.
 - From `packages/engine`, `bun run typecheck --project ../../script/vectorscope-eval/tsconfig.json`: exit 0, no diagnostics. This checks types only; it does not execute a model or evaluation.
+- From `packages/web`, `bun test --timeout 30000 ../../test/account-delete.test.ts`: exit 0, 37 passed, 454 assertions; one explicit CI-only Valkey test was not run locally. The real one-second HTTP deadline case also passed.
 
 The first fixture repair run identified one further test-harness mismatch: Redis command arguments can arrive as numbers in JSON (the Lua key count), while the old fixture cast every argument to a string without conversion. The handler now normalizes command elements to strings, matching Redis's representation; the complete named file then passed. The production command format and scripts are unchanged.
+
+For the workspace retry case, an initial attempt to use `revokeAccountTokens` directly correctly stopped at `revoke`: this billing fixture deliberately lacks Upstash's path-style REST endpoint. Reusing its existing durable-marker helper instead made the complete account-deletion file pass; the separate real revocation tests remain intact.
 
 Exact-source hosted checks remain required after integration; queued, skipped and superseded checks are not passes. The earlier scope UI/Vite configuration failure was superseded by a successful `57f6bf0c1` UI run. Its Vercel commit status also became successful at 18:05:26 UTC; that receipt does not qualify later source revisions.

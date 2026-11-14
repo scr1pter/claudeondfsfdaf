@@ -968,7 +968,13 @@ describe("running a deletion (WP A57)", () => {
     const stripeDown = async () => {
       throw new Error("stripe down")
     }
-    const quiet = { fetcher: w.fetcher, clock: w.clock, revoke: async () => true, close: async () => undefined }
+    const quiet = {
+      fetcher: w.fetcher,
+      clock: w.clock,
+      // A successful revoke must persist its fence: the integrated cloud-agent eraser checks the real mark.
+      revoke: async () => markRevoked(w),
+      close: async () => undefined,
+    }
     // The revoke store being down stops the deletion too, after the host was asked.
     expect(
       await finishAccountDeletion(ACCOUNT, { ...quiet, revoke: async () => false, cancel: stripeDown }),
@@ -978,6 +984,7 @@ describe("running a deletion (WP A57)", () => {
       stage: "billing",
       failed: [],
     })
+    expect(w.fakes.store.get(`vector:cli-revoked:${ACCOUNT}`)).toBe("1")
     expect(w.services.workspaces).toEqual([ACCOUNT, ACCOUNT])
     expect([...w.services.closedWorkspaces]).toEqual([ACCOUNT])
     // Once billing goes through, the erase part takes this run's close: the host is asked once per run.
