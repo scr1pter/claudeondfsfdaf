@@ -1,0 +1,653 @@
+import { KEY_TYPES_MARKER, type LuaKeyType } from "../../../../api/_lib/everywhere/lua"
+import { RedisClient } from "bun"
+import { AUDIT_APPEND_SCRIPT } from "../../../../api/_lib/everywhere/audit"
+import {
+  ATOMIC_COMMANDS_SCRIPT,
+  AUTHORITY_PREFIX,
+  withAccountAuthority,
+  type AccountAuthorityPort,
+} from "../../../../api/_lib/everywhere/authority"
+import { FINISH_DELIVERY_SCRIPT } from "../../../../api/_lib/everywhere/dedupe"
+import { CREATE_STATE_SCRIPT, LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
+import { RECORD_SEEN_SCRIPT, CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
+import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
+import { REPLACE_NATIVE_RESERVATION_SCRIPT } from "../../../../api/_lib/everywhere/native-resource"
+import { ERASE_JIRA_TASK_SCRIPT, WRITE_JIRA_TASK_SCRIPT } from "../../../../api/_lib/everywhere/jira/task-store"
+import { everywhereStore, SWAP_SCRIPT, type Store } from "../../../../api/_lib/everywhere/store"
+import { ACCOUNT_ID_PATTERN } from "../../../../packages/schema/src/everywhere"
+
+/*
+ * Store fakes for Vector everywhere tests (contract section 9).
+ *
+ * `FakeStore` is enough of Redis for the server foundation: strings with NX, XX and PX, counters, expiry on a fake
+ * clock, sets and sorted sets, and the everywhere Lua scripts, each recognised by its exact text and run as TypeScript. A
+ * script it does not know is an error, so a new one cannot slip through untested. Its `fetch` speaks the Redis REST
+ * API that `persistentStore` calls, at a `.invalid` address that no real request can reach.
+ *
+ * `realRedis()` forwards the same REST calls to a disposable loopback Redis when VECTOR_TEST_REDIS_URL is set (CI),
+ * so the atomic scripts also run against the real thing. It touches only the keys the test used and deletes them.
+ */
+
+export const FAKE_KV_URL = "https://kv.everywhere-fakes.invalid"
+export const FAKE_KV_TOKEN = "everywhere-fake-kv"
+
+/** An explicit fixture authority, never inferred by production code or backed by a real account service. */
+export const testAccountAuthority: AccountAuthorityPort = async (account) =>
+  ACCOUNT_ID_PATTERN.test(account)
+    ? { tombstoneKey: `vector:codium:test:tombstone:${account.toLowerCase()}` }
+    : undefined
+
+/** Keep test opt-in visible at each factory, including real-Redis bridges used only by CI. */
+export function testEverywhereStore(fetcher: typeof fetch): Store {
+  return everywhereStore(fetcher, testAccountAuthority)
+}
+
+/** Direct FakeStore.send adapters need the same explicit authority as REST-backed fixtures. */
+export function withTestAccountAuthority(store: Store): Store {
+  return withAccountAuthority(store, testAccountAuthority)
+}
+
+export class FakeClock {
+  constructor(public now = Date.UTC(2026, 10, 11, 14, 30)) {}
+  advance(ms: number) {
+    this.now += ms
+    return this.now
+  }
+}
+
+type Value =
+  | { kind: "string"; value: string }
+  | { kind: "set"; value: Set<string> }
+  | { kind: "zset"; value: Map<string, number> }
+type Script = (keys: string[], argv: string[]) => unknown
+
+class ScriptError extends Error {}
+
+export class FakeStore {
+  readonly data = new Map<string, Value>()
+  readonly expires = new Map<string, number>()
+  readonly commands: string[][] = []
+  /** When true, every call answers 503, as a store outage would. */
+  down = false
+  private readonly scripts = new Map<string, Script>([
+    [AUDIT_APPEND_SCRIPT, (keys, argv) => this.auditAppend(keys, argv)],
+    [ATOMIC_COMMANDS_SCRIPT, (_keys, argv) => this.atomicCommands(argv)],
+    [CREATE_STATE_SCRIPT, (keys, argv) => this.createState(keys, argv)],
+    [COUNT_JOB_SCRIPT, (keys, argv) => this.countJob(keys, argv)],
+    [SWAP_SCRIPT, (keys, argv) => this.swap(keys, argv)],
+    [REPLACE_NATIVE_RESERVATION_SCRIPT, (keys, argv) => {
+      if (this.run("GET", [keys[0]!]) !== argv[0]) return 0
+      this.run("SET", [keys[0]!, argv[1]!, "PX", "30000"])
+      return 1
+    }],
+    [WRITE_JIRA_TASK_SCRIPT, (keys, argv) => {
+      if ((this.run("GET", [keys[1]!]) ?? "") !== argv[1]) return -1
+      if ((this.run("GET", [keys[0]!]) ?? "") !== argv[0]) return -2
+      if (keys[7] && (this.run("GET", [keys[7]]) ?? "") !== argv[12]) return -1
+      if (argv[7] === "create") {
+        if (this.run("EXISTS", [keys[5]!]) === 1) return -3
+        if ((this.run("GET", [keys[2]!]) ?? "") !== argv[8]) return -4
+      }
+      this.run("ZREMRANGEBYSCORE", [keys[3]!, "-inf", argv[6]!])
+      if (argv[7] === "create" && Number(this.run("ZCARD", [keys[3]!])) >= 2000) return -5
+      if (keys[6]) {
+        this.run("ZREMRANGEBYSCORE", [keys[6], "-inf", argv[6]!])
+        if (this.run("ZSCORE", [keys[6], argv[4]!]) === null && Number(this.run("ZCARD", [keys[6]])) >= 2000) return -5
+      }
+      this.run("SET", [keys[0]!, argv[2]!, "PX", argv[3]!])
+      if (argv[7] === "create") {
+        this.run("SET", [keys[2]!, argv[4]!, "PX", argv[3]!])
+        this.run("SET", [keys[5]!, argv[4]!, "PX", argv[3]!])
+      }
+      this.run("ZADD", [keys[3]!, argv[5]!, argv[4]!]); this.run("PEXPIRE", [keys[3]!, "172800000"])
+      if (keys[6]) { this.run("ZADD", [keys[6], argv[5]!, argv[4]!]); this.run("PEXPIRE", [keys[6], "172800000"]) }
+      if (argv[9] === "write") this.run("SET", [keys[4]!, argv[10]!, "PX", argv[11]!])
+      if (argv[9] === "delete") this.run("DEL", [keys[4]!])
+      return 1
+    }],
+    [ERASE_JIRA_TASK_SCRIPT, (keys, argv) => {
+      if (this.run("GET", [keys[0]!]) !== argv[0]) return 0
+      this.run("DEL", [keys[0]!, keys[1]!])
+      if (this.run("GET", [keys[2]!]) === argv[1]) this.run("DEL", [keys[2]!])
+      if (this.run("GET", [keys[4]!]) === argv[1]) this.run("DEL", [keys[4]!])
+      this.run("ZREM", [keys[3]!, argv[1]!])
+      if (keys[5]) this.run("ZREM", [keys[5], argv[1]!])
+      return 1
+    }],
+    [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],
+    [RECORD_SEEN_SCRIPT, (keys, argv) => {
+      if (argv[3] !== "") {
+        this.run("ZREMRANGEBYSCORE", [keys[2]!, "-inf", argv[6]!])
+        if (this.run("ZSCORE", [keys[2]!, argv[5]!]) === null && Number(this.run("ZCARD", [keys[2]!])) >= 64) return 0
+      }
+      this.run("SET", [keys[0]!, argv[0]!, "PX", argv[1]!])
+      if (argv[3] !== "") {
+        this.run("SET", [keys[1]!, argv[3]!, "PX", argv[4]!])
+        this.run("ZADD", [keys[2]!, argv[2]!, argv[5]!]); this.run("PEXPIRE", [keys[2]!, argv[4]!])
+      }
+      return 1
+    }],
+    [CREATE_JOB_SCRIPT, (keys, argv) => this.createJob(keys, argv)],
+    [TRANSITION_SCRIPT, (keys, argv) => this.transition(keys, argv)],
+    [FINISH_DELIVERY_SCRIPT, (keys, argv) => {
+      const current = this.run("GET", [keys[0]!]) as string | null
+      if (current?.startsWith("job:")) return 0
+      if (argv[1] !== "" && current !== argv[1]) return 0
+      this.run("SET", [keys[0]!, "done", "PX", argv[0]!])
+      return 1
+    }],
+  ])
+
+  constructor(readonly clock = new FakeClock()) {}
+
+  /** The Redis REST API, as `persistentStore` calls it. */
+  readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+    if (!url.startsWith(FAKE_KV_URL)) throw new Error("The fake store only answers its own address.")
+    if (new Headers(init?.headers).get("authorization") !== `Bearer ${FAKE_KV_TOKEN}`)
+      return Response.json({ error: "unauthorized" }, { status: 401 })
+    if (this.down) return new Response(null, { status: 503 })
+    const command = JSON.parse(String(init?.body)) as (string | number)[]
+    try {
+      return Response.json({ result: this.send(command) })
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "error" }, { status: 400 })
+    }
+  }) as typeof fetch
+
+  /** Runs one command, as Redis would. */
+  send(command: readonly (string | number)[]): unknown {
+    const [name = "", ...rest] = command.map(String)
+    this.commands.push([name, ...rest])
+    return this.run(name.toUpperCase(), rest)
+  }
+
+  private run(name: string, args: string[]): unknown {
+    switch (name) {
+      case "GET": {
+        const value = this.read(args[0]!)
+        if (value && value.kind !== "string") throw new ScriptError("WRONGTYPE")
+        return value?.value ?? null
+      }
+      case "GETDEL": {
+        const value = this.read(args[0]!)
+        if (value && value.kind !== "string") throw new ScriptError("WRONGTYPE")
+        if (value) this.remove(args[0]!)
+        return value?.value ?? null
+      }
+      case "SET":
+        return this.set(args)
+      case "SADD": {
+        const set = this.setOf(args[0]!, true)!
+        let added = 0
+        for (const member of args.slice(1)) {
+          if (!set.has(member)) added++
+          set.add(member)
+        }
+        return added
+      }
+      case "SREM": {
+        const set = this.setOf(args[0]!)
+        if (!set) return 0
+        let removed = 0
+        for (const member of args.slice(1)) if (set.delete(member)) removed++
+        if (!set.size) this.remove(args[0]!)
+        return removed
+      }
+      case "SMEMBERS":
+        return [...(this.setOf(args[0]!) ?? [])]
+      case "SISMEMBER":
+        return this.setOf(args[0]!)?.has(args[1]!) ? 1 : 0
+      case "DEL":
+        return args.filter((key) => this.remove(key)).length
+      case "EXISTS":
+        return args.filter((key) => this.read(key)).length
+      case "MGET":
+        return args.map((key) => {
+          const value = this.read(key)
+          return value?.kind === "string" ? value.value : null
+        })
+      case "INCR":
+        return this.incr(args[0]!)
+      case "PEXPIRE": {
+        if (!this.read(args[0]!)) return 0
+        this.expires.set(args[0]!, this.clock.now + Number(args[1]))
+        return 1
+      }
+      case "PTTL":
+        return this.pttl(args[0]!)
+      case "ZADD": {
+        const onlyExisting = args[1]?.toUpperCase() === "XX"
+        const onlyGreater = args[1]?.toUpperCase() === "GT"
+        const set = this.zset(args[0]!, !onlyExisting)
+        if (!set) return 0
+        let added = 0
+        for (let index = onlyExisting || onlyGreater ? 2 : 1; index < args.length; index += 2) {
+          if (onlyExisting && !set.has(args[index + 1]!)) continue
+          if (onlyGreater && set.has(args[index + 1]!) && set.get(args[index + 1]!)! >= Number(args[index])) continue
+          if (!set.has(args[index + 1]!)) added++
+          set.set(args[index + 1]!, Number(args[index]))
+        }
+        return added
+      }
+      case "ZCARD":
+        return this.zset(args[0]!)?.size ?? 0
+      case "ZREM": {
+        const set = this.zset(args[0]!)
+        if (!set) return 0
+        let removed = 0
+        for (const member of args.slice(1)) if (set.delete(member)) removed++
+        if (!set.size) this.remove(args[0]!)
+        return removed
+      }
+      case "ZSCORE": {
+        const score = this.zset(args[0]!)?.get(args[1]!)
+        return score === undefined ? null : String(score)
+      }
+      case "ZRANGEBYSCORE":
+        return this.zrangeByScore(args[0]!, args[1]!, args[2]!, args.slice(3))
+      case "ZREVRANGE": {
+        const sorted = this.sorted(args[0]!).reverse()
+        return slice(sorted, Number(args[1]), Number(args[2]))
+      }
+      case "ZRANGE":
+        return slice(this.sorted(args[0]!), Number(args[1]), Number(args[2]))
+      case "ZREMRANGEBYSCORE":
+        return this.zremByScore(args[0]!, args[1]!, args[2]!)
+      case "ZREMRANGEBYRANK":
+        return this.zremByRank(args[0]!, Number(args[1]), Number(args[2]))
+      case "EVAL": {
+        const count = Number(args[1])
+        if (!Number.isSafeInteger(count) || count < 0 || args.length < count + 2)
+          throw new ScriptError("Invalid EVAL keys.")
+        return this.evaluate(args[0]!, args.slice(2, 2 + count), args.slice(2 + count))
+      }
+      default:
+        throw new ScriptError(`The fake store does not know ${name}.`)
+    }
+  }
+
+  private evaluate(program: string, keys: string[], argv: string[]): unknown {
+    if (program.startsWith(AUTHORITY_PREFIX)) {
+      const kc = Number(argv.at(-3))
+      const ac = Number(argv.at(-2))
+      const gc = Number(argv.at(-1))
+      if (
+        !Number.isSafeInteger(kc) || kc < 0 ||
+        !Number.isSafeInteger(ac) || ac < 0 ||
+        !Number.isSafeInteger(gc) || gc < 1 || gc > 24 ||
+        keys.length !== kc + gc || argv.length !== ac + gc * 2 + 3
+      ) throw new ScriptError("Invalid authority proof.")
+      for (let index = 0; index < gc; index++) {
+        const mode = argv[ac + index * 2]
+        if (mode !== "missing" && mode !== "exact") throw new ScriptError("Invalid authority guard.")
+        const current = this.run("GET", [keys[kc + index]!])
+        if (mode === "missing" ? current !== null : current !== argv[ac + index * 2 + 1])
+          return ["ve:authority-changed", index + 1]
+      }
+      // The original program sees only its own keys/arguments, exactly as in the
+      // Lua wrapper; an account guard cannot accidentally become an optional base key.
+      return this.evaluate(program.slice(AUTHORITY_PREFIX.length), keys.slice(0, kc), argv.slice(0, ac))
+    }
+    const script = this.scripts.get(program)
+    if (!script) throw new ScriptError("The fake store does not know this script.")
+    if (program.startsWith(KEY_TYPES_MARKER)) {
+      const kinds: unknown = JSON.parse(program.slice(KEY_TYPES_MARKER.length, program.indexOf("\n")))
+      if (!Array.isArray(kinds) || kinds.some((kind) => !["string", "counter", "set", "zset"].includes(kind))) throw new ScriptError("Invalid key types")
+      kinds.forEach((kind: LuaKeyType, index) => { if (keys[index]) this.preflightType(keys[index]!, kind) })
+    }
+    return script(keys, argv)
+  }
+
+  private preflightType(key: string, kind: LuaKeyType) {
+    const current = this.read(key)
+    if (current && current.kind !== (kind === "counter" ? "string" : kind)) throw new ScriptError("WRONGTYPE everywhere preflight")
+    if (kind === "counter" && current?.kind === "string" && !/^(?:0|[1-9][0-9]*)$/.test(current.value)) throw new ScriptError("Invalid everywhere counter")
+  }
+
+  private atomicCommands(argv: string[]) {
+    const operations: unknown = JSON.parse(argv[0]!)
+    if (!Array.isArray(operations)) throw new ScriptError("Invalid atomic commands.")
+    const commands = operations.map((operation: unknown) => {
+      if (
+        !Array.isArray(operation) || operation.length < 2 ||
+        !operation.every((value) => typeof value === "string" || typeof value === "number") ||
+        typeof operation[0] !== "string" ||
+        !["SET", "DEL", "SADD", "SREM", "ZADD", "ZREM", "PEXPIRE"].includes(operation[0])
+      ) throw new ScriptError("Invalid atomic command.")
+      return operation as (string | number)[]
+    })
+    const kinds: Readonly<Record<string, LuaKeyType>> = { SET: "string", SADD: "set", SREM: "set", ZADD: "zset", ZREM: "zset" }
+    for (const operation of commands) {
+      const kind = kinds[String(operation[0])]
+      if (kind) this.preflightType(String(operation[1]), kind)
+    }
+    return commands.map((operation) => this.run(String(operation[0]), operation.slice(1).map(String)))
+  }
+
+  private createState(keys: string[], argv: string[]) {
+    if (this.run("EXISTS", [keys[0]!]) === 1) return 0
+    this.run("ZREMRANGEBYSCORE", [keys[1]!, "-inf", String(Number(argv[2]) - Number(argv[1]))])
+    if (Number(this.run("ZCARD", [keys[1]!])) >= 32) return -2
+    this.run("SET", [keys[0]!, argv[0]!, "PX", argv[1]!])
+    this.run("ZADD", [keys[1]!, argv[2]!, argv[3]!])
+    this.run("PEXPIRE", [keys[1]!, argv[1]!])
+    return 1
+  }
+
+  private live(key: string) {
+    const at = this.expires.get(key)
+    if (at !== undefined && at <= this.clock.now) {
+      this.data.delete(key)
+      this.expires.delete(key)
+    }
+  }
+
+  read(key: string) {
+    this.live(key)
+    return this.data.get(key)
+  }
+
+  private remove(key: string) {
+    this.live(key)
+    this.expires.delete(key)
+    return this.data.delete(key)
+  }
+
+  private set(args: string[]) {
+    const [key, value, ...options] = args as [string, string, ...string[]]
+    let ttl: number | undefined
+    let nx = false
+    let xx = false
+    for (let index = 0; index < options.length; index++) {
+      const option = options[index]!.toUpperCase()
+      if (option === "PX") ttl = Number(options[++index])
+      else if (option === "NX") nx = true
+      else if (option === "XX") xx = true
+      else throw new ScriptError(`SET option ${option}`)
+    }
+    const exists = this.read(key) !== undefined
+    if ((nx && exists) || (xx && !exists)) return null
+    this.data.set(key, { kind: "string", value })
+    if (ttl === undefined) this.expires.delete(key)
+    else this.expires.set(key, this.clock.now + ttl)
+    return "OK"
+  }
+
+  private incr(key: string) {
+    const value = this.read(key)
+    if (value && value.kind !== "string") throw new ScriptError("WRONGTYPE")
+    const current = value ? Number(value.value) : 0
+    if (!Number.isSafeInteger(current)) throw new ScriptError("not an integer")
+    this.data.set(key, { kind: "string", value: String(current + 1) })
+    return current + 1
+  }
+
+  pttl(key: string) {
+    if (!this.read(key)) return -2
+    const at = this.expires.get(key)
+    return at === undefined ? -1 : at - this.clock.now
+  }
+
+  /** A set's members. */
+  private setOf(key: string, create = false) {
+    const value = this.read(key)
+    if (value && value.kind !== "set") throw new ScriptError("WRONGTYPE")
+    if (value) return value.value
+    if (!create) return undefined
+    const fresh = new Set<string>()
+    this.data.set(key, { kind: "set", value: fresh })
+    return fresh
+  }
+
+  private zset(key: string, create = false) {
+    const value = this.read(key)
+    if (value && value.kind !== "zset") throw new ScriptError("WRONGTYPE")
+    if (value) return value.value
+    if (!create) return undefined
+    const fresh = new Map<string, number>()
+    this.data.set(key, { kind: "zset", value: fresh })
+    return fresh
+  }
+
+  /** Members by score, then by member, as Redis orders them. */
+  sorted(key: string) {
+    return [...(this.zset(key)?.entries() ?? [])]
+      .sort(([a, x], [b, y]) => x - y || (a < b ? -1 : a > b ? 1 : 0))
+      .map(([member]) => member)
+  }
+
+  private zrangeByScore(key: string, min: string, max: string, options: string[]) {
+    const low = scoreBound(min)
+    const high = scoreBound(max)
+    const set = this.zset(key)
+    let found = this.sorted(key).filter((member) => {
+      const score = set!.get(member)!
+      return (
+        (low.open ? score > low.value : score >= low.value) && (high.open ? score < high.value : score <= high.value)
+      )
+    })
+    if (options.length) {
+      if (options.length !== 3 || options[0]!.toUpperCase() !== "LIMIT") throw new ScriptError("ZRANGEBYSCORE option")
+      const offset = Number(options[1])
+      const count = Number(options[2])
+      found = found.slice(offset, count < 0 ? undefined : offset + count)
+    }
+    return found
+  }
+
+  private zremByScore(key: string, min: string, max: string) {
+    const set = this.zset(key)
+    if (!set) return 0
+    const bound = (text: string) => {
+      if (text === "-inf") return { value: -Infinity, open: false }
+      if (text === "+inf") return { value: Infinity, open: false }
+      return text.startsWith("(") ? { value: Number(text.slice(1)), open: true } : { value: Number(text), open: false }
+    }
+    const low = bound(min)
+    const high = bound(max)
+    let removed = 0
+    for (const [member, score] of [...set]) {
+      const aboveLow = low.open ? score > low.value : score >= low.value
+      const belowHigh = high.open ? score < high.value : score <= high.value
+      if (aboveLow && belowHigh) {
+        set.delete(member)
+        removed++
+      }
+    }
+    if (!set.size) this.remove(key)
+    return removed
+  }
+
+  private zremByRank(key: string, start: number, stop: number) {
+    const set = this.zset(key)
+    if (!set) return 0
+    const doomed = slice(this.sorted(key), start, stop)
+    for (const member of doomed) set.delete(member)
+    if (!set.size) this.remove(key)
+    return doomed.length
+  }
+
+  private auditAppend(keys: string[], argv: string[]) {
+    const [key] = keys as [string]
+    const [score, member, cutoff, max, keep] = argv as [string, string, string, string, string]
+    this.run("ZADD", [key, score, member])
+    this.run("ZREMRANGEBYSCORE", [key, "-inf", `(${cutoff}`])
+    const extra = (this.zset(key)?.size ?? 0) - Number(max)
+    if (extra > 0) this.run("ZREMRANGEBYRANK", [key, "0", String(extra - 1)])
+    this.run("PEXPIRE", [key, keep])
+    return this.zset(key)?.size ?? 0
+  }
+
+  private swap(keys: string[], argv: string[]) {
+    const [key] = keys as [string]
+    const [expected, next] = argv as [string, string]
+    const current = this.run("GET", [key]) as string | null
+    if (!((current === null && expected === "") || current === expected)) return 0
+    if (next === "") this.run("DEL", [key])
+    else this.run("SET", [key, next])
+    return 1
+  }
+
+  private tries(keys: string[], argv: string[]) {
+    const count = this.incr(keys[0]!)
+    if (count === 1) this.run("PEXPIRE", [keys[0]!, argv[0]!])
+    return count
+  }
+
+  /** CREATE_JOB_SCRIPT, step for step. */
+  private createJob(keys: string[], argv: string[]) {
+    const [job, body, due, live, installationLive, history] = keys as [string, string, string, string, string, string]
+    const [record, recordTtl, sealed, bodyTtl, dueScore, jid, received, liveCap, cutoff, historyTtl] = argv as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    if (keys[6] && this.run("GET", [keys[6]]) !== argv[11]) return -4
+    if (keys[7] && this.run("GET", [keys[7]]) !== argv[12]) return -5
+    if (keys[11] && this.run("GET", [keys[11]]) !== argv[19]) return -6
+    if (this.read(job)) return 0
+    if ((this.zset(live)?.size ?? 0) >= Number(liveCap)) return -3
+    if (keys[8]) {
+      for (let index = 8; index < 11; index++) if (Number(this.run("GET", [keys[index]!]) ?? 0) >= Number(argv[index + 5])) return -3
+      for (let index = 8; index < 11; index++) {
+        this.run("INCR", [keys[index]!])
+        if (this.pttl(keys[index]!) < 0) this.run("PEXPIRE", [keys[index]!, argv[index + 8]!])
+      }
+    }
+    if (keys[11]) this.run("SET", [keys[11], argv[19]!, "PX", argv[20]!])
+    if (keys[6]) this.run("SET", [keys[6], `job:${jid}`, "PX", argv[10]!])
+    this.run("SET", [job, record, "PX", recordTtl])
+    this.run("SET", [body, sealed, "PX", bodyTtl])
+    this.run("ZADD", [due, dueScore, jid])
+    this.run("ZADD", [live, received, jid])
+    this.run("ZADD", [installationLive, received, jid])
+    this.run("ZADD", [history, received, jid])
+    this.run("ZREMRANGEBYSCORE", [history, "-inf", `(${cutoff}`])
+    this.run("PEXPIRE", [history, historyTtl])
+    return 1
+  }
+
+  /** TRANSITION_SCRIPT, step for step: the same fixed pattern reads the version and state. */
+  private transition(keys: string[], argv: string[]) {
+    const [job, body, due, live, installationLive, posts] = keys as [string, string, string, string, string, string]
+    const [version, state, record, ttl, dueScore, stayLive, bodyMode, jid, postAt] = argv as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    const raw = this.run("GET", [job]) as string | null
+    if (raw === null) return 0
+    const match = /^\{"version":(\d+),"state":"([a-z]+)"/.exec(raw)
+    if (!match || match[1] !== version || match[2] !== state) return -1
+    if (bodyMode === "require" && !this.read(body)) return -2
+    this.run("SET", [job, record, "PX", ttl])
+    if (dueScore === "") this.run("ZREM", [due, jid])
+    else this.run("ZADD", [due, dueScore, jid])
+    if (stayLive === "0") {
+      this.run("ZREM", [live, jid])
+      this.run("ZREM", [installationLive, jid])
+    }
+    if (bodyMode === "delete") this.run("DEL", [body])
+    if (postAt !== "") this.run("ZADD", [posts, postAt, jid])
+    return 1
+  }
+
+  private countJob(keys: string[], argv: string[]) {
+    const counts: number[] = []
+    let full = false
+    for (let index = 0; index < 3; index++) {
+      const raw = this.run("GET", [keys[index]!]) as string | null
+      const value = Number(raw ?? "0")
+      if (!Number.isSafeInteger(value)) throw new ScriptError("not a number")
+      counts.push(value)
+      if (value >= Number(argv[index])) full = true
+    }
+    const live = this.zset(keys[3]!)?.size ?? 0
+    if (live >= Number(argv[3])) full = true
+    if (!full)
+      for (let index = 0; index < 3; index++) {
+        counts[index] = this.incr(keys[index]!)
+        if (this.pttl(keys[index]!) < 0) this.run("PEXPIRE", [keys[index]!, argv[4 + index]!])
+      }
+    return [full ? 0 : 1, counts[0], counts[1], counts[2], live]
+  }
+}
+
+function scoreBound(text: string) {
+  if (text === "-inf") return { value: -Infinity, open: false }
+  if (text === "+inf") return { value: Infinity, open: false }
+  return text.startsWith("(") ? { value: Number(text.slice(1)), open: true } : { value: Number(text), open: false }
+}
+
+function slice<T>(items: T[], start: number, stop: number) {
+  const length = items.length
+  const from = start < 0 ? Math.max(0, length + start) : start
+  const to = stop < 0 ? length + stop : Math.min(stop, length - 1)
+  return from > to ? [] : items.slice(from, to + 1)
+}
+
+/** Points `persistentStore` at a fake (or bridged) store for the duration of a test file. Answers a restore. */
+export function useKv(): () => void {
+  const previous = {
+    KV_REST_API_URL: process.env.KV_REST_API_URL,
+    KV_REST_API_TOKEN: process.env.KV_REST_API_TOKEN,
+    UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL,
+    UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN,
+  }
+  process.env.KV_REST_API_URL = FAKE_KV_URL
+  process.env.KV_REST_API_TOKEN = FAKE_KV_TOKEN
+  delete process.env.UPSTASH_REDIS_REST_URL
+  delete process.env.UPSTASH_REDIS_REST_TOKEN
+  return () => {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}
+
+export type RealRedis = { readonly fetch: typeof fetch; close(): Promise<void> }
+
+/** A REST bridge to the loopback Redis in VECTOR_TEST_REDIS_URL, or undefined when it is not set (local runs). */
+export async function realRedis(): Promise<RealRedis | undefined> {
+  const configured = process.env.VECTOR_TEST_REDIS_URL
+  if (!configured) return undefined
+  const url = new URL(configured)
+  if (!["127.0.0.1", "localhost"].includes(url.hostname)) throw new Error("Store tests need a loopback Redis.")
+  const redis = new RedisClient(url.href, { connectionTimeout: 1000, enableOfflineQueue: false, autoReconnect: false })
+  await redis.connect()
+  const touched = new Set<string>()
+  const bridge = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const command = (JSON.parse(String(init?.body)) as (string | number)[]).map(String)
+    const [name = "", ...args] = command
+    if (name.toUpperCase() === "EVAL") args.slice(2, 2 + Number(args[1])).forEach((key) => touched.add(key))
+    else if (["DEL", "EXISTS", "MGET"].includes(name.toUpperCase())) args.forEach((key) => touched.add(key))
+    else if (args[0]) touched.add(args[0])
+    try {
+      return Response.json({ result: await redis.send(name, args) })
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "error" }, { status: 400 })
+    }
+  }) as typeof fetch
+  return {
+    fetch: bridge,
+    async close() {
+      if (touched.size) await redis.send("DEL", [...touched])
+      redis.close()
+    },
+  }
+}
