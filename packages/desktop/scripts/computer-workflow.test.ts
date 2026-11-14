@@ -11,6 +11,9 @@ import {
   WINDOWS_NATIVE_CODES,
 } from "./computer-helper-selftest-windows"
 
+// A Windows host may resolve `bash` to WSL, which drops the fixture's injected environment. Use a real local Bash.
+const bash = process.env.VECTOR_TEST_BASH ?? "bash"
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a workflow mapping.")
   return value as Record<string, unknown>
@@ -161,7 +164,7 @@ const dispatchModes: { inputs: Record<string, unknown>; jobs: string[] }[] = [
 function validateDispatch(inputs: Record<string, unknown>) {
   const validator = record(record(main.document.jobs)["validate-dispatch"])
   const step = steps(validator)[0]!
-  return spawnSync("bash", ["--noprofile", "--norc", "-c", String(step.run)], {
+  return spawnSync(bash, ["--noprofile", "--norc", "-c", String(step.run)], {
     env: {
       ...process.env,
       ...Object.fromEntries(
@@ -282,10 +285,13 @@ test("the normal test workflow supplies only the native lane's read permissions"
 
 test("dispatch selectors stay within GitHub's input limit and every expensive job waits for validation", () => {
   const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(Object.keys(inputs).toSorted()).toEqual([...booleanSelectors, "computer_helper_target"].toSorted())
-  expect(Object.keys(inputs)).toHaveLength(8)
+  expect(Object.keys(inputs).toSorted()).toEqual(
+    [...booleanSelectors, "computer_helper_target", "production_source_sha"].toSorted(),
+  )
+  expect(Object.keys(inputs)).toHaveLength(9)
   expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
   expect(inputs.computer_helper_target).toMatchObject({ type: "choice", default: "all", options: [...targets] })
+  expect(inputs.production_source_sha).toMatchObject({ type: "string", default: "" })
   for (const name of booleanSelectors) expect(inputs[name]).toMatchObject({ type: "boolean", default: false })
   // Undefined inputs used to hide false-vs-undefined routing errors and the helper's true E2E default.
   expect(mainExpression("inputs.offline_footprint", {})).toBe(false)
@@ -307,7 +313,7 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
   expect(current[0]!.uses).toBeUndefined()
   expect(current[0]!["continue-on-error"]).toBeUndefined()
   expect(Object.keys(record(current[0]!.env)).toSorted()).toEqual(
-    [...booleanSelectors.map((name) => name.toUpperCase()), "COMPUTER_HELPER_TARGET"].toSorted(),
+    [...booleanSelectors.map((name) => name.toUpperCase()), "COMPUTER_HELPER_TARGET", "PRODUCTION_SOURCE_SHA"].toSorted(),
   )
   for (const [name, value] of Object.entries(all)) {
     if (name === "validate-dispatch") continue
@@ -396,6 +402,14 @@ test("the actual cheap validator rejects mixed modes, orphan or unknown targets 
   for (const target of ["unknown", "WINDOWS", "windows,linux"])
     expect(validateDispatch({ computer_helper: true, computer_helper_target: target }).status).toBe(1)
   for (const flag of booleanSelectors) expect(validateDispatch({ [flag]: "not-boolean" }).status, flag).toBe(1)
+})
+
+test("an exact comparison source is admitted only as an immutable production UI arm", () => {
+  const source = "a".repeat(40)
+  expect(validateDispatch({ production_benchmark: true, production_source_sha: source }).status).toBe(0)
+  expect(validateDispatch({ production_source_sha: source }).status).toBe(1)
+  for (const value of ["main", "../main", source + "x", "${{ secrets.UNUSED }}"])
+    expect(validateDispatch({ production_benchmark: true, production_source_sha: value }).status).toBe(1)
 })
 
 test("dispatch cancellation groups distinguish every valid mode and cannot be reused by invalid mixed flags", () => {
@@ -729,7 +743,7 @@ test("Linux-only runs both real Electron lanes and skips every native OS lane", 
         for (const event of ["workflow_dispatch", "workflow_call", "push"]) {
           rmSync(output, { force: true })
           const result = spawnSync(
-            "bash",
+            bash,
             ["--noprofile", "--norc", "-c", `set -euo pipefail\n${plan.slice(begin, end)}`],
             {
               env: {
@@ -758,7 +772,7 @@ test("the actual native plan refuses simultaneous Linux-only and Windows-only se
   expect(guard).toBeDefined()
   for (const linux of ["true", "false"])
     for (const windows of ["true", "false"]) {
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `set -euo pipefail\n${guard}`], {
+      const result = spawnSync(bash, ["--noprofile", "--norc", "-c", `set -euo pipefail\n${guard}`], {
         env: { ...process.env, LINUX_ONLY: linux, WINDOWS_ONLY: windows },
         encoding: "utf8",
         timeout: 5000,
