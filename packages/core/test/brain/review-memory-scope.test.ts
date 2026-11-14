@@ -6,7 +6,7 @@ import { EffectDrizzleSqlite } from "@vectordevai/effect-drizzle-sqlite"
 import { mkdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { and, eq, sql } from "drizzle-orm"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import reviewMemory from "../../src/brain/migration/20261216000000_review_memory"
@@ -463,7 +463,7 @@ describe("review memory physical repository namespaces", () => {
   )
 
   gitTest(
-    "invalid, missing or expired physical-scope components cannot mutate any scope during repository/session erase",
+    "invalid, missing or expired physical-scope components are not mutated by a repository/session erase",
     async () => {
       await using repos = await repositories("remote")
       for (const mode of ["negative", "fractional", "missing", "witness"] as const)
@@ -488,13 +488,23 @@ describe("review memory physical repository namespaces", () => {
               yield* setup.db.run(
                 sql`UPDATE brain_tombstone SET until = 0 WHERE norm_hash = ${`${ReviewStore.SCOPE_MARKER}${repos.b.place.scope}`}`,
               )
-            const before = yield* snapshot(setup)
-            expect(
-              Exit.isFailure(yield* Effect.exit(setup.brain.eraseSession(repos.a.place, repos.a.source.reviewID))),
-            ).toBe(true)
-            expect(yield* snapshot(setup)).toEqual(before)
-            expect(Exit.isFailure(yield* Effect.exit(setup.brain.erase(repos.a.place, "repository")))).toBe(true)
-            expect(yield* snapshot(setup)).toEqual(before)
+            // The user's erase completes for ordinary memory, and no review scope, epoch, record or witness changes.
+            const review = (state: Effect.Success<ReturnType<typeof snapshot>>) => ({
+              entries: state.entries,
+              scopes: state.scopes,
+              epochs: state.epochs,
+              witnesses: state.witnesses.filter(
+                (row) => row.norm_hash === ReviewStore.MARKER || row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+              ),
+            })
+            const before = review(yield* snapshot(setup))
+            expect((yield* snapshot(setup)).ordinary).toHaveLength(4)
+            expect(yield* setup.brain.eraseSession(repos.a.place, repos.a.source.reviewID)).toBe(1)
+            expect((yield* snapshot(setup)).ordinary).toHaveLength(3)
+            expect(review(yield* snapshot(setup))).toEqual(before)
+            expect(yield* setup.brain.erase(repos.a.place, "repository")).toBe(3)
+            expect((yield* snapshot(setup)).ordinary).toEqual([])
+            expect(review(yield* snapshot(setup))).toEqual(before)
           }),
         )
     },

@@ -3,7 +3,7 @@ export * as Brain from "./brain"
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, like, lt, ne, not, notInArray, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 import { Global } from "../global"
@@ -2328,16 +2328,34 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const skills = yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
-          // Validate review epochs/witnesses before any generic tombstone deletion can hide a corrupt component.
-          const reviews = scope === "personal" ? 0 : yield* ReviewStore.eraseScope(tx, repositories)
+          // Review memory is erased in its own savepoint, before the generic deletes. Inconsistent review state rolls
+          // only that part back and stays fail closed, but it never stops the user's erase of ordinary memory.
+          const reviews =
+            scope === "personal"
+              ? 0
+              : yield* tx
+                  .transaction((review) => ReviewStore.eraseScope(review, repositories))
+                  .pipe(Effect.catchDefect((defect) => keptReviews("Brain.erase", defect)))
           yield* tx.delete(BrainEntryTable).where(where).run()
           yield* tx
             .delete(BrainEventTable)
             .where(repositories ? inArray(BrainEventTable.repository_id, repositories) : undefined)
             .run()
+          // Review witnesses are ReviewStore's: a successful review erase already removed them, and when it was rolled
+          // back, deleting them here could turn a corrupt component back into valid authority.
           yield* tx
             .delete(BrainTombstoneTable)
-            .where(repositories ? inArray(BrainTombstoneTable.repository_id, repositories) : undefined)
+            .where(
+              and(
+                repositories ? inArray(BrainTombstoneTable.repository_id, repositories) : undefined,
+                not(
+                  or(
+                    eq(BrainTombstoneTable.norm_hash, ReviewStore.MARKER),
+                    like(BrainTombstoneTable.norm_hash, `${ReviewStore.SCOPE_MARKER}%`),
+                  )!,
+                ),
+              ),
+            )
             .run()
           if (rows.length)
             yield* tx
@@ -2479,8 +2497,11 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     return yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
-          // Review preflight is first; every ordinary/review/skill mutation below commits or rolls back together.
-          const reviews = yield* ReviewStore.eraseSession(tx, place.repository, sessionID)
+          // Review memory is erased first, in its own savepoint. Inconsistent review state rolls only that part back
+          // and stays fail closed; the ordinary and skill mutations below still commit together.
+          const reviews = yield* tx
+            .transaction((review) => ReviewStore.eraseSession(review, place.repository, sessionID))
+            .pipe(Effect.catchDefect((defect) => keptReviews("Brain.eraseSession", defect)))
           const rows = yield* tx
             .select()
             .from(BrainEntryTable)
@@ -3286,4 +3307,12 @@ async function removeFailure(file: string, signature: string) {
   const staged = `${file}.${randomBytes(6).toString("hex")}.tmp`
   await fs.writeFile(staged, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 })
   await fs.rename(staged, file)
+}
+
+// A user erase whose review part was rolled back still removes ordinary memory. The review memory stays as it was, and
+// its reads keep refusing it as stale until the state is repaired.
+function keptReviews(operation: string, defect: unknown) {
+  return Effect.logWarning(`${operation} kept review memory whose state is inconsistent`, { defect }).pipe(
+    Effect.as(0),
+  )
 }

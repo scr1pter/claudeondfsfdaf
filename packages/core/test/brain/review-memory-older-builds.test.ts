@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import { and, eq, sql } from "drizzle-orm"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import { BrainRevocation } from "../../src/brain/revocation"
@@ -13,9 +13,8 @@ import {
   BrainReviewMemoryStateTable,
   BrainReviewMemoryScopeStateTable,
   BrainReviewMemoryTable,
+  BrainReviewMemorySourceTable,
   BrainTombstoneTable,
-  BrainEventTable,
-  BrainStateTable,
   BrainEntryTable,
   BrainEvidenceTable,
   BrainUseTable,
@@ -127,7 +126,7 @@ const genericEntry = (setup: Setup, text: string, origin: "agent" | "user" = "ag
   })
 
 describe("review memory erase compatibility and suspended writers, actual SQLite", () => {
-  test("session erase validates review epochs and witnesses before any generic entry, evidence, use or audit mutation", async () => {
+  test("session erase leaves inconsistent review epochs and witnesses untouched and still forgets ordinary memory", async () => {
     for (const mode of ["epoch", "witness"] as const) {
       await using tmp = await tmpdir()
       await open(tmp.path, ":memory:", (setup) =>
@@ -156,22 +155,29 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
           const snapshot = () =>
             Effect.gen(function* () {
               return {
-                entries: yield* setup.db.select().from(BrainEntryTable),
-                evidence: yield* setup.db.select().from(BrainEvidenceTable),
-                uses: yield* setup.db.select().from(BrainUseTable),
-                audit: yield* setup.db.select().from(BrainEventTable),
-                tombstones: yield* setup.db.select().from(BrainTombstoneTable),
-                state: yield* setup.db.select().from(BrainStateTable),
                 reviews: yield* setup.db.select().from(BrainReviewMemoryTable),
                 reviewState: yield* setup.db.select().from(BrainReviewMemoryStateTable),
                 reviewScopes: yield* setup.db.select().from(BrainReviewMemoryScopeStateTable),
+                reviewSources: yield* setup.db.select().from(BrainReviewMemorySourceTable),
+                witnesses: (yield* setup.db.select().from(BrainTombstoneTable)).filter(
+                  (row) => row.norm_hash === ReviewStore.MARKER || row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+                ),
               }
             })
           const before = yield* snapshot()
-          expect(before.entries).toHaveLength(3)
+          expect(yield* setup.db.select().from(BrainEntryTable)).toHaveLength(3)
           expect(before.reviews).toHaveLength(1)
-          expect(Exit.isFailure(yield* Effect.exit(setup.brain.eraseSession(setup.place, source.reviewID)))).toBe(true)
+          // Inconsistent review state must not block the user's erase: ordinary memory goes, review memory stays exactly
+          // as it was and keeps refusing as stale.
+          expect(yield* setup.brain.eraseSession(setup.place, source.reviewID)).toBe(2)
           expect(yield* snapshot()).toEqual(before)
+          expect(yield* setup.db.select().from(BrainEntryTable)).toHaveLength(1)
+          expect((yield* setup.db.select().from(BrainEntryTable)).some((row) => row.id === ordinary.id)).toBe(false)
+          expect((yield* setup.db.select().from(BrainEvidenceTable)).some((row) => row.entry_id === ordinary.id)).toBe(
+            false,
+          )
+          expect((yield* setup.db.select().from(BrainUseTable)).some((row) => row.entry_id === ordinary.id)).toBe(false)
+          expect(yield* setup.memory.inspect(setup.place)).toEqual({ ok: false, reason: "stale" })
         }),
       )
     }
@@ -273,9 +279,11 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
                   .from(BrainReviewMemoryStateTable)
                   .orderBy(BrainReviewMemoryStateTable.repository_id),
                 records: yield* setup.db.select().from(BrainReviewMemoryTable),
-                markers: yield* setup.db.select().from(BrainTombstoneTable),
-                revocation: yield* setup.db.select().from(BrainStateTable),
-                audit: yield* setup.db.select().from(BrainEventTable),
+                scopes: yield* setup.db.select().from(BrainReviewMemoryScopeStateTable),
+                sources: yield* setup.db.select().from(BrainReviewMemorySourceTable),
+                markers: (yield* setup.db.select().from(BrainTombstoneTable)).filter(
+                  (row) => row.norm_hash === ReviewStore.MARKER || row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+                ),
               }
             })
           const corrupted = yield* snapshot()
@@ -294,9 +302,19 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
             ok: false,
             reason: "stale",
           })
-          expect(Exit.isFailure(yield* Effect.exit(setup.brain.erase(setup.place, "repository")))).toBe(true)
-          expect(Exit.isFailure(yield* Effect.exit(setup.brain.erase(setup.place, "all")))).toBe(true)
+          // The user's erase still completes for ordinary memory; the corrupt review state is not touched, so it cannot
+          // be cancelled into valid authority, and review reads keep refusing it.
+          const ordinary = yield* genericEntry(setup, "Prefer early returns before optional lookups.")
+          const learned = (yield* setup.db.select().from(BrainEntryTable)).length
+          expect(learned).toBeGreaterThan(0)
+          expect(yield* setup.brain.erase(setup.place, "repository")).toBe(learned)
+          expect((yield* setup.db.select().from(BrainEntryTable)).some((row) => row.id === ordinary.id)).toBe(false)
           expect(yield* snapshot()).toEqual(corrupted)
+          yield* genericEntry(setup, "Keep the parsing boundary narrow.")
+          expect(yield* setup.brain.erase(setup.place, "all")).toBe(1)
+          expect(yield* setup.db.select().from(BrainEntryTable)).toEqual([])
+          expect(yield* snapshot()).toEqual(corrupted)
+          expect(yield* setup.memory.inspect(setup.place)).toEqual({ ok: false, reason: "stale" })
         }),
       )
     }
