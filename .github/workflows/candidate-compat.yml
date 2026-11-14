@@ -65,6 +65,32 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
+      - name: Install ripgrep
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          fi
+          rg --version
+
+      - name: Install ripgrep (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          choco install ripgrep -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Installing ripgrep failed." }
+          # Use the native executable rather than Chocolatey's shim in long trusted paths.
+          $tools = Join-Path $env:ChocolateyInstall 'lib\ripgrep\tools'
+          $native = @(Get-ChildItem -LiteralPath $tools -Filter rg.exe -File -Recurse)
+          if ($native.Count -ne 1) { throw "Expected one native ripgrep executable in $tools." }
+          & ($native[0].FullName) --version
+          if ($LASTEXITCODE -ne 0) { throw "The native ripgrep executable failed." }
+          $native[0].DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Configure disposable Git fixtures
         run: |
           git config --global user.email "bot@vectordev.ai"
