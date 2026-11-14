@@ -79,12 +79,19 @@ jobs:
       - name: Check the real Solid reactive controller in CI
         working-directory: packages/app
         run: bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser/vectorscope-local.test.ts --timeout 30000
+      - name: Compile the App and all browser regression entrypoints
+        working-directory: packages/app
+        run: bunx vite build --config e2e/vite.config.ts
+        env:
+          VITE_VECTOR_SERVER_HOST: "127.0.0.1"
+          VITE_VECTOR_SERVER_PORT: "4096"
       - name: Run local review and memory UI regressions
         working-directory: packages/app
         run: bunx playwright test e2e/regression/vectorscope-local.spec.ts e2e/regression/vectorscope-local-app.spec.ts e2e/regression/vectorscope-memory.spec.ts e2e/regression/vectorscope-memory-connected.spec.ts --project chromium --workers 1 --retries 0 --trace retain-on-failure
         env:
           CI: true
           PLAYWRIGHT_WORKERS: "1"
+          PLAYWRIGHT_PREVIEW: "1"
         timeout-minutes: 30
       - name: Upload Playwright artifacts
         if: always()
