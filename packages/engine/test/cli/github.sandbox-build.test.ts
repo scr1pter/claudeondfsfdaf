@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
 import { fileURLToPath } from "node:url"
+import path from "node:path"
 import { sandboxProbeTarget } from "../../script/sandbox-probe-target"
+import { sandboxBunUndici } from "../../script/sandbox-bun-undici"
 import { tmpdir } from "../fixture/fixture"
 
 test("each sandbox artifact selects the actual matching Core SQLite adapter", async () => {
@@ -30,6 +32,34 @@ test("each sandbox artifact selects the actual matching Core SQLite adapter", as
       bunSqlite: runtime === "bun",
     })
   }
+}, 30_000)
+
+test("the Bun sandbox preserves and can import the installed Undici wrapper without bundler rewriting", async () => {
+  await using temporary = await tmpdir()
+  const wrapper = await sandboxBunUndici(fileURLToPath(new URL("../..", import.meta.url)))
+  const build = await Bun.build({
+    ...sandboxProbeTarget("bun"),
+    entrypoints: [fileURLToPath(new URL("../fixture/sandbox-undici-import.ts", import.meta.url))],
+    outdir: temporary.path,
+    format: "esm",
+    plugins: [wrapper.plugin],
+  })
+  expect(build.success).toBe(true)
+  const entry = build.outputs.find((value) => value.kind === "entry-point")
+  expect(entry).toBeDefined()
+  expect(await entry!.text()).toContain(`./${wrapper.asset}`)
+  await Bun.write(path.join(temporary.path, wrapper.asset), wrapper.contents)
+  expect(await Bun.file(path.join(temporary.path, wrapper.asset)).arrayBuffer()).toEqual(
+    await Bun.file(wrapper.source).arrayBuffer(),
+  )
+  const child = Bun.spawn([process.execPath, "--no-env-file", entry!.path], { stdout: "pipe", stderr: "pipe" })
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(stdout)).toEqual({ agent: "function", dispatcher: "function", same: true })
 }, 30_000)
 
 test("the existing Bun cell executes its installed Bun artifact while host assertions remain on Node", async () => {

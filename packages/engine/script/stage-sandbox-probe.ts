@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { sandboxProbeTarget } from "./sandbox-probe-target"
+import { sandboxBunUndici } from "./sandbox-bun-undici"
 
 // CI-only packaging: include the actual ShellTool and its runtime assets in the immutable disposable probe.
 const engine = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -10,6 +11,7 @@ const output = path.join(process.env.RUNNER_TEMP!, "vector-probe-tools")
 if (!process.env.RUNNER_TEMP || !path.isAbsolute(output)) throw new Error("Missing probe output directory")
 const runtime = process.argv[2] ?? "node"
 if (runtime !== "node" && runtime !== "bun") throw new Error("Unsupported probe runtime")
+const undici = runtime === "bun" ? await sandboxBunUndici(engine) : undefined
 // Different targets run in separate Bun invocations; a runtime's resolver/file cache cannot select the other's adapter.
 const result = await Bun.build({
   ...sandboxProbeTarget(runtime),
@@ -18,6 +20,7 @@ const result = await Bun.build({
   tsconfig: path.join(engine, "tsconfig.json"),
   format: "esm",
   plugins: [
+    ...(undici ? [undici.plugin] : []),
     {
       name: "installed-jsonc-esm",
       setup(build) {
@@ -43,6 +46,10 @@ const result = await Bun.build({
 })
 if (!result.success) throw new AggregateError(result.logs, `The actual ${runtime} tool probe did not build`)
 const artifacts = result.outputs.map((item) => path.relative(output, item.path))
+if (undici) {
+  await Bun.write(path.join(output, undici.asset), undici.contents)
+  artifacts.push(undici.asset)
+}
 if (runtime === "node") {
   const guard = await Bun.build({
     target: "node",
