@@ -290,6 +290,42 @@ int serve(const Command& command, HANDLE output) {
           handler(request, context, std::move(done));
         });
     };
+    // Setup is a trusted containing-app operation, not an agent action. Status is inert;
+    // start/reset only retire detector metadata while the exact current session is paused.
+    server->register_handler(L"input.setup", 4000, false, false, [detector](const auto& request, const auto& context, auto done) {
+      const auto& args = request.args;
+      if (args.Size() != 1 || !args.HasKey(L"action") || args.Lookup(L"action").ValueType() != JsonValueType::String) {
+        done(Failure{L"failed", L"Invalid input setup arguments."}); return;
+      }
+      const auto action = args.GetNamedString(L"action");
+      if (action != L"status" && action != L"start" && action != L"reset") {
+        done(Failure{L"failed", L"Invalid input setup action."}); return;
+      }
+      if (action != L"status") {
+        if (context.session && !context.session->paused) {
+          done(Failure{L"unavailable", L"Pause the computer session before verifying input detection."}); return;
+        }
+        bool started = true;
+        // These setters are metadata/enqueue only: no native API, wait or synchronous
+        // Dispatcher callback is allowed under this original authority fence.
+        if (!context.with_current || !context.with_current([&] {
+          if (action == L"start") started = detector->setup_start(); else detector->setup_reset();
+        })) { done(Failure{L"changed", L"The computer session changed during input setup."}); return; }
+        if (!started) { done(Failure{L"unavailable", L"Input detection could not start verification."}); return; }
+      }
+      const auto status = detector->setup_status();
+      const wchar_t* state = L"unavailable";
+      switch (status.state) {
+        case UserInputSetupState::needs_calibration: state = L"needs-calibration"; break;
+        case UserInputSetupState::calibrating: state = L"calibrating"; break;
+        case UserInputSetupState::ready: state = L"ready"; break;
+        case UserInputSetupState::unavailable: break;
+      }
+      JsonObject fields; fields.Insert(L"state", JsonValue::CreateStringValue(state));
+      fields.Insert(L"mouse", JsonValue::CreateBooleanValue(status.mouse));
+      fields.Insert(L"keyboard", JsonValue::CreateBooleanValue(status.keyboard));
+      done(Reply{fields, {}});
+    });
     register_surface(L"apps.list", 5000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->list(request.args, context, std::move(done)); });
     register_surface(L"cursor.position", 4000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->cursor(request.args, context, std::move(done)); });
     register_surface(L"app.activate", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->activate(request.args, context, std::move(done)); });

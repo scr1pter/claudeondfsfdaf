@@ -21,7 +21,12 @@ const windows = (flags: Partial<{ captureBlocked: boolean; elevated: boolean }> 
     adhoc: false,
     helperStart: "ok",
     vectorHoldsGrant: { screen: false, accessibility: false },
-    windows: { captureBlocked: false, elevated: false, ...flags },
+    windows: {
+      captureBlocked: false,
+      elevated: false,
+      inputSetup: { state: "ready", mouse: true, keyboard: true },
+      ...flags,
+    },
   }) satisfies Computer.PermissionsView
 
 function settings(

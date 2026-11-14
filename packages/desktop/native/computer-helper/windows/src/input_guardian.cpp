@@ -430,7 +430,10 @@ void authenticate(const std::shared_ptr<ChildState>& state) {
 
 class NativeGuardian final : public InputGuardian, public std::enable_shared_from_this<NativeGuardian> {
  public:
-  explicit NativeGuardian(std::shared_ptr<InputGuardianDiagnostic> diagnostic) : diagnostic_(std::move(diagnostic)),nonce_(random_hex(32)),tag_(hex_number(random_hex(8))) {
+  // Choose the launch marker in the Windows input metadata's 32-bit domain, then zero-extend it.
+  // This narrows marker entropy to 32 bits; the private control nonce remains independent.
+  // Received hook tags are never masked: ownership still requires exact full-width equality.
+  explicit NativeGuardian(std::shared_ptr<InputGuardianDiagnostic> diagnostic) : diagnostic_(std::move(diagnostic)),nonce_(random_hex(32)),tag_(hex_number(random_hex(4))) {
     if (!tag_) throw std::runtime_error("Guardian tag unavailable.");
     shutdown_event_.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr));
     if (!shutdown_event_) throw std::runtime_error("Guardian shutdown unavailable.");

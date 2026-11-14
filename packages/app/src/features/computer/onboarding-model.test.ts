@@ -16,11 +16,24 @@ const mac: Computer.PermissionsView = {
 const windows: Computer.PermissionsView = {
   ...mac,
   rows: [],
-  windows: { captureBlocked: false, elevated: false },
+  windows: { captureBlocked: false, elevated: false, inputSetup: { state: "ready", mouse: true, keyboard: true } },
 }
 const consentedAt = 1_700_000_000_000
 
 describe("computer onboarding eligibility", () => {
+  test("Windows never finishes without current complete input calibration", () => {
+    for (const inputSetup of [
+      undefined,
+      { state: "needs-calibration" as const, mouse: false, keyboard: false },
+      { state: "calibrating" as const, mouse: true, keyboard: false },
+      { state: "unavailable" as const, mouse: true, keyboard: true },
+      { state: "ready" as const, mouse: true, keyboard: false },
+    ]) {
+      const value = { ...windows, windows: { ...windows.windows!, inputSetup } }
+      expect(ComputerOnboarding.canFinish(value, consentedAt)).toBe(false)
+      expect(ComputerOnboarding.probeBlocked(value)).toBe("computer.inputSetup.required")
+    }
+  })
   test("Finish requires explicit valid consent even after all permissions are granted", () => {
     for (const consent of [undefined, 0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
       expect(ComputerOnboarding.canFinish(mac, consent)).toBe(false)

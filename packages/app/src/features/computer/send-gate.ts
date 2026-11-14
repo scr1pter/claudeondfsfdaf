@@ -44,7 +44,11 @@ export class Refusal extends Error {
 }
 
 // Blockers onboarding itself can clear: a failed check can be retried there, and it opens Windows' capture setting.
-const SETUP = new Set<RefusalKey>(["computer.onboarding.checkFailed", "computer.onboarding.windows.captureBlocked"])
+const SETUP = new Set<RefusalKey>([
+  "computer.onboarding.checkFailed",
+  "computer.onboarding.windows.captureBlocked",
+  "computer.inputSetup.required",
+])
 
 /** How long a readiness read or the engine's capability answer may take before the send fails closed. */
 export const LIMIT = 5000
@@ -53,7 +57,7 @@ export const LIMIT = 5000
  * A permission probe that rejects once `LIMIT` passes without an answer. On the desktop each probe asks the helper,
  * and a hung one would otherwise hold Settings and onboarding, with every change queued behind it.
  */
-export function bounded(probe: Promise<Computer.PermissionsView>) {
+export function bounded<T>(probe: Promise<T>) {
   let timer: ReturnType<typeof setTimeout> | undefined
   const limit = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error("The permission check did not answer")), LIMIT)

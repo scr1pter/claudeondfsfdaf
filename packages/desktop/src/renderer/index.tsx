@@ -366,6 +366,8 @@ function desktopComputer(api: ElectronAPI["computer"]): NonNullable<Platform["co
     setPrefs: (patch) => api.setPrefs(patch).then(settingsFromWire),
     permissions: () => api.permissions(),
     recheck: () => api.recheck(),
+    inputSetup: (action) =>
+      api.inputSetup ? api.inputSetup(action) : Promise.reject(new Error("Input setup is unavailable.")),
     openPane: (id) => api.openPane(id),
     reset: (id) => api.reset(id),
     apps: (query) => api.apps(query),

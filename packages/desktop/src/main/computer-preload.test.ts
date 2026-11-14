@@ -40,6 +40,7 @@ test("window.api.computer invokes exactly the section 2.9 channels, and Linux re
   await computer.setPrefs({ notify: false })
   await computer.permissions()
   await computer.recheck()
+  await computer.inputSetup!("status")
   await computer.openPane("screen")
   await computer.reset("accessibility")
   await computer.apps("Num")
@@ -57,6 +58,7 @@ test("window.api.computer invokes exactly the section 2.9 channels, and Linux re
     ["computer-set-prefs", { notify: false }],
     ["computer-permissions"],
     ["computer-recheck"],
+    ["computer-input-setup", "status"],
     ["computer-open-pane", "screen"],
     ["computer-reset", "accessibility"],
     ["computer-apps", "Num"],

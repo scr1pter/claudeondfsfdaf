@@ -243,11 +243,19 @@ describe("fresh permission truth", () => {
       helperStart: "ok",
       canReset: false,
       adhoc: false,
-      windows: { captureBlocked: false, elevated: false },
+      windows: {
+        captureBlocked: false,
+        elevated: false,
+        inputSetup: { state: "unavailable", mouse: false, keyboard: false },
+      },
     })
     f.state.probe.permissions.captureBlocked = true
     f.state.elevated = true
-    expect((await permissions.list()).windows).toEqual({ captureBlocked: true, elevated: true })
+    expect((await permissions.list()).windows).toEqual({
+      captureBlocked: true,
+      elevated: true,
+      inputSetup: { state: "unavailable", mouse: false, keyboard: false },
+    })
     expect(f.vectorCalls).toEqual([])
     expect(f.requests).toEqual([])
   })

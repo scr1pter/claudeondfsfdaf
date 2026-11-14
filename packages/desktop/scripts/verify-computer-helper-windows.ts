@@ -333,6 +333,13 @@ try {
 } catch { exit 23 }
 `
 
+/** The Windows packaging toolchain requires this protected PowerShell 7 installation; never search PATH. */
+export function windowsHelperPowerShellHost(programFiles = process.env.ProgramFiles ?? "C:\\Program Files") {
+  if (!/^[a-z]:\\Program Files$/i.test(programFiles) || /[\r\n]/.test(programFiles))
+    throw new Error("The Windows helper requires the fixed PowerShell 7 installation under Program Files.")
+  return path.win32.join(programFiles, "PowerShell/7/pwsh.exe")
+}
+
 /** Observe the OS signature without loading the helper or requiring a console/code-page mutation. */
 export async function observeWindowsHelperAuthenticode(
   file: string,
@@ -350,13 +357,10 @@ export async function observeWindowsHelperAuthenticode(
   const timeoutMs = dependencies.timeoutMs === undefined ? 5000 : dependencies.timeoutMs
   if (timeoutMs !== 5000 && timeoutMs !== 10000)
     throw new Error("The Windows helper Authenticode observation timeout is invalid.")
-  const powershell = path.win32.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32/WindowsPowerShell/v1.0/powershell.exe",
-  )
-  // Windows PowerShell uses .NET Framework, whose Console.OutputEncoding setter calls
-  // SetConsoleOutputCP and throws without a console even when the inherited stdout pipe is valid.
-  // Explicit UTF-8 bytes preserve certificate Subjects without that unnecessary console dependency.
+  const powershell = windowsHelperPowerShellHost()
+  // Use the same required PowerShell 7 host as the packaging/signing toolchain. Explicit UTF-8
+  // bytes preserve certificate Subjects without a console dependency. The observed Windows
+  // PowerShell 5 signature-stage refusal does not establish its underlying OS/certificate cause.
   const result = await Promise.resolve()
     .then(() =>
       (dependencies.run ?? runNativeCommand)(

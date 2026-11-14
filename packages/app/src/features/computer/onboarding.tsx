@@ -8,6 +8,7 @@ import { Hands } from "@vectordevai/schema/hands"
 import { useLanguage } from "@/context/language"
 import { ComputerOnboarding } from "./onboarding-model"
 import { createComputerOnboarding } from "./onboarding-controller"
+import { ComputerInputSetup } from "./input-setup"
 
 export type ComputerOnboardingOptions = {
   computer: Computer.ComputerPlatform
@@ -103,6 +104,14 @@ function ComputerOnboardingDialog(
           <Show when={!store.state.loading && blocked()}>{(key) => <p role="alert">{t(key())}</p>}</Show>
           <Show when={store.state.error}>{(key) => <p role="alert">{t(key())}</p>}</Show>
           <Show when={store.state.step !== "consent"}>
+            <Show when={platform() === "windows"}>
+              <ComputerInputSetup
+                computer={props.computer}
+                value={store.state.permissions?.windows?.inputSetup}
+                disabled={busy() || !!blocked()}
+                onChange={props.controller.inputSetupChanged}
+              />
+            </Show>
             <For each={rows()}>
               {(row) => (
                 <div

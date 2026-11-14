@@ -6,6 +6,14 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
+**13 November continuation.** The owner approved the W9 calibration/listener-health redesign. Its native service, trusted desktop setup UI and protocol wiring are implemented in the current candidate. Real mouse motion and a Shift press/release after a current health acknowledgement are required; metadata health alone cannot grant input. Fresh status gates enabling and all explicit Resume routes. The actual passive-health fixture is separate from hardware-calibration proof. Local focused checks and app/desktop typechecking passed; native execution of this redesign remains pending. Earlier owner-pending statements below retain their historical scope.
+
+Full PR run `43167728467`, head `6d23cdb5` and tested merge `2eea3fa83c1a2959e8cb366e65c2269aa7c0fb0d`, supplied new executed evidence: core 30/0/1, isolated 36/0/11, but Stop failed with `guardian-observe-reply-negative-low32-tag-candidate`. This is weak projected-marker correlation, not proof of a matching DOWN or universal Windows truncation. The next candidate uses a nonzero random DWORD-sized launch marker stored as uint64; all received-marker comparisons remain exact, without masking. Its event-marker collision domain is 32 bits rather than the previous 64 bits; the private channel nonce is separate and does not increase event-marker entropy. Native verification is still required.
+
+The dedicated `6d23cdb5` diagnostic `43167720423` instead stopped at the legacy PowerShell signature block (exit 21); it did not execute its runtime cases. Signature observation now requires the fixed absolute PowerShell 7 toolchain host, with unchanged actual OS verification, bounds and signing policy. The required observer runs after independent native diagnostics so its failure cannot hide their results. This host choice still needs actual runtime verification.
+
+Current machine-readable continuation evidence is [hands-windows-validation-2026-11-13.json](./evidence/hands-windows-validation-2026-11-13.json). No native success, release, signing or owner-device proof is claimed by these source changes.
+
 **Latest native observation.** Independent-VM diagnostic
 [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
 at `b286accd` completed with failure. Baseline job `131006042604` passed core

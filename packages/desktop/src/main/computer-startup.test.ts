@@ -7,6 +7,8 @@ import { Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
 import { Hands } from "@vectordevai/schema/hands"
+import { createFakeHelper } from "../../test/computer/fake-helper"
+import type { HelperChannel } from "./computer-helper"
 
 // spawnLocalServer's Electron and desktop-store edges are replaced; no process, window or OS API is used here.
 const forks: { options: { env: Record<string, string> } }[] = []
@@ -314,6 +316,148 @@ describe("startup and the bridge pair (section 2.8)", () => {
       "app:macos:com.apple.iwork.numbers",
     ])
     await expect(runtime.service.block({ key: "builtin:terminals", name: "Terminal" })).rejects.toThrow()
+  })
+})
+
+describe("trusted Windows input setup integration (synthetic helper, not native proof)", () => {
+  function setup() {
+    const data = new Set<(bytes: Uint8Array) => void>()
+    const exits = new Set<(event: { code?: number; signal?: string }) => void>()
+    const requests: { op: string; action?: string }[] = []
+    const fake = createFakeHelper(
+      { platform: "windows", scenario: "notes" },
+      {
+        write: (bytes) => {
+          for (const cb of data) cb(bytes)
+        },
+        exit: (code) => {
+          for (const cb of exits) cb({ code })
+        },
+      },
+    )
+    const channel: HelperChannel = {
+      write(bytes) {
+        requests.push(JSON.parse(Buffer.from(bytes).subarray(4).toString("utf8")))
+        fake.receive(bytes)
+      },
+      end: () => fake.endOfInput(),
+      kill: () => fake.endOfInput(),
+      onData(cb) {
+        data.add(cb)
+        return () => void data.delete(cb)
+      },
+      onExit(cb) {
+        exits.add(cb)
+        return () => void exits.delete(cb)
+      },
+    }
+    const helper = new ComputerHelper({
+      platform: "win32",
+      channel: "dev",
+      packaged: false,
+      check: async () => {},
+      spawn: () => channel,
+      probeCommand: async () => ({
+        code: 0,
+        stdout: JSON.stringify({
+          permissions: { screen: "n/a", accessibility: "n/a" },
+          responsible: true,
+          captureBlocked: false,
+          elevated: false,
+        }),
+      }),
+    })
+    const f = fixture({ platform: "win32", release: "10.0.22631", prefs: { consentedAt: 1, enabled: false }, helper })
+    return { ...f, fake, requests }
+  }
+  async function flush() {
+    for (let i = 0; i < 60; i++) await Promise.resolve()
+  }
+
+  test("enabling and every trusted renderer/tray Resume read fresh readiness and fail closed", async () => {
+    const f = setup()
+    const runtime = await f.start()
+    await expect(runtime.service.setPrefs({ enabled: true })).rejects.toThrow("Calibrate input detection")
+    expect(runtime.service.prefs().prefs.enabled).toBe(false)
+    expect(await runtime.service.inputSetup!("start")).toEqual({ state: "calibrating", mouse: false, keyboard: false })
+    expect(f.fake.control({ type: "synthetic_input_setup", mouse: true, keyboard: true, healthy: true })).toBe(true)
+    expect((await runtime.service.setPrefs({ enabled: true })).prefs.enabled).toBe(true)
+    expect(await runtime.service.status()).toMatchObject({ available: true })
+    await runtime.service.inputSetup!("reset")
+    expect(await runtime.service.status()).toMatchObject({ available: false, reason: "permissions" })
+    const before = () => f.requests.filter((item) => item.op === "input.setup" && item.action === "status").length
+    for (const command of ["resume", "hand-over", "not-now"] as const) {
+      const ipc = before()
+      await expect(runtime.service.command(command)).rejects.toThrow("Calibrate input detection")
+      expect(before()).toBeGreaterThan(ipc)
+    }
+    const tray = before()
+    runtime.trayCommand("resume")
+    await flush()
+    expect(before()).toBeGreaterThan(tray)
+    expect(runtime.service.state().holder).toBeUndefined()
+    expect(f.requests.some((item) => item.op === "session.begin")).toBe(false)
+  })
+
+  test("start and reset pause an existing holder; status and becoming ready never Resume it", async () => {
+    const f = setup()
+    const runtime = await f.start()
+    await runtime.service.inputSetup!("start")
+    f.fake.control({ type: "synthetic_input_setup", mouse: true, keyboard: true, healthy: true })
+    await runtime.service.setPrefs({ enabled: true })
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async () => Response.json({ paths: [], directories: [] })) as typeof fetch
+    try {
+      runtime.attach({
+        url: "http://127.0.0.1:4096",
+        password: "synthetic",
+        source: {
+          async *events(signal: AbortSignal) {
+            yield { directory: "/virtual/a", payload: { type: "server.connected" } }
+            await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+          },
+          statuses: async () => ({}),
+          requests: async () => [],
+          drains: async () => [],
+          prompts: async () => [],
+        },
+      })
+      await flush()
+      const request = {
+        v: 1 as const,
+        command: "acquire" as const,
+        rootSessionID: "ses_setup",
+        sessionID: "ses_setup",
+        directory: "/virtual/a",
+        title: "Synthetic setup holder",
+      }
+      const key = Object.freeze({
+        id: 1,
+        command: "acquire" as const,
+        rootSessionID: "ses_setup",
+        sessionID: "ses_setup",
+        directory: "/virtual/a",
+      })
+      const acquired = await f.captured.start!.executor.run(request, key)
+      expect(acquired).toHaveProperty("lease")
+      const holder = runtime.service.state().holder
+      expect(holder?.sessionID).toBe("ses_setup")
+      await runtime.service.inputSetup!("start")
+      expect(runtime.service.state()).toMatchObject({ phase: "paused", holder })
+      f.fake.control({ type: "synthetic_input_setup", mouse: true, keyboard: true, healthy: true })
+      expect(await runtime.service.inputSetup!("status")).toMatchObject({ state: "ready" })
+      expect(runtime.service.state()).toMatchObject({ phase: "paused", holder })
+      await runtime.service.inputSetup!("reset")
+      expect(runtime.service.state()).toMatchObject({ phase: "paused", holder })
+      expect(await runtime.service.inputSetup!("status")).toMatchObject({ state: "needs-calibration" })
+      expect(
+        f.requests.some(
+          (item) => item.op.startsWith("input.") && !["input.setup", "input.releaseAll"].includes(item.op),
+        ),
+      ).toBe(false)
+    } finally {
+      globalThis.fetch = realFetch
+    }
   })
 })
 

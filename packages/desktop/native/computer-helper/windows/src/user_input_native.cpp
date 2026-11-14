@@ -124,27 +124,49 @@ std::optional<UserInputModifier> modifier(const RAWKEYBOARD& key) noexcept {
 
 struct NativeListener final : std::enable_shared_from_this<NativeListener> {
   struct Attachment { std::shared_ptr<NativeListener> state; };
-  std::mutex lifecycle_mutex,probe_mutex;
-  winrt::handle stop_event,ready_event,probe_event,thread;
+  std::mutex lifecycle_mutex,health_mutex;
+  winrt::handle stop_event,ready_event,health_event,thread;
   std::atomic<HANDLE> stop_signal{nullptr},thread_witness{nullptr};
   std::function<void(UserInputSample)> receive;
-  std::array<uint64_t,8> probes{}; size_t probe_count=0;
+  std::function<void(UserInputHealthReceipt)> receive_health;
+  std::array<UserInputHealthChallenge,8> challenges{}; size_t challenge_count=0;
+  uint64_t last_health_sequence=0;
   std::atomic<bool> attempted{false},closed{false},installed{false},registered{false},alive{false};
-  std::atomic<uint64_t> listener_generation{0};
+  std::atomic<uint64_t> listener_generation{0},context_generation{0};
 
   UserInputListenerStatus status()const noexcept {
     UserInputListenerStatus value;
-    const auto first=listener_generation.load();
-    value={installed.load(),registered.load(),alive.load()&&!closed.load(),first};
-    if (listener_generation.load()!=first) value.alive=false;
+    const auto first=listener_generation.load(),context=context_generation.load();
+    value={installed.load(),registered.load(),alive.load()&&!closed.load(),first,context};
+    if (!context || listener_generation.load()!=first || context_generation.load()!=context) value.alive=false;
+    return value;
+  }
+  uint64_t invalidate_context() noexcept {
+    auto observed=context_generation.load();
+    while (observed && observed!=std::numeric_limits<uint64_t>::max()) {
+      if (context_generation.compare_exchange_weak(observed,observed+1)) return observed+1;
+    }
+    fail(); return 0;
+  }
+  UserInputEnvironment environment() noexcept {
+    if (closed.load() || !alive.load()) return {WindowsSurfaceState::unavailable,monotonic(),context_generation.load()};
+    auto value=observe_environment();
+    if (value.state!=WindowsSurfaceState::ready) (void)invalidate_context();
+    value.context_generation=context_generation.load();
     return value;
   }
   void sample(UserInputSample value) noexcept {
     if (closed.load()) return;
+    const auto current_context=context_generation.load();
+    // Invalidation metadata cannot calibrate. Hardware/injected packets retain their observed
+    // lineage; a concurrent context change must never relabel old input into a new setup scope.
+    if (value.kind==UserInputKind::configuration || value.origin==UserInputOrigin::unknown) value.context_generation=current_context;
+    else if (!value.context_generation || value.context_generation!=current_context) { configuration(); return; }
     try { if (receive) receive(std::move(value)); }
     catch (...) { fail(); }
   }
   void configuration() noexcept {
+    (void)invalidate_context();
     UserInputSample value; value.listener_generation=listener_generation.load(); value.observed_at_ms=monotonic();
     sample(std::move(value));
   }
@@ -153,7 +175,7 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     if (stop_event) SetEvent(stop_event.get());
   }
   void raw(WPARAM wparam,LPARAM lparam) noexcept {
-    const auto observed=monotonic();
+    const auto context=context_generation.load(); const auto observed=monotonic();
     INPUT_MESSAGE_SOURCE source{};
     // Capture provenance in this exact WM_INPUT context, before any deferred work. Microsoft does
     // not promise that every WM_INPUT context supplies it; unavailable/system stays unknown.
@@ -165,7 +187,7 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     const auto& raw=packet;
     if (raw.header.dwSize!=size || raw.header.wParam!=wparam ||
         (raw.header.dwType!=RIM_TYPEMOUSE && raw.header.dwType!=RIM_TYPEKEYBOARD)) { configuration(); return; }
-    UserInputSample value; value.listener_generation=listener_generation.load(); value.observed_at_ms=observed;
+    UserInputSample value; value.listener_generation=listener_generation.load(); value.observed_at_ms=observed; value.context_generation=context;
     value.origin=classify_user_input_origin(source,known,raw.header.dwType);
     if (raw.header.dwType==RIM_TYPEKEYBOARD) {
       if (size<offsetof(RAWINPUT,data)+sizeof(RAWKEYBOARD)) { configuration(); return; }
@@ -195,6 +217,7 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     }
     // ExtraInformation is ULONG32, not MOUSEINPUT.dwExtraInfo's ULONG_PTR64. It is never widened
     // into invented full-marker evidence. No names, values, Unicode translation or persistence.
+    if (value.origin==UserInputOrigin::unknown) (void)invalidate_context();
     sample(std::move(value));
   }
   static LRESULT CALLBACK window_proc(HWND hwnd,UINT message,WPARAM wparam,LPARAM lparam) noexcept {
@@ -215,17 +238,46 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     // In particular RIM_INPUT must reach DefWindowProc for the system's Raw Input cleanup.
     return DefWindowProcW(hwnd,message,wparam,lparam);
   }
-  void process_probes() noexcept {
-    std::array<uint64_t,8> queued{}; size_t count=0;
-    { std::lock_guard lock(probe_mutex); count=probe_count; std::copy_n(probes.begin(),count,queued.begin()); probe_count=0; ResetEvent(probe_event.get()); }
-    for (size_t i=0;i<count && !closed.load();++i) {
-      if (observe_environment().state!=WindowsSurfaceState::ready) { configuration(); continue; }
-      INPUT input{}; input.type=INPUT_MOUSE; input.mi.dwFlags=MOUSEEVENTF_MOVE|MOUSEEVENTF_MOVE_NOCOALESCE;
-      input.mi.dwExtraInfo=static_cast<ULONG_PTR>(queued[i]);
-      // Acceptance is NOT receipt. A zero-distance move is not guaranteed to produce WM_INPUT.
-      // The service waits for the actual raw packet or fails closed with probe_missing in500ms.
-      // https://github.com/wine-mirror/wine/blob/c28e3a549fc76b9c3c2f92058db98a1c78a9325d/server/queue.c#L2219
-      if (SendInput(1,&input,sizeof(input))!=1) configuration();
+  bool challenge_current(const UserInputHealthChallenge& value,uint64_t now)const noexcept {
+    return value.listener_generation && value.context_generation && value.scope_ticket && value.sequence &&
+      value.listener_generation==listener_generation.load() && value.context_generation==context_generation.load() &&
+      value.deadline_ms>value.sent_at_ms && value.deadline_ms-value.sent_at_ms==500 &&
+      now>=value.sent_at_ms && now<value.deadline_ms;
+  }
+  bool pump_messages() noexcept {
+    MSG message{};
+    for (size_t read=0;read<64 && !closed.load() && PeekMessageW(&message,nullptr,0,0,PM_REMOVE);++read) {
+      if (message.message==WM_QUIT) { fail(); return false; }
+      DispatchMessageW(&message);
+    }
+    if (closed.load()) return false;
+    // A backlog is not a health acknowledgement; the original challenge deadline keeps running.
+    return !PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE);
+  }
+  void process_health(HWND hwnd) noexcept {
+    const auto held=thread_witness.load();
+    if (!held || GetThreadId(held)!=GetCurrentThreadId()) { fail(); return; }
+    std::array<UserInputHealthChallenge,8> queued{}; size_t count=0;
+    { std::lock_guard lock(health_mutex); count=challenge_count; std::copy_n(challenges.begin(),count,queued.begin()); challenge_count=0; ResetEvent(health_event.get()); }
+    for (size_t i=0;i<count && !closed.load() && alive.load();++i) {
+      const auto& challenge=queued[i];
+      if (!challenge_current(challenge,monotonic())) continue;
+      if (!own_routes(hwnd)) { configuration(); registered.store(false); fail(); return; }
+      const auto observed_environment=environment();
+      if (closed.load()) continue;
+      if (!own_routes(hwnd)) { configuration(); registered.store(false); fail(); return; }
+      // Charge every route/environment query to the original absolute challenge deadline.
+      const auto observed=monotonic(); const auto listener=status();
+      if (closed.load() || observed<challenge.sent_at_ms || observed>=challenge.deadline_ms) continue;
+      const bool healthy=listener.installed && listener.registered && listener.alive &&
+        listener.generation==challenge.listener_generation && listener.context_generation==challenge.context_generation &&
+        observed_environment.state==WindowsSurfaceState::ready && observed_environment.context_generation==challenge.context_generation &&
+        observed_environment.observed_at_ms>=challenge.sent_at_ms && observed_environment.observed_at_ms<=observed &&
+        observed-observed_environment.observed_at_ms<500 && challenge_current(challenge,observed);
+      // This typed acknowledgement proves only bounded listener/route/context work. It never
+      // synthesizes Raw Input or establishes the separate hardware-calibration evidence.
+      try { if (receive_health) receive_health({challenge,observed_environment,observed,healthy}); else fail(); }
+      catch (...) { fail(); }
     }
   }
   bool own_routes(HWND hwnd) noexcept {
@@ -271,18 +323,15 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
       if (did_register) registered.store(true);
       if (!did_register || closed.load() || !own_routes(hwnd)) throw std::runtime_error("user-input.registration");
       alive.store(true); SetEvent(ready_event.get());
-      const HANDLE waits[]={stop_event.get(),probe_event.get()};
+      const HANDLE waits[]={stop_event.get(),health_event.get()};
       while (!closed.load()) {
         const auto result=MsgWaitForMultipleObjectsEx(static_cast<DWORD>(std::size(waits)),waits,50,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
         if (result==WAIT_OBJECT_0) break;
         if (result==WAIT_FAILED || result==WAIT_ABANDONED_0 || result==WAIT_ABANDONED_0+1) throw std::runtime_error("user-input.wait");
-        if (result==WAIT_OBJECT_0+1) process_probes();
-        MSG message{};
-        for (size_t read=0;read<64 && !closed.load() && PeekMessageW(&message,nullptr,0,0,PM_REMOVE);++read) {
-          if (message.message==WM_QUIT) { fail(); break; }
-          DispatchMessageW(&message);
-        }
+        const bool pumped=pump_messages();
+        if (WaitForSingleObject(stop_event.get(),0)==WAIT_OBJECT_0) break;
         if (!closed.load() && !own_routes(hwnd)) { configuration(); registered.store(false); fail(); break; }
+        if (pumped && WaitForSingleObject(health_event.get(),0)==WAIT_OBJECT_0) process_health(hwnd);
         if (WaitForSingleObject(stop_event.get(),0)==WAIT_OBJECT_0) break;
       }
       alive.store(false);
@@ -300,15 +349,15 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     std::unique_ptr<std::shared_ptr<NativeListener>> context(static_cast<std::shared_ptr<NativeListener>*>(raw));
     const auto state=*context; context.reset(); state->run(); return 0;
   }
-  bool start(std::function<void(UserInputSample)> callback) noexcept {
-    if (!callback || closed.load() || attempted.exchange(true)) return false;
+  bool start(std::function<void(UserInputSample)> callback,std::function<void(UserInputHealthReceipt)> health_callback) noexcept {
+    if (!callback || !health_callback || closed.load() || attempted.exchange(true)) return false;
     try {
       { std::lock_guard lock(registration_mutex); if (registration_poisoned.load() || registration_owner.lock()) { closed.store(true); return false; } registration_owner=shared_from_this(); }
       { std::lock_guard lock(lifecycle_mutex);
         if (closed.load()) return false;
-        const auto issued=generation(); if (!issued) return false; listener_generation.store(issued); receive=std::move(callback);
-        stop_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr)); ready_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr)); probe_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr));
-        if (!stop_event || !ready_event || !probe_event) { closed.store(true); registration_poisoned.store(true); return false; }
+        const auto issued=generation(); if (!issued) return false; listener_generation.store(issued); context_generation.store(1); receive=std::move(callback); receive_health=std::move(health_callback);
+        stop_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr)); ready_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr)); health_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr));
+        if (!stop_event || !ready_event || !health_event) { closed.store(true); registration_poisoned.store(true); return false; }
         stop_signal.store(stop_event.get());
         auto context=std::make_unique<std::shared_ptr<NativeListener>>(shared_from_this());
         const auto launched=CreateThread(nullptr,0,thread_proc,context.get(),0,nullptr);
@@ -319,12 +368,13 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
       return true;
     } catch (...) { registration_poisoned.store(true); close(); return false; }
   }
-  bool probe(uint64_t marker) noexcept {
-    if (!marker || closed.load() || !status().alive) return false;
-    std::lock_guard lock(probe_mutex);
-    if (closed.load() || probe_count>=probes.size() || !probe_event) return false;
-    probes[probe_count++]=marker;
-    if (!SetEvent(probe_event.get())) { fail(); return false; }
+  bool health(const UserInputHealthChallenge& challenge) noexcept {
+    if (closed.load() || !status().alive || !challenge_current(challenge,monotonic())) return false;
+    std::lock_guard lock(health_mutex);
+    if (closed.load() || !status().alive || !health_event || challenge_count>=challenges.size() ||
+        challenge.sequence<=last_health_sequence || !challenge_current(challenge,monotonic())) return false;
+    challenges[challenge_count++]=challenge; last_health_sequence=challenge.sequence;
+    if (!SetEvent(health_event.get())) { fail(); return false; }
     return true;
   }
   void close() noexcept {
@@ -347,10 +397,10 @@ UserInputOrigin classify_user_input_origin(const INPUT_MESSAGE_SOURCE& source,bo
 UserInputBackend UserInputBackend::system() {
   const auto state=std::make_shared<NativeListener>();
   UserInputBackend backend;
-  backend.start=[state](auto receive){return state->start(std::move(receive));};
+  backend.start=[state](auto receive,auto health_receive){return state->start(std::move(receive),std::move(health_receive));};
   backend.status=[state]{return state->status();};
-  backend.environment=observe_environment;
-  backend.probe=[state](uint64_t marker){return state->probe(marker);};
+  backend.environment=[state]{return state->environment();};
+  backend.health=[state](const UserInputHealthChallenge& challenge){return state->health(challenge);};
   backend.close=[state]{state->close();};
   return backend;
 }

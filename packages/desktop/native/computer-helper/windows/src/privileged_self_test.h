@@ -14,14 +14,14 @@ struct CaptureReceipt;
 struct WindowsRect;
 enum class WindowsInventoryDiagnostic;
 enum class CaptureReadPhase;
-inline constexpr std::array<std::wstring_view, 16> windows_privileged_checks{
+inline constexpr std::array<std::wstring_view, 17> windows_privileged_checks{
   L"privileged-isolated-target", L"apps-running-target", L"apps-installed-target",
   L"capture-color-patch", L"capture-affinity-exclusion", L"uia-counter-increment",
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
-  L"capture-isolated-window-worker"};
-inline constexpr std::array<std::wstring_view, 156> windows_privileged_stages{
+  L"capture-isolated-window-worker", L"input-listener-health"};
+inline constexpr std::array<std::wstring_view, 159> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -72,7 +72,8 @@ inline constexpr std::array<std::wstring_view, 156> windows_privileged_stages{
   L"capture-color-masked-unknown", L"capture-color-unmasked-screen", L"capture-color-unmasked-window",
   L"capture-color-unmasked-unknown", L"capture-color-mask-unknown-screen", L"capture-color-mask-unknown-window",
   L"capture-color-mask-unknown-unknown",
-  L"affinity-sample-plan", L"affinity-fixture-current", L"affinity-native-sample-missing", L"affinity-native-sample-mismatch", L"affinity-display-proof"};
+  L"affinity-sample-plan", L"affinity-fixture-current", L"affinity-native-sample-missing", L"affinity-native-sample-mismatch", L"affinity-display-proof",
+  L"input-listener-setup", L"input-listener-health", L"input-calibration-required"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",

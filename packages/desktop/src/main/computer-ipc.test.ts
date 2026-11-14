@@ -55,6 +55,7 @@ function fixture() {
     setPrefs: record("setPrefs", settings) as never,
     permissions: record("permissions") as never,
     recheck: record("recheck") as never,
+    inputSetup: record("inputSetup", { state: "needs-calibration", mouse: false, keyboard: false }) as never,
     openPane: record("openPane") as never,
     reset: record("reset") as never,
     apps: record("apps", []) as never,
@@ -96,6 +97,7 @@ function fixture() {
 
 const ARGS: Record<string, unknown[]> = {
   "computer-command": ["stop"],
+  "computer-input-setup": ["status"],
   "computer-set-prefs": [{ notify: false }],
   "computer-open-pane": ["screen"],
   "computer-reset": ["screen"],
@@ -136,6 +138,7 @@ describe("computer renderer IPC", () => {
       "setPrefs",
       "permissions",
       "recheck",
+      "inputSetup",
       "openPane",
       "reset",
       "apps",
@@ -154,6 +157,8 @@ describe("computer renderer IPC", () => {
       Promise.resolve().then(() => f.handlers.get(channel)!(trusted, ...args))
     for (const [channel, args] of [
       ["computer-command", ["always"]],
+      ["computer-input-setup", [{ action: "start", ready: true }]],
+      ["computer-input-setup", ["resume"]],
       ["computer-command", ["stop-session", { sessionID: "ses_a", extra: true }]],
       ["computer-set-prefs", [{ granted: undefined, hidden: true }]],
       ["computer-set-prefs", [[]]],

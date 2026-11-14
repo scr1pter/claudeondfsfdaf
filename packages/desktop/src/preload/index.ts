@@ -166,6 +166,7 @@ const api: ElectronAPI = {
     setPrefs: (patch) => ipcRenderer.invoke("computer-set-prefs", patch),
     permissions: () => ipcRenderer.invoke("computer-permissions"),
     recheck: () => ipcRenderer.invoke("computer-recheck"),
+    inputSetup: (action) => ipcRenderer.invoke("computer-input-setup", action),
     openPane: (id) => ipcRenderer.invoke("computer-open-pane", id),
     reset: (id) => ipcRenderer.invoke("computer-reset", id),
     apps: (query) => ipcRenderer.invoke("computer-apps", query),

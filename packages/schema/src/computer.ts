@@ -1372,6 +1372,28 @@ export const PermissionsStatus = Schema.Struct({
   captureBlocked: optional(Schema.Boolean),
 }).annotate({ identifier: "Computer.PermissionsStatus" })
 
+/** Trusted Windows setup UI only; never an agent tool action or bridge command. */
+export const InputSetupAction = Schema.Literals(["status", "start", "reset"]).annotate({
+  identifier: "Computer.InputSetupAction",
+})
+export type InputSetupAction = typeof InputSetupAction.Type
+export interface InputSetupStatus extends Schema.Schema.Type<typeof InputSetupStatus> {}
+export const InputSetupStatus = Schema.Struct({
+  state: Schema.Literals(["needs-calibration", "calibrating", "ready", "unavailable"]),
+  mouse: Schema.Boolean,
+  keyboard: Schema.Boolean,
+})
+  .check(
+    Schema.makeFilter((value) => value.state !== "ready" || (value.mouse && value.keyboard), {
+      expected: "ready only after both raw input classes have calibrated",
+    }),
+  )
+  .annotate({ identifier: "Computer.InputSetupStatus" })
+
+export function inputSetupReady(value: InputSetupStatus | undefined): boolean {
+  return value?.state === "ready" && value.mouse === true && value.keyboard === true
+}
+
 export interface HelperHello extends Schema.Schema.Type<typeof HelperHello> {}
 export const HelperHello = Schema.Struct({
   protocol: Version,
@@ -1696,6 +1718,7 @@ export const HelperOps = {
   "permissions.request": { args: op("permissions.request", { service: Service }), result: PermissionsStatus },
   /** Resets only the helper's own entry. */
   "permissions.reset": { args: op("permissions.reset", { service: Service }), result: PermissionsStatus },
+  "input.setup": { args: op("input.setup", { action: InputSetupAction }), result: InputSetupStatus },
   "session.begin": { args: op("session.begin", SessionBegin.fields), result: Schema.Struct({}) },
   "session.update": {
     args: op("session.update", {
@@ -1982,7 +2005,12 @@ export type PermissionsView = {
   adhoc: boolean
   helperStart: "ok" | "failed"
   vectorHoldsGrant: { screen: boolean; accessibility: boolean }
-  windows?: { captureBlocked: boolean; elevated: boolean }
+  windows?: {
+    captureBlocked: boolean
+    elevated: boolean
+    /** Absent on an older/unavailable helper; absence must never enable Windows input. */
+    inputSetup?: InputSetupStatus
+  }
 }
 
 /** Commands the renderer and tray send to main. None hides the glow or banner. */
@@ -2034,6 +2062,7 @@ export const IPC_CHANNELS = Object.freeze([
   "computer-set-prefs",
   "computer-permissions",
   "computer-recheck",
+  "computer-input-setup",
   "computer-open-pane",
   "computer-reset",
   "computer-apps",
@@ -2064,6 +2093,8 @@ export interface ComputerPlatform {
   setPrefs(p: Partial<ComputerPrefs>): Promise<ResolvedComputerSettings>
   permissions(): Promise<PermissionsView>
   recheck(): Promise<PermissionsView>
+  /** Optional only for older fake platforms. Windows callers must treat absence as unavailable. */
+  inputSetup?(action: InputSetupAction): Promise<InputSetupStatus>
   openPane(id: "screen" | "accessibility" | "windows-capture"): Promise<void>
   reset(id: "screen" | "accessibility"): Promise<PermissionsView>
   apps(
@@ -2140,6 +2171,7 @@ export const PLATFORM_KEYS = keysOf<ComputerPlatform>()([
   "setPrefs",
   "permissions",
   "recheck",
+  "inputSetup",
   "openPane",
   "reset",
   "apps",

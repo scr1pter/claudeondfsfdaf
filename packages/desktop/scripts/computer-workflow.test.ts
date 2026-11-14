@@ -862,7 +862,7 @@ test("Windows unit and diagnostic lanes exercise the packed Main pin reader befo
   )
 })
 
-test("Windows diagnostics exercise the actual hidden signature observer before native runtime checks", () => {
+test("Windows diagnostics independently require the hidden signature observer after native runtime checks", () => {
   const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
   const build = current.findIndex((step) => step.name === "Build only the x64 native diagnostic artifacts")
   const observer = current.find(
@@ -870,10 +870,27 @@ test("Windows diagnostics exercise the actual hidden signature observer before n
   )!
   expect(build).toBeGreaterThan(-1)
   expect(current.indexOf(observer)).toBeGreaterThan(build)
-  expect(current.indexOf(observer)).toBeLessThan(
+  expect(current.indexOf(observer)).toBeGreaterThan(
     current.findIndex((step) => step.name === "Run Windows unit and fresh version/probe checks"),
   )
-  expect(observer.if).toBeUndefined()
+  expect(observer.if).toBe("${{ always() && steps.native_build.outcome == 'success' }}")
+  expect(current[build]!.id).toBe("native_build")
+  expect(current.indexOf(observer)).toBeGreaterThan(current.findIndex((step) => step.id === "staged_move_probe"))
+  for (const outcome of ["success", "failure", "skipped", "cancelled"])
+    for (const successful of [false, true])
+      expect(
+        expression(
+          String(observer.if),
+          {},
+          "workflow_dispatch",
+          "refs/heads/hands",
+          {},
+          {
+            success: successful,
+            steps: { native_build: { outcome } },
+          },
+        ),
+      ).toBe(outcome === "success")
   expect(observer["continue-on-error"]).toBeUndefined()
   expect(observer["timeout-minutes"]).toBe(2)
   const script = String(observer.run)

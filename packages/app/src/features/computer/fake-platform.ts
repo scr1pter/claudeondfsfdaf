@@ -23,6 +23,8 @@ export interface FakeComputerScript {
   permissions?: PermissionSequence
   recheck?: PermissionSequence
   reset?: PermissionSequence
+  /** Explicit synthetic setup state; omitted Windows fixtures remain uncalibrated. */
+  inputSetup?: Computer.InputSetupStatus
   apps?: App[]
   /** Each apps() answer waits for releaseApps(), so a browser test can act before an app lookup lands. */
   holdApps?: boolean
@@ -41,6 +43,7 @@ export type FakeComputerCall =
   | { method: "openPane"; id: "screen" | "accessibility" | "windows-capture" }
   | { method: "reset"; id: "screen" | "accessibility" }
   | { method: "deleteScreenshots" }
+  | { method: "inputSetup"; action: Computer.InputSetupAction }
 
 export interface FakeComputer extends Computer.ComputerPlatform {
   /** Commands only record intent. Tests explicitly emit the next desktop state. */
@@ -129,7 +132,15 @@ export function createFakeComputer(script: FakeComputerScript = {}): FakeCompute
       adhoc: false,
       helperStart: "ok",
       vectorHoldsGrant: { screen: false, accessibility: false },
-      ...(windows ? { windows: { captureBlocked: false, elevated: false } } : {}),
+      ...(windows
+        ? {
+            windows: {
+              captureBlocked: false,
+              elevated: false,
+              inputSetup: seed.inputSetup ?? { state: "needs-calibration", mouse: false, keyboard: false },
+            },
+          }
+        : {}),
     },
     apps: seed.apps ?? [],
     removed: seed.removedScreenshots ?? 0,
@@ -192,6 +203,22 @@ export function createFakeComputer(script: FakeComputerScript = {}): FakeCompute
     },
     permissions: async () => permissionView("permissions"),
     recheck: async () => permissionView("recheck"),
+    inputSetup: async (action) => {
+      log.push({ method: "inputSetup", action })
+      if (!windows) throw new Error("Input calibration is unavailable on this platform.")
+      const setup =
+        action === "reset"
+          ? { state: "needs-calibration" as const, mouse: false, keyboard: false }
+          : action === "start"
+            ? { state: "calibrating" as const, mouse: false, keyboard: false }
+            : (current.permissions.windows?.inputSetup ??
+              seed.inputSetup ?? { state: "unavailable" as const, mouse: false, keyboard: false })
+      current.permissions = {
+        ...current.permissions,
+        windows: { captureBlocked: false, elevated: false, ...current.permissions.windows, inputSetup: setup },
+      }
+      return structuredClone(setup)
+    },
     openPane: async (id) => {
       log.push({ method: "openPane", id })
     },

@@ -206,7 +206,15 @@ describe("computer send gate: local readiness", () => {
   })
 
   test("a ready Windows platform needs its clean capture and elevation flags", async () => {
-    const windows = { ...granted, rows: [], windows: { captureBlocked: false, elevated: false } }
+    const windows = {
+      ...granted,
+      rows: [],
+      windows: {
+        captureBlocked: false,
+        elevated: false,
+        inputSetup: { state: "ready" as const, mouse: true, keyboard: true },
+      },
+    }
     const script = { prefs: { enabled: true, consentedAt: 1 }, state: { backend: "local-windows" as const } }
     expect(
       await ComputerSendGate.check({
@@ -225,7 +233,15 @@ describe("computer send gate: local readiness", () => {
   })
 
   test("what only the fresh probe reports gets its own sentence, and Set up only where onboarding can fix it", async () => {
-    const windows = { ...granted, rows: [], windows: { captureBlocked: false, elevated: false } }
+    const windows = {
+      ...granted,
+      rows: [],
+      windows: {
+        captureBlocked: false,
+        elevated: false,
+        inputSetup: { state: "ready" as const, mouse: true, keyboard: true },
+      },
+    }
     const script = { prefs: { enabled: true, consentedAt: 1 }, state: { backend: "local-windows" as const } }
     // The desktop's status has not caught up with what the probe found, so only the permission view reports it.
     const cases: [FakeComputerScript, ComputerSendGate.RefusalKey, "setup" | "local"][] = [

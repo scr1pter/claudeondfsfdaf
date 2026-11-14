@@ -17,6 +17,7 @@ import {
   checkWindowsHelperFinalVersion,
   inspectWindowsHelperPe,
   observeWindowsHelperAuthenticode,
+  windowsHelperPowerShellHost,
 } from "./verify-computer-helper-windows"
 
 const packageDirectory = fileURLToPath(new URL("../", import.meta.url))
@@ -220,7 +221,7 @@ export async function prepareWindowsComputerHelpers(
     if (environment.GITHUB_ACTIONS !== "true" || required.some((name) => !environment[name]?.trim()))
       throw new Error("The required Windows helper signing credentials are not configured.")
     await command(
-      "pwsh",
+      windowsHelperPowerShellHost(),
       [
         "-NoLogo",
         "-NoProfile",

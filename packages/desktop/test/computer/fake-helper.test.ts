@@ -19,6 +19,60 @@ import { encodeFrame, readTranscript, replay, type Channel } from "./transcript"
 const FIXTURES = path.join(import.meta.dir, "../fixtures/computer-protocol")
 const FULL_DISPLAY = { maxWidth: 4096, maxHeight: 4096, maxPixels: 4096 * 4096 }
 
+describe("labelled synthetic Windows input setup (not native proof)", () => {
+  test("status cannot calibrate, synthetic gestures require health, and reset invalidates readiness", () => {
+    const fake = start({ platform: "windows", scenario: "notes" })
+    expect(fake.call("input.setup", { action: "status" })).toMatchObject({
+      ok: true,
+      state: "needs-calibration",
+      mouse: false,
+      keyboard: false,
+    })
+    expect(fake.helper.control({ type: "synthetic_input_setup", mouse: true, keyboard: true, healthy: true })).toBe(
+      false,
+    )
+    expect(fake.call("input.setup", { action: "start" })).toMatchObject({
+      ok: true,
+      state: "calibrating",
+      mouse: false,
+      keyboard: false,
+    })
+    expect(fake.call("input.setup", { action: "status" })).toMatchObject({
+      state: "calibrating",
+      mouse: false,
+      keyboard: false,
+    })
+    expect(fake.helper.control({ type: "synthetic_input_setup", mouse: true, keyboard: true, healthy: false })).toBe(
+      true,
+    )
+    expect(fake.call("input.setup", { action: "status" })).toMatchObject({
+      state: "calibrating",
+      mouse: true,
+      keyboard: true,
+    })
+    expect(fake.helper.control({ type: "synthetic_input_setup", mouse: true, keyboard: true, healthy: true })).toBe(
+      true,
+    )
+    expect(fake.call("input.setup", { action: "status" })).toMatchObject({
+      state: "ready",
+      mouse: true,
+      keyboard: true,
+    })
+    expect(fake.call("input.setup", { action: "reset" })).toMatchObject({
+      state: "needs-calibration",
+      mouse: false,
+      keyboard: false,
+    })
+    expect(fake.kinds()).not.toContain("input")
+  })
+
+  test("macOS does not expose Windows setup", () => {
+    const fake = start()
+    for (const action of ["status", "start", "reset"])
+      expect(fake.call("input.setup", { action })).toMatchObject({ ok: false, code: "unsupported_action" })
+  })
+})
+
 describe("windowless macOS app-menu observations", () => {
   const tree = (fake: ReturnType<typeof start>, slot = "notes", extra: Message = {}) =>
     fake.call("ui.tree", { pid: fake.helper.desktop.app(slot)!.pid, maxNodes: 50, maxDepth: 4, ...extra })

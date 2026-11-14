@@ -1,6 +1,8 @@
 import { createContext, createEffect, createMemo, createSignal, onCleanup, useContext, type Accessor } from "solid-js"
 import { Option, Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
+import { createStore } from "solid-js/store"
+import { ComputerSendGate } from "./send-gate"
 
 export type ComputerStateInput = {
   /** The desktop platform, passed only when the desktop owns this engine's Hands runs. */
@@ -21,6 +23,8 @@ export type ComputerStateValue = {
   state: Accessor<Computer.ComputerState | undefined>
   /** Present when the desktop owns the run: Stop, Take over and Resume go to it. */
   desktop?: Computer.ComputerPlatform
+  /** Windows Resume remains disabled until its current native setup status is verified. */
+  resumeReady?: Accessor<boolean>
 }
 
 /** Undefined outside a session page. The Tasks button, the Tasks pane and the composer share one subscription. */
@@ -46,6 +50,35 @@ export function createComputerState(input: ComputerStateInput): ComputerStateVal
   const [state, setState] = createSignal<Computer.ComputerState>()
   const desktop = input.desktop
   if (desktop) {
+    const [setup, setSetup] = createStore({ ready: false })
+    const windowsPaused = createMemo(() => state()?.backend === "local-windows" && state()?.phase === "paused")
+    createEffect(() => {
+      if (!windowsPaused()) return
+      let retired = false
+      let pending = false
+      setSetup("ready", false)
+      const check = async () => {
+        if (pending || retired) return
+        pending = true
+        try {
+          if (!desktop.inputSetup) throw new Error("Input setup unavailable")
+          const value = await ComputerSendGate.bounded(desktop.inputSetup("status"))
+          const decoded = Schema.decodeUnknownOption(Computer.InputSetupStatus, { onExcessProperty: "error" })(value)
+          if (!retired) setSetup("ready", Option.isSome(decoded) && Computer.inputSetupReady(decoded.value))
+        } catch {
+          if (!retired) setSetup("ready", false)
+        } finally {
+          pending = false
+        }
+      }
+      void check()
+      const timer = setInterval(() => void check(), 1000)
+      onCleanup(() => {
+        retired = true
+        clearInterval(timer)
+        setSetup("ready", false)
+      })
+    })
     // An event that arrives while a read is in flight is newer than that read's answer.
     let live = false
     let disposed = false
@@ -74,7 +107,7 @@ export function createComputerState(input: ComputerStateInput): ComputerStateVal
         },
       )
     read(1)
-    return { state, desktop }
+    return { state, desktop, resumeReady: () => state()?.backend !== "local-windows" || setup.ready }
   }
 
   const silence = input.silenceMs ?? Computer.LIMITS.engineSilenceMs

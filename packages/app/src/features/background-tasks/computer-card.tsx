@@ -60,7 +60,8 @@ function HolderView(props: ComputerCardProps & { card: HolderCard }) {
   const language = useLanguage()
   const sdk = useSDK()
   const sync = useSync()
-  const desktop = useComputerState()?.desktop
+  const computerState = useComputerState()
+  const desktop = computerState?.desktop
   const titleID = createUniqueId()
   const t = (key: Parameters<typeof language.t>[0], params?: Record<string, string | number>) =>
     language.t(key, { name: Hands.NAME, ...params })
@@ -239,6 +240,7 @@ function HolderView(props: ComputerCardProps & { card: HolderCard }) {
           <button
             type="button"
             class="vector-bg-tasks-computer-button"
+            disabled={computerState?.state()?.backend === "local-windows" && !computerState?.resumeReady?.()}
             onClick={() => run(() => desktop!.command("resume"))}
           >
             {t("computer.action.resume")}

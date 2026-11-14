@@ -104,6 +104,7 @@ export function createComputerPermissions(input: {
         input.platform === "darwin" ? input.vector.isTrustedAccessibilityClient(false) : false,
       ),
       Promise.resolve().then(() => (input.platform === "win32" && input.elevated ? input.elevated() : undefined)),
+      Promise.resolve().then(() => (input.platform === "win32" ? inputSetup("status") : undefined)),
     ])
     const decoded = results[0].status === "fulfilled" ? Schema.decodeUnknownOption(Probe)(results[0].value) : undefined
     const probe = decoded && Option.isSome(decoded) ? decoded.value : undefined
@@ -121,6 +122,7 @@ export function createComputerPermissions(input: {
     const captureBlocked = captureFacts.includes(true) ? true : captureFacts.includes(false) ? false : undefined
     const elevationFacts = [results[4].status === "fulfilled" ? results[4].value : undefined, probe?.elevated]
     const elevated = elevationFacts.includes(true) ? true : elevationFacts.includes(false) ? false : undefined
+    const setup = results[5].status === "fulfilled" ? results[5].value : undefined
     const healthy =
       !!probe &&
       probe.responsible &&
@@ -175,7 +177,13 @@ export function createComputerPermissions(input: {
         accessibility: results[3].status === "fulfilled" && results[3].value === true,
       },
       ...(input.platform === "win32"
-        ? { windows: { captureBlocked: captureBlocked === true, elevated: elevated === true } }
+        ? {
+            windows: {
+              captureBlocked: captureBlocked === true,
+              elevated: elevated === true,
+              inputSetup: healthy && setup ? setup : { state: "unavailable", mouse: false, keyboard: false },
+            },
+          }
         : {}),
     }
     if (read === state.read) state.latest = structuredClone(view)
@@ -207,6 +215,7 @@ export function createComputerPermissions(input: {
 
   return {
     list,
+    inputSetup,
     openPane(id: "screen" | "accessibility" | "windows-capture") {
       if (input.platform === "win32") {
         if (id !== "windows-capture")
@@ -252,5 +261,18 @@ export function createComputerPermissions(input: {
         return result
       })
     },
+  }
+
+  async function inputSetup(action: Computer.InputSetupAction): Promise<Computer.InputSetupStatus> {
+    if (input.platform !== "win32")
+      throw new ComputerError("unsupported_action", "Input calibration is only available on Windows.")
+    if (!input.settings.get().prefs.consentedAt)
+      throw new ComputerError("unavailable", "Consent is required before starting input calibration.")
+    if (!input.settings.get().policy.enabled)
+      throw new ComputerError("unavailable", "Input calibration is disabled by your company.")
+    const value = await input.helper.request<unknown>("input.setup", { action }, 5000)
+    const decoded = Schema.decodeUnknownOption(Computer.InputSetupStatus, { onExcessProperty: "error" })(value)
+    if (Option.isNone(decoded)) throw new ComputerError("unavailable", "Input setup could not be verified.")
+    return decoded.value
   }
 }

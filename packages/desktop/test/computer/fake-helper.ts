@@ -192,6 +192,7 @@ const SESSIONLESS: ReadonlySet<Computer.HelperOpName> = new Set([
   "permissions.status",
   "permissions.request",
   "permissions.reset",
+  "input.setup",
   "displays.list",
   "apps.list",
   "session.begin",
@@ -204,6 +205,13 @@ const SESSIONLESS: ReadonlySet<Computer.HelperOpName> = new Set([
 const MAX_CAPTURES = 32
 
 const Control = Schema.Union([
+  // Labelled synthetic fixture only, never a native calibration receipt or helper operation.
+  Schema.Struct({
+    type: Schema.Literal("synthetic_input_setup"),
+    mouse: Schema.Boolean,
+    keyboard: Schema.Boolean,
+    healthy: Schema.Boolean,
+  }),
   Schema.Struct({
     type: Schema.Literal("user_input"),
     kind: Schema.Literals(["pointer", "key", "click", "scroll"]),
@@ -290,6 +298,7 @@ const ok = (result: object = {}, extra: { image?: Uint8Array; held?: readonly st
 export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   const clock = io.clock ?? systemClock
   const platform = options.platform ?? "macos"
+  let inputSetup: Computer.InputSetupStatus = { state: "needs-calibration", mouse: false, keyboard: false }
   const desktop = createDesktop({ platform, scenario: options.scenario })
   // The virtual desktop has a fixed US layout and no app menu shortcuts; it never reads the owner's keyboard.
   const layout = {
@@ -1227,7 +1236,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     if (feature && !features[feature]) return refuse("unsupported_action", `This helper has ${feature} turned off`)
     if (!SESSIONLESS.has(args.op) && !state.session) return refuse("unavailable", "No session is active")
     if (
-      (args.op.startsWith("input.") && args.op !== "input.releaseAll") ||
+      (args.op.startsWith("input.") && args.op !== "input.releaseAll" && args.op !== "input.setup") ||
       [
         "app.activate",
         "app.launch",
@@ -1269,6 +1278,19 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         })
       case "permissions.status":
         return ok(permissions())
+      case "input.setup":
+        if (platform !== "windows") return refuse("unsupported_action", "Input setup is Windows only")
+        if (args.action !== "status") {
+          if (state.session) state.session = { ...state.session, paused: true }
+          releaseAll("input_setup")
+          abortCurrent("paused", "Paused for synthetic input setup", "input_setup", true)
+          inputSetup = {
+            state: args.action === "start" ? "calibrating" : "needs-calibration",
+            mouse: false,
+            keyboard: false,
+          }
+        }
+        return ok(inputSetup)
       case "permissions.request":
       case "permissions.reset":
         // Windows has no grant to prompt for or reset (W2).
@@ -1965,6 +1987,16 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       const decoded = Schema.decodeUnknownOption(Control)(message)
       if (decoded._tag === "None" || state.closed) return false
       const value = decoded.value
+      if (value.type === "synthetic_input_setup") {
+        if (platform !== "windows" || inputSetup.state !== "calibrating") return false
+        inputSetup = {
+          state: value.mouse && value.keyboard && value.healthy ? "ready" : "calibrating",
+          mouse: value.mouse,
+          keyboard: value.keyboard,
+        }
+        record("synthetic_input_setup", { mouse: value.mouse, keyboard: value.keyboard, healthy: value.healthy })
+        return true
+      }
       if (value.type === "user_input" && value.tagged) return true
       // The user's own key stays out of the log, as it stays out of `user_input` events (2.10).
       record("control", {

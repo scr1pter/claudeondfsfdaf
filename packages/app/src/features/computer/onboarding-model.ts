@@ -1,6 +1,6 @@
 export * as ComputerOnboarding from "./onboarding-model"
 
-import type { Computer } from "@vectordevai/schema/computer"
+import { Computer } from "@vectordevai/schema/computer"
 import type { dict } from "../../i18n/en"
 
 export type Platform = "macos" | "windows"
@@ -21,6 +21,7 @@ export type BlockedKey = Extract<
   | "computer.onboarding.windows.captureBlocked"
   | "computer.availability.macos"
   | "computer.onboarding.helperFailed"
+  | "computer.inputSetup.required"
 >
 export type View = {
   settings?: Computer.ResolvedComputerSettings
@@ -169,6 +170,8 @@ export function probeBlocked(permissions: Computer.PermissionsView | undefined):
   if (permissions?.windows?.elevated === true) return "computer.availability.elevated"
   if (permissions?.windows?.captureBlocked === true) return "computer.onboarding.windows.captureBlocked"
   if (permissions?.helperStart === "failed") return "computer.onboarding.helperFailed"
+  if (permissions?.windows && !Computer.inputSetupReady(permissions.windows.inputSetup))
+    return "computer.inputSetup.required"
 }
 
 /** Setup is complete apart from enabling: nothing blocks it, consent is recorded and every grant reads granted. */
@@ -183,7 +186,8 @@ function ready(permissions: Computer.PermissionsView | undefined): boolean {
       Array.isArray(permissions.rows) &&
       permissions.rows.length === 0 &&
       permissions.windows?.captureBlocked === false &&
-      permissions.windows?.elevated === false
+      permissions.windows?.elevated === false &&
+      Computer.inputSetupReady(permissions.windows.inputSetup)
     )
   if (!Array.isArray(permissions.rows) || permissions.rows.length !== 2) return false
   return (

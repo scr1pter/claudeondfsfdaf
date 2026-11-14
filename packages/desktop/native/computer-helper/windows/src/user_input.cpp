@@ -16,7 +16,7 @@ bool same_session(const ServerSession& a,const ServerSession& b) {
   return a.run_epoch!=0 && a.observation_epoch!=0 && a.run_epoch==b.run_epoch && a.observation_epoch==b.observation_epoch && a.id==b.id && a.revision==b.revision;
 }
 bool valid_cursor(const UserInputCursor& value) { return value.monitor!=0 && std::isfinite(value.dpi_scale) && value.dpi_scale>=0.25 && value.dpi_scale<=16; }
-bool healthy(const UserInputListenerStatus& value) { return value.installed && value.registered && value.alive && value.generation!=0; }
+bool healthy(const UserInputListenerStatus& value) { return value.installed && value.registered && value.alive && value.generation!=0 && value.context_generation!=0; }
 std::wstring lower(std::wstring_view value) { std::wstring result(value); for (auto& c:result) if (c>=L'A' && c<=L'Z') c=static_cast<wchar_t>(c+32); return result; }
 std::wstring trim(std::wstring_view value) { while (!value.empty() && value.front()==L' ') value.remove_prefix(1); while (!value.empty() && value.back()==L' ') value.remove_suffix(1); return lower(value); }
 WORD stop_key(std::wstring_view key) {
@@ -106,194 +106,266 @@ std::optional<UserInputChord> parse_user_input_chord(std::wstring_view value) {
 
 struct UserInputService::State : std::enable_shared_from_this<UserInputService::State> {
   struct Scope {
-    ServerSession session; uint64_t ticket=0,listener=0,created=0; std::optional<UserInputChord> chord;
-    std::optional<UserInputCursor> cursor; std::optional<uint64_t> pulse,last_probe; std::optional<UserInputEnvironment> environment;
+    std::optional<ServerSession> session; bool setup=false;
+    uint64_t ticket=0,listener=0,context=0,created=0;
+    std::optional<UserInputChord> chord; std::optional<UserInputCursor> cursor;
+    std::optional<uint64_t> pulse,last_health; std::optional<UserInputEnvironment> environment;
     bool revoked=false,failed=false; std::optional<bool> reported; std::wstring reason;
   };
-  struct Challenge { std::shared_ptr<Scope> scope; uint64_t sequence=0,marker=0,sent=0; };
+  struct Calibration {
+    UserInputSetupState state=UserInputSetupState::needs_calibration;
+    uint64_t listener=0,context=0;
+    bool mouse=false,keyboard=false; UserInputModifier shift=UserInputModifier::none;
+    std::optional<UserInputCursor> cursor;
+  } calibration;
+  struct Challenge { std::shared_ptr<Scope> scope; UserInputHealthChallenge request; };
   struct Notice { enum Kind{physical,stop,detection,wake} kind; std::shared_ptr<Scope> scope; UserInputKind input=UserInputKind::pointer;
     std::optional<double> dx,dy; bool flag=false; std::wstring reason; };
-  const uint64_t marker; UserInputCallbacks callbacks; UserInputBackend backend; Execute execute,observe; Schedule schedule; std::function<uint64_t()> now;
-  std::shared_ptr<UserInputRuntime> runtime; mutable std::mutex mutex; bool started=false,closed=false,observation_busy=false;
-  uint64_t sequence=0,scope_ticket=0; UserInputListenerStatus listener; std::shared_ptr<Scope> scope; std::optional<Challenge> challenge;
-  std::array<bool,8> modifiers{}; Cancel cancel_tick,cancel_challenge;
+  UserInputCallbacks callbacks; UserInputBackend backend; Execute execute,observe; Schedule schedule; std::function<uint64_t()> now;
+  std::shared_ptr<UserInputRuntime> runtime; mutable std::mutex mutex;
+  bool started=false,closed=false,observation_busy=false;
+  uint64_t sequence=0,scope_ticket=0; UserInputListenerStatus listener;
+  std::optional<UserInputEnvironment> environment;
+  std::shared_ptr<Scope> scope,setup_scope; std::optional<Challenge> challenge;
+  std::array<bool,8> modifiers{}; Cancel cancel_tick,cancel_challenge,deferred_cancel;
+  std::optional<Notice> deferred_notice;
   State(uint64_t own,UserInputCallbacks receiver,UserInputBackend source,Execute events,Schedule timer,std::function<uint64_t()> clock,Execute observations)
-    :marker(own),callbacks(std::move(receiver)),backend(std::move(source)),execute(std::move(events)),observe(std::move(observations)),schedule(std::move(timer)),now(clock?std::move(clock):monotonic) {
-    if (!marker || !backend.start || !backend.status || !backend.environment || !backend.probe || !backend.close || !callbacks.physical || !callbacks.stop || !callbacks.detection)
+    :callbacks(std::move(receiver)),backend(std::move(source)),execute(std::move(events)),observe(std::move(observations)),schedule(std::move(timer)),now(clock?std::move(clock):monotonic) {
+    if (!own || !backend.start || !backend.status || !backend.environment || !backend.health || !backend.close || !callbacks.physical || !callbacks.stop || !callbacks.detection)
       throw Failure{L"unavailable",L"The physical input detector is incomplete."};
     if (!execute || !schedule) { runtime=std::make_shared<UserInputRuntime>(); if (!execute) execute=runtime->execute(false);
       if (!observe) observe=runtime->execute(true); if (!schedule) schedule=[timer_runtime=runtime](auto ms,auto body){return timer_runtime->schedule(ms,std::move(body));}; }
     if (!observe) observe=execute;
   }
-  bool current_locked(const std::shared_ptr<Scope>& value)const { return started && !closed && scope==value && value && value->ticket!=0; }
+  bool current_locked(const std::shared_ptr<Scope>& value)const { return started && !closed && scope==value && value && value->ticket!=0 && value->session.has_value(); }
+  bool active_locked(const std::shared_ptr<Scope>& value)const {return started && !closed && value && value->ticket && (scope==value || setup_scope==value);}
+  std::shared_ptr<Scope> selected_locked()const{return setup_scope?setup_scope:scope;}
+  bool calibrated_locked()const {return calibration.state==UserInputSetupState::ready && calibration.listener==listener.generation && calibration.context==listener.context_generation;}
+  bool fresh_environment(const UserInputEnvironment& value,uint64_t time,uint64_t context)const {
+    return value.state==WindowsSurfaceState::ready && context && value.context_generation==context && value.observed_at_ms<=time && time-value.observed_at_ms<500;
+  }
+  bool health_ready_locked(const std::shared_ptr<Scope>& value,uint64_t time)const {
+    return active_locked(value) && healthy(listener) && value->listener==listener.generation && value->context==listener.context_generation && !value->failed && !value->revoked &&
+      value->pulse && time>=*value->pulse && time-*value->pulse<2500 && value->environment && fresh_environment(*value->environment,time,value->context) &&
+      (!challenge || challenge->scope!=value || (time>=challenge->request.sent_at_ms && time<challenge->request.deadline_ms));
+  }
+  std::shared_ptr<Scope> make_scope_locked(bool setup,const std::optional<ServerSession>& session={}) {
+    if(scope_ticket==std::numeric_limits<uint64_t>::max())return {};
+    auto value=std::make_shared<Scope>();value->setup=setup;value->ticket=++scope_ticket;
+    value->listener=listener.generation;value->context=listener.context_generation;value->created=now();
+    if(session){value->session=*session;value->chord=parse_user_input_chord(session->stop_chord);}
+    return value;
+  }
+  Cancel retire_locked(){challenge.reset();return std::move(cancel_challenge);}
   UserInputReadiness ready_locked(const std::shared_ptr<Scope>& value,uint64_t time)const {
-    if (!current_locked(value) || !healthy(listener) || listener.generation!=value->listener || !value->chord || value->revoked || value->failed) return UserInputReadiness::unavailable;
-    if(challenge && challenge->scope==value && (time<challenge->sent || time-challenge->sent>=500))return UserInputReadiness::unavailable;
-    if(!value->environment && (time<value->created || time-value->created>=500))return UserInputReadiness::unavailable;
-    if (!value->environment || !value->pulse) return UserInputReadiness::pending;
-    if (value->environment->state!=WindowsSurfaceState::ready || time<value->environment->observed_at_ms || time-value->environment->observed_at_ms>=500 ||
-        time<*value->pulse || time-*value->pulse>=2500) return UserInputReadiness::unavailable;
+    if(!current_locked(value) || !healthy(listener) || !calibrated_locked() || value->listener!=listener.generation || value->context!=listener.context_generation || !value->chord || value->revoked || value->failed)return UserInputReadiness::unavailable;
+    if(challenge && challenge->scope==value && (time<challenge->request.sent_at_ms || time>=challenge->request.deadline_ms))return UserInputReadiness::unavailable;
+    if(!value->environment || !value->pulse)return time>=value->created && time-value->created<500?UserInputReadiness::pending:UserInputReadiness::unavailable;
+    if(!fresh_environment(*value->environment,time,value->context) || time<*value->pulse || time-*value->pulse>=2500)return UserInputReadiness::unavailable;
     return UserInputReadiness::ready;
   }
   void deliver(Notice notice) {
-    {std::lock_guard lock(mutex);if (!current_locked(notice.scope)) return;
-      if(notice.kind==Notice::detection && (notice.scope->reported!=notice.flag || notice.scope->reason!=notice.reason ||
-          (notice.flag && ready_locked(notice.scope,now())!=UserInputReadiness::ready)))return;
+    {std::lock_guard lock(mutex);if(!current_locked(notice.scope))return;
+      if(notice.kind==Notice::detection && (notice.scope->reported!=notice.flag || notice.scope->reason!=notice.reason || (notice.flag && ready_locked(notice.scope,now())!=UserInputReadiness::ready)))return;
     }
-    const auto& session=notice.scope->session;
-    if (notice.kind==Notice::wake) {if(callbacks.readiness_changed)callbacks.readiness_changed(session);return;}
-    if (notice.kind==Notice::stop) {(void)callbacks.stop(notice.reason,session);return;}
-    if (notice.kind==Notice::detection) {(void)callbacks.detection(notice.flag,notice.reason,session);return;}
-    JsonObject fields;
-    fields.Insert(L"kind",JsonValue::CreateStringValue(notice.input==UserInputKind::pointer?L"pointer":notice.input==UserInputKind::click?L"click":notice.input==UserInputKind::scroll?L"scroll":L"key"));
+    const auto& session=*notice.scope->session;
+    if(notice.kind==Notice::wake){if(callbacks.readiness_changed)callbacks.readiness_changed(session);return;}
+    if(notice.kind==Notice::stop){(void)callbacks.stop(notice.reason,session);return;}
+    if(notice.kind==Notice::detection){(void)callbacks.detection(notice.flag,notice.reason,session);return;}
+    JsonObject fields;fields.Insert(L"kind",JsonValue::CreateStringValue(notice.input==UserInputKind::pointer?L"pointer":notice.input==UserInputKind::click?L"click":notice.input==UserInputKind::scroll?L"scroll":L"key"));
     if(notice.dx)fields.Insert(L"dx",JsonValue::CreateNumberValue(*notice.dx));if(notice.dy)fields.Insert(L"dy",JsonValue::CreateNumberValue(*notice.dy));
     (void)callbacks.physical(event_document(L"user_input",fields),session,notice.flag);
   }
   void post(Notice notice)noexcept {
-    const auto expected=notice.scope;
-    try {execute([weak=weak_from_this(),notice=std::move(notice)] {if(const auto state=weak.lock())state->deliver(notice);});}
-    catch (...) {std::lock_guard lock(mutex);if(current_locked(expected)){expected->failed=true;expected->revoked=true;}}
+    try{execute([weak=weak_from_this(),notice=std::move(notice)]{if(const auto state=weak.lock())state->deliver(notice);});}
+    catch(...){std::lock_guard lock(mutex);calibration={};calibration.state=UserInputSetupState::unavailable;if(scope){scope->failed=true;scope->revoked=true;}}
   }
   std::optional<Notice> detection_locked(const std::shared_ptr<Scope>& value,bool alive,std::wstring reason) {
-    if(!current_locked(value) || value->session.mode!=L"foreground")return {};
+    if(!current_locked(value) || value->session->mode!=L"foreground")return {};
     if(!alive)value->revoked=true;
     if(value->reported==alive && value->reason==reason)return {};
     value->reported=alive;value->reason=reason;return Notice{Notice::detection,value,UserInputKind::pointer,{},{},alive,std::move(reason)};
   }
+  void fail_locked(std::vector<Notice>& notices,std::wstring reason=L"probe_missing") {
+    calibration={};calibration.state=UserInputSetupState::unavailable;
+    if(setup_scope){setup_scope->failed=true;setup_scope->revoked=true;}
+    if(scope){scope->failed=true;if(auto notice=detection_locked(scope,false,std::move(reason)))notices.push_back(std::move(*notice));}
+  }
+  void finish_calibration_locked(uint64_t time) {
+    if(calibration.state==UserInputSetupState::calibrating && calibration.mouse && calibration.keyboard && setup_scope && !setup_scope->failed && !setup_scope->revoked &&
+      setup_scope->pulse && time>=*setup_scope->pulse && time-*setup_scope->pulse<2500 && setup_scope->environment && fresh_environment(*setup_scope->environment,time,calibration.context)) {
+      calibration.state=UserInputSetupState::ready;calibration.cursor.reset();calibration.shift=UserInputModifier::none;
+    }
+  }
+  void health_receipt(UserInputHealthReceipt value)noexcept {
+    std::vector<Notice> notices;Cancel retire;
+    try{{std::lock_guard lock(mutex);if(!challenge || !active_locked(challenge->scope) || value.challenge!=challenge->request)return;
+      const auto expected=challenge->scope;const auto time=now();const auto& request=challenge->request;
+      if(expected->failed || expected->revoked)return;
+      if(!value.healthy || !healthy(listener) || request.listener_generation!=listener.generation || request.context_generation!=listener.context_generation ||
+        time<request.sent_at_ms || time>=request.deadline_ms || request.deadline_ms-request.sent_at_ms!=500 || value.observed_at_ms<request.sent_at_ms || value.observed_at_ms>time ||
+        value.environment.observed_at_ms<request.sent_at_ms || value.environment.observed_at_ms>value.observed_at_ms || !fresh_environment(value.environment,time,request.context_generation)) {
+        fail_locked(notices);retire=retire_locked();
+      } else {
+        expected->pulse=time;expected->environment=value.environment;environment=value.environment;retire=retire_locked();
+        if(expected->setup)finish_calibration_locked(time);
+        else {if(ready_locked(expected,time)==UserInputReadiness::ready)if(auto notice=detection_locked(expected,true,L""))notices.push_back(std::move(*notice));notices.push_back({Notice::wake,expected});}
+      }
+    }if(retire)retire();for(auto& notice:notices)post(std::move(notice));}
+    catch(...){std::lock_guard lock(mutex);calibration={};calibration.state=UserInputSetupState::unavailable;if(scope){scope->failed=true;scope->revoked=true;}}
+  }
   void sample(UserInputSample value)noexcept {
-    std::shared_ptr<Scope> expected;
-    try {
-      std::vector<Notice> notices;Cancel retire_timeout;
-      {std::lock_guard lock(mutex);const auto current=scope;expected=current;const auto time=now();
-        if(!started || closed || !value.listener_generation || value.listener_generation!=listener.generation)return;
-        // The listener outlives tasks. Actual hardware modifier releases between accepted sessions
-        // must retire their matching state even though no task can receive an event at that time.
-        if(value.origin==UserInputOrigin::hardware && (value.kind==UserInputKind::key_down || value.kind==UserInputKind::key_up) && value.modifier!=UserInputModifier::none &&
-            value.observed_at_ms<=time && time-value.observed_at_ms<500) {
-          const auto index=static_cast<size_t>(value.modifier)-1;if(index<modifiers.size())modifiers[index]=value.kind==UserInputKind::key_down;
-        }
-        if(!current_locked(current) || value.listener_generation!=current->listener || value.observed_at_ms<current->created || value.observed_at_ms>time || time-value.observed_at_ms>=500)return;
-        if(value.kind==UserInputKind::configuration) {current->failed=true;if(auto notice=detection_locked(current,false,L"probe_missing"))notices.push_back(std::move(*notice));}
+    std::vector<Notice> notices;Cancel retire;
+    try{{std::lock_guard lock(mutex);const auto time=now();
+      if(!started || closed || !value.listener_generation || value.listener_generation<listener.generation)return;
+      if(value.listener_generation!=listener.generation || !value.context_generation || value.context_generation>listener.context_generation) {
+        if(value.listener_generation==listener.generation && value.context_generation>listener.context_generation)listener.context_generation=value.context_generation;
+        fail_locked(notices);retire=retire_locked();
+      } else if(value.context_generation==listener.context_generation && value.observed_at_ms<=time && time-value.observed_at_ms<500) {
+        if(value.kind==UserInputKind::configuration || value.origin==UserInputOrigin::unknown){fail_locked(notices);retire=retire_locked();}
         else {
-          std::optional<double> dx,dy;
-          if(value.kind==UserInputKind::pointer || value.kind==UserInputKind::click || value.kind==UserInputKind::scroll) {
-            if(value.cursor && valid_cursor(*value.cursor)) {
-              if(current->cursor && current->cursor->monitor==value.cursor->monitor && current->cursor->dpi_scale==value.cursor->dpi_scale) {
-                dx=(static_cast<double>(value.cursor->x)-static_cast<double>(current->cursor->x))/value.cursor->dpi_scale;
-                dy=(static_cast<double>(value.cursor->y)-static_cast<double>(current->cursor->y))/value.cursor->dpi_scale;
-              }
-              current->cursor=value.cursor;
-            } else current->cursor.reset();
+          if(value.origin==UserInputOrigin::hardware && (value.kind==UserInputKind::key_down || value.kind==UserInputKind::key_up) && value.modifier!=UserInputModifier::none) {
+            const auto index=static_cast<size_t>(value.modifier)-1;if(index<modifiers.size())modifiers[index]=value.kind==UserInputKind::key_down;
           }
-          const bool probe=challenge && challenge->scope==current && value.origin==UserInputOrigin::injected && value.kind==UserInputKind::pointer && value.motion_only &&
-            value.extra_information==static_cast<uint32_t>(challenge->marker) && value.observed_at_ms>=challenge->sent && time>=challenge->sent && time-challenge->sent<500;
-          if(probe) {
-            current->pulse=time;current->failed=false;challenge.reset();retire_timeout=std::move(cancel_challenge);
-            if(ready_locked(current,time)==UserInputReadiness::ready)if(auto notice=detection_locked(current,true,L""))notices.push_back(std::move(*notice));
-            notices.push_back({Notice::wake,current});
-          } else if(value.origin==UserInputOrigin::unknown) {current->failed=true;if(auto notice=detection_locked(current,false,L"probe_missing"))notices.push_back(std::move(*notice));}
-          else if(value.origin==UserInputOrigin::hardware) {
-            uint32_t bits=0;for(size_t i=0;i<modifiers.size();++i)if(modifiers[i])bits|=1U<<(i/2);
-            const bool key_down=value.kind==UserInputKind::key_down;
-            const bool chord=key_down && current->chord && value.virtual_key==current->chord->key && bits==current->chord->modifiers;
-            const bool escape=key_down && value.virtual_key==VK_ESCAPE && bits==0 && current->session.mode==L"foreground" && !current->session.paused && current->session.esc_stops;
-            if(chord || escape) {current->revoked=true;notices.push_back({Notice::stop,current,UserInputKind::pointer,{},{},false,chord?L"chord":L"esc"});}
-            else {
-              const bool working=current->session.mode==L"foreground" && !current->session.paused;
-              const bool takeover=working && (value.kind!=UserInputKind::pointer || !dx || !dy || std::hypot(*dx,*dy)>=8);
-              if(takeover)current->revoked=true;
-              if(value.kind!=UserInputKind::pointer || !working || takeover)notices.push_back({Notice::physical,current,value.kind,dx,dy,takeover});
+          const bool setup_event=setup_scope && calibration.state==UserInputSetupState::calibrating;
+          if(setup_event && health_ready_locked(setup_scope,time) && value.observed_at_ms>=*setup_scope->pulse && value.origin==UserInputOrigin::hardware) {
+            if(value.kind==UserInputKind::pointer && value.motion_only && value.cursor && valid_cursor(*value.cursor)) {
+              if(calibration.cursor && calibration.cursor->monitor==value.cursor->monitor && calibration.cursor->dpi_scale==value.cursor->dpi_scale && (calibration.cursor->x!=value.cursor->x || calibration.cursor->y!=value.cursor->y))calibration.mouse=true;
+              calibration.cursor=value.cursor;
+            }
+            const bool shift=value.modifier==UserInputModifier::shift_left || value.modifier==UserInputModifier::shift_right;
+            const bool matching_key=value.virtual_key==VK_SHIFT || (value.modifier==UserInputModifier::shift_left && value.virtual_key==VK_LSHIFT) || (value.modifier==UserInputModifier::shift_right && value.virtual_key==VK_RSHIFT);
+            if((value.kind==UserInputKind::key_down || value.kind==UserInputKind::key_up) && (!shift || !matching_key))calibration.shift=UserInputModifier::none;
+            if(shift && matching_key) {
+              if(value.kind==UserInputKind::key_down && std::none_of(modifiers.begin(),modifiers.begin()+4,[](bool down){return down;}) && std::none_of(modifiers.begin()+6,modifiers.end(),[](bool down){return down;}))calibration.shift=value.modifier;
+              if(value.kind==UserInputKind::key_up && calibration.shift==value.modifier && std::none_of(modifiers.begin(),modifiers.end(),[](bool down){return down;})){calibration.keyboard=true;calibration.shift=UserInputModifier::none;}
+            }
+            finish_calibration_locked(time);
+          }
+          const auto current=scope;
+          if(!setup_event && current_locked(current) && value.observed_at_ms>=current->created) {
+            std::optional<double> dx,dy;
+            if(value.kind==UserInputKind::pointer || value.kind==UserInputKind::click || value.kind==UserInputKind::scroll) {
+              if(value.cursor && valid_cursor(*value.cursor)) {
+                if(current->cursor && current->cursor->monitor==value.cursor->monitor && current->cursor->dpi_scale==value.cursor->dpi_scale){dx=(static_cast<double>(value.cursor->x)-static_cast<double>(current->cursor->x))/value.cursor->dpi_scale;dy=(static_cast<double>(value.cursor->y)-static_cast<double>(current->cursor->y))/value.cursor->dpi_scale;}
+                current->cursor=value.cursor;
+              }else current->cursor.reset();
+            }
+            if(value.origin==UserInputOrigin::hardware) {
+              uint32_t bits=0;for(size_t i=0;i<modifiers.size();++i)if(modifiers[i])bits|=1U<<(i/2);
+              const bool down=value.kind==UserInputKind::key_down;
+              const bool chord=down && current->chord && value.virtual_key==current->chord->key && bits==current->chord->modifiers;
+              const bool escape=down && value.virtual_key==VK_ESCAPE && bits==0 && current->session->mode==L"foreground" && !current->session->paused && current->session->esc_stops;
+              if(chord || escape){current->revoked=true;notices.push_back({Notice::stop,current,UserInputKind::pointer,{},{},false,chord?L"chord":L"esc"});}
+              else {const bool working=current->session->mode==L"foreground" && !current->session->paused;const bool takeover=working && (value.kind!=UserInputKind::pointer || !dx || !dy || std::hypot(*dx,*dy)>=8);
+                if(takeover)current->revoked=true;if(value.kind!=UserInputKind::pointer || !working || takeover)notices.push_back({Notice::physical,current,value.kind,dx,dy,takeover});}
+              if(current->revoked && calibrated_locked()){retire=retire_locked();if(!setup_scope)setup_scope=make_scope_locked(true);}
             }
           }
         }
       }
-      if(retire_timeout)retire_timeout();
-      for(auto& notice:notices)post(std::move(notice));
-    } catch (...) {std::lock_guard lock(mutex);if(current_locked(expected)){expected->failed=true;expected->revoked=true;}}
+    }if(retire)retire();for(auto& notice:notices)post(std::move(notice));}
+    catch(...){std::lock_guard lock(mutex);calibration={};calibration.state=UserInputSetupState::unavailable;if(scope){scope->failed=true;scope->revoked=true;}}
   }
-  void challenge_expired(const std::shared_ptr<Scope>& expected,uint64_t expected_sequence) {
-    std::optional<Notice> notice;
-    {std::lock_guard lock(mutex);if(!current_locked(expected) || !challenge || challenge->scope!=expected || challenge->sequence!=expected_sequence)return;
-      const auto time=now();if(time>=challenge->sent && time-challenge->sent<500)return;
-      challenge.reset();cancel_challenge={};expected->failed=true;notice=detection_locked(expected,false,L"probe_missing");
-    }
-    if(notice)post(std::move(*notice));post({Notice::wake,expected});
+  void challenge_expired(uint64_t expected_sequence) {
+    std::vector<Notice> notices;std::shared_ptr<Scope> expected;
+    {std::lock_guard lock(mutex);if(!challenge || challenge->request.sequence!=expected_sequence || !active_locked(challenge->scope))return;
+      const auto time=now();if(time>=challenge->request.sent_at_ms && time<challenge->request.deadline_ms)return;
+      expected=challenge->scope;challenge.reset();cancel_challenge={};fail_locked(notices);
+    }for(auto& notice:notices)post(std::move(notice));if(expected && !expected->setup)post({Notice::wake,expected});
   }
   void cycle(const std::shared_ptr<Scope>& expected) {
-    {std::lock_guard lock(mutex);if(!current_locked(expected)){observation_busy=false;return;}}
-    UserInputListenerStatus status;UserInputEnvironment environment;
-    try {status=backend.status();environment=backend.environment();}catch(...){environment={WindowsSurfaceState::unavailable,now()};}
-    std::vector<Notice> notices;std::optional<uint64_t> probe;
-    {std::lock_guard lock(mutex);observation_busy=false;if(!current_locked(expected))return;listener=status;const auto time=now();expected->environment=environment;
-      const auto reason=environment.state==WindowsSurfaceState::secure_desktop?L"secure_desktop":environment.state==WindowsSurfaceState::elevated?L"elevated_foreground":L"probe_missing";
-      if(!healthy(status) || status.generation!=expected->listener || environment.state!=WindowsSurfaceState::ready || environment.observed_at_ms>time || time-environment.observed_at_ms>=500 || !expected->chord) {
-        expected->failed=true;if(auto notice=detection_locked(expected,false,reason))notices.push_back(std::move(*notice));
-      } else if(!challenge && (!expected->last_probe || time<*expected->last_probe || time-*expected->last_probe>=2000)) {
-        uint32_t projection=0;bool found=false;
-        while(sequence<MAXDWORD) {projection=static_cast<uint32_t>(marker)^static_cast<uint32_t>(++sequence);if(projection && projection!=static_cast<uint32_t>(marker)){found=true;break;}}
-        if(found) {const auto token=(marker&0xffffffff00000000ULL)|projection;challenge=Challenge{expected,sequence,token,time};expected->last_probe=time;probe=token;}
-        else {expected->failed=true;if(auto notice=detection_locked(expected,false,L"probe_missing"))notices.push_back(std::move(*notice));}
+    {std::lock_guard lock(mutex);if(!started || closed || selected_locked()!=expected){observation_busy=false;return;}}
+    UserInputListenerStatus status;UserInputEnvironment observed_environment;
+    try{status=backend.status();observed_environment=backend.environment();}catch(...){observed_environment={WindowsSurfaceState::unavailable,now(),0};}
+    std::vector<Notice> notices;std::optional<UserInputHealthChallenge> issued;Cancel retire;
+    {std::lock_guard lock(mutex);observation_busy=false;if(!started || closed || selected_locked()!=expected)return;
+      listener=status;environment=observed_environment;const auto time=now();if(expected)expected->environment=observed_environment;
+      const auto reason=observed_environment.state==WindowsSurfaceState::secure_desktop?L"secure_desktop":observed_environment.state==WindowsSurfaceState::elevated?L"elevated_foreground":L"probe_missing";
+      if(!healthy(status) || !fresh_environment(observed_environment,time,status.context_generation) ||
+        ((calibration.state==UserInputSetupState::calibrating || calibration.state==UserInputSetupState::ready) && (calibration.listener!=status.generation || calibration.context!=status.context_generation)) ||
+        (expected && (expected->listener!=status.generation || expected->context!=status.context_generation))) {
+        fail_locked(notices,reason);retire=retire_locked();
+      } else if(expected && !expected->failed && !expected->revoked && (expected->setup || calibrated_locked()) &&
+        !challenge && (!expected->last_health || time<*expected->last_health || time-*expected->last_health>=2000)) {
+        if(sequence==std::numeric_limits<uint64_t>::max() || time>std::numeric_limits<uint64_t>::max()-500){fail_locked(notices);retire=retire_locked();}
+        else {UserInputHealthChallenge request{status.generation,status.context_generation,expected->ticket,expected->session?expected->session->run_epoch:0,expected->session?expected->session->observation_epoch:0,expected->session?expected->session->revision.value_or(0):0,++sequence,time,time+500};
+          challenge=Challenge{expected,request};expected->last_health=time;issued=request;}
       }
-      if(ready_locked(expected,time)==UserInputReadiness::ready)if(auto notice=detection_locked(expected,true,L""))notices.push_back(std::move(*notice));
+      if(expected && !expected->setup && ready_locked(expected,time)==UserInputReadiness::ready)if(auto notice=detection_locked(expected,true,L""))notices.push_back(std::move(*notice));
     }
-    for(auto& notice:notices)post(std::move(notice));
-    if(probe) {
-      uint64_t ticket=0,sent=0;
-      {std::lock_guard lock(mutex);if(current_locked(expected) && challenge && challenge->marker==*probe){ticket=challenge->sequence;sent=challenge->sent;}}
-      if(!ticket)return;
-      const auto time=now();const auto remaining=time>=sent && time-sent<500?static_cast<uint32_t>(500-(time-sent)):0U;
-      Cancel timeout;
-      try{timeout=schedule(remaining,[weak=weak_from_this(),expected,ticket]{if(const auto state=weak.lock())state->challenge_expired(expected,ticket);});}
-      catch(...){std::optional<Notice> notice;{std::lock_guard lock(mutex);if(current_locked(expected)){challenge.reset();expected->failed=true;notice=detection_locked(expected,false,L"probe_missing");}}if(notice)post(std::move(*notice));return;}
-      bool retire=false;
-      {std::lock_guard lock(mutex);retire=!current_locked(expected) || !challenge || challenge->sequence!=ticket;if(!retire)cancel_challenge=timeout;}
-      if(retire){if(timeout)timeout();return;}
-      bool submitted=false;try{submitted=backend.probe(*probe);}catch(...){}
-      if(!submitted) {std::optional<Notice> notice;{std::lock_guard lock(mutex);if(current_locked(expected) && challenge && challenge->marker==*probe){challenge.reset();expected->failed=true;notice=detection_locked(expected,false,L"probe_missing");}}if(notice)post(std::move(*notice));}
+    if(retire)retire();for(auto& notice:notices)post(std::move(notice));
+    if(issued) {
+      const auto time=now();const auto remaining=time>=issued->sent_at_ms && time<issued->deadline_ms?static_cast<uint32_t>(issued->deadline_ms-time):0U;
+      Cancel timeout;try{timeout=schedule(remaining,[weak=weak_from_this(),ticket=issued->sequence]{if(const auto state=weak.lock())state->challenge_expired(ticket);});}
+      catch(...){std::vector<Notice> failures;{std::lock_guard lock(mutex);if(challenge && challenge->request==*issued){fail_locked(failures);challenge.reset();}}for(auto& notice:failures)post(std::move(notice));return;}
+      bool retired=false;{std::lock_guard lock(mutex);retired=!challenge || challenge->request!=*issued;if(!retired)cancel_challenge=timeout;}
+      if(retired){if(timeout)timeout();return;}
+      bool submitted=false;try{submitted=backend.health(*issued);}catch(...){}
+      if(!submitted){std::vector<Notice> failures;Cancel cancel;{std::lock_guard lock(mutex);if(challenge && challenge->request==*issued){fail_locked(failures);cancel=retire_locked();}}if(cancel)cancel();for(auto& notice:failures)post(std::move(notice));}
     }
   }
   void tick() {
-    std::shared_ptr<Scope> current;std::vector<Notice> notices;bool sample=false;
-    {std::lock_guard lock(mutex);if(!started || closed)return;current=scope;const auto time=now();
-      if(current && current->session.mode==L"foreground") {
-        if(challenge && challenge->scope==current && (time<challenge->sent || time-challenge->sent>=500)) {challenge.reset();current->failed=true;if(auto notice=detection_locked(current,false,L"probe_missing"))notices.push_back(std::move(*notice));}
-        if(current->environment && (time<current->environment->observed_at_ms || time-current->environment->observed_at_ms>=500)) {current->failed=true;if(auto notice=detection_locked(current,false,L"probe_missing"))notices.push_back(std::move(*notice));}
-        if(!current->environment && (time<current->created || time-current->created>=500)) {current->failed=true;if(auto notice=detection_locked(current,false,L"probe_missing"))notices.push_back(std::move(*notice));}
-        if(!observation_busy){observation_busy=true;sample=true;}
+    std::shared_ptr<Scope> expected;std::vector<Notice> notices;Cancel retire,deferred;bool sample_metadata=false;
+    {std::lock_guard lock(mutex);if(!started || closed)return;const auto time=now();expected=selected_locked();deferred=std::move(deferred_cancel);
+      if(deferred_notice){notices.push_back(std::move(*deferred_notice));deferred_notice.reset();}
+      if((challenge && (time<challenge->request.sent_at_ms || time>=challenge->request.deadline_ms)) ||
+        (environment && !fresh_environment(*environment,time,listener.context_generation) && (calibration.state==UserInputSetupState::ready || calibration.state==UserInputSetupState::calibrating))) {
+        fail_locked(notices);retire=retire_locked();
       }
+      if(!observation_busy){observation_busy=true;sample_metadata=true;}
     }
-    for(auto& notice:notices)post(std::move(notice));
-    if(sample)try{observe([weak=weak_from_this(),current]{if(const auto state=weak.lock())state->cycle(current);});}catch(...){std::lock_guard lock(mutex);observation_busy=false;if(current_locked(current)){current->failed=true;current->revoked=true;}}
-    Cancel cancel;
-    try{cancel=schedule(100,[weak=weak_from_this()]{if(const auto state=weak.lock())state->tick();});}
-    catch(...){std::optional<Notice> notice;{std::lock_guard lock(mutex);if(current_locked(current)){current->failed=true;notice=detection_locked(current,false,L"probe_missing");}}if(notice)post(std::move(*notice));return;}
-    bool retire=false;{std::lock_guard lock(mutex);retire=closed;if(!retire)cancel_tick=cancel;}if(retire && cancel)cancel();
+    if(deferred)deferred();if(retire)retire();for(auto& notice:notices)post(std::move(notice));
+    if(sample_metadata)try{observe([weak=weak_from_this(),expected]{if(const auto state=weak.lock())state->cycle(expected);});}
+      catch(...){std::lock_guard lock(mutex);observation_busy=false;calibration={};calibration.state=UserInputSetupState::unavailable;if(scope){scope->failed=true;scope->revoked=true;}}
+    Cancel cancel;try{cancel=schedule(100,[weak=weak_from_this()]{if(const auto state=weak.lock())state->tick();});}
+      catch(...){std::lock_guard lock(mutex);calibration={};calibration.state=UserInputSetupState::unavailable;if(scope){scope->failed=true;scope->revoked=true;}return;}
+    bool retired=false;{std::lock_guard lock(mutex);retired=closed;if(!retired)cancel_tick=cancel;}if(retired && cancel)cancel();
   }
   bool start() {
     {std::lock_guard lock(mutex);if(closed || started)return started && !closed && healthy(listener);started=true;}
     bool installed=false;
-    try {if(runtime)runtime->start();installed=backend.start([weak=weak_from_this()](UserInputSample sample){if(const auto state=weak.lock())state->sample(std::move(sample));});const auto status=backend.status();installed=installed && healthy(status);
+    try{if(runtime)runtime->start();installed=backend.start([weak=weak_from_this()](UserInputSample sample){if(const auto state=weak.lock())state->sample(std::move(sample));},
+      [weak=weak_from_this()](UserInputHealthReceipt receipt){if(const auto state=weak.lock())state->health_receipt(std::move(receipt));});const auto status=backend.status();installed=installed && healthy(status);
       std::lock_guard lock(mutex);installed=installed && !closed;listener=installed?status:UserInputListenerStatus{};
-      if(installed && scope){const auto accepted=scope->session;bind_locked(accepted);}
+      if(installed && scope){const auto accepted=scope->session;scope=make_scope_locked(false,accepted);if(scope)scope->revoked=true;}
     }catch(...){installed=false;}
     if(!installed){try{backend.close();}catch(...){}if(runtime)runtime->close();return false;}
     tick();return true;
   }
-  void bind_locked(std::optional<ServerSession> session) {
-    challenge.reset();scope.reset();
-    if(session && !session->id.empty() && session->run_epoch && session->observation_epoch && scope_ticket!=std::numeric_limits<uint64_t>::max()) {
-      scope=std::make_shared<Scope>();scope->session=std::move(*session);scope->ticket=++scope_ticket;scope->listener=listener.generation;scope->created=now();scope->chord=parse_user_input_chord(scope->session.stop_chord);
-    }
+  UserInputSetupStatus setup_status()const {
+    std::lock_guard lock(mutex);auto state=started && !closed && healthy(listener)?calibration.state:UserInputSetupState::unavailable;
+    if(state==UserInputSetupState::ready){const auto selected=selected_locked();const auto time=now();if(!health_ready_locked(selected,time))
+      state=selected && !selected->failed && !selected->revoked && !selected->pulse && time>=selected->created && time-selected->created<500?UserInputSetupState::calibrating:UserInputSetupState::unavailable;}
+    return {state,calibration.mouse,calibration.keyboard};
+  }
+  bool listener_health_ready()const {std::lock_guard lock(mutex);return health_ready_locked(selected_locked(),now());}
+  bool setup_start() {
+    // Called inside the trusted UI's short Dispatcher fence: retire authority now, but
+    // leave cancellation, native observation and user/Dispatcher callbacks to the timer.
+    std::lock_guard lock(mutex);if(!started || closed || !healthy(listener))return false;
+    if(cancel_challenge)deferred_cancel=std::move(cancel_challenge);challenge.reset();
+    if(scope){scope->failed=true;scope->revoked=true;if(auto notice=detection_locked(scope,false,L"probe_missing"))deferred_notice=std::move(*notice);}
+    calibration={};calibration.state=UserInputSetupState::calibrating;calibration.listener=listener.generation;calibration.context=listener.context_generation;
+    setup_scope.reset();try{setup_scope=make_scope_locked(true);}catch(...){calibration.state=UserInputSetupState::unavailable;return false;}
+    if(!setup_scope){calibration.state=UserInputSetupState::unavailable;return false;}return true;
+  }
+  void setup_reset() {
+    std::lock_guard lock(mutex);if(cancel_challenge)deferred_cancel=std::move(cancel_challenge);challenge.reset();setup_scope.reset();calibration={};
+    if(scope){scope->failed=true;scope->revoked=true;if(auto notice=detection_locked(scope,false,L"probe_missing"))deferred_notice=std::move(*notice);}
   }
   void session_changed(std::optional<ServerSession> session) {
-    Cancel retire;{std::lock_guard lock(mutex);if(closed)return;retire=std::move(cancel_challenge);bind_locked(std::move(session));}if(retire)retire();
-    // A metadata-only phase hook never calls native APIs or the Dispatcher recursively.
+    Cancel retire;{std::lock_guard lock(mutex);if(closed)return;retire=retire_locked();scope.reset();
+      if(calibration.state!=UserInputSetupState::calibrating)setup_scope.reset();
+      if(session && !session->id.empty() && session->run_epoch && session->observation_epoch){scope=make_scope_locked(false,session);if(scope && !calibrated_locked())scope->revoked=true;}
+      else if(calibrated_locked())setup_scope=make_scope_locked(true);
+    }if(retire)retire();
   }
-  UserInputReadiness readiness(const ServerSession& expected)const {std::lock_guard lock(mutex);return scope && same_session(scope->session,expected)?ready_locked(scope,now()):UserInputReadiness::unavailable;}
+  UserInputReadiness readiness(const ServerSession& expected)const {std::lock_guard lock(mutex);return scope && scope->session && same_session(*scope->session,expected)?ready_locked(scope,now()):UserInputReadiness::unavailable;}
   JsonObject features()const {std::lock_guard lock(mutex);const auto installed=started && !closed && healthy(listener);JsonObject result;for(const auto key:{L"userInput.detect",L"stop.esc",L"stop.chord"})result.Insert(key,JsonValue::CreateBooleanValue(installed));return result;}
   void close()noexcept {
-    Cancel cancel,challenge_cancel;{std::lock_guard lock(mutex);if(closed)return;closed=true;scope.reset();challenge.reset();cancel=std::move(cancel_tick);challenge_cancel=std::move(cancel_challenge);}
-    try{if(cancel)cancel();if(challenge_cancel)challenge_cancel();backend.close();}catch(...){}if(runtime)runtime->close();
+    Cancel cancel,health_cancel,pending;{std::lock_guard lock(mutex);if(closed)return;closed=true;scope.reset();setup_scope.reset();challenge.reset();calibration={};calibration.state=UserInputSetupState::unavailable;cancel=std::move(cancel_tick);health_cancel=std::move(cancel_challenge);pending=std::move(deferred_cancel);deferred_notice.reset();}
+    try{if(cancel)cancel();if(health_cancel)health_cancel();if(pending)pending();backend.close();}catch(...){}if(runtime)runtime->close();
   }
 };
 
@@ -301,6 +373,10 @@ UserInputService::UserInputService(uint64_t marker,UserInputCallbacks callbacks,
   :state_(std::make_shared<State>(marker,std::move(callbacks),std::move(backend),std::move(execute),std::move(schedule),std::move(now),std::move(observations))){}
 UserInputService::~UserInputService(){close();}
 bool UserInputService::start(){return state_->start();}
+UserInputSetupStatus UserInputService::setup_status()const{return state_->setup_status();}
+bool UserInputService::listener_health_ready()const{return state_->listener_health_ready();}
+bool UserInputService::setup_start(){return state_->setup_start();}
+void UserInputService::setup_reset(){state_->setup_reset();}
 void UserInputService::session_changed(std::optional<ServerSession> session){state_->session_changed(std::move(session));}
 UserInputReadiness UserInputService::readiness(const ServerSession& session)const{return state_->readiness(session);}
 bool UserInputService::foreground_ready(const ServerSession& session)const{return readiness(session)==UserInputReadiness::ready;}

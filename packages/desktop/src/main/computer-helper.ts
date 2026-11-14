@@ -102,6 +102,18 @@ export function createHelperClient(
     const entry = pending.get(id)
     // A reply to a timed-out/cancelled request can arrive after cleanup. IDs are never reused.
     if (!entry) return
+    if (
+      entry.op === "input.setup" &&
+      Object.keys(value).some(
+        (key) =>
+          !(
+            "ok" in value && value.ok === false
+              ? ["id", "ok", "code", "error"]
+              : ["id", "ok", "state", "mouse", "keyboard"]
+          ).includes(key),
+      )
+    )
+      return fail("failed", "The helper returned an invalid input setup response.")
     const failure = Schema.decodeUnknownOption(Computer.HelperFailure)(value)
     if (Option.isSome(failure)) {
       pending.delete(id)
@@ -154,6 +166,8 @@ export function createHelperClient(
     timeoutMs = op === "capture" ? Computer.LIMITS.captureMs : op === "ui.tree" ? Computer.LIMITS.uiTreeMs : 5000,
     cleanup = false,
   ): Promise<T> {
+    if (op === "input.setup" && Object.keys(args).some((key) => key !== "action"))
+      return Promise.reject(new ComputerError("failed", "The input setup request is invalid."))
     if (state.closed || (state.closing && !cleanup))
       return Promise.reject(new HelperUnavailableError("helper_missing", "The computer helper is not running."))
     if (state.recovering && !cleanup)
@@ -525,10 +539,16 @@ export class ComputerHelper implements HelperClient {
       const retiring = closeChannel ? client.close().catch(() => {}) : Promise.resolve()
       if (closeChannel) {
         this.retiring = retiring
-        void retiring.finally(() => { if (this.retiring === retiring) this.retiring = undefined })
+        void retiring.finally(() => {
+          if (this.retiring === retiring) this.retiring = undefined
+        })
       }
       for (const listener of this.listeners)
-        try { listener(event) } catch { /* One listener cannot retain somebody else's authority. */ }
+        try {
+          listener(event)
+        } catch {
+          /* One listener cannot retain somebody else's authority. */
+        }
       const restart = () => {
         if (generation !== this.generation || this.stopped || this.client || this.needsResume || this.active) return
         this.restartTimer = this.time.setTimeout(() => {
@@ -623,7 +643,7 @@ export class ComputerHelper implements HelperClient {
   }
 
   async request<T>(op: Computer.HelperOpName, args?: Record<string, unknown>, timeoutMs?: number): Promise<T> {
-    const permission = ["permissions.status", "permissions.request", "permissions.reset"].includes(op)
+    const permission = ["permissions.status", "permissions.request", "permissions.reset", "input.setup"].includes(op)
     const starting =
       this.needsResume && permission
         ? (this.refreshing ?? (this.greeting ? Promise.resolve(this.greeting) : this.refreshPermissions()))

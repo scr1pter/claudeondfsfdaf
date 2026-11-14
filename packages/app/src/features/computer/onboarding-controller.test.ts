@@ -21,7 +21,7 @@ const denied: Computer.PermissionsView = {
 const windows: Computer.PermissionsView = {
   ...healthy,
   rows: [],
-  windows: { captureBlocked: false, elevated: false },
+  windows: { captureBlocked: false, elevated: false, inputSetup: { state: "ready", mouse: true, keyboard: true } },
 }
 const cleanups: (() => void)[] = []
 beforeEach(() => vi.useFakeTimers())

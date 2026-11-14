@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-windows-continuation",
+  "datePacific": "2026-11-13",
+  "branch": "hands",
+  "parentRevision": "6d23cdb58a1bafba09230643bc8a4ddfc4d3a7c9",
+  "ownerApprovedW9": true,
+  "w9": {
+    "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
+    "nativeGroups": 46,
+    "nativeExecution": "pending",
+    "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
+    "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
+  },
+  "executedPriorPR": {
+    "run": 43167728467,
+    "job": 131020775740,
+    "headRevision": "6d23cdb58a1bafba09230643bc8a4ddfc4d3a7c9",
+    "testedMergeRevision": "2eea3fa83c1a2959e8cb366e65c2269aa7c0fb0d",
+    "core": { "passed": 30, "failed": 0, "skipped": 1 },
+    "isolated": { "passed": 36, "failed": 0, "skipped": 11 },
+    "artifact": 13922397057,
+    "artifactBytes": 1354,
+    "archiveSha256": "3bc69e634074c0730fe980e38d5df651b9b0786f06a5645bd5dff17c2f18cd1b",
+    "stop": "failed: input_post_failed / guardian-observe-reply-negative-low32-tag-candidate / driver_failure",
+    "qualification": "Observed projected-marker metadata cannot distinguish MOVE from DOWN or establish exact receipt."
+  },
+  "markerCandidate": {
+    "generation": "Nonzero CSPRNG DWORD, zero-extended to uint64",
+    "unchanged": "Exact full-value received marker equality, injected flag, reservation descriptor, actual DOWN/UP, sequence, deadline and release authority; no received value masking.",
+    "collisionDomainBits": 32,
+    "qualification": "Explicit entropy-domain change, not a claim of 64-bit event entropy. Private channel nonce remains separate. Runtime results pending."
+  },
+  "localChecks": {
+    "appTypecheck": "passed",
+    "desktopTypecheck": "passed",
+    "startup": { "passed": 33, "failed": 0, "assertions": 198 },
+    "setup": { "passed": 2, "failed": 0, "assertions": 20 },
+    "helperClient": { "passed": 43, "failed": 0, "assertions": 219 },
+    "fakeHelper": { "passed": 149, "failed": 0, "assertions": 1411 },
+    "signatureVerifier": { "passed": 22, "failed": 0, "assertions": 164 },
+    "signer": { "passed": 9, "failed": 0, "assertions": 81 },
+    "focusedWorkflow": { "passed": 4, "failed": 0, "filtered": 27, "assertions": 553 },
+    "selftestWrapper": { "passed": 48, "failed": 0, "assertions": 1031 },
+    "scope": "Serial provider-free named files and package typechecks only; no native or owner desktop execution."
+  },
+  "pending": "Exact-source Windows native runtime, Stop receipt and passive health; broad CI and final packaging; actual device calibration/takeover, Mac grants, signing and owner publication gates."
+}

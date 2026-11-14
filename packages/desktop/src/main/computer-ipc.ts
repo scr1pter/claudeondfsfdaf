@@ -19,6 +19,7 @@ export type ComputerIpcService = {
   setPrefs(patch: Partial<Computer.ComputerPrefs>): Promise<Computer.ResolvedComputerSettings>
   permissions(): Promise<Computer.PermissionsView>
   recheck(): Promise<Computer.PermissionsView>
+  inputSetup?(action: Computer.InputSetupAction): Promise<Computer.InputSetupStatus>
   openPane(id: Pane): Promise<void>
   reset(id: PermissionID): Promise<Computer.PermissionsView>
   apps(query?: string): Promise<AppRow[]>
@@ -91,6 +92,12 @@ export function registerComputerIpc<E>(
   })
   add("computer-permissions", () => current().permissions())
   add("computer-recheck", () => current().recheck())
+  add("computer-input-setup", (action: unknown) => {
+    if (!Schema.is(Computer.InputSetupAction)(action)) throw new Error("That input setup action is invalid.")
+    const setup = current().inputSetup
+    if (!setup) throw new Error("Input setup is unavailable.")
+    return setup(action)
+  })
   add("computer-open-pane", (id: unknown) => {
     if (typeof id !== "string" || !PANES.has(id)) throw new Error("That settings pane is unavailable.")
     return current().openPane(id as Pane)

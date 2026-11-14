@@ -1694,4 +1694,23 @@ export const dict = {
   "computer.status.done": "Done",
   "computer.status.stopped": "Stopped",
   "computer.status.yourTurn": "Your turn",
+  "computer.inputSetup.checking": "Checking listener health…",
+  "computer.inputSetup.title": "Verify takeover detection",
+  "computer.inputSetup.required": "Calibrate Windows input detection before using {{name}}.",
+  "computer.inputSetup.instruction":
+    "Move your pointer, then press and release Shift. The agent stays paused during setup.",
+  "computer.inputSetup.privacy":
+    "{{name}} checks delivery from your mouse and keyboard without saving key history. After calibration, it checks the listener's health; this does not continuously prove hardware delivery.",
+  "computer.inputSetup.needs-calibration": "Needs calibration",
+  "computer.inputSetup.calibrating": "Waiting for your mouse and keyboard",
+  "computer.inputSetup.ready": "Calibrated — listener healthy",
+  "computer.inputSetup.unavailable": "Detection unavailable — stay paused",
+  "computer.inputSetup.mouse": "Mouse delivery",
+  "computer.inputSetup.keyboard": "Keyboard delivery",
+  "computer.inputSetup.complete": "Verified",
+  "computer.inputSetup.pending": "Waiting",
+  "computer.inputSetup.start": "Start calibration",
+  "computer.inputSetup.reset": "Recalibrate",
+  "computer.inputSetup.explicit":
+    "Calibration never resumes the agent. Finish setup or choose Resume when you are ready.",
 }

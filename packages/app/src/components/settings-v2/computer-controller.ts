@@ -185,6 +185,10 @@ export function createComputerSettings(
       listeners.clear()
     },
     check,
+    inputSetupChanged(setup: Computer.InputSetupStatus | undefined) {
+      if (!state.permissions?.windows || disposed) return
+      publish({ permissions: { ...state.permissions, windows: { ...state.permissions.windows, inputSetup: setup } } })
+    },
     /** Writes Settings' own fields. Locked fields, consent, grants and turning Hands on are refused without a call. */
     setPrefs: (patch: Partial<Computer.ComputerPrefs>) =>
       mutate(async (current) => {

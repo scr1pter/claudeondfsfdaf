@@ -59,13 +59,13 @@ size_t run_privileged_self_test_tests() {
   size_t count = 0;
   const auto test = [&](const auto& body) { body(); ++count; };
   test([] {
-    constexpr std::array<std::wstring_view, 16> expected{
+    constexpr std::array<std::wstring_view, 17> expected{
       L"privileged-isolated-target", L"apps-running-target", L"apps-installed-target",
       L"capture-color-patch", L"capture-affinity-exclusion", L"uia-counter-increment",
       L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
       L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
       L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
-      L"capture-isolated-window-worker"};
+      L"capture-isolated-window-worker", L"input-listener-health"};
     require(windows_privileged_checks == expected &&
       std::set<std::wstring_view>(expected.begin(), expected.end()).size() == expected.size(),
       "privileged.fixed-complete-unique-catalog");

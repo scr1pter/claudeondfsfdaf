@@ -134,6 +134,11 @@ export function createComputerOnboarding(
       listeners.clear()
     },
     check: () => check(),
+    inputSetupChanged(setup: Computer.InputSetupStatus | undefined) {
+      if (!state.permissions?.windows || disposed) return
+      publish({ permissions: { ...state.permissions, windows: { ...state.permissions.windows, inputSetup: setup } } })
+      if (state.step === "try" && !ready()) publish({ step: "permissions" })
+    },
     consent: () =>
       mutate("consent", async () => {
         if (!(await settings()) || blocked()) return false

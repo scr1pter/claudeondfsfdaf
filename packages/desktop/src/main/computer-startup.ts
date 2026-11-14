@@ -452,6 +452,15 @@ function missingGrants(kind: Computer.Backend, permissions: Computer.Permissions
   )
 }
 
+function windowsInputReady(view: Computer.PermissionsView): boolean {
+  return (
+    view.helperStart === "ok" &&
+    view.windows?.captureBlocked === false &&
+    view.windows.elevated === false &&
+    Computer.inputSetupReady(view.windows.inputSetup)
+  )
+}
+
 /**
  * A renderer's preference write, checked in main: company-locked fields and main's own permission record are
  * refused, and a stop shortcut must pass D20's validation (stored in its canonical form).
@@ -589,12 +598,19 @@ function limited(
       if (!settings) return off()
       const previous = settings.get()
       const checked = checkedPatch(patch, previous, platform)
+      if (
+        platform === "win32" &&
+        checked.enabled === true &&
+        (!permissions || !windowsInputReady(await permissions.list()))
+      )
+        throw new ComputerError("unavailable", `Calibrate input detection before enabling ${Hands.NAME}.`)
       const saved = await settings.setPrefs(checked)
       retention?.changed(previous)
       return saved
     },
     permissions: () => (permissions ? permissions.list() : off()),
     recheck: () => (permissions ? permissions.recheck() : off()),
+    inputSetup: (action) => (permissions ? permissions.inputSetup(action) : off()),
     openPane: (id) => (permissions ? permissions.openPane(id) : off()),
     reset: (id) => (permissions ? permissions.reset(id) : off()),
     apps: async () => [],
@@ -829,14 +845,23 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     deps.power.on(name, callback)
     return () => deps.power.removeListener(name, callback)
   })
+  async function trustedControl(action: Computer.OverlayAction, requestID?: string) {
+    if (
+      (action === "resume" || action === "hand-over" || action === "not-now") &&
+      platform === "win32" &&
+      !windowsInputReady(await permissions.list())
+    )
+      throw new ComputerError("unavailable", `Calibrate input detection before resuming ${Hands.NAME}.`)
+    return executor.control(action, requestID)
+  }
   const detachOverlayControls = setComputerOverlayControls({
     banner: () => overlay.banner(),
     state: () => controller.state(),
     armed: (requestID) => overlay.armed(requestID),
     hover: (on) => overlay.hover(on),
     async act(action, requestID) {
-      if (action === "stop" || action === "takeover" || action === "resume") return executor.control(action)
-      if (action === "hand-over" || action === "not-now") return executor.control(action, requestID)
+      if (action === "stop" || action === "takeover" || action === "resume") return trustedControl(action)
+      if (action === "hand-over" || action === "not-now") return trustedControl(action, requestID)
       const ask = controller.state().ask
       const reply = bannerReply(action, requestID, ask)
       const engine = connection.engine
@@ -858,7 +883,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     const granted =
       probe.healthy &&
       (platform === "win32"
-        ? view.windows?.captureBlocked === false && view.windows.elevated === false
+        ? windowsInputReady(view)
         : view.rows.length === 2 && view.rows.every((row) => row.status === "granted"))
     if (!granted && controller.state().holder) void controller.pause("helper").catch(() => {})
     return view
@@ -889,7 +914,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     }
     if (
       platform === "win32"
-        ? fresh.windows?.captureBlocked !== false || fresh.windows?.elevated !== false
+        ? !windowsInputReady(fresh)
         : fresh.rows.length !== 2 ||
           !["screen", "accessibility"].every(
             (id) => fresh.rows.filter((row) => row.id === id && row.status === "granted").length === 1,
@@ -1050,17 +1075,19 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       }
       if (command === "hand-over" || command === "not-now") {
         const ask = controller.state().ask
-        if (ask?.kind !== "pointer" || !(await executor.control(command, ask.requestID)))
+        if (!(await trustedControl(command, ask?.kind === "pointer" ? ask.requestID : undefined)))
           throw new Error("That request is no longer open.")
         return
       }
-      await executor.control(command)
+      await trustedControl(command)
     },
     prefs: () => settings.get(),
     async setPrefs(patch) {
       alive()
       const previous = settings.get()
       const checked = checkedPatch(patch, previous, platform)
+      if (platform === "win32" && checked.enabled === true && !windowsInputReady(await permissions.list()))
+        throw new ComputerError("unavailable", `Calibrate input detection before enabling ${Hands.NAME}.`)
       if (checked.enabled === false) await controller.stop()
       const saved = await settings.setPrefs(checked)
       alive()
@@ -1074,6 +1101,15 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     recheck: () => {
       alive()
       return permissions.recheck().then(observed)
+    },
+    async inputSetup(action) {
+      alive()
+      if (platform !== "win32")
+        throw new ComputerError("unsupported_action", "Input calibration is only available on Windows.")
+      if (action !== "status") await controller.pause("button")
+      const setup = await permissions.inputSetup(action)
+      alive()
+      return setup
     },
     openPane: (id) => {
       alive()
@@ -1226,7 +1262,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     service,
     tray: () => computerTrayState(controller.state()),
     trayCommand(command) {
-      void executor.control(command).catch(() => {})
+      void trustedControl(command).catch(() => {})
     },
     attach(engine) {
       if (connection.closed || connection.abort) return

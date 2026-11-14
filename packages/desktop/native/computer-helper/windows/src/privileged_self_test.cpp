@@ -858,6 +858,26 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
         });
       }
     });
+    run(16, [&] {
+      // The real passive listener/route health path is independently testable without
+      // fabricating hardware calibration or enabling a foreground mutation.
+      const auto detector = native->state->detector;
+      struct ResetSetup { std::shared_ptr<UserInputService> detector; ~ResetSetup() { detector->setup_reset(); } } reset{detector};
+      diagnostic_stage(L"input-listener-setup", [&] {
+        require(native->state->available() && target->current() && detector->setup_start());
+      });
+      diagnostic_stage(L"input-listener-health", [&] {
+        const auto deadline = GetTickCount64() + 750;
+        while (native->state->available() && target->current() && !detector->listener_health_ready() && GetTickCount64() < deadline)
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        require(native->state->available() && target->current() && detector->listener_health_ready());
+      });
+      diagnostic_stage(L"input-calibration-required", [&] {
+        const auto status = detector->setup_status();
+        if (status.mouse || status.keyboard) throw ScenarioSkip{L"physical_takeover"};
+        require(status.state != UserInputSetupState::ready && !detector->foreground_ready(native->session()));
+      });
+    });
   } catch (const ScenarioFailure& failure) { report.checks[0] = {std::wstring(windows_privileged_checks[0]), false, false, failure.reason}; }
   catch (const ScenarioSkip& skip) { report.skip_unrun(skip.reason); }
   catch (...) { report.checks[0] = {std::wstring(windows_privileged_checks[0]), false, false, L"native_operation_failed"}; }

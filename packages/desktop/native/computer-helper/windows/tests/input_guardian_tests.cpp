@@ -467,6 +467,42 @@ size_t run_input_guardian_tests() {
     ledger.retire(ticket,true); const auto successor=reserve(ledger,mouse(),true);
     check(!ledger.observed(successor,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,"guardian.projected-candidate-metadata-does-not-survive-slot-reuse");
   });
+  test([] {
+    // Boundary markers cover zero-extension, including the sign bit; hook observations stay uint64.
+    for (const uint64_t marker : {uint64_t{1},uint64_t{0x80000000},uint64_t{0xffffffff}}) {
+      for (const auto release : {mouse(),scan(),unicode()}) {
+        InputGuardianLedger ledger(marker); const auto ticket=reserve(ledger,release,true);
+        const auto wrong=release.kind==InputReleaseKind::mouse_button ? mouse(1) :
+          release.kind==InputReleaseKind::scan_key ? scan(static_cast<WORD>('B'),0x30) : unicode(0x03c1);
+        for (const auto rejected : {InputGuardianEvent{release,marker | (uint64_t{1} << 32),true,true,100},
+            InputGuardianEvent{release,marker ^ 1U,true,true,100}, InputGuardianEvent{release,marker,false,true,100},
+            InputGuardianEvent{wrong,marker,true,true,100}, InputGuardianEvent{release,marker,true,false,100}}) {
+          check(!ledger.observe(rejected) && !ledger.observed(ticket,true) && !ledger.observed(ticket,false) &&
+                !ledger.pending() && ledger.releases().empty() && ledger.released_count()==0,
+                "guardian.narrow-marker-rejects-foreign-upper-bits-wrong-tag-hardware-descriptor-and-up-before-down");
+        }
+        ledger.observe_move(marker,true);
+        check(!ledger.observed(ticket,true) && !ledger.pending() && ledger.releases().empty(),
+              "guardian.narrow-marker-move-never-creates-down-or-release-authority");
+        check(ledger.observe({release,marker,true,true,100}) && ledger.observed(ticket,true) &&
+              ledger.pending() && ledger.releases()==std::vector{ticket},
+              "guardian.narrow-marker-exact-injected-down-alone-creates-release-debt");
+        ledger.retire(ticket);
+        check(!ledger.observe({release,marker,true,true,101}) && ledger.pending(),
+              "guardian.narrow-marker-duplicate-down-does-not-change-original-debt");
+        for (const auto rejected : {InputGuardianEvent{release,marker | (uint64_t{1} << 32),true,false,200},
+            InputGuardianEvent{release,marker ^ 1U,true,false,200}, InputGuardianEvent{release,marker,false,false,200},
+            InputGuardianEvent{wrong,marker,true,false,200}}) {
+          check(!ledger.observe(rejected) && !ledger.observed(ticket,false) && ledger.pending() &&
+                ledger.releases()==std::vector{ticket} && ledger.released_count()==0,
+                "guardian.narrow-marker-release-credit-rejects-foreign-upper-bits-wrong-tag-hardware-and-descriptor");
+        }
+        check(ledger.observe({release,marker,true,false,200}) && ledger.observed(ticket,false) &&
+              !ledger.pending() && ledger.releases().empty() && ledger.released_count()==1,
+              "guardian.narrow-marker-exact-injected-up-alone-completes-retired-debt");
+      }
+    }
+  });
   return groups;
 }
 }

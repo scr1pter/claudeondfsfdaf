@@ -10,6 +10,7 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { ComputerMainCopy } from "@/features/computer/main-copy"
 import { ComputerOnboarding } from "@/features/computer/onboarding-model"
+import { ComputerInputSetup } from "@/features/computer/input-setup"
 import { requestComposerPrompt } from "@/utils/composer-handoff"
 import { createComputerSettings, type AppResult } from "./computer-controller"
 import { ComputerSettings } from "./computer-model"
@@ -227,6 +228,15 @@ export function SettingsComputerV2(props: { computer: Computer.ComputerPlatform 
                 </div>
               </div>
               <div class="settings-v2-card-body">
+                <Show when={os() === "windows"}>
+                  <ComputerInputSetup
+                    computer={props.computer}
+                    value={store.state.permissions?.windows?.inputSetup}
+                    disabled={busy() || !current().prefs.consentedAt}
+                    onChange={controller.inputSetupChanged}
+                    onResume={store.state.phase === "paused" ? () => props.computer.command("resume") : undefined}
+                  />
+                </Show>
                 <For each={rows()}>
                   {(row) => (
                     <div

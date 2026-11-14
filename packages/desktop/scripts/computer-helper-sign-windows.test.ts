@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { readIdentity } from "./computer-helper-identity"
 import { prepareWindowsComputerHelpers, windowsHelperSigningDigest } from "./computer-helper-sign-windows"
+import { windowsHelperPowerShellHost } from "./verify-computer-helper-windows"
 import type { HelperArchitecture, HelperManifest, NativeCommand } from "./build-computer-helper"
 
 const directory = path.resolve(import.meta.dirname, "..")
@@ -51,10 +52,7 @@ async function fixture(options: { noSignature?: boolean; changeCode?: boolean; c
   const output = path.join(root, "final helpers")
   const identity = readIdentity(path.join(directory, "native/computer-helper/identity.json"))
   const events: { command: string; args: readonly string[]; env: NodeJS.ProcessEnv; timeoutMs: number }[] = []
-  const powershell = path.win32.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32/WindowsPowerShell/v1.0/powershell.exe",
-  )
+  const powershell = windowsHelperPowerShellHost()
   const inspected: string[] = []
   const manifests: Partial<Record<HelperArchitecture, HelperManifest>> = {}
   for (const architecture of ["x64", "arm64"] as const) {
@@ -74,7 +72,7 @@ async function fixture(options: { noSignature?: boolean; changeCode?: boolean; c
   }
   const run: NativeCommand = async (command, args, input) => {
     events.push({ command, args, env: input.env, timeoutMs: input.timeoutMs })
-    if (command === "pwsh" && args.includes("-File")) {
+    if (command === powershell && args.includes("-File")) {
       if (options.noSignature) return { code: 0, stdout: "", stderr: "" }
       for (const file of args.slice(args.indexOf("-File") + 2)) {
         const bytes = signed(await readFile(file))
@@ -162,7 +160,8 @@ describe("immutable Windows helper release signing", () => {
       ])
       expect(signing[0]!.env.VECTOR_REQUIRE_WINDOWS_SIGNING).toBe("true")
       expect(signing[0]!.env.AZURE_CLIENT_SECRET).toBe("fixture-value")
-      expect(signing[0]!.command).toBe("pwsh")
+      expect(signing[0]!.command).toBe(f.powershell)
+      expect(path.win32.isAbsolute(signing[0]!.command)).toBe(true)
       expect(signing[0]!.timeoutMs).toBe(300_000)
       expect(
         f.events

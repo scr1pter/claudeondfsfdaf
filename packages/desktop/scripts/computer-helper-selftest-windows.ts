@@ -54,6 +54,7 @@ export const WINDOWS_NATIVE_CHECKS = {
     "hardware-user-input-pauses",
     "isolated-target-cleanup",
     "capture-isolated-window-worker",
+    "input-listener-health",
   ],
   targetControl: ["windows-test-target-control-schema"],
   eof: ["caller-eof"],
@@ -245,6 +246,9 @@ export const WINDOWS_NATIVE_STAGES = [
   "affinity-native-sample-missing",
   "affinity-native-sample-mismatch",
   "affinity-display-proof",
+  "input-listener-setup",
+  "input-listener-health",
+  "input-calibration-required",
 ] as const
 export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
 export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]

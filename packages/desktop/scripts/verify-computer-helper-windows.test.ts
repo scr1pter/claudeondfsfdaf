@@ -17,6 +17,7 @@ import {
   observeWindowsHelperAuthenticode,
   parseWindowsHelperAuthenticode,
   verifyComputerHelperWindows,
+  windowsHelperPowerShellHost,
 } from "./verify-computer-helper-windows"
 import type { HelperArchitecture, HelperManifest, NativeCommand } from "./build-computer-helper"
 
@@ -67,6 +68,23 @@ const helperManifest = (bytes: Uint8Array, architecture: HelperArchitecture = "x
 })
 
 describe("Windows Authenticode observation without a console", () => {
+  test("requires the fixed absolute PowerShell 7 toolchain host, without PATH or legacy fallback", () => {
+    expect(windowsHelperPowerShellHost("C:\\Program Files")).toBe("C:\\Program Files\\PowerShell\\7\\pwsh.exe")
+    expect(windowsHelperPowerShellHost("D:\\Program Files")).toBe("D:\\Program Files\\PowerShell\\7\\pwsh.exe")
+    for (const invalid of [
+      "",
+      "Program Files",
+      "C:Program Files",
+      "\\\\host\\Program Files",
+      "C:\\tools",
+      "C:\\Program Files\\..",
+      "C:\\Program Files\0",
+      "C:\\Program Files\n",
+      "C:\\Program Files\r\n",
+    ])
+      expect(() => windowsHelperPowerShellHost(invalid)).toThrow("fixed PowerShell 7 installation")
+  })
+
   test("uses the real fixed cmdlet and binary UTF-8 stdout without changing the console code page", async () => {
     const file = path.resolve(os.tmpdir(), "helper's literal [path] $é.exe")
     const publisher = "CN=Vectör 研究, O=Vector, C=US"
@@ -86,9 +104,9 @@ describe("Windows Authenticode observation without a console", () => {
     ).toEqual({ status: "Valid", publisher, thumbprint: "a".repeat(40) })
     expect(calls).toHaveLength(1)
     const call = calls[0]!
-    expect(call.command).toBe(
-      path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
-    )
+    expect(call.command).toBe(windowsHelperPowerShellHost())
+    expect(path.win32.isAbsolute(call.command)).toBe(true)
+    expect(call.command).toMatch(/\\PowerShell\\7\\pwsh\.exe$/)
     expect(call.args.slice(0, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand"])
     expect(call.settings.timeoutMs).toBe(5000)
     expect(call.settings.cwd).toBe(path.resolve(os.tmpdir()))
@@ -416,10 +434,7 @@ async function fixture(
     }),
   )
   const calls: { command: string; args: readonly string[]; environment: NodeJS.ProcessEnv; timeoutMs: number }[] = []
-  const powershell = path.win32.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32/WindowsPowerShell/v1.0/powershell.exe",
-  )
+  const powershell = windowsHelperPowerShellHost()
   const run: NativeCommand = async (command, args, settings) => {
     calls.push({ command, args, environment: settings.env, timeoutMs: settings.timeoutMs })
     if (command === powershell) return { code: 0, stdout: JSON.stringify(signature), stderr: "" }
