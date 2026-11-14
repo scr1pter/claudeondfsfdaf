@@ -562,9 +562,10 @@ export function CloudWorkspaces() {
       {auth !== "signed-in" ? (
         <section className="cw-door">
           <Cloud size={32} aria-hidden="true" />
-          <h1>Your workspace, wherever you are.</h1>
+          <h1>Cloud workspaces are a private pilot.</h1>
           <p>
             Open a GitHub repository, ask Vector to work on it, and return to the same cloud chats from another device.
+            The pilot is not open to everyone yet. Sign in to see whether it is available for your account.
           </p>
           {auth === "loading" ? (
             <p className="cw-loading">

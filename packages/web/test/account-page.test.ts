@@ -34,6 +34,23 @@ test("the Design tab follows the server's owner answer, whatever the address", (
   expect(page({ user: { ...user, email: "someone@example.com" }, owner: true })).toContain(DESIGN_TAB)
 })
 
+// Cloud workspaces are a closed pilot, off by default (api/cloud-workspaces answers `enabled: false` for everyone else),
+// so the page neither invites an account into them nor describes them in its deletion copy until the gateway says yes.
+test("cloud workspaces appear only for an account the gateway reports enabled", () => {
+  const user = { id: "usr_preview", email: "someone@example.com" }
+  const hidden = renderToStaticMarkup(createElement(AccountPage, { preview: { user } }))
+  expect(hidden).not.toContain("Cloud workspaces")
+  expect(hidden).not.toContain('href="/workspaces"')
+  expect(hidden).not.toMatch(/workspace/i)
+  expect(hidden).toContain("Deleting removes your sign-in and stops your CLI tokens. It cannot be undone.")
+  const shown = renderToStaticMarkup(createElement(AccountPage, { preview: { user }, previewWorkspaces: true }))
+  expect(shown).toContain("<h2>Cloud workspaces</h2>")
+  expect(shown).toContain('href="/workspaces"')
+  expect(shown).toContain("closes your cloud workspaces. Workspace files are queued for cleanup.")
+  // Percentages-only: no credits, tokens or prices in the workspace copy either way.
+  for (const html of [hidden, shown]) expect(html).not.toMatch(/credit|\$\d|per token/i)
+})
+
 // Who the owner is is the server's answer (api/account/status), so the browser code never needs to name anyone.
 // Addresses at the reserved example domains are placeholders, and test files may hold any fixture.
 test("the site's components and libraries carry no one's email address", async () => {
