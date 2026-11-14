@@ -183,6 +183,111 @@ test("keeper diagnostic vocabulary rejects invented phases, raw paths, extra fie
   ])
     expect(GithubIsolation.decodeFailureRecords(failureBytes(value), "prepare")).toEqual([])
 })
+test("keeper startup diagnostics project the complete closed outcome, log and info product", () => {
+  const stages = ["child-exit", "timeout"].flatMap((outcome) =>
+    [
+      "empty",
+      "no-marker",
+      "invalid",
+      "unstable",
+      "unreadable",
+      "phase-identity",
+      "phase-capabilities",
+      "phase-environment",
+      "phase-ready-write",
+      "bwrap-initial-caps",
+      "bwrap-capset",
+      "bwrap-userns-denied",
+      "bwrap-clone",
+      "bwrap-uid-map",
+      "bwrap-gid-map",
+      "bwrap-setgroups",
+      "bwrap-mount-propagation",
+      "bwrap-root-tmpfs",
+      "bwrap-exec",
+    ].flatMap((log) =>
+      ["empty", "child-created", "invalid"].map((info) => `prepare-keeper-${outcome}-log-${log}-info-${info}`),
+    ),
+  )
+  expect(stages).toHaveLength(114)
+  expect(new Set(stages).size).toBe(114)
+  for (const stage of stages) {
+    const timeout = stage.startsWith("prepare-keeper-timeout-")
+    const entry: GithubIsolation.FailureRecord = {
+      ...failureRecord(),
+      stage,
+      class: timeout ? "TimeoutExpired" : "CalledProcessError",
+      errno: null,
+      exit: timeout ? null : 125,
+      signal: null,
+    }
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(entry), "prepare")).toEqual([entry])
+    const transport: GithubIsolation.FailureRecord = {
+      ...entry,
+      origin: "transport",
+      stage: "close",
+      class: "ChildExit",
+      exit: 1,
+    }
+    const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, entry] }
+    expect(GithubIsolation.failureMetadata(new Error("private startup log and info", { cause }))).toEqual(cause)
+    if (!timeout) {
+      for (const exit of [0, 1, 255]) {
+        const exited = { ...entry, exit }
+        expect(GithubIsolation.decodeFailureRecords(failureBytes(exited), "prepare")).toEqual([exited])
+      }
+      const signaled: GithubIsolation.FailureRecord = { ...entry, exit: null, signal: "SIGKILL" }
+      expect(GithubIsolation.decodeFailureRecords(failureBytes(signaled), "prepare")).toEqual([signaled])
+    }
+  }
+})
+test("keeper startup log and info vocabulary rejects unknown values and private output", () => {
+  const entry: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    stage: "prepare-keeper-child-exit-log-empty-info-empty",
+    class: "CalledProcessError",
+    errno: null,
+    exit: 125,
+  }
+  for (const stage of [
+    "keeper-child-exit-log-empty-info-empty",
+    "prepare-worker-child-exit-log-empty-info-empty",
+    "prepare-keeper-exit-log-empty-info-empty",
+    "prepare-keeper-stopped-log-empty-info-empty",
+    "prepare-keeper-child-exit-log-unknown-info-empty",
+    "prepare-keeper-child-exit-log-phase-network-info-empty",
+    "prepare-keeper-child-exit-log-bwrap-private-info-empty",
+    "prepare-keeper-child-exit-log-/owner/private-info-empty",
+    "prepare-keeper-child-exit-log-empty-info-ready",
+    "prepare-keeper-timeout-log-empty-info-/run/private",
+    "prepare-keeper-timeout-log-empty-info-child-created-private-value",
+    "prepare-keeper-timeout-log-empty-info-invalid\nprivate-value",
+    "VECTOR_NATIVE_KEEPER_STAGE identity",
+  ])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+  for (const origin of ["control", "client", "transport"])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, origin }), "prepare")).toEqual([])
+  for (const value of [
+    { ...entry, log: "private child stderr" },
+    { ...entry, info: { path: "/owner/private", pid: 123 } },
+    { ...entry, outcome: "child-exit" },
+    { ...entry, stderr: "synthetic-private-token" },
+    { ...entry, path: "/owner/private" },
+    { ...entry, class: "PrivateKeeperFailure" },
+    { ...entry, signal: "SIGPRIVATE" },
+  ])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(value), "prepare")).toEqual([])
+  expect(
+    GithubIsolation.decodeFailureRecords(Buffer.concat([failureBytes(entry), Buffer.from([0xff])]), "prepare"),
+  ).toEqual([])
+  const projected = GithubIsolation.decodeFailureRecords(
+    Buffer.concat([Buffer.from("private stderr /owner/private synthetic-private-token\n"), failureBytes(entry)]),
+    "prepare",
+  )
+  expect(projected).toEqual([entry])
+  expect(JSON.stringify(projected)).not.toContain("/owner/private")
+  expect(JSON.stringify(projected)).not.toContain("synthetic-private-token")
+})
 test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
   const ordinary = failureRecord()
   for (const value of [

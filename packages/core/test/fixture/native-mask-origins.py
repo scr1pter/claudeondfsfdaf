@@ -26,7 +26,8 @@ PURE = {
     "require", "integer", "exact", "canonical", "object_identity", "construction_namespace",
     "filesystem", "json_digest", "digest_value", "mask_records", "mount_field", "mount_path", "parse_mount_table",
     "beneath", "hidden", "refuse_mask_aliases", "require_private_mounts", "require_known_mask_origins",
-    "require_capture_closure", "keeper_log_stage", "keeper_environment",
+    "require_capture_closure", "keeper_log_stage", "keeper_environment", "keeper_log_classification",
+    "keeper_info_progress", "keeper_failure_stage",
 }
 CONSTANTS = {"HOST_TEMP", "MASKS"}
 SELECTED = [node for node in TREE.body if
@@ -36,9 +37,9 @@ SELECTED = [node for node in TREE.body if
 if ({node.name for node in SELECTED if isinstance(node, ast.FunctionDef)} != PURE or
         len(SELECTED) != len(PURE) + len(CONSTANTS)):
     raise AssertionError("The production pure-function allowlist changed")
-SAFE_CALLS = PURE | {"RuntimeError", "type", "len", "all", "any", "ord", "chr", "int", "str", "set", "sorted", "list"}
+SAFE_CALLS = PURE | {"RuntimeError", "type", "len", "all", "any", "ord", "chr", "int", "str", "set", "sorted", "list", "dict"}
 SAFE_MODULE_CALLS = {"os.major", "os.minor", "os.path.normpath", "os.path.relpath", "os.path.join",
-                     "hashlib.sha256", "json.dumps", "re.sub", "re.fullmatch", "stat.S_ISDIR", "stat.S_ISREG"}
+                     "hashlib.sha256", "json.dumps", "json.loads", "re.sub", "re.fullmatch", "stat.S_ISDIR", "stat.S_ISREG"}
 SAFE_METHODS = {"encode", "startswith", "endswith", "rstrip", "values", "count", "isascii", "isdigit", "split", "items", "decode",
                 "splitlines", "index", "append", "add", "hexdigest", "get"}
 for node in SELECTED:
@@ -444,6 +445,150 @@ class KeeperLogTests(unittest.TestCase):
             self.assertIsNone(NATIVE["keeper_log_stage"](data))
 
 
+class KeeperDiagnosticTests(unittest.TestCase):
+    def test_log_classification_keeps_opaque_stderr_private_and_marker_stages_closed(self):
+        classify = NATIVE["keeper_log_classification"]
+        self.assertEqual(classify(b""), "empty")
+        for data in (b"opaque stderr\n", b"/owner/private synthetic-private-token\xff\0\n", b"x" * 65536):
+            with self.subTest(data=data[:80]):
+                self.assertEqual(classify(data), "no-marker")
+        prefix = b"VECTOR_NATIVE_KEEPER_STAGE "
+        phases = ("identity", "capabilities", "environment", "ready-write")
+        for count, phase in enumerate(phases, start=1):
+            data = b"\xff/owner/private\n" + b"".join(
+                prefix + item.encode("ascii") + b"\n" for item in phases[:count])
+            self.assertEqual(classify(data), "phase-" + phase)
+        for data in (
+            prefix + b"capabilities\n", prefix + b"identity", prefix + b"identity\r\n",
+            prefix + b"identity\n" + prefix + b"identity\n", prefix + b"private-path /owner/secret\n",
+            b"VECTOR_NATIVE_KEEPER_STAGE_EXTRA identity\n",
+        ):
+            self.assertEqual(classify(data), "invalid")
+        for data in (None, "private stderr", bytearray(b""), memoryview(b""), 7, b"x" * 65537):
+            self.assertEqual(classify(data), "invalid")
+
+    def test_all_eleven_pinned_fatal_labels_return_only_ten_fixed_categories(self):
+        labels = (
+            ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
+            ("bwrap-capset", b"bwrap: capset failed: ", False),
+            ("bwrap-userns-denied", b"bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'.", True),
+            ("bwrap-clone", b"bwrap: Creating new namespace failed: ", False),
+            ("bwrap-clone", b"bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.", True),
+            ("bwrap-uid-map", b"bwrap: setting up uid map: ", False),
+            ("bwrap-gid-map", b"bwrap: setting up gid map: ", False),
+            ("bwrap-setgroups", b"bwrap: error writing to setgroups: ", False),
+            ("bwrap-mount-propagation", b"bwrap: Failed to make / slave: ", False),
+            ("bwrap-root-tmpfs", b"bwrap: Failed to mount tmpfs: ", False),
+            ("bwrap-exec", b"bwrap: execvp /usr/bin/python3: ", False),
+        )
+        self.assertEqual(len(labels), 11)
+        self.assertEqual(len({category for category, _, _ in labels}), 10)
+        for category, label, exact_label in labels:
+            suffix = b"" if exact_label else b"Permission denied /owner/private synthetic-private-token\xff"
+            data = b"opaque stderr\xfe\n" + label + suffix + b"\n"
+            with self.subTest(category=category, label=label):
+                result = NATIVE["keeper_log_classification"](data)
+                self.assertEqual(result, category)
+                self.assertNotIn("private", result)
+                self.assertNotIn("/", result)
+                self.assertNotIn("Permission", result)
+                self.assertEqual(NATIVE["keeper_log_classification"](
+                    b"VECTOR_NATIVE_KEEPER_STAGE identity\n" + data), category)
+                for near_match in (
+                    b"prefix " + label + suffix + b"\n", label.replace(b"bwrap:", b"Bwrap:", 1) + suffix + b"\n",
+                    label + b" private-suffix\n" if exact_label else label[:-1] + suffix + b"\n",
+                ):
+                    self.assertEqual(NATIVE["keeper_log_classification"](near_match), "no-marker")
+                self.assertEqual(NATIVE["keeper_log_classification"](label + suffix), "invalid")
+                self.assertEqual(NATIVE["keeper_log_classification"](data + data), "invalid")
+
+    def test_fatal_classification_requires_pinned_prefix_case_delimiter_and_complete_unique_line(self):
+        classify = NATIVE["keeper_log_classification"]
+        exact = b"bwrap: Unexpected capabilities but not setuid, old file caps config?"
+        prefix = b"bwrap: capset failed: "
+        complete = prefix + b"Permission denied\n"
+        for data in (
+            b"Bwrap: capset failed: Permission denied\n", b"bwrap: Capset failed: Permission denied\n",
+            b"prefix " + complete, b"bwrap: capset failed:Permission denied\n",
+            b"bwrap: capset failed Permission denied\n", b"bwrap: capset faile\n",
+            exact + b" extra-private-value\n", exact.lower() + b"\n",
+            b"bwrap: execvp /bin/sh: Permission denied\n", b"bwrap: execvp /usr/bin/python3-private: Permission denied\n",
+            b"bwrap: Failed to make /owner/private slave: Permission denied\n",
+        ):
+            with self.subTest(data=data):
+                self.assertEqual(classify(data), "no-marker")
+        for data in (
+            exact, prefix + b"Permission denied", complete + complete,
+            complete + b"bwrap: setting up uid map: Permission denied\n",
+            b"bwrap: Creating new namespace failed: Permission denied\n" +
+            b"bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.\n",
+            b"VECTOR_NATIVE_KEEPER_STAGE capabilities\n" + complete,
+        ):
+            with self.subTest(data=data):
+                self.assertEqual(classify(data), "invalid")
+
+    def test_info_progress_accepts_only_bounded_child_creation_with_known_namespace_ids(self):
+        progress = NATIVE["keeper_info_progress"]
+        self.assertEqual(progress(b""), "empty")
+        fields = ("cgroup-namespace", "ipc-namespace", "mnt-namespace", "net-namespace", "pid-namespace", "uts-namespace")
+        records = [{"child-pid": 2}, {"child-pid": 9007199254740991}]
+        records.extend({"child-pid": 42, field: 1} for field in fields)
+        records.append({"child-pid": 42, **{field: index + 1 for index, field in enumerate(fields)}})
+        for record in records:
+            with self.subTest(record=record):
+                self.assertEqual(progress(json.dumps(record).encode("utf-8")), "child-created")
+        data = b'{"child-pid":2}'
+        boundary = data + b" " * (65536 - len(data))
+        self.assertEqual(len(boundary), 65536)
+        self.assertEqual(progress(boundary), "child-created")
+        self.assertEqual(progress(boundary + b" "), "invalid")
+
+    def test_info_progress_refuses_malformed_duplicate_unknown_and_unsafe_fields_without_returning_data(self):
+        progress = NATIVE["keeper_info_progress"]
+        for data in (
+            b" ", b"\xff", b"{", b"{}", b"[]", b"null", b"2", b"true",
+            b'{"child-pid":2,"child-pid":3}', b'{"child-pid":2,"ipc-namespace":1,"ipc-namespace":2}',
+            b'{"child-pid":2,"user-namespace":3}', b'{"child-pid":2,"private-path":"/owner/secret"}',
+            b'{"child-pid":2} trailing', b'{"child-pid":NaN}',
+        ):
+            with self.subTest(data=data):
+                self.assertEqual(progress(data), "invalid")
+        for value in (None, False, True, 0, 1, -1, 1.5, "2", 9007199254740992, {}, []):
+            self.assertEqual(progress(json.dumps({"child-pid": value}).encode("utf-8")), "invalid")
+        for field in ("cgroup-namespace", "ipc-namespace", "mnt-namespace", "net-namespace", "pid-namespace", "uts-namespace"):
+            for value in (None, False, True, 0, -1, 1.5, "1", 9007199254740992, {}, []):
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(progress(json.dumps({"child-pid": 2, field: value}).encode("utf-8")), "invalid")
+        for data in (None, "private-info", bytearray(b""), memoryview(b""), 7, b"x" * 65537):
+            self.assertEqual(progress(data), "invalid")
+
+    def test_failure_stage_builder_returns_the_exact_closed_product_and_refuses_unknown_values(self):
+        logs = (
+            "empty", "no-marker", "invalid", "unstable", "unreadable", "phase-identity", "phase-capabilities",
+            "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
+            "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
+            "bwrap-root-tmpfs", "bwrap-exec",
+        )
+        stages = []
+        for outcome in ("child-exit", "timeout"):
+            for log in logs:
+                for info in ("empty", "child-created", "invalid"):
+                    stage = NATIVE["keeper_failure_stage"](outcome, log, info)
+                    self.assertEqual(stage, f"prepare-keeper-{outcome}-log-{log}-info-{info}")
+                    stages.append(stage)
+        self.assertEqual(len(stages), 114)
+        self.assertEqual(len(set(stages)), 114)
+        for values in (
+            ("exit", "empty", "empty"), ("child-exit-log-empty", "empty", "empty"),
+            ("timeout", "phase-network", "empty"), ("child-exit", "bwrap-private", "empty"),
+            ("child-exit", "/owner/private", "empty"), ("child-exit", "empty", "/run/private"),
+            ("child-exit", "empty", "ready"), ("timeout", "empty", "invalid\nprivate-value"),
+            (None, "empty", "empty"), (b"child-exit", "empty", "empty"), (True, "empty", "empty"),
+        ):
+            with self.subTest(values=values), self.assertRaises(RuntimeError):
+                NATIVE["keeper_failure_stage"](*values)
+
+
 class SourceStructureTests(unittest.TestCase):
     def test_only_allowlisted_pure_definitions_are_executed(self):
         self.assertEqual({node.name for node in SELECTED if isinstance(node, ast.FunctionDef)}, PURE)
@@ -499,8 +644,12 @@ class SourceStructureTests(unittest.TestCase):
         self.assertEqual([ast.literal_eval(value) for value in wait.args.defaults], [5])
         invocation = calls("prepare_in_capture", "wait_keeper")
         self.assertEqual(len(invocation), 1)
-        self.assertEqual(len(invocation[0].args), 4)
+        self.assertEqual(len(invocation[0].args), 5)
         self.assertFalse(invocation[0].keywords)
+        self.assertEqual([ast.dump(value) for value in invocation[0].args],
+                         [ast.dump(value) for value in ast.parse(
+                             "f(value['scratch'] + '/keeper-ready.json', value['directory'] + '/keeper.log', "
+                             "info_path, uid, process)", mode="eval").body.args])
         self.assertEqual(len(calls("wait_keeper", "process.poll")), 1)
         self.assertEqual([ast.literal_eval(call.args[0]) for call in calls("wait_keeper", "time.sleep")], [0.01])
         child_error = calls("wait_keeper", "subprocess.CalledProcessError")
@@ -513,49 +662,69 @@ class SourceStructureTests(unittest.TestCase):
                          [ast.dump(value) for value in ast.parse("f(('fixed-keeper',), seconds)", mode="eval").body.args])
         self.assertEqual({ast.dump(node.exc) for node in ast.walk(wait) if isinstance(node, ast.Raise)},
                          {ast.dump(child_error[0]), ast.dump(timeout[0])})
-        self.assertEqual(len(calls("wait_keeper", "read_keeper_stage")), 2)
-        self.assertTrue(all(ast.unparse(call.args[0]) == "log" for call in calls("wait_keeper", "read_keeper_stage")))
+        diagnostics = calls("wait_keeper", "read_keeper_diagnostic")
+        self.assertEqual(len(diagnostics), 4)
+        self.assertCountEqual(
+            [tuple(ast.dump(value) for value in call.args) for call in diagnostics],
+            [tuple(ast.dump(value) for value in ast.parse(expression, mode="eval").body.args)
+             for expression in ("f(log, 'log')", "f(info, 'info')", "f(log, 'log')", "f(info, 'info')")])
+        self.assertTrue(all(not call.keywords for call in diagnostics))
         stages = {ast.dump(node.value) for node in ast.walk(wait) if isinstance(node, ast.Assign) and
                   any(isinstance(target, ast.Name) and target.id == "_DIAGNOSTIC_STAGE" for target in node.targets)}
         expected_stages = {
             ast.dump(ast.parse(expression, mode="eval").body) for expression in (
-                "'prepare-keeper-child-exit' + ('-' + phase if phase else '')",
-                "'prepare-keeper-timeout' + ('-' + phase if phase else '')",
+                "keeper_failure_stage('child-exit', read_keeper_diagnostic(log, 'log'), read_keeper_diagnostic(info, 'info'))",
+                "keeper_failure_stage('timeout', read_keeper_diagnostic(log, 'log'), read_keeper_diagnostic(info, 'info'))",
                 "'prepare-keeper-ready-record'",
             )}
         self.assertEqual(stages, expected_stages)
         expressions = {ast.dump(node) for node in ast.walk(wait)}
         for expression in ("time.monotonic() + seconds", "time.monotonic() >= deadline", "read_json(name, owner)"):
             self.assertIn(ast.dump(ast.parse(expression, mode="eval").body), expressions)
-        reader = FUNCTIONS["read_keeper_stage"]
-        opened = calls("read_keeper_stage", "os.open")
+        reader = FUNCTIONS["read_keeper_diagnostic"]
+        self.assertEqual([argument.arg for argument in reader.args.args], ["name", "kind"])
+        opened = calls("read_keeper_diagnostic", "os.open")
         self.assertEqual(len(opened), 1)
         self.assertEqual(ast.dump(opened[0].args[1]),
                          ast.dump(ast.parse("os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK", mode="eval").body))
-        read = calls("read_keeper_stage", "os.read")
+        read = calls("read_keeper_diagnostic", "os.read")
         self.assertEqual(len(read), 1)
         self.assertEqual(ast.literal_eval(read[0].args[1]), 65537)
-        snapshots = calls("read_keeper_stage", "os.fstat")
+        snapshots = calls("read_keeper_diagnostic", "os.fstat")
         self.assertEqual(len(snapshots), 2)
         self.assertLess(snapshots[0].lineno, read[0].lineno)
         self.assertLess(read[0].lineno, snapshots[1].lineno)
         expressions = {ast.dump(node) for node in ast.walk(reader)}
         for expression in (
             "stat.S_ISREG(before.st_mode)", "before.st_uid == before.st_gid == 0", "before.st_nlink == 1",
-            "stat.S_IMODE(before.st_mode) == 0o600", "before.st_size <= 65536", "len(data) == before.st_size",
+            "kind not in ('log', 'info')", "stat.S_IMODE(before.st_mode) == 0o600", "before.st_size <= 65536",
+            "len(data) != before.st_size",
             "(before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid, before.st_nlink, "
-            "before.st_size, before.st_mtime_ns, before.st_ctime_ns) == "
+            "before.st_size, before.st_mtime_ns, before.st_ctime_ns) != "
             "(after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid, after.st_nlink, "
             "after.st_size, after.st_mtime_ns, after.st_ctime_ns)",
         ):
             self.assertIn(ast.dump(ast.parse(expression, mode="eval").body), expressions)
         self.assertEqual({ast.dump(node.value) for node in ast.walk(reader) if isinstance(node, ast.Return)},
-                         {ast.dump(ast.parse("keeper_log_stage(data)", mode="eval").body), ast.dump(ast.Constant(None))})
+                         {ast.dump(ast.parse(expression, mode="eval").body) for expression in (
+                             "'invalid'", "'unstable' if kind == 'log' else 'invalid'",
+                             "keeper_log_classification(data) if kind == 'log' else keeper_info_progress(data)",
+                             "'unreadable' if kind == 'log' else 'invalid'",
+                         )})
+        for function in ("read_keeper_diagnostic", "wait_keeper", "keeper_failure_stage"):
+            for output in ("print", "os.write", "sys.stdout.write", "sys.stdout.buffer.write",
+                           "sys.stderr.write", "sys.stderr.buffer.write"):
+                self.assertFalse(calls(function, output), (function, output))
         handlers = [node for node in ast.walk(reader) if isinstance(node, ast.ExceptHandler)]
         self.assertEqual(len(handlers), 1)
         self.assertEqual(ast.dump(handlers[0].type),
                          ast.dump(ast.parse("(OSError, RuntimeError, ValueError)", mode="eval").body))
-        self.assertEqual(len(calls("read_keeper_stage", "os.close")), 1)
+        self.assertEqual(len(calls("read_keeper_diagnostic", "os.close")), 1)
+        builder = FUNCTIONS["keeper_failure_stage"]
+        self.assertEqual([argument.arg for argument in builder.args.args], ["outcome", "log", "info"])
+        self.assertEqual({ast.dump(node.value) for node in ast.walk(builder) if isinstance(node, ast.Return)},
+                         {ast.dump(ast.parse("'prepare-keeper-' + outcome + '-log-' + log + '-info-' + info",
+                                             mode="eval").body)})
         keeper = FUNCTIONS["keeper"]
         markers = calls("keeper", "keeper_marker")
         self.assertEqual([ast.literal_eval(call.args[0]) for call in markers],
@@ -579,7 +748,8 @@ class SourceStructureTests(unittest.TestCase):
         self.assertTrue(calls("read_state", "mask_records"))
         forbidden = {"capture_mount_namespace", "supported_mask_sources", "validate_source_view", "validate_masks",
                      "mount_table", "parse_mount_table", "refuse_mask_aliases", "require_known_mask_origins",
-                     "require_capture_closure"}
+                     "require_capture_closure", "wait_keeper", "read_keeper_diagnostic", "keeper_log_classification",
+                     "keeper_info_progress", "keeper_failure_stage"}
         for function in ("cleanup", "read_state", "mask_records"):
             for name in forbidden:
                 self.assertFalse(calls(function, name), (function, name))

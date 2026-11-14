@@ -913,42 +913,115 @@ def keeper_log_stage(data):
     return markers[-1].decode("ascii") if markers else None
 
 
-def read_keeper_stage(name):
+def keeper_log_classification(data):
+    if type(data) is not bytes or len(data) > 65536:
+        return "invalid"
+    if not data:
+        return "empty"
+    phase = keeper_log_stage(data)
+    if phase is None and any(line.startswith(b"VECTOR_NATIVE_KEEPER_STAGE") for line in data.splitlines()):
+        return "invalid"
+    # Exact fatal labels and formatting from bubblewrap v0.9.0, commit
+    # 8e51677abd7e3338e4952370bf7d902e37d8cbb6 (bubblewrap.c and utils.c:warnv).
+    # Only the closed category leaves this parser. Error prose, paths and errno text remain private.
+    labels = (
+        ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
+        ("bwrap-capset", b"bwrap: capset failed: ", False),
+        ("bwrap-userns-denied", b"bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'.", True),
+        ("bwrap-clone", b"bwrap: Creating new namespace failed: ", False),
+        ("bwrap-clone", b"bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.", True),
+        ("bwrap-uid-map", b"bwrap: setting up uid map: ", False),
+        ("bwrap-gid-map", b"bwrap: setting up gid map: ", False),
+        ("bwrap-setgroups", b"bwrap: error writing to setgroups: ", False),
+        ("bwrap-mount-propagation", b"bwrap: Failed to make / slave: ", False),
+        ("bwrap-root-tmpfs", b"bwrap: Failed to mount tmpfs: ", False),
+        ("bwrap-exec", b"bwrap: execvp /usr/bin/python3: ", False),
+    )
+    fatal = None
+    for line in data.splitlines(keepends=True):
+        body = line[:-1] if line.endswith(b"\n") else line
+        for category, label, exact_label in labels:
+            if not (body == label if exact_label else body.startswith(label)):
+                continue
+            if not line.endswith(b"\n") or fatal is not None:
+                return "invalid"
+            fatal = category
+    return fatal if fatal is not None else "phase-" + phase if phase is not None else "no-marker"
+
+
+def keeper_info_progress(data):
+    if type(data) is not bytes or len(data) > 65536:
+        return "invalid"
+    if not data:
+        return "empty"
+    def unique_fields(pairs):
+        require(len(pairs) == len({key for key, _ in pairs}))
+        return dict(pairs)
+    try:
+        value = json.loads(data.decode("utf-8", "strict"), object_pairs_hook=unique_fields)
+    except (ValueError, UnicodeError, RuntimeError):
+        return "invalid"
+    # v0.9.0 ns_infos contains exactly these optional namespace fields. This is diagnostic progress,
+    # never process ownership or admission; the existing post-ready live PID/namespace checks still apply.
+    keys = {"child-pid", "cgroup-namespace", "ipc-namespace", "mnt-namespace", "net-namespace",
+            "pid-namespace", "uts-namespace"}
+    if (type(value) is not dict or not set(value) <= keys or not integer(value.get("child-pid")) or
+            value["child-pid"] <= 1 or not all(integer(item) for item in value.values())):
+        return "invalid"
+    return "child-created"
+
+
+def read_keeper_diagnostic(name, kind):
+    if kind not in ("log", "info"):
+        return "invalid"
     descriptor = None
     try:
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
         before = os.fstat(descriptor)
-        require(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0 and before.st_nlink == 1 and
-                stat.S_IMODE(before.st_mode) == 0o600 and before.st_size <= 65536)
+        if not (stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0 and before.st_nlink == 1 and
+                stat.S_IMODE(before.st_mode) == 0o600 and before.st_size <= 65536):
+            return "invalid"
         data = os.read(descriptor, 65537)
         after = os.fstat(descriptor)
-        require(len(data) == before.st_size and
-                (before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid, before.st_nlink,
-                 before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
+        if ((before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid, before.st_nlink,
+                 before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
                 (after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid, after.st_nlink,
-                 after.st_size, after.st_mtime_ns, after.st_ctime_ns))
-        return keeper_log_stage(data)
+                 after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            return "unstable" if kind == "log" else "invalid"
+        if len(data) != before.st_size:
+            return "invalid"
+        return keeper_log_classification(data) if kind == "log" else keeper_info_progress(data)
     except (OSError, RuntimeError, ValueError):
         # Diagnostic uncertainty preserves the actual failure outcome and never delays owned cleanup.
-        return None
+        return "unreadable" if kind == "log" else "invalid"
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
 
-def wait_keeper(name, log, owner, process, seconds=5):
+def keeper_failure_stage(outcome, log, info):
+    require(outcome in ("child-exit", "timeout") and
+            log in ("empty", "no-marker", "invalid", "unstable", "unreadable", "phase-identity", "phase-capabilities",
+                    "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
+                    "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
+                    "bwrap-root-tmpfs", "bwrap-exec") and
+            info in ("empty", "child-created", "invalid"))
+    return "prepare-keeper-" + outcome + "-log-" + log + "-info-" + info
+
+
+def wait_keeper(name, log, info, owner, process, seconds=5):
     global _DIAGNOSTIC_STAGE
     deadline = time.monotonic() + seconds
     while not os.path.lexists(name):
         result = process.poll()
         if result is not None:
-            phase = read_keeper_stage(log)
-            _DIAGNOSTIC_STAGE = "prepare-keeper-child-exit" + ("-" + phase if phase else "")
+            _DIAGNOSTIC_STAGE = keeper_failure_stage("child-exit", read_keeper_diagnostic(log, "log"),
+                                                     read_keeper_diagnostic(info, "info"))
             # Only the numeric returncode reaches control_failure's existing finite exit/signal projection.
             raise subprocess.CalledProcessError(result, ("fixed-keeper",))
         if time.monotonic() >= deadline:
-            phase = read_keeper_stage(log)
-            _DIAGNOSTIC_STAGE = "prepare-keeper-timeout" + ("-" + phase if phase else "")
+            _DIAGNOSTIC_STAGE = keeper_failure_stage("timeout", read_keeper_diagnostic(log, "log"),
+                                                     read_keeper_diagnostic(info, "info"))
             raise subprocess.TimeoutExpired(("fixed-keeper",), seconds)
         time.sleep(0.01)
     _DIAGNOSTIC_STAGE = "prepare-keeper-ready-record"
@@ -1588,7 +1661,7 @@ def prepare_in_capture(uid, gid, container, namespace, pins):
         os.close(info_fd)
         os.close(log_fd)
     _DIAGNOSTIC_STAGE = "prepare-keeper-wait"
-    ready = wait_keeper(value["scratch"] + "/keeper-ready.json", value["directory"] + "/keeper.log", uid, process)
+    ready = wait_keeper(value["scratch"] + "/keeper-ready.json", value["directory"] + "/keeper.log", info_path, uid, process)
     _DIAGNOSTIC_STAGE = "prepare-keeper-identity"
     details = read_json(info_path)
     require(type(details) is dict and integer(details.get("child-pid")))

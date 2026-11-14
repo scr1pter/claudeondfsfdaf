@@ -2,6 +2,11 @@ name: Genuine native Shell seam
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnostic_cell:
+        description: Run one baseline cell while diagnosing prepare; this does not qualify the full matrix
+        type: boolean
+        default: false
   push:
     branches: [build-native-shell]
     paths:
@@ -31,9 +36,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [node, bun]
-        mode: [own-key, codium]
-        family: [baseline, engine-death]
+        runtime: ${{ fromJSON(inputs.diagnostic_cell && '["bun"]' || '["node","bun"]') }}
+        mode: ${{ fromJSON(inputs.diagnostic_cell && '["own-key"]' || '["own-key","codium"]') }}
+        family: ${{ fromJSON(inputs.diagnostic_cell && '["baseline"]' || '["baseline","engine-death"]') }}
     defaults:
       run:
         shell: bash
