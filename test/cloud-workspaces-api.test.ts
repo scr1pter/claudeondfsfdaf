@@ -128,7 +128,7 @@ beforeAll(async () => {
           state.override !== undefined
             ? state.override
             : path === "/accounts/close"
-              ? { closed: true }
+              ? { closed: true, remaining: 0 }
               : request.method === "GET"
                 ? { enabled: true, workspaces: [workspace] }
                 : path.endsWith("/delete")
@@ -240,14 +240,33 @@ test("signed account list reaches only the fixed host and exposes public workspa
 test("account closure signs the verified account and queues cleanup even when pilot access and workspace creation are disabled", async () => {
   process.env.VECTOR_WORKSPACES_ENABLED = "false"
   process.env.VECTOR_WORKSPACES_ACCOUNTS = OTHER
-  expect(await closeCloudWorkspaces(ACCOUNT)).toEqual({ closed: true })
+  expect(await closeCloudWorkspaces(ACCOUNT)).toEqual({ closed: true, remaining: 0 })
   expect(state.requests).toMatchObject([
     { path: "/accounts/close", method: "POST", account: ACCOUNT, body: "{}", authorization: null },
   ])
   expect(state.auth).toBe(0)
   expect(state.commands).toEqual([])
-  expect(await closeCloudWorkspaces(ACCOUNT)).toEqual({ closed: true })
+  expect(await closeCloudWorkspaces(ACCOUNT)).toEqual({ closed: true, remaining: 0 })
   expect(state.requests[0]!.nonce).not.toBe(state.requests[1]!.nonce)
+})
+
+test("account closure reports workspaces the host has not erased yet, and fails on them only when asked to", async () => {
+  state.override = { closed: true, remaining: 2 }
+  expect(await closeCloudWorkspaces(ACCOUNT)).toEqual({ closed: true, remaining: 2 })
+  await expect(closeCloudWorkspaces(ACCOUNT, fetch, { requireErased: true })).rejects.toMatchObject({
+    statusCode: 503,
+    code: "WORKSPACE_CLEANUP_PENDING",
+  })
+  state.override = { closed: true, remaining: 0 }
+  expect(await closeCloudWorkspaces(ACCOUNT, fetch, { requireErased: true })).toEqual({ closed: true, remaining: 0 })
+  expect(state.requests.map((request) => request.path)).toEqual(Array(3).fill("/accounts/close"))
+})
+
+test("a workspace secret saved with surrounding whitespace signs with the trimmed value, as the host reads it", async () => {
+  process.env.VECTOR_WORKSPACES_SECRET = `${SECRET}\n`
+  expect(await closeCloudWorkspaces(ACCOUNT)).toEqual({ closed: true, remaining: 0 })
+  expect((await send()).body).toEqual({ enabled: true, workspaces: [workspace] })
+  expect(state.requests.map((request) => request.path)).toEqual(["/accounts/close", "/workspaces"])
 })
 
 test("account closure skips only never-configured deployments and refuses partial configuration, host failures or invalid acknowledgements", async () => {
@@ -272,7 +291,16 @@ test("account closure skips only never-configured deployments and refuses partia
     message: "Cloud workspaces are temporarily unavailable. Please try again.",
   })
   state.upstreamStatus = 200
-  for (const value of [{ closed: false }, { closed: true, runtimeId: "private-fixture" }, null]) {
+  for (const value of [
+    { closed: false, remaining: 0 },
+    { closed: true, remaining: 0, runtimeId: "private-fixture" },
+    // A host from before `remaining` cannot say whether the account's workspaces are erased.
+    { closed: true },
+    { closed: true, remaining: -1 },
+    { closed: true, remaining: 1.5 },
+    { closed: true, remaining: "0" },
+    null,
+  ]) {
     state.override = value
     await expect(closeCloudWorkspaces(ACCOUNT)).rejects.toMatchObject({ statusCode: 503 })
   }

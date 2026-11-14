@@ -75,7 +75,8 @@ export function verifyWorkspaceRequest(input: {
     )
     .digest()
   if (!timingSafeEqual(expected, Buffer.from(signature, "hex"))) throw denied()
-  return { accountId: owner, nonce, expiresAt: Number(timestamp) + 60_000 }
+  // The signature covers the id as sent; the host compares ids lower-case, as its workspace store keeps them.
+  return { accountId: owner.toLowerCase(), nonce, expiresAt: Number(timestamp) + 60_000 }
 }
 
 function denied() {

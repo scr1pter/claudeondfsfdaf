@@ -70,6 +70,10 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
     "CREATE TABLE IF NOT EXISTS model_guard (workspace TEXT PRIMARY KEY, prompt TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0)",
   )
   nonceDB.exec("CREATE TABLE IF NOT EXISTS closed_account (account TEXT PRIMARY KEY, closed_at INTEGER NOT NULL)")
+  // Account ids are compared lower-case (signing.ts); a fence an earlier version stored as signed moves to that form.
+  nonceDB.exec(
+    "INSERT OR IGNORE INTO closed_account(account,closed_at) SELECT lower(account),closed_at FROM closed_account WHERE account<>lower(account); DELETE FROM closed_account WHERE account<>lower(account)",
+  )
   nonceDB.exec(
     "CREATE TABLE IF NOT EXISTS publication (workspace TEXT PRIMARY KEY, digest TEXT NOT NULL, receipt TEXT NOT NULL)",
   )
@@ -342,9 +346,11 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
     return paused
   }
 
+  /** Erases every workspace of a closed account; the promise settles when this pass is over, whatever it left behind. */
   function cleanupAccount(owner: string) {
     const key = `account:${owner}`
-    if (jobs.has(key)) return
+    const running = jobs.get(key)
+    if (running) return running
     const cleanup = (async () => {
       for (const workspace of options.store.list(owner)) {
         await jobs.get(workspace.id)
@@ -364,6 +370,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
       })
       .finally(() => jobs.delete(key))
     jobs.set(key, cleanup)
+    return cleanup
   }
 
   async function command(owner: string, path: string, request: Request, raw: string) {
@@ -372,8 +379,10 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
         throw new WorkspaceError("INVALID_WORKSPACE_REQUEST", "Send a supported account cleanup request.")
       nonceDB.query("INSERT OR IGNORE INTO closed_account(account,closed_at) VALUES (?,?)").run(owner, now())
       for (const workspace of options.store.list(owner)) publishers.get(workspace.id)?.abort()
-      cleanupAccount(owner)
-      return response({ closed: true }, 202)
+      void cleanupAccount(owner)
+      // `remaining` counts the account's workspaces not yet erased. Account deletion's follow-up pass waits for zero, so
+      // a deletion is not finished while a container or volume the runtime keeps refusing still holds the account's data.
+      return response({ closed: true, remaining: options.store.list(owner).length }, 202)
     }
     if (isClosed.get(owner))
       throw new WorkspaceError("ACCOUNT_CLOSED", "This account's cloud workspaces are closed.", 403)
@@ -715,8 +724,12 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
           failed = true
         })
       }
-      for (const owner of closedAccounts.all()) cleanupAccount(owner.account)
-      if (failed) throw new Error("One or more cloud engines still need retirement.")
+      for (const owner of closedAccounts.all()) {
+        await cleanupAccount(owner.account)
+        // A closed account's workspace that this pass could not erase is reported like an engine that would not stop.
+        if (options.store.list(owner.account).length) failed = true
+      }
+      if (failed) throw new Error("One or more cloud engines or closed accounts' workspaces still need cleanup.")
     },
     async settle() {
       await Promise.all(jobs.values())
