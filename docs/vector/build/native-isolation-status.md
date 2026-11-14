@@ -162,3 +162,30 @@ selection reported 7 passes and 65 explicit Linux skips before the final private
 refresh addition; the additional restored-mtime integration case is also Linux-only.
 The six new Linux cases have not been represented as local passes. No hosted lane was
 automatically started for this C5 source change.
+
+
+## Hosted C5 correction: stat-cache optimization held
+
+At exact `f2988d6ad8e076a4bf435f93c6b8c64134df196e`, repository-identity run
+`43629547399`, job `132552901107`, passed 69 read-only Git cases and explicitly
+skipped the unsupported-host case. The new equal-size/restored-mtime negative
+failed: size and mtime matched, high-resolution ctime changed, but the refreshed
+private Git stat cache returned `dirty=false`. This is a correctness failure,
+not a successful C5 optimization or a flaky timeout. Earlier source/type passes
+above do not qualify it. The other five new semantic-index/HEAD cases passed.
+
+The optimization is removed. The review retains its normalized private index
+with empty source stat/skip/fsmonitor cache fields, and status continues to hash
+rather than trusting refreshed Git metadata. The original semantic HEAD/ref,
+staged-entry and index-tree proof remains, so an ordinary live `git status`
+rewrite does not cancel the review. The restored-mtime negative remains fully
+asserted. Cache-performance work is held until a stronger metadata witness
+preserves that detection guarantee; no delay, skip or weakened fixture replaces it.
+The corrected source needs fresh hosted qualification at its own revision.
+
+
+Correction validation on this Windows host: Core `bun typecheck` passes, and the
+named read-only Git/pure spawn-refusal selection passes 7 cases with 66 explicit
+Linux-only skips. The six genuine Linux cases, including the restored-mtime
+negative, require fresh hosted qualification and are not local passes. No fixture,
+assertion, native control, evidence pin or model/provider route was weakened here.

@@ -1741,14 +1741,12 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     const safeRead = (operation: Read) => observe((context) => perform(operation, context))
     let statusQueue: Promise<unknown> = Promise.resolve()
     const status = (context: Operation) => {
-      // Refresh only this review's normalized private stat cache. Source stat/skip/fsmonitor flags were discarded;
-      // explicit ctime/full-stat checks remain enabled. Serialize refreshes so status readers never race an index lock.
+      // Keep normalized index stat fields empty. A refreshed Git cache missed a real equal-size edit with restored
+      // mtime in hosted qualification, despite a changed high-resolution ctime. Never let that cache grant clean status.
+      // Serialize status observations; source index cache refreshes remain harmless through the semantic tree proof.
       const pending = statusQueue.then(async () => {
         context.check()
         await unchanged(context)
-        const refresh = await commands.command(context, [...args, "update-index", "--refresh", "--ignore-submodules"])
-        // One means an ordinary dirty worktree; refresh may not change staged entries or authorize a new snapshot.
-        requireCommand(refresh, [0, 1], "private index stat refresh failed")
         const result = await commands.command(context, [
           ...args,
           "status",
