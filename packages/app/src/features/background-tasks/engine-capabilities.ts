@@ -19,6 +19,9 @@ export const FLAGS = [
   "taskIsolation",
   "workflows",
   "backgroundShells",
+  "vectorscopeSettings",
+  "vectorscopeRuns",
+  "vectorscopeReviewMemoryControls",
 ] as const
 
 export type EngineFlag = (typeof FLAGS)[number]

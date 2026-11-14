@@ -16,6 +16,12 @@ import code from "@vectordevai/core/brain/migration/20261120000000_code"
 import creditedOnce from "@vectordevai/core/brain/migration/20261121000000_credited_once"
 import research from "@vectordevai/core/brain/migration/20261201000000_research"
 import facets from "@vectordevai/core/brain/migration/20261202000000_facets"
+import revocation from "@vectordevai/core/brain/migration/20261203000000_revocation"
+import learnedSkills from "@vectordevai/core/brain/migration/20261210000000_learned_skills"
+import workflow from "@vectordevai/core/brain/migration/20261211000000_workflow"
+import researchClaims from "@vectordevai/core/brain/migration/20261212000000_research_claims"
+import reviewMemory from "@vectordevai/core/brain/migration/20261216000000_review_memory"
+import reviewMemoryScope from "@vectordevai/core/brain/migration/20261217000000_review_memory_scope"
 import {
   BrainSkillListingTable,
   BrainSkillTable,
@@ -131,7 +137,8 @@ describe("Brain learned-skills migrations", () => {
       )
       .all()
     db.close()
-    expect(migrations.slice(-7)).toEqual([
+    // The whole tail from the last migration that earlier build had, so a later migration cannot silently shift it.
+    expect(migrations.slice(migrations.indexOf("20261202000000_facets"))).toEqual([
       "20261202000000_facets",
       "20261203000000_revocation",
       "20261210000000_learned_skills",
@@ -139,6 +146,9 @@ describe("Brain learned-skills migrations", () => {
       "20261212000000_research_claims",
       "20261213000000_codium_brain",
       "20261214000000_codium_workflow",
+      "20261216000000_review_memory",
+      "20261217000000_review_memory_scope",
+      "20261218000000_review_memory_source",
     ])
     expect(entries).toEqual([{ id: "m1a2b3", kind: "lesson", status: "active" }])
     // Unset settings read as the defaults: review, local-only, apply, no exploring.
@@ -154,6 +164,70 @@ describe("Brain learned-skills migrations", () => {
         knowledge_distill: null,
       },
     ])
+  })
+
+  test("a brain.db an earlier VectorScope build migrated under the old review memory ids opens and keeps its rows", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "brain.db")
+    // That build ran the first two review memory migrations under their ids before Codium's Brain migrations took
+    // 20261213 and 20261214, and never had Codium's migrations or the source table.
+    const earlier = (migration: DatabaseMigration.Migration, id: string) => ({ id, up: migration.up })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* EffectDrizzleSqlite.makeWithDefaults()
+        yield* DatabaseMigration.applyOnly(db, [
+          first,
+          knowledge,
+          privateMemory,
+          tombstoneTerms,
+          credit,
+          code,
+          creditedOnce,
+          research,
+          facets,
+          revocation,
+          learnedSkills,
+          workflow,
+          researchClaims,
+          earlier(reviewMemory, "20261213000000_review_memory"),
+          earlier(reviewMemoryScope, "20261214000000_review_memory_scope"),
+        ])
+        yield* db.run(sql`
+          INSERT INTO brain_review_memory (id, repository_id, scope_id, kind, status, visibility, body, paths, citations,
+            reason, origin, created_at, updated_at)
+          VALUES ('r1', 'repo-1', 'scope-1', 'preference', 'active', 'repository', 'Prefer an explicit return.', '[]',
+            '[]', 'An explicit owner preference.', 'owner', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO brain_review_memory_scope_state (repository_id, scope_id, enabled, generation)
+          VALUES ('repo-1', 'scope-1', 1, 3)
+        `)
+      }).pipe(Effect.provide(SqliteClient.layer({ filename: file })), Effect.scoped),
+    )
+    // Re-running either earlier migration would fail on its existing table or column, so opening proves they were skipped.
+    await build(file)
+    await build(file)
+    const db = new Database(file, { readonly: true })
+    const migrations = (db.query("SELECT id FROM migration ORDER BY id").all() as { id: string }[]).map((row) => row.id)
+    const memory = db.query("SELECT id, scope_id, body FROM brain_review_memory").all()
+    const scope = db
+      .query("SELECT repository_id, scope_id, enabled, generation FROM brain_review_memory_scope_state")
+      .all()
+    const sources = db.query("SELECT count(*) AS n FROM brain_review_memory_source").get()
+    db.close()
+    expect(migrations.slice(migrations.indexOf("20261212000000_research_claims"))).toEqual([
+      "20261212000000_research_claims",
+      "20261213000000_codium_brain",
+      "20261213000000_review_memory",
+      "20261214000000_codium_workflow",
+      "20261214000000_review_memory_scope",
+      "20261216000000_review_memory",
+      "20261217000000_review_memory_scope",
+      "20261218000000_review_memory_source",
+    ])
+    expect(memory).toEqual([{ id: "r1", scope_id: "scope-1", body: "Prefer an explicit return." }])
+    expect(scope).toEqual([{ repository_id: "repo-1", scope_id: "scope-1", enabled: 1, generation: 3 }])
+    expect(sources).toEqual({ n: 0 })
   })
 
   test("deleting a skill's entry deletes its skill row, and a key has one live entry at most", async () => {

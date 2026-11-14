@@ -2,6 +2,8 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
+import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
+import { assessReview, evidenceScope, modelEvidenceNotes } from "@vectordevai/core/review/model-evidence"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { Auth } from "@/auth"
 import { Provider } from "@/provider/provider"
@@ -52,6 +54,12 @@ const MODELS = [
   model("vector/acme/coder:free"),
   model("openrouter/acme/coder:free"),
   model("tiny/small", { context: 16_000, input: 1, output: 1 }),
+  // Free models on a user's own OpenRouter account: one whose provider may train on prompts, and the free router.
+  {
+    ...model("openrouter/acme/learner:free"),
+    freeModel: { source: "openrouter" as const, dataPolicy: "may-train" as const },
+  },
+  model("openrouter/openrouter/free"),
   model("vector-plan/vector-flash"),
   model("vector-plan/vendor/coder", { input: 3, output: 15 }),
 ]
@@ -63,6 +71,10 @@ interface Setup {
   /** Free models listed ahead of the curated ones under Vector. */
   before?: Provider.Model[]
   oauth?: string[]
+  vectorscope?: { model?: string; variant?: string; disable?: boolean }
+  projectVectorscope?: { model?: string; variant?: string }
+  globalModel?: string
+  projectModel?: string
 }
 
 const services = (setup: Setup) =>
@@ -107,7 +119,21 @@ const services = (setup: Setup) =>
               }),
             ),
     }),
-    TestConfig.layer({ get: () => Effect.succeed(setup.agent ? { agent: { review: setup.agent } } : {}) }),
+    TestConfig.layer({
+      get: () =>
+        Effect.succeed({
+          ...(setup.projectModel ? { model: setup.projectModel } : {}),
+          agent: {
+            ...(setup.agent ? { review: setup.agent } : {}),
+            ...(setup.projectVectorscope ? { vectorscope: setup.projectVectorscope } : {}),
+          },
+        }),
+      getGlobal: () =>
+        Effect.succeed({
+          ...(setup.globalModel ? { model: setup.globalModel } : {}),
+          ...(setup.vectorscope ? { agent: { vectorscope: setup.vectorscope } } : {}),
+        }),
+    }),
     // The catalog lists acme and anthropic, whose key is not set in these tests; "retired" is in no catalog.
     Layer.mock(ModelCatalog.Service, {
       get: () =>
@@ -186,6 +212,65 @@ describe("ReviewModel.resolveReviewModel order", () => {
       expect(agent.variant).toBe("high")
       expect(yield* chosen({ trigger: "desktop", env }, { defaultModel: "acme/default" })).toBe("acme/default")
       expect((yield* resolve({ trigger: "local", env }).pipe(Effect.flip)).message).toContain("No review model is set")
+    }),
+  )
+})
+
+describe("VectorScope service model admission", () => {
+  it.effect("uses the owner-only independent setting and ignores project and generic review overrides", () =>
+    Effect.gen(function* () {
+      const result = yield* resolve(
+        { trigger: "local", identity: "vectorscope" },
+        {
+          vectorscope: { model: "acme/agent", variant: "high" },
+          projectVectorscope: { model: "acme/json", variant: "project-variant" },
+          agent: { model: "acme/env", variant: "generic-variant" },
+          defaultModel: "acme/default",
+        },
+      )
+      expect(`${result.providerID}/${result.modelID}`).toBe("acme/agent")
+      expect(result.variant).toBe("high")
+      expect(result.subject?.choice).toEqual({ explicit: true, setting: "agent.vectorscope.model" })
+    }),
+  )
+
+  it.effect("explicit and pinned models win without inheriting an agent variant for the same model ID", () =>
+    Effect.gen(function* () {
+      const setup = { vectorscope: { model: "acme/agent", variant: "high" } }
+      for (const source of [{ flag: "acme/agent" }, { config: "acme/agent" }, { exact: "acme/agent" }]) {
+        const result = yield* resolve({ trigger: "local", identity: "vectorscope", ...source }, setup)
+        expect(`${result.providerID}/${result.modelID}`).toBe("acme/agent")
+        expect(result.variant).toBeUndefined()
+      }
+    }),
+  )
+
+  it.effect("uses an owner default and refuses an ambient project default instead of silently selecting it", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* chosen(
+          { trigger: "desktop", identity: "vectorscope" },
+          { globalModel: "acme/default", projectModel: "acme/json" },
+        ),
+      ).toBe("acme/default")
+      const refused = yield* resolve(
+        { trigger: "local", identity: "vectorscope" },
+        { projectModel: "acme/json", defaultModel: "acme/json" },
+      ).pipe(Effect.flip)
+      expect(refused.message).toContain("No VectorScope model is set")
+      expect(yield* chosen({ trigger: "local", identity: "vectorscope" }, { defaultModel: "acme/default" })).toBe(
+        "acme/default",
+      )
+    }),
+  )
+
+  it.effect("an explicit owner disable refuses before a selected model can run", () =>
+    Effect.gen(function* () {
+      const refused = yield* resolve(
+        { trigger: "local", identity: "vectorscope", flag: "acme/flag" },
+        { vectorscope: { disable: true } },
+      ).pipe(Effect.flip)
+      expect(refused.message).toBe("VectorScope is disabled in agent.vectorscope.")
     }),
   )
 })
@@ -372,6 +457,129 @@ describe("free review defaults", () => {
       expect((yield* resolve({ trigger: "command", env: { MODEL: "retired/model" } }).pipe(Effect.flip)).message).toBe(
         "This workflow was set up by an older Vector; run vector github install again.",
       )
+    }),
+  )
+})
+
+describe("model evidence (VS-07)", () => {
+  const SCOPE = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG })
+  const NOW = Date.parse("2026-11-04T12:00:00Z")
+
+  it.effect("the resolver says which setting chose the model, or which default it fell back to", () =>
+    Effect.gen(function* () {
+      const env = { MODEL: "acme/env", REVIEW_AUTO_MODEL: "acme/auto" }
+      const setup = { agent: { model: "acme/agent", variant: "high" }, defaultModel: "acme/default" }
+      expect((yield* resolve({ trigger: "local", flag: "acme/flag", env }, setup)).subject).toEqual({
+        model: "acme/flag",
+        free: false,
+        status: "active",
+        choice: { explicit: true, setting: "--model" },
+      })
+      expect((yield* resolve({ trigger: "local", env }, setup)).subject).toEqual({
+        model: "acme/agent",
+        variant: "high",
+        free: false,
+        status: "active",
+        choice: { explicit: true, setting: "agent.review.model" },
+      })
+      expect((yield* resolve({ trigger: "desktop", env }, { defaultModel: "acme/default" })).subject?.choice).toEqual({
+        explicit: false,
+        setting: "your default model",
+      })
+      expect((yield* resolve({ trigger: "auto", config: "acme/json", env })).subject?.choice).toEqual({
+        explicit: true,
+        setting: "REVIEW_AUTO_MODEL in .github/workflows/vector.yml",
+      })
+      expect((yield* resolve({ trigger: "command", config: "acme/json", env })).subject?.choice).toEqual({
+        explicit: true,
+        setting: "model in .vector/review.json",
+      })
+      expect((yield* resolve({ trigger: "local", exact: "acme/json", env })).subject?.choice).toEqual({
+        explicit: true,
+        setting: "triageModel in .vector/review.json",
+      })
+      // An unattended review without a model falls back to a free one that does not train on prompts, and says so.
+      expect(
+        (yield* resolve({ trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" } }, { free: true })).subject,
+      ).toEqual({
+        model: "vector/acme/coder:free",
+        free: true,
+        status: "active",
+        choice: { explicit: false, setting: 'an available free model not labelled "May train on your prompts"' },
+      })
+      // A free model's data policy comes from Vector's record, as everywhere else.
+      expect((yield* resolve({ trigger: "local", flag: "openrouter/acme/learner:free" })).subject).toMatchObject({
+        free: true,
+        freeModel: { source: "openrouter", dataPolicy: "may-train" },
+      })
+    }),
+  )
+
+  it.effect("evidence changes no choice: every model resolves the same with it on, and none is replaced", () =>
+    Effect.gen(function* () {
+      const env = { MODEL: "acme/env", REVIEW_AUTO_MODEL: "acme/auto", VECTOR_CLI_TOKEN: "test-only" }
+      const setup = { agent: { model: "acme/agent", variant: "high" }, defaultModel: "acme/default", free: true }
+      const requests: ReviewModel.ResolveInput[] = [
+        { trigger: "auto", env },
+        { trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" } },
+        { trigger: "command", config: "acme/json", env },
+        { trigger: "local", flag: "acme/flag", env },
+        { trigger: "local", env },
+        { trigger: "local", exact: "acme/json", env },
+        { trigger: "local", flag: "openrouter/openrouter/free" },
+        { trigger: "local", flag: "openrouter/acme/learner:free" },
+      ]
+      for (const request of requests)
+        expect(yield* resolve({ ...request, evidence: true }, setup)).toEqual(yield* resolve(request, setup))
+    }),
+  )
+
+  it.effect(
+    "with evidence on, a local model its provider retired is refused as retired; off, the message is today's",
+    () =>
+      Effect.gen(function* () {
+        const off = yield* resolve({ trigger: "local", flag: "anthropic/claude-2" }).pipe(Effect.flip)
+        expect(off.message).toBe("anthropic/claude-2 is not available. Check the provider and its key.")
+        const on = yield* resolve({ trigger: "local", flag: "anthropic/claude-2", evidence: true }).pipe(Effect.flip)
+        expect(on.message).toBe("Anthropic has retired claude-2. Set --model to one of its current models.")
+        const triage = yield* resolve({ trigger: "local", exact: "anthropic/claude-2", evidence: true }).pipe(
+          Effect.flip,
+        )
+        expect(triage.message).toBe(
+          "Anthropic has retired claude-2. Set triageModel in .vector/review.json to one of its current models.",
+        )
+        // A model that is only unavailable stays unavailable: nothing falls back to another model.
+        const missing = yield* resolve({ trigger: "local", flag: "anthropic/claude-sonnet-4-5", evidence: true }).pipe(
+          Effect.flip,
+        )
+        expect(missing.message).toBe("anthropic/claude-sonnet-4-5 is not available. Check the provider and its key.")
+        // A workflow already says a model is retired, with or without evidence.
+        const ci = yield* resolve({ trigger: "auto", env: { MODEL: "anthropic/claude-2" }, evidence: true }).pipe(
+          Effect.flip,
+        )
+        expect(ci.message).toBe(
+          "Anthropic has retired claude-2. Set MODEL in .github/workflows/vector.yml to one of its current models.",
+        )
+      }),
+  )
+
+  it.effect("what the resolved models' evidence says: unvetted, a router, and a free model that may train", () =>
+    Effect.gen(function* () {
+      const notes = (subject: ReviewModel.ResolvedModel["subject"]) =>
+        modelEvidenceNotes(assessReview({ review: subject!, scope: SCOPE, now: NOW }))
+      expect(notes((yield* resolve({ trigger: "local", flag: "acme/flag" })).subject)).toEqual([
+        "`acme/flag` has no VectorScope evaluation on record, so how well it reviews is unmeasured. Vector used it because --model names it, and does not switch a chosen model.",
+      ])
+      expect(notes((yield* resolve({ trigger: "local", flag: "openrouter/openrouter/free" })).subject)).toEqual([
+        "`openrouter/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it. Vector used it because --model names it, and does not switch a chosen model.",
+      ])
+      expect(notes((yield* resolve({ trigger: "local", flag: "openrouter/acme/learner:free" })).subject)).toEqual([
+        '`openrouter/acme/learner:free` has no VectorScope evaluation on record, so how well it reviews is unmeasured. Being free is not evidence of review quality. `openrouter/acme/learner:free` is labelled "May train on your prompts": its provider may log the code it is sent and use it to train models. Don\'t use it for private code. Vector used it because --model names it, and does not switch a chosen model.',
+      ])
+      const fallback = yield* resolve({ trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" } }, { free: true })
+      expect(notes(fallback.subject)).toEqual([
+        '`vector/acme/coder:free` has no VectorScope evaluation on record, so how well it reviews is unmeasured. Being free is not evidence of review quality. No review model is set, so Vector used an available free model not labelled "May train on your prompts".',
+      ])
     }),
   )
 })

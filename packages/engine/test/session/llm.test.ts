@@ -29,6 +29,13 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { LayerNodePlatform } from "@vectordevai/core/effect/app-node-platform"
+import { Database } from "@vectordevai/core/database/database"
+import { AbsolutePath } from "@vectordevai/core/schema"
+import { ProjectTable } from "@vectordevai/core/project/sql"
+import { SessionTable } from "@vectordevai/core/session/sql"
+import { SessionProjector } from "@vectordevai/core/session/projector"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { eq } from "drizzle-orm"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -56,25 +63,64 @@ const openAIConfig = (model: ModelCatalog.Provider["models"][string], baseURL: s
 
 const LINED_ORIGIN = "https://lined-openai.test"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([LLM.node, Provider.node])))
+const fixtureRoot = LayerNode.group([LLM.node, Provider.node, Database.node, EventV2Bridge.node, SessionProjector.node])
+const isolatedFixtureRoot = LayerNode.group([LLM.node, Database.node, EventV2Bridge.node, SessionProjector.node])
+const it = testEffect(AppNodeBuilder.build(fixtureRoot, [[Database.node, Database.layerFromPath(":memory:")]]))
 const itReasoningContext = testEffect(
-  AppNodeBuilder.build(LayerNode.group([LLM.node, Provider.node]), [
+  AppNodeBuilder.build(fixtureRoot, [
+    [Database.node, Database.layerFromPath(":memory:")],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalReasoningContext: "all_turns" })],
   ]),
 )
 
+// Positive transport fixtures keep their existing fixed IDs/headers while
+// becoming actual registered Sessions in the exact database used by LLM.
+const ordinarySession = Effect.fnUntraced(function* (value: string) {
+  const sessionID = SessionID.make(value)
+  const database = yield* Database.Service
+  if (yield* database.db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
+    return
+  const instance = yield* InstanceRef
+  if (!instance) return yield* Effect.die("InstanceRef not provided")
+  yield* database.db
+    .insert(ProjectTable)
+    .values({ id: instance.project.id, worktree: AbsolutePath.make(instance.worktree), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+  const events = yield* EventV2Bridge.Service
+  yield* events.publish(SessionV1.Event.Created, {
+    sessionID,
+    info: SessionV1.SessionInfo.make({
+      id: sessionID,
+      projectID: instance.project.id,
+      directory: instance.directory,
+      slug: "llm-transport-fixture",
+      title: "LLM transport fixture",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }),
+  })
+})
+
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
-const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
+const drain = (input: LLM.StreamInput) =>
+  ordinarySession(input.sessionID).pipe(
+    Effect.andThen(LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))),
+  )
 
 // drainWith builds an isolated runtime so custom replacements fully own LLM and
 // its transitive deps.
-const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
+const drainWith = (
+  layer: Layer.Layer<LLM.Service | Database.Service | EventV2Bridge.Service>,
+  input: LLM.StreamInput,
+) =>
   Effect.gen(function* () {
     const ctx = yield* InstanceRef
     if (!ctx) return yield* Effect.die("InstanceRef not provided")
     return yield* Effect.promise(() =>
       Effect.runPromise(
-        LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain)).pipe(
+        ordinarySession(input.sessionID).pipe(
+          Effect.andThen(LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))),
           Effect.provide(layer),
           Effect.provideService(InstanceRef, ctx),
         ),
@@ -90,7 +136,8 @@ function llmLayerWithExecutor(
     slots?: ModelSlots.Interface
   } = {},
 ) {
-  return AppNodeBuilder.build(LLM.node, [
+  return AppNodeBuilder.build(isolatedFixtureRoot, [
+    [Database.node, Database.layerFromPath(":memory:")],
     [RuntimeFlags.node, RuntimeFlags.layer(options.flags)],
     ...(options.executor ? ([[LayerNodePlatform.requestExecutor, options.executor]] as const) : []),
     ...(options.slots ? ([[ModelSlots.node, Layer.succeed(ModelSlots.Service, options.slots)]] as const) : []),
@@ -1195,6 +1242,7 @@ describe("session.llm.stream", () => {
             options: verbosity ? { textVerbosity: verbosity } : {},
             permission: [],
           } satisfies Agent.Info
+          yield* ordinarySession(sessionID)
           const events = yield* LLM.Service.use((svc) =>
             svc
               .stream({
@@ -1278,6 +1326,7 @@ describe("session.llm.stream", () => {
         const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6.1-sol"))
         const sessionID = SessionID.make("session-reasoning-context")
         const agent = { name: "test", mode: "primary", options: {}, permission: [] } satisfies Agent.Info
+        yield* ordinarySession(sessionID)
         yield* LLM.Service.use((svc) =>
           svc
             .stream({
@@ -1340,8 +1389,9 @@ describe("session.llm.stream", () => {
                 ]),
               )
               const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(id))
-              const sessionID = SessionID.make(`session-reasoning-context-${id}`)
+              const sessionID = SessionID.make(`session-reasoning-context-${id.replaceAll(".", "_")}`)
               const agent = { name: "test", mode: "primary", options: {}, permission: [] } satisfies Agent.Info
+              yield* ordinarySession(sessionID)
               yield* LLM.Service.use((svc) =>
                 svc
                   .stream({
@@ -1905,7 +1955,8 @@ describe("session.llm.stream", () => {
         } satisfies Agent.Info
 
         yield* drainWith(
-          AppNodeBuilder.build(LLM.node, [
+          AppNodeBuilder.build(isolatedFixtureRoot, [
+            [Database.node, Database.layerFromPath(":memory:")],
             [LayerNodePlatform.llmClient, failingNativeClient],
             [RuntimeFlags.node, RuntimeFlags.layer({ experimentalNativeLlm: false })],
           ]),

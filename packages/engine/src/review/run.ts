@@ -2,7 +2,9 @@
 // finalize prompt for a session stopped early, a verify pass, then selection and cost. The engine's agent `steps`
 // limit only adds text-only prompt guidance, which conflicts with this runner's required StructuredOutput tool.
 // Review admits each provider attempt, including retries, and one separate finalizer. Dollar reservations are
-// estimates; reported usage can exceed them, so they are not a hard billing cap.
+// estimates; reported usage can exceed them, so they are not a hard billing cap. An eval projection (VS-21b,
+// ReviewEval.project) may run what the dollar cap alone refuses, against a fake provider on this computer; nothing
+// else sets it, and unset it changes nothing.
 
 import path from "path"
 import { Billing } from "@vectordevai/schema/billing"
@@ -19,11 +21,23 @@ import {
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
-import { noteTriageFixedUnchecked, noteTriageUnchecked, noteVerifySkipped } from "@vectordevai/core/review/format"
+import {
+  noteTriageFixedUnchecked,
+  noteTriageUnchecked,
+  noteVerifySkipped,
+  noteVerifyUnfinished,
+} from "@vectordevai/core/review/format"
 import { checkedLabs, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import { classifyPath, isSensitivePath } from "@vectordevai/core/review/ignore"
+import {
+  assessReview,
+  evidenceScope,
+  modelEvidenceNotes,
+  type ModelCertificate,
+  type ModelSubject,
+} from "@vectordevai/core/review/model-evidence"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import {
@@ -33,6 +47,9 @@ import {
   NEXT_STEP_SLACK,
   nextStepCostUsd,
   planSpecialists,
+  verifyCandidates,
+  verifyUnanswered,
+  verifyUnconfirmed,
   type ReviewPrice,
 } from "@vectordevai/core/review/plan"
 import {
@@ -42,6 +59,8 @@ import {
   buildSecurityPrompt,
   buildVerifyPrompt,
   SCOPE,
+  PINNED_SESSION_PREFIX,
+  VECTORSCOPE_AGENT,
   type PromptInput,
 } from "@vectordevai/core/review/prompt"
 import {
@@ -78,6 +97,9 @@ import { Session } from "@/session/session"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { Truncate } from "@/tool/truncate"
+import { EffectBridge } from "@/effect/bridge"
+import { InstanceState } from "@/effect/instance-state"
+import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
 
 export interface RunInput {
@@ -112,6 +134,15 @@ export interface RunInput {
   judge?: ResolvedModel
   allowDirs?: string[]
   checks?: boolean
+  readDenies?: readonly string[]
+  readRoot?: string
+  /** Frozen internal authority admitted before asynchronous adapter setup. */
+  admittedReads?: ReadAuthority
+  instructionsFromContext?: true
+  /** The shared service uses its own helper; legacy adapters retain their specialists. */
+  identity?: "vectorscope"
+  /** An owning cloud run can stop every specialist without discarding completed reports. */
+  stopSignal?: AbortSignal
   knownPath: (path: string) => Promise<boolean>
   onProgress?: (
     e:
@@ -122,10 +153,67 @@ export interface RunInput {
   baseRef?: string // the base branch name, for the prompt
   rulesSource?: PromptInput["rulesSource"] // defaults to the working tree for local and desktop runs
   inlinePosted?: number // state.inlinePosted, for the per-PR inline cap
+  // The eval's view of the run (ReviewEval.replay): each pass's prompt and every provider attempt, admitted or
+  // refused, with what it settled at. Off unless set, and observing changes nothing the review does.
+  observe?: (event: Observation) => void
+  // The certificates model evidence (VS-07) compares the models with when config.modelEvidence is "warn":
+  // MODEL_EVIDENCE when absent. The eval and tests pass their own.
+  certificates?: readonly ModelCertificate[]
+  // VS-21b: asked about each decision the dollar cap would refuse. Off unless set, and only ReviewEval.project sets
+  // it, after refusing any provider that sends off this computer.
+  projection?: Projection
 }
 
 type Name = ReviewOutcome["specialists"][number]["name"]
 type Stop = "budget" | "steps" | "timeout"
+type Phase = "turn" | "finalize"
+
+// A decision the review's dollar cap would refuse, and where it was made: before a pass's session ("pass"), at a
+// provider attempt ("attempt"), at the finalizer's reservation ("finalizer"), or at verify's pre-check ("verify").
+// `sessionID` is the pass's session, at an attempt and at the finalizer's reservation.
+export interface OverCap {
+  pass: Name
+  phase: Phase
+  site: "pass" | "attempt" | "finalizer" | "verify"
+  // The whole amount that went over the cap, which a lifted decision admits: at "pass" and at a turn's "attempt", the
+  // turn's estimate plus the finalizer share reserved beside it; at "finalizer", a finalizing "attempt" and "verify",
+  // which reserve no finalizer share, the estimate alone.
+  estimateUsd: number
+  sessionID?: SessionID
+}
+
+// VS-21b. ReviewEval.project runs the review against a fake provider on this computer, so the dollar cap must not cut
+// a pass short there. `overCap` is asked only about a decision the cap would refuse, never about one it admits, a step
+// or time stop, or an uncapped review. True runs it anyway, and its reservation is kept like any other; false, or a
+// projection that throws, refuses it as the cap would.
+export interface Projection {
+  overCap: (decision: OverCap) => boolean
+}
+
+export type Observation =
+  // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
+  // left).
+  | { type: "pass"; pass: Name; model: string; text: string; maxSteps: number }
+  // One provider attempt the review's admission was asked for, retries included. A refused one was never sent.
+  | {
+      type: "attempt"
+      pass: Name
+      phase: Phase
+      admitted: boolean
+      stop?: Stop
+      estimateUsd: number
+      sessionID?: SessionID
+      model?: { providerID: string; modelID: string; api: string; npm: string }
+    }
+  // What an admitted attempt settled at; incomplete usage keeps its estimate as uncertain spend.
+  | {
+      type: "settle"
+      pass: Name
+      phase: Phase
+      costUsd: number
+      complete: boolean
+      tokens?: { input: number; output: number }
+    }
 type Progress = Parameters<NonNullable<RunInput["onProgress"]>>[0]
 
 interface Track {
@@ -164,7 +252,7 @@ interface Asked<T> {
   detail?: string
 }
 
-type Sent = { timedOut: true } | { timedOut: false; message?: SessionV1.WithParts }
+type Sent = { timedOut: true } | { timedOut: false; message?: SessionV1.WithParts; contextError?: string }
 
 const VERIFY_STEPS = 10
 /**
@@ -224,26 +312,86 @@ export const run: (
     allowDirs: input.allowDirs,
     checks: input.checks,
     truncateGlob: input.trust === "untrusted" ? undefined : Truncate.GLOB,
+    readDenies: input.admittedReads
+      ? input.admittedReads.patternsFor((yield* InstanceState.context).worktree)
+      : input.readDenies?.length
+        ? readAuthority(input.readDenies, {
+            directory: input.directory,
+            worktree: (yield* InstanceState.context).worktree,
+            ...(input.readRoot ? { readRoot: input.readRoot } : {}),
+          }).patterns
+        : undefined,
   })
-  const reviewed = { paths: input.files.map((file) => file.path), trust: input.trust }
+  const reviewed = {
+    paths: input.files.map((file) => file.path),
+    trust: input.trust,
+    ...(input.instructionsFromContext ? { instructions: "provided" as const } : {}),
+    ...(input.admittedReads?.patterns.length || input.readDenies?.length ? { restrictedReads: true as const } : {}),
+  }
   const tracks = new Map<string, Track>()
   const reservations = new Map<Name, { turn: number; finalize: number }>()
   const sessionIDs: SessionID[] = []
-  const state = { spent: 0, reported: 0, codium: false, ownReported: false, uncertain: 0, incomplete: false }
+  const state = {
+    spent: 0,
+    reported: 0,
+    codium: false,
+    ownReported: false,
+    uncertain: 0,
+    incomplete: false,
+    served: [] as string[],
+  }
   const scope = yield* Scope.make()
+  const bridge = input.stopSignal ? yield* EffectBridge.make() : undefined
+  const stop = () => {
+    for (const track of tracks.values()) track.stop ??= "timeout"
+    // Abort callbacks retain this review's instance and services. Admission below also checks the signal, so
+    // a session created concurrently with cancellation cannot start a provider call or a finalizer.
+    if (bridge)
+      bridge.fork(
+        Effect.forEach(sessionIDs, (sessionID) => prompts.cancel(sessionID), { concurrency: "unbounded" }).pipe(
+          Effect.ignore,
+          Effect.forkIn(scope),
+          Effect.asVoid,
+        ),
+      )
+  }
+  input.stopSignal?.addEventListener("abort", stop, { once: true })
 
   const progress = (event: Progress) =>
     Effect.sync(() => input.onProgress?.(event)).pipe(Effect.catchCause(() => Effect.void))
+  // Called from inside synchronous admission and settlement, so an observer that throws is dropped here rather than
+  // allowed to refuse or leak an attempt.
+  const observe = (event: Observation) => {
+    if (!input.observe) return
+    try {
+      input.observe(event)
+    } catch {
+      return
+    }
+  }
+  // Whether a projection runs a decision the dollar cap refuses. Unset, or throwing, it never does, so the cap holds.
+  const lift = (decision: OverCap) => {
+    if (!input.projection) return false
+    try {
+      return input.projection.overCap(decision) === true
+    } catch {
+      return false
+    }
+  }
 
   // Reservations are estimates, not billed spend. Replace this specialist's old reservation in one synchronous
   // operation: parallel specialists must not each spend the same remainder, including a pending finalization.
-  const reserve = (name: Name, turn: number, finalize: number) => {
+  const reserve = (name: Name, turn: number, finalize: number, at: Pick<OverCap, "phase" | "site" | "sessionID">) => {
     if (!capped) return true
     const others = [...reservations].reduce(
       (total, [owner, amount]) => total + (owner === name ? 0 : amount.turn + amount.finalize),
       0,
     )
-    if (state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd) return false
+    if (
+      state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd &&
+      !lift({ pass: name, estimateUsd: turn + finalize, ...at })
+    )
+      return false
     reservations.set(name, { turn, finalize })
     return true
   }
@@ -320,6 +468,7 @@ export const run: (
     // Each model a reply came from, with its cost kind when it is one this review chose.
     const chosen = [model, ...(triaged ? [triage] : []), ...(judgeModel ? [judgeModel] : [])]
     const used = [...new Set(assistant.map((message) => `${message.providerID}/${message.modelID}`))]
+    state.served = used
     const kinds = [...new Set(own.map((message) => `${message.providerID}/${message.modelID}`))].map(
       (name) => chosen.find((model) => nameOf(model) === name)?.costKind,
     )
@@ -346,11 +495,7 @@ export const run: (
                 : (measured?.costUsd ?? 0) > 0
                   ? "priced"
                   : "unknown",
-      model: !used.length
-        ? nameOf(model)
-        : known || (codium && !own.length)
-          ? used.join(" + ")
-          : "Multiple models",
+      model: !used.length ? nameOf(model) : known || (codium && !own.length) ? used.join(" + ") : "Multiple models",
     } satisfies ReviewCost
   })
 
@@ -375,8 +520,7 @@ export const run: (
               : cost.unknownTurns || cost.unpriced
                 ? "unknown"
                 : ([model, triage, ...(judgeModel ? [judgeModel] : [])].find((chosen) => nameOf(chosen) === used)
-                    ?.costKind ??
-                  (cost.costUsd > 0 ? "priced" : "unknown"))
+                    ?.costKind ?? (cost.costUsd > 0 ? "priced" : "unknown"))
             return [
               {
                 name: track.name,
@@ -435,17 +579,29 @@ export const run: (
   // session with every tool but StructuredOutput denied.
   function ask<T>(spec: Spec<T>): Effect.Effect<Asked<T>> {
     return Effect.gen(function* () {
+      if (input.stopSignal?.aborted)
+        return { name: spec.name, status: "stopped", stop: "timeout", detail: "timeout", steps: 0 } satisfies Asked<T>
       // Include the structured-output schema and a fixed context allowance. The first turn has no reported usage
       // yet, so this is only an admission estimate; provider usage replaces it as soon as it arrives.
       const context = Math.ceil((spec.text.length + JSON.stringify(spec.schema).length) / 3.5)
       const price = priceOf(spec.model)
       const firstCost = nextCost({ context, cached: 0, price })
-      if (!reserve(spec.name, firstCost, firstCost))
+      observe({ type: "pass", pass: spec.name, model: nameOf(spec.model), text: spec.text, maxSteps: spec.cap })
+      if (!reserve(spec.name, firstCost, firstCost, { phase: "turn", site: "pass" })) {
+        observe({
+          type: "attempt",
+          pass: spec.name,
+          phase: "turn",
+          admitted: false,
+          stop: "budget",
+          estimateUsd: firstCost,
+        })
         return { name: spec.name, status: "stopped", stop: "budget", detail: "budget", steps: 0 } satisfies Asked<T>
+      }
       // A helper session: it stays out of session lists, and the review reports what it spent.
       const session = yield* sessions.create({
         title: `Vectorscope review · ${input.head.slice(0, 7)} · ${spec.name}`,
-        internal: `vectorscope.${spec.name}`,
+        internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${spec.name}`,
         parentID: input.parentID,
         permission: rules,
       })
@@ -475,29 +631,52 @@ export const run: (
       const policy: SessionAdmission.Policy = {
         sessionID: session.id,
         admit: (request) => {
-          const stop = track.finalizing
-            ? track.finalizeAttempts >= 1 || !request.tools.includes("StructuredOutput")
-              ? "steps"
-              : undefined
-            : track.attempts >= track.cap
-              ? "steps"
-              : Date.now() >= deadline
-                ? "timeout"
+          const phase: Phase = track.finalizing ? "finalize" : "turn"
+          const attempt = { type: "attempt", pass: track.name, phase, sessionID: session.id } as const
+          const stop = input.stopSignal?.aborted
+            ? "timeout"
+            : track.finalizing
+              ? track.finalizeAttempts >= 1 || !request.tools.includes("StructuredOutput")
+                ? "steps"
                 : undefined
+              : track.attempts >= track.cap
+                ? "steps"
+                : Date.now() >= deadline
+                  ? "timeout"
+                  : undefined
           if (stop) {
             track.stop ??= stop
             track.denied = true
+            observe({ ...attempt, admitted: false, stop, estimateUsd: 0 })
             return
           }
           track.cost = request.model.cost
           const estimate = nextCost(track)
-          if (!reserve(track.name, estimate, track.finalizing ? 0 : estimate)) {
+          if (
+            !reserve(track.name, estimate, track.finalizing ? 0 : estimate, {
+              phase,
+              site: "attempt",
+              sessionID: session.id,
+            })
+          ) {
             track.stop = "budget"
             track.denied = true
+            observe({ ...attempt, admitted: false, stop: "budget", estimateUsd: estimate })
             return
           }
           if (track.finalizing) track.finalizeAttempts++
           else track.attempts++
+          observe({
+            ...attempt,
+            admitted: true,
+            estimateUsd: estimate,
+            model: {
+              providerID: request.model.providerID,
+              modelID: request.model.id,
+              api: request.model.api.id,
+              npm: request.model.api.npm,
+            },
+          })
           return {
             ...(track.finalizing ? { tools: ["StructuredOutput"] } : {}),
             observe: (cost) => {
@@ -505,6 +684,16 @@ export const run: (
               if (reservation) reservation.turn = Math.max(reservation.turn, cost)
             },
             settle: (result) => {
+              observe({
+                type: "settle",
+                pass: track.name,
+                phase,
+                costUsd: result.cost,
+                complete: result.complete,
+                ...(result.usage
+                  ? { tokens: { input: result.usage.inputTokens ?? 0, output: result.usage.outputTokens ?? 0 } }
+                  : {}),
+              })
               state.spent += result.cost
               if (track.price && !result.complete) {
                 // No usage, partial usage, and unpriced usage cannot turn an accepted attempt into free capacity.
@@ -524,11 +713,16 @@ export const run: (
 
       const send = (text: string, ms: number): Effect.Effect<Sent> =>
         Effect.suspend(() => {
-          if (ms <= 0) return Effect.succeed<Sent>({ timedOut: true })
+          if (ms <= 0 || input.stopSignal?.aborted) return Effect.succeed<Sent>({ timedOut: true })
           return prompts
             .prompt({
               sessionID: session.id,
-              agent: spec.name === "security" ? "security" : "review",
+              agent:
+                input.identity === VECTORSCOPE_AGENT
+                  ? VECTORSCOPE_AGENT
+                  : spec.name === "security"
+                    ? "security"
+                    : "review",
               model: { providerID: spec.model.providerID, modelID: spec.model.modelID },
               ...(spec.model.variant ? { variant: spec.model.variant } : {}),
               // A class instance: the stored user message only accepts the schema class, not a plain object.
@@ -541,7 +735,13 @@ export const run: (
               Effect.timeoutOption(Duration.millis(ms)),
               Effect.exit,
               Effect.flatMap((exit): Effect.Effect<Sent> => {
-                if (Exit.isFailure(exit)) return Effect.succeed({ timedOut: false })
+                if (Exit.isFailure(exit)) {
+                  const error = Cause.squash(exit.cause)
+                  return Effect.succeed({
+                    timedOut: false,
+                    ...(error instanceof SessionPrompt.ReviewContextUnavailable ? { contextError: error.message } : {}),
+                  })
+                }
                 if (Option.isNone(exit.value))
                   return prompts.cancel(session.id).pipe(Effect.as({ timedOut: true as const }))
                 return Effect.succeed({ timedOut: false, message: exit.value.value })
@@ -559,6 +759,7 @@ export const run: (
       })
 
       const first = yield* send(spec.text, deadline - Date.now())
+      if (!first.timedOut && first.contextError) return done(undefined, "failed", undefined, first.contextError)
       if (first.timedOut) track.stop ??= "timeout"
       const message = first.timedOut ? undefined : first.message
       // A budget.run cap can still stop a specialist through the run guard. Count it as a budget stop, so
@@ -569,14 +770,27 @@ export const run: (
       const value =
         structured !== undefined ? spec.decode(structured) : !track.stop ? spec.decode(lastText(message)) : undefined
       if (value !== undefined) return done(value, "ok")
+      if (input.stopSignal?.aborted) return done(undefined, "stopped", "timeout", "timeout")
 
       // The first prompt is now idle. Unknown exposure stays in the review's ledger; only unused future work is
       // released. The finalizer must still fit beside every other specialist's admitted work.
-      if (!reserve(track.name, nextCost(track), 0)) return done(undefined, "stopped", "budget", "budget")
+      if (!reserve(track.name, nextCost(track), 0, { phase: "finalize", site: "finalizer", sessionID: session.id })) {
+        observe({
+          type: "attempt",
+          pass: spec.name,
+          phase: "finalize",
+          admitted: false,
+          stop: "budget",
+          estimateUsd: nextCost(track),
+          sessionID: session.id,
+        })
+        return done(undefined, "stopped", "budget", "budget")
+      }
       track.finalizing = true
       track.denied = false
       yield* sessions.setPermission({ sessionID: session.id, permission: [...rules, DENY_ALL, ALLOW_OUTPUT] })
       const last = yield* send(buildFinalizePrompt(), FINALIZE_MS)
+      if (!last.timedOut && last.contextError) return done(undefined, "failed", undefined, last.contextError)
       const final = last.timedOut ? undefined : last.message
       const finalStructured = final?.info.role === "assistant" ? final.info.structured : undefined
       const finalValue = spec.decode(finalStructured !== undefined ? finalStructured : lastText(final))
@@ -612,10 +826,7 @@ export const run: (
             ...input.files.filter((file) => !focused.has(file.path)),
           ]
         : input.files
-    const split = budgetDiff(
-      ordered,
-      diffBudgetChars(Math.min(model.context, triage.context), config.maxDiffChars),
-    )
+    const split = budgetDiff(ordered, diffBudgetChars(Math.min(model.context, triage.context), config.maxDiffChars))
     // Each changed file once: annotated when its pull request text is at hand, and only its changed lines when an
     // incremental review has nothing new in it.
     const packed = packChanges({
@@ -675,21 +886,20 @@ export const run: (
     const report = mergeReports(reports.map((entry) => entry.report))
     const normalized = reports.flatMap((entry) => normalizeFindings(entry.report.findings, entry.source, input.anchors))
 
-    // 7. Verify: blocking findings (and every suggestion when untrusted), or everything of concern or above. After a
-    // cheaper triage pass, everything of concern or above is confirmed on the review model, whatever `verify` says.
-    const all = config.verify === "all" || triaged
-    const candidates = [
-      ...new Map(
-        (config.verify === "off" && !triaged ? [] : normalized)
-          .filter((finding) =>
-            all
-              ? finding.severity !== "nit" && finding.confidence >= config.minConfidence
-              : (finding.severity === "blocking" && finding.confidence >= config.minConfidence) ||
-                (input.trust === "untrusted" && finding.suggestion !== undefined),
-          )
-          .map((finding) => [finding.id, finding]),
-      ).values(),
-    ]
+    // 7. Verify: the candidates the verify policy names (plan.ts). After a cheaper triage pass, everything of concern
+    // or above is confirmed on the review model, whatever `verify` says.
+    const shared = config.verifyPolicy === "shared"
+    const candidates = verifyCandidates(
+      normalized,
+      {
+        verify: config.verify,
+        policy: config.verifyPolicy,
+        minConfidence: config.minConfidence,
+        trust: input.trust,
+        triaged,
+      },
+      "engine",
+    )
     // After a triage pass the cheaper model's word that an earlier finding is fixed goes to the double-check too, so
     // only the review model closes a finding and resolves its thread. A claim about a finding the first pass reported
     // again contradicts itself and is dropped.
@@ -721,9 +931,25 @@ export const run: (
           price: verifyPrice,
         }).low
       : 0
-    const unaffordable =
-      (capped && state.spent + state.uncertain + estimate > config.maxCostUsd) || (yield* overTokenStop(verifyText))
     const late = deadline - Date.now() < VERIFY_MIN_MS
+    // A projection is asked only about a verify pass that would otherwise run: one skipped for time never mattered.
+    // The Codium token stop (CODIUM_REVIEW_TOKEN_STOP) is not a dollar decision, so no projection lifts it.
+    const unaffordable =
+      (yield* overTokenStop(verifyText)) ||
+      (capped &&
+        state.spent + state.uncertain + estimate > config.maxCostUsd &&
+        !(verifyText !== "" && !late && lift({ pass: "verify", phase: "turn", site: "verify", estimateUsd: estimate })))
+    if (verifyText && (unaffordable || late)) {
+      observe({ type: "pass", pass: "verify", model: nameOf(model), text: verifyText, maxSteps: VERIFY_STEPS })
+      observe({
+        type: "attempt",
+        pass: "verify",
+        phase: "turn",
+        admitted: false,
+        stop: unaffordable ? "budget" : "timeout",
+        estimateUsd: estimate,
+      })
+    }
     const verify: Asked<ReturnType<typeof decodeVerify>> | undefined = !verifyText
       ? undefined
       : unaffordable || late
@@ -754,12 +980,32 @@ export const run: (
       ? estimateCostUsd({ promptTokens: Math.ceil(judgeText.length / 3.5), maxSteps: VERIFY_STEPS, price: judgePrice })
           .low
       : 0
+    const judgeLate = deadline - Date.now() < VERIFY_MIN_MS
+    // As verify's pre-check: a projection may lift only the dollar cap, and only for a judge that would otherwise run.
     const judgeUnaffordable =
-      (capped && state.spent + state.uncertain + judgeEstimate > config.maxCostUsd) || (yield* overTokenStop(judgeText))
+      (yield* overTokenStop(judgeText)) ||
+      (capped &&
+        state.spent + state.uncertain + judgeEstimate > config.maxCostUsd &&
+        !(
+          judgeText !== "" &&
+          !judgeLate &&
+          lift({ pass: "judge", phase: "turn", site: "verify", estimateUsd: judgeEstimate })
+        ))
+    if (judgeModel && judgeText && (judgeUnaffordable || judgeLate)) {
+      observe({ type: "pass", pass: "judge", model: nameOf(judgeModel), text: judgeText, maxSteps: VERIFY_STEPS })
+      observe({
+        type: "attempt",
+        pass: "judge",
+        phase: "turn",
+        admitted: false,
+        stop: judgeUnaffordable ? "budget" : "timeout",
+        estimateUsd: judgeEstimate,
+      })
+    }
     const judged: Asked<ReturnType<typeof decodeVerify>> | undefined =
       !judgeModel || !judgeText
         ? undefined
-        : judgeUnaffordable || deadline - Date.now() < VERIFY_MIN_MS
+        : judgeUnaffordable || judgeLate
           ? { name: "judge", status: "skipped", steps: 0, detail: judgeUnaffordable ? "budget" : "time" }
           : yield* ask({
               name: "judge",
@@ -771,16 +1017,15 @@ export const run: (
             })
     const candidateIds = new Set(candidates.map((finding) => finding.id))
     // The judge's verdict stands where it gave one; the check's stands for the rest, and for earlier fixed claims.
-    const finalCall =
-      judged?.status === "ok" ? (judged.value ?? []).filter((entry) => candidateIds.has(entry.id)) : []
+    const finalCall = judged?.status === "ok" ? (judged.value ?? []).filter((entry) => candidateIds.has(entry.id)) : []
     const verdicts = new Map([...(verify?.value ?? []), ...finalCall].map((entry) => [entry.id, entry.verdict]))
     // After a triage pass only what the review model confirmed is reported: a candidate it rejected, gave no verdict
     // for, or never saw because the double-check was skipped or failed is left out.
-    const unchecked = new Set(
-      triaged
-        ? candidates.filter((finding) => verdicts.get(finding.id) !== "confirmed").map((finding) => finding.id)
-        : [],
-    )
+    const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triaged).map((finding) => finding.id))
+    // Under the shared policy the review says how many candidates it posts without a verdict, whether or not the pass
+    // finished; after a triage pass, how many it left out for want of one.
+    const unanswered = shared && verify ? verifyUnanswered(candidates, verdicts, triaged).length : 0
+    const finished = verify?.status === "ok"
     const kept = normalized.filter((finding) => verdicts.get(finding.id) !== "rejected")
     const findings = kept
       .filter((finding) => !unchecked.has(finding.id))
@@ -860,7 +1105,43 @@ export const run: (
       })
     }
 
+    // What the review says about its verify pass. The shared policy (plan.ts) accounts for every candidate left without
+    // a verdict, whether or not the pass finished. The legacy rule notes a skipped pass and, after a triage pass, one
+    // that did not finish.
+    const triageNote = (why: "unfinished" | "unanswered") =>
+      unconfirmed ? [noteTriageUnchecked(unconfirmed, nameOf(triage), nameOf(model), why)] : []
+    const fixedNote = claims.length ? [noteTriageFixedUnchecked(claims.length, nameOf(triage), nameOf(model))] : []
+    const verifyNotes = !verify
+      ? []
+      : shared
+        ? [
+            ...(triaged ? triageNote(finished ? "unanswered" : "unfinished") : []),
+            ...(triaged && !finished ? fixedNote : []),
+            ...(unanswered ? [noteVerifyUnfinished(unanswered, finished ? "unanswered" : unfinished(verify))] : []),
+          ]
+        : triaged && !finished
+          ? [...triageNote("unfinished"), ...fixedNote]
+          : verify.status === "skipped"
+            ? [noteVerifySkipped()]
+            : []
+
     const spentByPass = yield* passes()
+    const cost = yield* measure()
+    // Model evidence (VS-07), only when review.json opts in: notes on what VectorScope's evaluation says about the
+    // models, after the replies are known. It never changes which model ran.
+    const evidenceNotes =
+      config.modelEvidence === "warn"
+        ? modelEvidenceNotes(
+            assessReview({
+              review: subjectOf(model),
+              ...(triaged ? { triage: subjectOf(triage) } : {}),
+              scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: nameOf(triage) } : {}) }),
+              served: state.served,
+              now: Date.now(),
+              ...(input.certificates ? { certificates: input.certificates } : {}),
+            }),
+          )
+        : []
     // WP A35: how many labs checked what this review reports, for the "Checked by a second lab" line.
     const labs = checkedLabs({
       model,
@@ -873,7 +1154,7 @@ export const run: (
       report: checked,
       selection,
       skipped: input.skipped,
-      cost: { ...(yield* measure()), ...(labs ? { labs } : {}) },
+      cost: { ...cost, ...(labs ? { labs } : {}) },
       ...(spentByPass.length ? { passes: spentByPass } : {}),
       durationMs: Date.now() - started,
       base: input.base,
@@ -897,24 +1178,25 @@ export const run: (
       notes: [
         ...picked.notes,
         ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
-        ...(triaged && verify && verify.status !== "ok"
-          ? [
-              ...(unconfirmed ? [noteTriageUnchecked(unconfirmed, nameOf(triage), nameOf(model))] : []),
-              ...(claims.length ? [noteTriageFixedUnchecked(claims.length, nameOf(triage), nameOf(model))] : []),
-            ]
-          : verify?.status === "skipped"
-            ? [noteVerifySkipped()]
-            : []),
+        ...verifyNotes,
         ...(state.incomplete
           ? [
               "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
             ]
           : []),
+        ...evidenceNotes,
       ],
     } satisfies ReviewOutcome
   })
 
-  return yield* body.pipe(Effect.ensuring(unsubscribe.pipe(Effect.andThen(Scope.close(scope, Exit.void)))))
+  return yield* body.pipe(
+    Effect.ensuring(
+      Effect.sync(() => input.stopSignal?.removeEventListener("abort", stop)).pipe(
+        Effect.andThen(unsubscribe),
+        Effect.andThen(Scope.close(scope, Exit.void)),
+      ),
+    ),
+  )
 })
 
 type Chosen = ResolvedModel & { lab?: string }
@@ -986,6 +1268,25 @@ export function normalizeFindings(findings: ModelFinding[], source: Finding["sou
 
 function nameOf(model: Pick<ResolvedModel, "providerID" | "modelID">) {
   return `${model.providerID}/${model.modelID}`
+}
+
+// What model evidence reads about a model. One built without the resolver gives only its name and whether it is free,
+// so its note says nothing about why it was used.
+function subjectOf(model: ResolvedModel): ModelSubject {
+  return (
+    model.subject ?? {
+      model: nameOf(model),
+      ...(model.variant ? { variant: model.variant } : {}),
+      free: model.costKind === "free",
+    }
+  )
+}
+
+// Why a verify pass did not finish, for its note: skipped or denied for budget, out of time, or anything else.
+function unfinished(verify: Pick<Asked<unknown>, "status" | "stop" | "detail">) {
+  if (verify.status === "timeout" || verify.stop === "timeout" || verify.detail === "time") return "time" as const
+  if (verify.stop === "budget" || verify.detail === "budget") return "budget" as const
+  return "unfinished" as const
 }
 
 function lastText(message: SessionV1.WithParts | undefined) {

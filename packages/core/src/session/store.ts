@@ -10,6 +10,7 @@ import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable, SessionTable } from "./sql"
 import { fromRow } from "./info"
+import type { ReviewMemoryFence } from "../review/memory-fence"
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info | undefined>
@@ -19,7 +20,7 @@ export interface Interface {
   readonly runnerContext: (
     sessionID: SessionSchema.ID,
     baselineSeq: number,
-  ) => Effect.Effect<SessionMessage.Message[], MessageDecodeError>
+  ) => Effect.Effect<SessionMessage.Message[], MessageDecodeError | ReviewMemoryFence.Refused>
   readonly message: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly message: SessionMessage.Message } | undefined>

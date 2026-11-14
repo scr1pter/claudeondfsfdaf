@@ -38,6 +38,7 @@ import {
   type ReviewTarget,
   type RepoRulesApi,
   type WorkingTreeChanges,
+  type WorkflowModel,
 } from "./ai-review"
 import {
   buildPullRequestCreateInput,
@@ -701,8 +702,12 @@ export function PullRequests(props: {
   onReview: (input: ReviewRequest) => Promise<ReviewOutcomeLite | undefined>
   // The open project's uncommitted changes, for "Review my changes"; undefined when the engine cannot say.
   onChanges?: () => Promise<WorkingTreeChanges | undefined>
-  // The model automatic reviews would run on, with its provider's key variables (see workflowModel).
-  automaticReviewModel?: () => { model: string; keys: string[]; reason?: string } | undefined
+  // The engine-owned local runner is separate from the PR review adapter.
+  localReview?: () => JSX.Element
+  factoryLocal?: boolean
+  // The model automatic reviews would run on, with its provider's key variables (see workflowModel), and the model
+  // evidence warnings when the open project opted into them ("modelEvidence": "warn", VS-07).
+  automaticReviewModel?: () => WorkflowModel | undefined
   // Applies a finding's fix to the open project's files (see applyReviewFix).
   onApplyFix?: (fix: ReviewFix) => Promise<"applied" | "changed">
   // Hands a prompt to the agent in the task on screen, or starts one with it.
@@ -719,7 +724,7 @@ export function PullRequests(props: {
   // the pull request adds exactly what was confirmed. Objects are replaced with setPanel({ … }), since setting one by
   // path merges it into the one before.
   const [panel, setPanel] = createStore<{
-    view?: "changes" | "automatic-reviews"
+    view?: "changes" | "automatic-reviews" | "local-reviews"
     changes?: WorkingTreeChanges
     checking?: boolean
     automatic?: AutoReviewStatus
@@ -855,6 +860,7 @@ export function PullRequests(props: {
   // The open project's uncommitted changes. Reading them needs no GitHub sign-in.
   const loadChanges = async (projectPath = props.projectPath) => {
     if (!projectPath || !props.onChanges) return
+    if (props.factoryLocal && props.localReview) return
     setPanel({ checking: true })
     const changes = await props.onChanges().catch(() => undefined)
     if (props.projectPath === projectPath) setPanel({ changes, checking: false })
@@ -1001,9 +1007,13 @@ export function PullRequests(props: {
     setCreateOpen(false)
     // A review of the changes stays when they are opened again; a pull request's does not.
     if (review()?.pr !== undefined) resetReview()
-    setPanel({ view: "changes" })
-    void loadChanges()
+    setPanel({ view: props.factoryLocal && props.localReview ? "local-reviews" : "changes" })
+    if (!props.factoryLocal || !props.localReview) void loadChanges()
   }
+
+  createEffect(() => {
+    if (!props.localReview && panel.view === "local-reviews") setPanel({ view: undefined })
+  })
 
   // Shows what setting up automatic reviews would do, with the workflow file it would add. Nothing reaches GitHub
   // until the user confirms.
@@ -2013,6 +2023,13 @@ export function PullRequests(props: {
                   </p>
                 )}
               </Show>
+              <For each={props.automaticReviewModel?.()?.warnings ?? []}>
+                {(warning) => (
+                  <p class="mx-4 mt-4 rounded-[6px] border border-[color:color-mix(in_srgb,var(--vx-amber)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--vx-amber)_8%,transparent)] px-3 py-2 text-[12px] leading-relaxed text-[color:var(--vx-amber)]">
+                    <CodeText text={warning} />
+                  </p>
+                )}
+              </For>
               <Show when={panel.preview}>
                 {(workflow) => (
                   <>
@@ -2117,6 +2134,20 @@ export function PullRequests(props: {
               <span class="truncate">{busy()}</span>
             </span>
           </Show>
+          <Show when={props.localReview}>
+            <button
+              type="button"
+              class={SECONDARY}
+              disabled={!!reviewRun()}
+              onClick={() => {
+                selectionRequests.invalidate()
+                setCreateOpen(false)
+                setPanel({ view: panel.view === "local-reviews" ? undefined : "local-reviews" })
+              }}
+            >
+              {panel.view === "local-reviews" ? "Pull requests" : "Local reviews"}
+            </button>
+          </Show>
           <Show when={status()?.authenticated}>
             <button
               type="button"
@@ -2192,7 +2223,11 @@ export function PullRequests(props: {
           </main>
         </Show>
 
-        <Show when={status() && !status()!.authenticated && panel.view !== "changes"}>
+        <Show when={panel.view === "local-reviews" && props.localReview}>
+          <main class="min-h-0 flex-1 overflow-y-auto">{props.localReview?.()}</main>
+        </Show>
+
+        <Show when={status() && !status()!.authenticated && panel.view !== "changes" && panel.view !== "local-reviews"}>
           <div class="grid min-h-0 flex-1 place-items-center overflow-y-auto px-5 py-8">
             <div class="w-full max-w-[520px]">
               <div class="mb-5 flex flex-col items-center gap-3 text-center">
@@ -2238,13 +2273,13 @@ export function PullRequests(props: {
                       {changesSummary()} · no GitHub sign-in needed
                     </p>
                   </div>
-                  <Show when={panel.changes?.files}>
+                  <Show when={panel.changes?.files || (props.factoryLocal && props.localReview)}>
                     <button
                       type="button"
                       class={SECONDARY}
                       onClick={() => {
                         openChanges()
-                        void reviewChanges()
+                        if (!props.factoryLocal || !props.localReview) void reviewChanges()
                       }}
                     >
                       <Icon name="scope" />
@@ -2257,7 +2292,7 @@ export function PullRequests(props: {
           </div>
         </Show>
 
-        <Show when={status()?.authenticated}>
+        <Show when={status()?.authenticated && panel.view !== "local-reviews"}>
           <div class="flex min-h-0 flex-1">
             <aside class="flex w-[300px] shrink-0 flex-col border-r border-[color:var(--vx-line)] bg-[color:var(--vx-stage)] lg:w-[340px]">
               <div class="border-b border-[color:var(--vx-line)] p-3">

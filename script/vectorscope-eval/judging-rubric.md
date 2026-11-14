@@ -1,0 +1,287 @@
+# VectorScope judging rubric
+
+How a review's findings are judged against a case's labels, how verdicts are
+settled, what the report measures and how the release gate decides. This is
+rubric version 1 (`RUBRIC_VERSION` in `packages/core/src/review/eval.ts`).
+Changing a rule below means raising that number. Every pass made under an
+earlier version then counts as stale and must be redone, and the same saved
+outputs are re-scored without any new review.
+
+The code is `packages/core/src/review/eval.ts` (verdicts, settlement, scoring
+and metrics), `eval-judge.ts` (blinding and judges) and `eval-report.ts` (the
+report and the gate). `judge.ts` and `report.ts` in this directory are the
+command-line tools. Dataset labels are made under `annotation-guide.md`.
+
+A proposed revision with an importance axis is in
+`judging-rubric-importance.md` (VS-45, pending owner question Q29). It is used
+only with `--proposal importance`, in a judgement file of its own, and changes
+nothing in this rubric: passes made under it never count here, and a report
+judged under it is never a release decision.
+
+## What is judged
+
+A **run** is one review of one case by one pipeline variant and model, such as
+the engine replay of a dataset case or the single-prompt harness on a fixture.
+A run has two lists of findings:
+
+- **Proposed:** what the reviewers reported.
+- **Posted:** what survived verification and selection and would actually be
+  posted. This means the line comments, plus the findings the summary lists
+  (outside the diff, elsewhere, overflow and nits).
+
+A finding has the same key in both lists, so it is judged once per run. Nits
+are not claims of a defect. They are left out of judging and of precision
+unless the gate counts them (`countNits`), but they still count as comments.
+
+## Verdicts
+
+Each finding gets one of three verdicts. Compare it with the case's labelled
+defects: each has a summary, a cause, locations and alternative locations.
+
+| Verdict | When |
+| --- | --- |
+| `match` with a defect id | The finding identifies that defect's **cause**: what goes wrong, for which input or state, and why. It may point anywhere. A finding elsewhere that explains the same cause matches. |
+| `extra` with an issue name | The finding is a **real defect in the change** that the labels lack. Check it against the code, not only against the labels. Give findings in one task that describe the same defect the same issue name. |
+| `false-alarm` | Anything else: wrong, speculative, not a defect in this change, a style preference presented as a defect, too vague to act on, or a **different complaint at a labelled line**. |
+
+When a finding suggests a change, also rate the suggestion: `valid` if applying
+it fixes the problem and breaks nothing, otherwise `invalid`.
+
+Being on the right line is never enough. A finding at the defect's line that
+names another problem is a false alarm, or an extra if that other problem is
+real, and the labelled defect still counts as missed. A real extra defect is
+never a false alarm, on a clean control too. If extras show a label is missing,
+tell the dataset's annotators. Labels change only through their two passes and
+adjudication, and a held-out label only with a new freeze.
+
+## Failure classes and production-breaking
+
+Annotators give each labelled defect a `failureClass` (`annotation-guide.md`,
+"Labels added in VS-22a"). These are label vocabulary set by annotators, not
+verdict rules: a finding is judged by the verdicts above whatever its defect's
+class, so they do not change the rubric version. They decide which defects
+class-scoped recall counts and what "production-breaking" means.
+
+| Class | A defect is in it when |
+| --- | --- |
+| `crash` | A process, thread, request, job or command terminates abnormally because of it: an exception or panic the code does not handle (even when a framework's top-level handler turns it into an error response or an exit status), a fatal error or signal, or a process that exits at startup. An error the program detects and returns on purpose, such as a configuration it rejects with a message, is `other` unless the evidence shows the process then exits. |
+| `data-corruption` | Data the program stores, or passes on for another system to store, is written wrongly, overwritten, truncated, duplicated or lost: files, databases, caches, queues, messages, uploads and replicated records. A wrong value that is only computed, compared, shown or returned (a wrong response included) is `other`, and so is diagnostic output: logs, traces, metrics and other telemetry that are lost or wrong. |
+| `leak` | See the leak scope below. |
+| `runaway-loop` | Work that never ends or repeats without bound: an infinite loop or recursion, a retry, poll or reconnect with no bound or backoff, or a loop that feeds itself. |
+| `auth-bypass` | An authentication, authorization or trust check accepts what it should refuse: an expired, forged or unsigned token or credential, a skipped or wrong permission check, or a request that crosses a tenant or access boundary. |
+| `other` | Everything else, including wrong results, valid input or configuration refused, and diagnostic output. |
+
+- **Concurrency defects are classed by their effect.** A race that corrupts
+  stored data is `data-corruption`; one that crashes is `crash`. One whose only
+  effect is a wrong or stale result is `other`, with
+  `pendingQ4: concurrency-wrong-result` (below).
+- **This build's readings, not the owner's wording**, recorded in
+  `docs/vector/build/vectorscope-deviations.md` (2026-11-06 · VS-22a) and open
+  to the owner's change: a deadlock or a request that never completes counts
+  as `runaway-loop`, and an injection that lets a caller run commands or
+  queries beyond its rights counts as `auth-bypass`. No seed defect depends on
+  either.
+- **Production-breaking** means labelled `blocking` and in one of the five
+  classes. This is VS-27's S2 and what "No verified production-breaking
+  issues" claims. Class-scoped recall counts the defects in the five classes
+  at any severity; whether precise mode is judged on it is owner question Q3
+  (D16).
+
+### Leak scope (pending owner Q4)
+
+Q4 asks whether "leaks" includes data exposure, and whether concurrency bugs
+with wrong results count. Until the owner answers, `leak` is a **resource
+leak** only: something the program acquires is not released, so its use grows
+while the program runs (memory, file handles, sockets, connections, threads,
+goroutines, timers, subscriptions). Each defect that a wider answer would move
+into a class stays `other` and carries a marker:
+
+- `pendingQ4: data-exposure`: a secret or private data reaches someone who
+  should not see it, without a bypassed check (a bypassed check is
+  `auth-bypass`).
+- `pendingQ4: concurrency-wrong-result`: a concurrency defect whose only
+  effect is a wrong or stale result.
+
+Either answer can then be computed from the labels without relabelling.
+
+## Duplicates
+
+**Duplicates are not judged; they are counted.** Within one run, the first
+finding matched to a defect, or to an extra issue, counts. Later findings on
+the same defect are duplicates. A duplicate stays in the precision denominator
+but not in its numerator, because a repeated comment reports nothing new. It is
+also reported as duplicates per pull request.
+
+**Summary and line comments** (VS-45, the addendum's VS-21 rule [GU3]). One
+rule, tested in `eval.test.ts` and `report.test.ts`:
+
+- The posted list is the line comments, then the findings the summary lists
+  (overflow, outside the diff, elsewhere and nits), in that order. Selection
+  puts each finding in exactly one of those lists (core `select.ts`), so a
+  finding never counts twice for being both inline and in the summary.
+- Prose in the review body or the summary body that restates a finding is not
+  a finding, and is not judged.
+- Two findings on one defect, one inline and one in the summary, are a finding
+  and a duplicate; the first in the posted list counts. An inline finding and
+  a summary finding with the same file, lines and title share one key, so they
+  get one judgement and the second is a duplicate.
+- S7 (the strict guardrail's one-finding-per-root-cause rule: the same id,
+  `sameFinding`, or the same class within 3 lines) is applied by the pipeline
+  before posting. A pair that S7 keeps apart but the judges match to one
+  defect still counts as a match and a duplicate here, so the eval is at least
+  as strict as S7.
+- An external comparison states this rule beside its metric and β.
+
+## Blinding and settlement
+
+- **Blinded tasks.** A judge gets one task per run, holding the case's labels
+  (each defect's id, category, severity, summary, cause, locations and
+  alternatives, without the annotators' `failureClass`), the run's findings
+  under opaque ids, and where to read the case's code: the
+  repository URL with the candidate's base and head commits for a dataset case,
+  or the change itself as a diff for a synthetic fixture. Read the code there
+  before calling an unexpected finding a false alarm. Nothing names the
+  pipeline, the model, the repetition, the case id or whether a finding was
+  posted. Tasks and findings are ordered by their ids, which come from a seed
+  only the coordinator's judgement file holds. The same finding in two runs gets
+  unrelated ids.
+- **Two passes with a human, or an adjudication.** A verdict is settled when two
+  independent judges agree and at least one of them is a human, or when a human
+  adjudicates. A model may assist with matching but is never the sole
+  authority: models that agree with no human among them settle nothing, and the
+  finding waits for a human's pass. Agreeing means the same verdict kind, and
+  the same defect for a match. A single pass settles nothing. A finding without
+  a settled verdict is **unjudged**: it is neither right nor wrong, and the
+  report and the gate show it.
+- **Disagreements go to a human.** `judge.ts disputes` writes them as a blinded
+  worksheet that lists the verdicts given, in no fixed order and without the
+  judges' names. The owner's answers are recorded as adjudications. A model
+  never adjudicates.
+- **No model judges itself.** A model judge's pass on a run whose findings
+  came, wholly or partly, from that model does not count. A batch with such a
+  judge is refused before any call. Model ids are compared by what they name,
+  not how they are spelled: a router prefix (`openrouter/`), a route suffix
+  (`:free`, `@preset`), a trailing date and dots against hyphens do not make
+  another model.
+- **Model judges are paid attempts.** Each call is admitted by the eval budget
+  ledger first, as a `judge` attempt charged to the run it judges, and settled
+  at what it reports. A call that fails after it was sent keeps its reservation
+  as uncertain spend. Worksheets record people only. No model judge is wired to
+  a provider in this build (D5, D12).
+
+## Run status
+
+| Status | Meaning |
+| --- | --- |
+| completed | The review finished: no early stop, no unreviewed file, no pass failed, timed out or stopped. |
+| partial | The review stopped early, left files unreviewed, lost a pass, or reviewed nothing because every file was skipped. Its findings count, but it is not complete coverage. |
+| failed | Every reviewer failed, or the request failed. |
+| not sent | The budget did not admit it. Nothing was spent. |
+| missing | Planned, with no saved output at all. |
+
+Every planned run stays in the denominators. A run that is failed, not sent or
+missing detects nothing.
+
+## Metrics
+
+Each metric is reported for the proposed and the posted findings, for each
+pipeline variant and model. Breakdowns by language, trust mode, change size and
+defect category use the gate's stage. Adversarial (prompt-injection) cases
+count only toward spend, wall time and trust violations: every rate below
+leaves them out, the defects they label included.
+
+| Metric | Definition |
+| --- | --- |
+| Coverage | Completed runs of the planned ones. |
+| Recall, end to end | Labelled defects detected over the defects of every planned run. |
+| Recall, completed runs | The same over completed runs only. |
+| Recall, macro | The mean of each bug case's end-to-end recall. |
+| Recall, class-scoped | End-to-end recall of the defects whose `failureClass` is one of the five classes. Unlabelled and `other` defects are left out. |
+| Recall, cross-file | End-to-end recall of the defects of cases whose `labels.crossFile` is true. |
+| Actionable precision | Matched plus extra findings over the judged actionable findings (matched, extra, duplicate and false alarm). Unjudged findings are left out and counted. |
+| Precision, macro | The mean precision of the runs with judged findings. |
+| F1 | From precision and end-to-end recall. |
+| False alarms per clean PR | False alarms on the behaviour-preserving controls a run reviewed, per reviewed control. Trivial controls are left out. |
+| False alarms, comments and duplicates per PR | Per reviewed run (completed or partial). |
+| Severity agreement | Matched findings whose severity equals the label's. |
+| Precision by posted severity | For each severity a finding was posted with, matched plus extra findings over the judged ones (duplicates in the denominator, as for actionable precision). A table with intervals and no trend: under this rubric a real concern is as real as a real blocking finding (VS-45). The nit row reads excluded while the gate does not count nits. |
+| Precision@blocking | Its blocking row: real findings over the judged findings posted as blocking. |
+| Recall, high severity | End-to-end recall of the defects labelled `blocking`. |
+| Precision@blocking against `engine:shared-verify` | A monitor, not a gate rule: each `engine:<name>` variant beside `engine:shared-verify` on the same model, on the cases and repetitions both reviewed, at the gate's stage. More than 5 points down in the point estimates is flagged; under 50 judged blocking findings on either side it reads too few. |
+| Location validity | Matched findings that cite one of the defect's locations or alternatives, within the slack (3 lines). |
+| Anchored | Posted findings placed on a diff line rather than only in the summary. |
+| Valid suggestions | Valid over rated suggestions. |
+| Trivial controls | Planned and reviewed trivial controls, and false alarms per reviewed trivial control, reported apart. |
+| Spend | Reported cost, uncertain cost (reservations kept in full when usage is missing), runs missing usage, and runs not admitted by the ledger. |
+
+A rate with nothing to count is shown as n/a with its counts, never as 1. For
+example, a control with no findings has no precision. Missing usage is never
+zero spend. Proportions use Wilson score intervals and per-PR rates use exact
+Poisson intervals. The recall difference on paired cases uses Newcombe's
+interval for paired proportions. Precision's interval treats findings as
+independent, though findings in one pull request are not. A human reviewing a
+borderline result should keep that in mind.
+
+## The release gate (D2)
+
+The default gate is the owner's approved D2, in `DEFAULT_GATE`. Print it with
+`report.ts --print-gate`, and give an edited copy with `--gate`. A gate file
+records who approved its thresholds and when.
+
+| Rule | Threshold | Decided on |
+| --- | --- | --- |
+| Trust or consent checks failed | 0 | Observed in the candidate's reviewed runs |
+| Unaccounted paid attempts | 0 | Observed: runs or judge calls the ledger did not admit, and attempts left open in it |
+| Coverage | at least 95% | Observed |
+| Actionable precision | at least 80% | Interval |
+| False alarms per clean PR | at most 0.2 | Interval |
+| Recall below the frozen pipeline on paired cases | at most 5 points | Interval |
+
+An observed rule passes or fails on its value. An interval rule passes only
+when its whole interval is on the passing side, and fails only when its whole
+interval is on the failing side. Otherwise it goes to **human review**. It also
+goes to review while any finding it depends on is unjudged, or when there is
+nothing to measure: no clean change, no frozen pipeline or no paired defect.
+The gate fails if any rule fails. Otherwise it needs review if any rule does,
+and passes only if every rule passes. Small samples will often need review.
+That calls for more data, not weaker thresholds.
+
+These choices are this build's reading of D2, and are recorded in
+`docs/vector/build/vectorscope-deviations.md`:
+
+- The gate counts **posted** findings, at **95%** confidence, without nits.
+- It applies to one candidate variant and model, compared with a named frozen
+  pipeline (`--candidate`, `--baseline`).
+- Paired recall pairs each labelled defect by case and repetition.
+
+A result is a **release decision** only when all of these hold:
+
+- It is a held-out run on a frozen manifest.
+- It was collected on or after the gate's approval date.
+- The report lists no input or judging problems.
+- The gate is no weaker than the approved D2: no looser threshold, no lower
+  confidence and no other decision split. A changed gate also needs its own
+  decision name; a copy that differs from D2 cannot call itself D2.
+
+Anything else is reported, but it is not a release decision. VS-45 changes
+none of this: D2's thresholds and `DEFAULT_GATE` are as approved, and only this
+rubric makes a release decision. A report judged under a proposed rubric
+(`--proposal`) lists that as a reason it is not one.
+
+## Workflow
+
+```
+# 1. Each judge gets a blinded worksheet of what they have not judged yet.
+bun script/vectorscope-eval/judge.ts tasks --outputs <dir> --judgements <file> --judge human:<name> --worksheet <sheet>
+# 2. They fill each finding's "answer", and their passes are recorded.
+bun script/vectorscope-eval/judge.ts import --outputs <dir> --judgements <file> --judge human:<name> --worksheet <sheet>
+# 3. Disagreements go to the owner, blinded.
+bun script/vectorscope-eval/judge.ts disputes --outputs <dir> --judgements <file> --worksheet <sheet>
+bun script/vectorscope-eval/judge.ts adjudicate --outputs <dir> --judgements <file> --worksheet <sheet> --by human:owner --date <YYYY-MM-DD>
+# 4. The report, offline, as often as needed.
+bun script/vectorscope-eval/report.ts --outputs <dir> --judgements <file> --candidate <variant>=<model> --baseline <variant>=<model>
+```
+
+The judgement file, the worksheets and `--out` reports must be outside the
+repository. The judgement file holds the blinding seed and the model names, so
+it stays with the coordinator and never goes to a judge.

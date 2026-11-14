@@ -160,6 +160,10 @@ async function run(command: string[], cwd: string, env: Record<string, string | 
   }
 }
 
+// The dry run starts seven processes on Windows: the publisher, its build step, the plugin publisher and npm, then
+// npm pack and two tar extracts. It takes 4.2 to 4.5 s on a Windows runner. Twice a runner slowed for about 40 s,
+// starting in the file before this one, and the publisher alone took 33 to 37 s (test.yml runs 42350032632 and
+// 42453816512). So this test gets a limit of its own. A hung process still fails it.
 test("dry-run packages every target with notices and a working Vector launcher without registry access", async () => {
   await using tmp = await fixture()
   const requests: string[] = []
@@ -328,7 +332,7 @@ if (process.argv[2] === "pack")
   } finally {
     registry.stop(true)
   }
-}, 30_000)
+}, 120_000)
 
 // Every borrowed OAuth registration stops publication except the Codex CLI client, which the provider policy
 // still names with Sign in with ChatGPT off by default since 23 October 2026 (docs/vector/owner-actions/chatgpt.md).

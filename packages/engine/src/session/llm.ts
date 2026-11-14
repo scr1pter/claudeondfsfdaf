@@ -7,7 +7,7 @@ import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
 import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
-import { Context, Effect, Exit, Layer } from "effect"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent, UsageInput } from "@vectordevai/llm"
@@ -40,6 +40,8 @@ import { EgressAttribution } from "@vectordevai/core/local-mode/attribution"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { ToolOrder } from "./llm/tool-order"
 import { REQUEST_ID_HEADER } from "@/plugin/openai/transport"
+import { Database } from "@vectordevai/core/database/database"
+import { ReviewMemoryFence } from "@vectordevai/core/review/memory-fence"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -64,6 +66,8 @@ export type StreamInput = {
   // What a Vector Codium request is for (X-Vector-Purpose): "title", "brain", a Vectorscope review's "review"; without
   // one, a judge agent's request is "judge" and anything else "chat".
   purpose?: ModelPlanStatus.Purpose
+  /** Server-derived pinned review context; model/provider options may not replace it. */
+  pinnedContext?: true
   retries?: number
   // "required" is sent as "auto" where the provider refuses forced tool use with thinking on
   // (ProviderTransform.toolChoice); `chose` hears what was sent.
@@ -117,6 +121,7 @@ const live: Layer.Layer<
   | RuntimeFlags.Service
   | ModelSlots.Service
   | Session.Service
+  | Database.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -130,6 +135,16 @@ const live: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
     const slots = yield* ModelSlots.Service
     const sessions = yield* Session.Service
+    const database = yield* Database.Service
+    const memory = ReviewMemoryFence.make(database.db)
+    const ordinary = (sessionID: string) =>
+      Effect.gen(function* () {
+        const parsed = Schema.decodeUnknownOption(SessionID)(sessionID)
+        if (Option.isNone(parsed) || (yield* memory.requiresLease(parsed.value)))
+          return yield* new ReviewMemoryFence.Refused({
+            message: "The review memory history boundary is unavailable.",
+          })
+      })
 
     // The top of a session's parent chain, or the last ancestor that could still be read.
     const rootOf = (session: Session.Info): Effect.Effect<Session.Info> =>
@@ -340,6 +355,7 @@ const live: Layer.Layer<
       // Runtime seam: native is an opt-in adapter over @vectordevai/llm. It
       // either returns a ready LLMEvent stream or a concrete fallback reason.
       if (flags.experimentalNativeLlm) {
+        yield* ordinary(input.sessionID)
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
@@ -370,13 +386,16 @@ const live: Layer.Layer<
           // The native runtime sends its requests itself, so on a server with a line (Provider.line) the stream holds
           // a permit in it, as getLanguage's requests do, until the reply ends.
           const line = yield* provider.line(input.model)
-          const held = line
-            ? Stream.unwrap(
-                slots
-                  .take({ origin: line.origin, permits: line.permits, priority: Provider.priorityOf(laned) })
-                  .pipe(Effect.as(native.stream)),
-              )
-            : native.stream
+          const held = Stream.unwrap(
+            Effect.gen(function* () {
+              if (line)
+                yield* slots.take({ origin: line.origin, permits: line.permits, priority: Provider.priorityOf(laned) })
+              // The native request is deferred. Its actual consumption can
+              // follow a line/permit wait after the pure request lowerer ran.
+              yield* ordinary(input.sessionID)
+              return native.stream
+            }),
+          )
           return {
             type: "native" as const,
             stream: scope ? held.pipe(Stream.provideService(EgressAttribution.Reference, scope)) : held,
@@ -406,6 +425,7 @@ const live: Layer.Layer<
       })
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
+      yield* ordinary(input.sessionID)
       return {
         type: "ai-sdk" as const,
         result: send({
@@ -484,6 +504,9 @@ const live: Layer.Layer<
                   return args.params
                 },
                 async wrapStream({ doStream }) {
+                  // The SDK defers language transport creation until this
+                  // middleware runs, after streamText has returned.
+                  await bridge.promise(ordinary(input.sessionID))
                   const response = await doStream()
                   input.accepted?.()
                   return response
@@ -510,10 +533,14 @@ const live: Layer.Layer<
       }
     })
 
-    const stream: Interface["stream"] = (input) =>
-      Stream.scoped(
+    const stream: Interface["stream"] = (input) => {
+      // Pin the primitive Session ID with this request when its Stream is
+      // constructed; deferred consumption never rereads a caller-owned ID.
+      const request = Object.freeze({ ...input })
+      return Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
+            yield* ordinary(request.sessionID)
             const timing = LLMTiming.create()
             const requestID = crypto.randomUUID()
             const ctrl = yield* Effect.acquireRelease(
@@ -522,19 +549,19 @@ const live: Layer.Layer<
             )
             yield* Effect.addFinalizer((exit) =>
               Effect.logInfo("llm request timing", {
-                "session.id": input.sessionID,
+                "session.id": request.sessionID,
                 "request.id": requestID,
-                providerID: input.model.providerID,
-                modelID: input.model.id,
-                agent: input.agent.name,
-                small: input.small ?? false,
+                providerID: request.model.providerID,
+                modelID: request.model.id,
+                agent: request.agent.name,
+                small: request.small ?? false,
                 ...timing.summary(
                   Exit.hasInterrupts(exit) ? "interrupted" : Exit.isFailure(exit) ? "failure" : "success",
                 ),
               }),
             )
 
-            const result = yield* run({ ...input, abort: ctrl.signal, requestID })
+            const result = yield* run({ ...request, abort: ctrl.signal, requestID })
             timing.ready()
             let answered = false
             const observe = (event: LLMEvent) =>
@@ -542,7 +569,7 @@ const live: Layer.Layer<
                 timing.observe(event)
                 if (answered || event.type === "provider-error" || event.type === "finish") return
                 answered = true
-                input.answering?.()
+                request.answering?.()
               })
 
             if (result.type === "native") return result.stream.pipe(Stream.tap(observe))
@@ -556,7 +583,7 @@ const live: Layer.Layer<
               Stream.tap((event) =>
                 Effect.sync(() => {
                   const usage = event.type === "raw" ? LLMAISDK.startedUsage(event.rawValue) : undefined
-                  if (usage) input.started?.(usage)
+                  if (usage) request.started?.(usage)
                 }),
               ),
               Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
@@ -566,6 +593,7 @@ const live: Layer.Layer<
           }),
         ),
       )
+    }
 
     return Service.of({ stream })
   }),
@@ -587,6 +615,7 @@ export const node = LayerNode.make({
     RuntimeFlags.node,
     ModelSlots.node,
     Session.node,
+    Database.node,
   ],
 })
 

@@ -479,6 +479,37 @@ function routeHttpApiWorkspace<E>(
           Effect.catchDefect(() => Effect.succeed(undefined)),
         )
       : undefined
+    if (/^\/experimental\/session\/:sessionID\/review(?:\/|$)/.test(route.route.path)) {
+      // Review routing has no directory fallback. An absent/defective parent
+      // lookup must not bootstrap or forward to a caller-selected project
+      // before the owner adapter gets to validate its placement.
+      if (!owner)
+        return HttpServerResponse.jsonUnsafe(
+          { _tag: "ForbiddenError", message: "Local reviews require the server owner." },
+          { status: 403 },
+        )
+      if (!session)
+        return HttpServerResponse.jsonUnsafe(
+          { code: "not_found", message: "Review conversation not found." },
+          { status: 400 },
+        )
+      if (session.parentID || session.internal || !path.isAbsolute(session.directory))
+        return HttpServerResponse.jsonUnsafe(
+          { code: "invalid", message: "Local reviews belong to an existing main conversation." },
+          { status: 400 },
+        )
+      const requestedWorkspace =
+        requestURL(request).searchParams.get("workspace") || request.headers["x-vector-workspace"]
+      if (
+        requestedWorkspace &&
+        requestedWorkspace !== session.workspaceID &&
+        requestedWorkspace !== configuredWorkspaceID()
+      )
+        return HttpServerResponse.jsonUnsafe(
+          { code: "placement", message: "A local review cannot select another workspace." },
+          { status: 400 },
+        )
+    }
     const plan = yield* planRequest(
       request,
       { template: route.route.path, path: matchedRoutePath(route.route.path, route.params) },

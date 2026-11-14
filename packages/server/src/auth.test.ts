@@ -1,8 +1,137 @@
 import { describe, expect, test } from "bun:test"
-import { Option, Redacted } from "effect"
+import { Effect, Layer, Option, Redacted, Schema } from "effect"
+import { HttpRouter, HttpServer } from "effect/unstable/http"
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { ServerAuth } from "./auth"
+import { Authorization, authorizationLayer } from "./middleware/authorization"
 
 describe("server authentication", () => {
+  test("review-memory reads, preparation, confirmation and discard are owner-only", () => {
+    for (const [method, route] of [
+      ["GET", "/experimental/review-memory"],
+      ["HEAD", "/experimental/review-memory"],
+      ["POST", "/experimental/review-memory/prepare"],
+      ["POST", "/experimental/review-memory/confirm"],
+      ["DELETE", "/experimental/review-memory/previews/:previewId"],
+      ["DELETE", "/experimental/review-memory/previews/01234567-89ab-4cde-8fab-0123456789ab"],
+    ])
+      expect(ServerAuth.isOwnerOnlyRoute(method!, route!)).toBe(true)
+  })
+
+  test("review-memory classification does not claim neighboring routes or parse raw query paths", () => {
+    // The classifier receives the router's declared pattern, not a URL or a substring borrowed from its query.
+    for (const route of [
+      "/experimental/review-memory-public",
+      "/experimental/review-memory2",
+      "/experimental/review-memories",
+      "/experimental/review",
+      "/public/experimental/review-memory",
+      "/experimental/review-memory?next=/private",
+      "/experimental/review-memory-public?next=/experimental/review-memory/confirm",
+    ])
+      for (const method of ["GET", "HEAD", "POST", "DELETE"])
+        expect(ServerAuth.isOwnerOnlyRoute(method, route)).toBe(false)
+  })
+
+  test("the actual matched-route gate refuses guest and forwarded-owner requests before review-memory handlers", async () => {
+    let reached = 0
+    const api = HttpApi.make("review-memory-owner-gate").add(
+      HttpApiGroup.make("test")
+        .add(
+          HttpApiEndpoint.get("inspect", "/experimental/review-memory", { success: Schema.String }),
+          HttpApiEndpoint.post("prepare", "/experimental/review-memory/prepare", { success: Schema.String }),
+          HttpApiEndpoint.post("confirm", "/experimental/review-memory/confirm", { success: Schema.String }),
+          HttpApiEndpoint.delete("discard", "/experimental/review-memory/previews/:previewId", {
+            params: { previewId: Schema.String },
+            success: Schema.String,
+          }),
+          HttpApiEndpoint.get("neighbor", "/experimental/review-memory-public", { success: Schema.String }),
+        )
+        .middleware(Authorization),
+    )
+    const privateHandler = () =>
+      Effect.sync(() => {
+        reached++
+        return "private control"
+      })
+    const handlers = HttpApiBuilder.group(api, "test", (handlers) =>
+      handlers
+        .handle("inspect", privateHandler)
+        .handle("prepare", privateHandler)
+        .handle("confirm", privateHandler)
+        .handle("discard", privateHandler)
+        .handle("neighbor", () => Effect.succeed("public neighbor")),
+    )
+    const web = HttpRouter.toWebHandler(
+      HttpApiBuilder.layer(api).pipe(
+        Layer.provide(handlers),
+        Layer.provide(authorizationLayer),
+        Layer.provide(
+          ServerAuth.Config.configLayer({
+            password: Option.some("owner-fixture"),
+            username: "owner",
+            guestPassword: Option.some("guest-fixture"),
+            guestUsername: "guest",
+          }),
+        ),
+        Layer.provide(HttpServer.layerServices),
+      ),
+      { disableLogger: true },
+    )
+    const send = (method: string, route: string, guest: boolean, forwarded = false) =>
+      web.handler(
+        new Request(`http://localhost${route}`, {
+          method,
+          headers: {
+            authorization:
+              ServerAuth.header({
+                username: guest ? "guest" : "owner",
+                password: guest ? "guest-fixture" : "owner-fixture",
+              }) ?? "",
+            ...(forwarded ? { "x-vector-guest-request": "1" } : {}),
+          },
+        }),
+      )
+    try {
+      const routes = [
+        ["GET", "/experimental/review-memory"],
+        ["HEAD", "/experimental/review-memory"],
+        ["GET", "/EXPERIMENTAL//review-memory;x?next=/public"],
+        ["POST", "/experimental/review-memory/prepare?next=/public"],
+        ["POST", "/experimental/review-memory/confirm"],
+        ["DELETE", "/experimental/review-memory/previews/preview_1"],
+      ] as const
+      for (const [method, route] of routes) {
+        expect((await send(method, route, true)).status).toBe(403)
+        expect((await send(method, route, false, true)).status).toBe(403)
+      }
+      expect(reached).toBe(0)
+      for (const [method, route] of routes) expect((await send(method, route, false)).status).toBe(200)
+      expect(reached).toBe(routes.length)
+      const neighbor = await send(
+        "GET",
+        "/experimental/review-memory-public?next=/experimental/review-memory/confirm",
+        true,
+      )
+      expect(neighbor.status).toBe(200)
+      expect(await neighbor.json()).toBe("public neighbor")
+      expect(reached).toBe(routes.length)
+    } finally {
+      await web.dispose()
+    }
+  })
+
+  test("local review starts, discovery, results and stop are owner-only", () => {
+    for (const [method, route] of [
+      ["POST", "/experimental/session/:sessionID/review"],
+      ["GET", "/experimental/session/:sessionID/review"],
+      ["GET", "/experimental/session/:sessionID/review/target"],
+      ["GET", "/experimental/session/:sessionID/review/:runID"],
+      ["POST", "/experimental/session/:sessionID/review/:runID/stop"],
+    ])
+      expect(ServerAuth.isOwnerOnlyRoute(method!, route!)).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/session/ses_review/review/ses_run")).toBe(true)
+  })
   test("an empty owner password cannot bypass guest authentication", () => {
     const config = {
       password: Option.some(""),

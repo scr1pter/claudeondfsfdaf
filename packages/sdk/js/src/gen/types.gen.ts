@@ -2453,6 +2453,7 @@ export type ConfigWithLocks = {
   local?: LocalConfig
   research?: ResearchConfig
   experimental?: {
+    vectorscope?: boolean
     disable_paste_summary?: boolean
     batch_tool?: boolean
     openTelemetry?: boolean
@@ -2649,6 +2650,7 @@ export type Config = {
   local?: LocalConfig
   research?: ResearchConfig
   experimental?: {
+    vectorscope?: boolean
     disable_paste_summary?: boolean
     batch_tool?: boolean
     openTelemetry?: boolean
@@ -2831,6 +2833,9 @@ export type ExperimentalCapabilities = {
   taskIsolation?: boolean
   workflows?: boolean
   backgroundShells?: boolean
+  vectorscopeSettings?: boolean
+  vectorscopeRuns?: boolean
+  vectorscopeReviewMemoryControls?: boolean
 }
 
 export type ToolListItem = {
@@ -4632,6 +4637,35 @@ export type QuestionRequest = {
 export type QuestionNotFoundError = {
   _tag: "QuestionNotFoundError"
   requestID: string
+  message: string
+}
+
+export type ReviewApiError = {
+  code:
+    | "disabled"
+    | "placement"
+    | "invalid"
+    | "not_found"
+    | "conflict"
+    | "unavailable"
+    | "corrupt"
+    | "permissions"
+    | "stale"
+  message: string
+}
+
+export type ReviewMemoryApiError = {
+  code:
+    | "invalid"
+    | "denied"
+    | "unavailable"
+    | "limit"
+    | "stale"
+    | "used"
+    | "expired"
+    | "disabled"
+    | "not-found"
+    | "source-unavailable"
   message: string
 }
 
@@ -7488,6 +7522,309 @@ export type PtyTicketConnectToken = {
   ticket: string
   expires_in: number
 }
+
+export type ReviewRunTarget = {
+  kind: "working-tree" | "staged"
+  head: string
+}
+
+export type ReviewRunStart = {
+  requestID: string
+  target: ReviewRunTarget
+  maxCost?: number
+}
+
+export type ReviewRunStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted" | "unknown"
+
+export type ReviewRunArtifact = {
+  version: 1
+  json: string
+  bytes: number
+  sha256: string
+}
+
+export type ReviewRunInfo = {
+  runID: string
+  parentID: string
+  request: ReviewRunStart
+  status: ReviewRunStatus
+  canStop: boolean
+  startedAt: number
+  completedAt?: number
+  artifact?: ReviewRunArtifact
+  error?: string
+}
+
+export type ReviewRunSummary = {
+  runID: string
+  parentID: string
+  request: ReviewRunStart
+  status: ReviewRunStatus
+  canStop: boolean
+  startedAt: number
+  completedAt?: number
+  error?: string
+  hasResult: boolean
+}
+
+export type ReviewRunList = {
+  runs: Array<ReviewRunSummary>
+  next?: string
+}
+
+export type ReviewMemoryControlId = string
+
+export type ReviewMemoryControlScope = string
+
+export type ReviewMemoryControlGeneration = number
+
+export type ReviewMemoryControlHead = string
+
+export type ReviewMemoryControlCitation = {
+  path: string
+  line: number
+  head: ReviewMemoryControlHead
+  quote: string
+}
+
+export type ReviewMemoryControlTimestamp = number
+
+export type ReviewMemoryControlOwnerEntry = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  id: ReviewMemoryControlId
+  createdAt: ReviewMemoryControlTimestamp
+  updatedAt: ReviewMemoryControlTimestamp
+  approvedBy: ReviewMemoryControlId
+  approvedAt: number
+  kind: "preference" | "check"
+  origin: "owner"
+  status: "active"
+}
+
+export type ReviewMemoryControlSource = {
+  parentID: ReviewMemoryControlId
+  reviewID: ReviewMemoryControlId
+  head: ReviewMemoryControlHead
+}
+
+export type ReviewMemoryControlProposedEntry = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  id: ReviewMemoryControlId
+  createdAt: ReviewMemoryControlTimestamp
+  updatedAt: ReviewMemoryControlTimestamp
+  kind: "outcome"
+  origin: "review"
+  status: "proposed"
+  source: ReviewMemoryControlSource
+}
+
+export type ReviewMemoryControlApprovedEntry = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  id: ReviewMemoryControlId
+  createdAt: ReviewMemoryControlTimestamp
+  updatedAt: ReviewMemoryControlTimestamp
+  approvedBy: ReviewMemoryControlId
+  approvedAt: number
+  kind: "outcome"
+  origin: "review"
+  status: "active"
+  source: ReviewMemoryControlSource
+}
+
+export type ReviewMemoryControlEntry =
+  | ReviewMemoryControlOwnerEntry
+  | ReviewMemoryControlProposedEntry
+  | ReviewMemoryControlApprovedEntry
+
+export type ReviewMemoryControlInspect = {
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  state: {
+    enabled: boolean
+    generation: ReviewMemoryControlGeneration
+    entries: Array<ReviewMemoryControlEntry>
+  }
+  next?: number
+}
+
+export type ReviewMemoryControlConfigure = {
+  action: "configure"
+  expected: ReviewMemoryControlGeneration
+  enabled: boolean
+}
+
+export type ReviewMemoryControlRecord = {
+  text: string
+  paths: Array<string>
+  citations: Array<ReviewMemoryControlCitation>
+  reason: string
+  visibility: "private" | "repository"
+  action: "record"
+  expected: ReviewMemoryControlGeneration
+  kind: "preference" | "check"
+}
+
+export type ReviewMemoryControlApprove = {
+  action: "approve"
+  expected: ReviewMemoryControlGeneration
+  id: ReviewMemoryControlId
+}
+
+export type ReviewMemoryControlReopen = {
+  action: "reopen"
+  expected: ReviewMemoryControlGeneration
+  id: ReviewMemoryControlId
+  reason: string
+}
+
+export type ReviewMemoryControlForget = {
+  action: "forget"
+  expected: ReviewMemoryControlGeneration
+  id: ReviewMemoryControlId
+}
+
+export type ReviewMemoryControlErase = {
+  action: "erase"
+  expected: ReviewMemoryControlGeneration
+}
+
+export type ReviewMemoryControlCommand =
+  | ReviewMemoryControlConfigure
+  | ReviewMemoryControlRecord
+  | ReviewMemoryControlApprove
+  | ReviewMemoryControlReopen
+  | ReviewMemoryControlForget
+  | ReviewMemoryControlErase
+
+export type ReviewMemoryControlPrepare = {
+  expectedScope: ReviewMemoryControlScope
+  command: ReviewMemoryControlCommand
+}
+
+export type ReviewMemoryControlPreviewId = string
+
+export type ReviewMemoryControlSha256 = string
+
+export type ReviewMemoryControlConfigurePreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "configure"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+    enabled: boolean
+  }
+}
+
+export type ReviewMemoryControlRecordPreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "record"
+  payload: {
+    text: string
+    paths: Array<string>
+    citations: Array<ReviewMemoryControlCitation>
+    reason: string
+    visibility: "private" | "repository"
+    expected: ReviewMemoryControlGeneration
+    kind: "preference" | "check"
+  }
+}
+
+export type ReviewMemoryControlApprovePreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "approve"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+    id: ReviewMemoryControlId
+    entry: ReviewMemoryControlProposedEntry
+  }
+}
+
+export type ReviewMemoryControlForgetPreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "forget"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+    id: ReviewMemoryControlId
+  }
+}
+
+export type ReviewMemoryControlErasePreview = {
+  previewId: ReviewMemoryControlPreviewId
+  sha256: ReviewMemoryControlSha256
+  expiresAt: ReviewMemoryControlTimestamp
+  repository: ReviewMemoryControlId
+  scope: ReviewMemoryControlScope
+  expected: ReviewMemoryControlGeneration
+  operation: "erase"
+  payload: {
+    expected: ReviewMemoryControlGeneration
+  }
+}
+
+export type ReviewMemoryControlPreview =
+  | ReviewMemoryControlConfigurePreview
+  | ReviewMemoryControlRecordPreview
+  | ReviewMemoryControlApprovePreview
+  | {
+      previewId: ReviewMemoryControlPreviewId
+      sha256: ReviewMemoryControlSha256
+      expiresAt: ReviewMemoryControlTimestamp
+      repository: ReviewMemoryControlId
+      scope: ReviewMemoryControlScope
+      expected: ReviewMemoryControlGeneration
+      operation: "reopen"
+      payload: {
+        expected: ReviewMemoryControlGeneration
+        id: ReviewMemoryControlId
+        reason: string
+        entry: ReviewMemoryControlApprovedEntry
+      }
+    }
+  | ReviewMemoryControlForgetPreview
+  | ReviewMemoryControlErasePreview
+
+export type ReviewMemoryControlConfirmation = {
+  previewId: ReviewMemoryControlPreviewId
+  approvedSha256: ReviewMemoryControlSha256
+}
+
+export type ReviewMemoryControlState = {
+  enabled: boolean
+  generation: ReviewMemoryControlGeneration
+}
+
+export type ReviewMemoryControlConfirmationResult = ReviewMemoryControlState | ReviewMemoryControlEntry
 
 export type PublicSessionConsent = {
   version: 1
@@ -17514,6 +17851,312 @@ export type QuestionRejectResponses = {
 
 export type QuestionRejectResponse = QuestionRejectResponses[keyof QuestionRejectResponses]
 
+export type ReviewTargetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/target"
+}
+
+export type ReviewTargetErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewTargetError = ReviewTargetErrors[keyof ReviewTargetErrors]
+
+export type ReviewTargetResponses = {
+  /**
+   * ReviewRun.Target
+   */
+  200: ReviewRunTarget
+}
+
+export type ReviewTargetResponse = ReviewTargetResponses[keyof ReviewTargetResponses]
+
+export type ReviewListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: string
+  }
+  url: "/experimental/session/{sessionID}/review"
+}
+
+export type ReviewListErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewListError = ReviewListErrors[keyof ReviewListErrors]
+
+export type ReviewListResponses = {
+  /**
+   * ReviewRun.List
+   */
+  200: ReviewRunList
+}
+
+export type ReviewListResponse = ReviewListResponses[keyof ReviewListResponses]
+
+export type ReviewStartData = {
+  body?: ReviewRunStart
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review"
+}
+
+export type ReviewStartErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewStartError = ReviewStartErrors[keyof ReviewStartErrors]
+
+export type ReviewStartResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewStartResponse = ReviewStartResponses[keyof ReviewStartResponses]
+
+export type ReviewGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/{runID}"
+}
+
+export type ReviewGetErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewGetError = ReviewGetErrors[keyof ReviewGetErrors]
+
+export type ReviewGetResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewGetResponse = ReviewGetResponses[keyof ReviewGetResponses]
+
+export type ReviewStopData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/{runID}/stop"
+}
+
+export type ReviewStopErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewStopError = ReviewStopErrors[keyof ReviewStopErrors]
+
+export type ReviewStopResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewStopResponse = ReviewStopResponses[keyof ReviewStopResponses]
+
+export type ReviewMemoryInspectData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    offset?: string
+    limit?: string
+  }
+  url: "/experimental/review-memory"
+}
+
+export type ReviewMemoryInspectErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryInspectError = ReviewMemoryInspectErrors[keyof ReviewMemoryInspectErrors]
+
+export type ReviewMemoryInspectResponses = {
+  /**
+   * ReviewMemoryControl.Inspect
+   */
+  200: ReviewMemoryControlInspect
+}
+
+export type ReviewMemoryInspectResponse = ReviewMemoryInspectResponses[keyof ReviewMemoryInspectResponses]
+
+export type ReviewMemoryPrepareData = {
+  body?: ReviewMemoryControlPrepare
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/review-memory/prepare"
+}
+
+export type ReviewMemoryPrepareErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryPrepareError = ReviewMemoryPrepareErrors[keyof ReviewMemoryPrepareErrors]
+
+export type ReviewMemoryPrepareResponses = {
+  /**
+   * ReviewMemoryControl.Preview
+   */
+  200: ReviewMemoryControlPreview
+}
+
+export type ReviewMemoryPrepareResponse = ReviewMemoryPrepareResponses[keyof ReviewMemoryPrepareResponses]
+
+export type ReviewMemoryConfirmData = {
+  body?: ReviewMemoryControlConfirmation
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/review-memory/confirm"
+}
+
+export type ReviewMemoryConfirmErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryConfirmError = ReviewMemoryConfirmErrors[keyof ReviewMemoryConfirmErrors]
+
+export type ReviewMemoryConfirmResponses = {
+  /**
+   * ReviewMemoryControl.ConfirmationResult
+   */
+  200: ReviewMemoryControlConfirmationResult
+}
+
+export type ReviewMemoryConfirmResponse = ReviewMemoryConfirmResponses[keyof ReviewMemoryConfirmResponses]
+
+export type ReviewMemoryDiscardData = {
+  body?: never
+  path: {
+    previewId: ReviewMemoryControlPreviewId
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/review-memory/previews/{previewId}"
+}
+
+export type ReviewMemoryDiscardErrors = {
+  /**
+   * ReviewMemoryApiError | InvalidRequestError
+   */
+  400: ReviewMemoryApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewMemoryDiscardError = ReviewMemoryDiscardErrors[keyof ReviewMemoryDiscardErrors]
+
+export type ReviewMemoryDiscardResponses = {
+  /**
+   * Success
+   */
+  200: boolean
+}
+
+export type ReviewMemoryDiscardResponse = ReviewMemoryDiscardResponses[keyof ReviewMemoryDiscardResponses]
+
 export type PermissionListData = {
   body?: never
   path?: never
@@ -17961,9 +18604,9 @@ export type SessionDeleteErrors = {
    */
   404: NotFoundError
   /**
-   * PublicShareRemovalError
+   * PublicShareRemovalError | SessionBusyError
    */
-  409: PublicShareRemovalError
+  409: PublicShareRemovalError | SessionBusyError
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
@@ -19910,9 +20553,9 @@ export type ExperimentalWorkspaceRemoveErrors = {
    */
   403: ForbiddenError
   /**
-   * PublicShareRemovalError
+   * PublicShareRemovalError | SessionBusyError
    */
-  409: PublicShareRemovalError
+  409: PublicShareRemovalError | SessionBusyError
 }
 
 export type ExperimentalWorkspaceRemoveError =
