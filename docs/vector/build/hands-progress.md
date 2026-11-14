@@ -16,6 +16,8 @@ Current machine-readable continuation evidence is [hands-windows-validation-2026
 
 Follow-up review preserves an in-flight private setup health challenge when only the actual session's paused phase changes; the retained setup ticket and deadline cannot authorize the new actual phase. Its regression brings W9 pure coverage to 47 groups, still awaiting native execution. The shared schema fixture now includes the new operation: the focused core file passed 90 tests / 657 assertions after CI identified its missing fixture. The earlier failing run remains recorded rather than being counted as passed.
 
+Native `43546191575` compiled both Windows x64 candidates and passed actual hidden PowerShell 7 signature observation. Its units failed one fixture timing assertion before runtime stages; no Stop pass is claimed. The fixture now drains its initial observation, and a separate race test verifies refusal throughout and the correct notice by 200 ms. The 500 ms production limit remains unchanged. All 48 pure groups execute once and collect static failures before failing the module, avoiding one failure per build without any skip, retry or weakened assertion.
+
 **Latest native observation.** Independent-VM diagnostic
 [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
 at `b286accd` completed with failure. Baseline job `131006042604` passed core

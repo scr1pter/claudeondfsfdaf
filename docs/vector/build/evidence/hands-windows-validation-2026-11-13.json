@@ -7,7 +7,7 @@
   "ownerApprovedW9": true,
   "w9": {
     "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
-    "nativeGroups": 47,
+    "nativeGroups": 48,
     "nativeExecution": "pending",
     "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
     "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
@@ -44,6 +44,17 @@
     "focusedWorkflow": { "passed": 4, "failed": 0, "filtered": 27, "assertions": 553 },
     "selftestWrapper": { "passed": 48, "failed": 0, "assertions": 1031 },
     "scope": "Serial provider-free named files and package typechecks only; no native or owner desktop execution."
+  },
+  "native84Observation": {
+    "run": 43546191575,
+    "baselineJob": 132298005513,
+    "probeJob": 132298005703,
+    "nativeCompilation": "both passed",
+    "actualPowerShell7Observer": "both passed: native-signature-observer: NotSigned",
+    "unitFailure": "user-input.nonready-desktop-no-health-or-mutation",
+    "cause": "Fixture changed phase before its queued startup observation was drained; safe refusal already held, but the asserted notice was one tick early.",
+    "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
+    "stagedStop": "not run because units failed"
   },
   "pending": "Exact-source Windows native runtime, Stop receipt and passive health; broad CI and final packaging; actual device calibration/takeover, Mac grants, signing and owner publication gates."
 }

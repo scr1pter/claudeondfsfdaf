@@ -3,10 +3,12 @@
 #include <deque>
 #include <map>
 #include <stdexcept>
+#include <string>
 
 namespace vector::computer {
 namespace {
-void check(bool value,const char* label){if(!value)throw std::runtime_error(label);}
+struct TestFailure { const char* label; };
+void check(bool value,const char* label){if(!value)throw TestFailure{label};}
 constexpr uint64_t private_marker=0x1234567800000001ULL;
 struct WorkQueue {
   std::deque<UserInputService::Task> jobs;
@@ -18,7 +20,7 @@ struct TimerQueue {
   UserInputService::Cancel add(uint32_t ms,UserInputService::Task body){const auto id=++sequence;history.push_back(body);jobs.emplace(id,Entry{now+ms,std::move(body)});return [this,id]{jobs.erase(id);};}
   std::optional<uint64_t> next()const{std::optional<uint64_t> value;for(const auto& pair:jobs)if(!value || pair.second.at<*value)value=pair.second.at;return value;}
   void run(){for(size_t i=0;i<1024;++i){auto first=jobs.end();for(auto item=jobs.begin();item!=jobs.end();++item)if(item->second.at<=now && (first==jobs.end() || item->second.at<first->second.at))first=item;
-    if(first==jobs.end())return;auto body=std::move(first->second.body);jobs.erase(first);body();}throw std::runtime_error("user-input.synthetic-timers-quiesce");}
+    if(first==jobs.end())return;auto body=std::move(first->second.body);jobs.erase(first);body();}throw TestFailure{"user-input.synthetic-timers-quiesce"};}
 };
 struct Fixture {
   uint64_t now=1000;ServerSession session;UserInputListenerStatus listener{true,true,true,1,1};WindowsSurfaceState environment=WindowsSurfaceState::ready;
@@ -70,7 +72,8 @@ struct Fixture {
 };}
 
 size_t run_user_input_tests(){
-  size_t groups=0;const auto test=[&](const auto& body){body();++groups;};
+  size_t groups=0;std::vector<const char*> failures;
+  const auto test=[&](const auto& body){++groups;try{body();}catch(const TestFailure& failure){failures.push_back(failure.label);}catch(...){failures.push_back("user-input.unexpected-exception");}};
   test([]{
     check(parse_user_input_chord(L"Control+Alt+Shift+Escape")==UserInputChord{VK_ESCAPE,7} && parse_user_input_chord(L"Ctrl+Shift+X")==UserInputChord{'X',5} &&
       parse_user_input_chord(L"Ctrl+Alt+Plus")==UserInputChord{VK_OEM_PLUS,3} && parse_user_input_chord(L"Control+Shift+-")==UserInputChord{VK_OEM_MINUS,5},"user-input.stop-chord-canonical-virtual-keys");
@@ -123,7 +126,11 @@ size_t run_user_input_tests(){
   test([]{Fixture f;f.ready();f.point(1000,0,1,2,UserInputOrigin::injected);f.point(1014,0);check(f.physical.empty() && f.service->foreground_ready(f.session),"user-input.own-motion-rebases-without-takeover-or-health-proof");});
   test([]{Fixture f;f.ready();f.point(1,1,2,1.5);check(f.physical.size()==1 && f.physical[0].takeover && !f.physical[0].document.HasKey(L"dx"),"user-input.monitor-transition-never-guesses-logical-distance");});
   test([]{for(const auto kind:{UserInputKind::click,UserInputKind::scroll}){Fixture f;f.ready();f.emit(f.sample(kind));check(f.physical.size()==1 && f.physical[0].takeover && f.physical[0].locally_halted,"user-input.button-and-wheel-takeover-remain-immediate");}});
-  test([]{for(const auto state:{WindowsSurfaceState::elevated,WindowsSurfaceState::secure_desktop,WindowsSurfaceState::unavailable}){Fixture f(false);f.environment=state;check(f.service->start(),"user-input.listener-does-not-bypass-desktop-policy");f.service->session_changed(f.session);f.advance(100);check(f.probes.empty() && !f.service->foreground_ready(f.session) && f.failed(state==WindowsSurfaceState::elevated?L"elevated_foreground":state==WindowsSurfaceState::secure_desktop?L"secure_desktop":L"probe_missing"),"user-input.nonready-desktop-no-health-or-mutation");}});
+  test([]{for(const auto state:{WindowsSurfaceState::elevated,WindowsSurfaceState::secure_desktop,WindowsSurfaceState::unavailable}){Fixture f(false);f.environment=state;check(f.service->start(),"user-input.listener-does-not-bypass-desktop-policy");f.drain();f.service->session_changed(f.session);f.advance(100);check(f.probes.empty() && !f.service->foreground_ready(f.session) && f.failed(state==WindowsSurfaceState::elevated?L"elevated_foreground":state==WindowsSurfaceState::secure_desktop?L"secure_desktop":L"probe_missing"),"user-input.nonready-desktop-no-health-or-mutation");}});
+  test([]{Fixture f(false);f.environment=WindowsSurfaceState::secure_desktop;check(f.service->start(),"user-input.listener-start-before-initial-observation");f.service->session_changed(f.session);
+    check(f.probes.empty() && !f.service->foreground_ready(f.session),"user-input.initial-observation-phase-race-never-admits-mutation");f.advance(100);
+    check(f.probes.empty() && !f.service->foreground_ready(f.session) && f.detection.empty(),"user-input.retired-initial-observation-never-issues-health-or-publishes");f.advance(100);
+    check(f.probes.empty() && !f.service->foreground_ready(f.session) && f.failed(L"secure_desktop"),"user-input.current-phase-observation-refuses-by-next-tick-without-health");});
   test([]{Fixture f;f.ready();f.environment_age=500;f.advance(100);check(!f.service->foreground_ready(f.session) && f.failed(L"probe_missing"),"user-input.environment-proof-must-be-fresh");});
   test([]{Fixture f;f.ready();f.advance(500,false,true);check(!f.service->foreground_ready(f.session) && f.failed(L"probe_missing"),"user-input.independent-timer-detects-stalled-environment-worker");});
   test([]{Fixture f;f.ack({},false);++f.session.observation_epoch;f.service->session_changed(f.session);f.events.run();check(f.detection.empty() && f.wakes==0,"user-input.queued-old-health-notice-cannot-publish-new-phase");});
@@ -134,6 +141,7 @@ size_t run_user_input_tests(){
   test([]{Fixture f(false);check(f.service->start(),"user-input.listener-start");f.drain();check(f.service->setup_start(),"user-input.setup-arm");f.advance(100);f.ack();f.point(0,0);f.point(2,0);f.key(VK_SHIFT,UserInputModifier::shift_right);f.key('A');f.key(VK_SHIFT,UserInputModifier::shift_right,UserInputOrigin::hardware,false);check(!f.service->setup_status().keyboard,"user-input.intervening-ordinary-key-invalidates-shift-gesture-without-history");f.key(VK_SHIFT,UserInputModifier::shift_right);f.key(VK_SHIFT,UserInputModifier::shift_right,UserInputOrigin::hardware,false);check(f.service->setup_status().state==UserInputSetupState::ready,"user-input.generic-native-vk-shift-and-actual-side-pair-calibrate");});
   test([]{Fixture f;f.ready();const auto count=f.wakes;f.ack(f.probes.back());check(f.wakes==count && f.service->foreground_ready(f.session),"user-input.duplicate-health-ack-cannot-publish-or-renew-again");f.probe_ok=false;f.advance(2000);check(!f.service->foreground_ready(f.session) && f.service->setup_status().state==UserInputSetupState::unavailable,"user-input.health-queue-refusal-invalidates-calibration-without-retry");});
   test([]{Fixture f;const auto request=f.probes.back();f.now=request.deadline_ms;f.health_receiver(f.receipt(request));check(!f.service->foreground_ready(f.session) && f.service->setup_status().state==UserInputSetupState::unavailable,"user-input.exact-deadline-ack-is-rejected-even-before-timeout-callback");});
+  if(!failures.empty()){std::string message="user-input.pure-groups-failed";for(const auto label:failures){message+="; ";message+=label;}throw std::runtime_error(message);}
   return groups;
 }
 }
