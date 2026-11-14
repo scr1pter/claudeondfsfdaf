@@ -558,6 +558,91 @@ describe("lifecycle", () => {
 })
 
 describe("checks before anything is asked", () => {
+  it.instance("source aliases retain absolute secret asks and denies from root and subfolder reviews", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-source-alias-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "requested")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "private.key", "WITHHELD_SOURCE_ALIAS")
+      yield* write(repository, "pkg/public.ts", "export {}")
+      yield* Effect.promise(() => fs.symlink(repository, alias, process.platform === "win32" ? "junction" : "dir"))
+      const canonical = yield* Effect.promise(() => fs.realpath(repository))
+      for (const action of ["ask", "deny"] as const) {
+        const { hub, requester } = yield* setup([
+          { permission: "read", pattern: "*", action: "allow" },
+          { permission: "read", pattern: path.join(alias, "private.key"), action },
+        ])
+        const checks: { root: string; blocked: boolean; readable: boolean }[] = []
+        script.handle = (_request, context) =>
+          Effect.gen(function* () {
+            expect(context.reviewService).toBeDefined()
+            const capability = context.reviewService!
+            const scope = yield* ConnectReviewService.scope(capability)
+            const privateRead = yield* ConnectReviewService.checkReads(capability, ["private.key"]).pipe(Effect.exit)
+            const publicRead = yield* ConnectReviewService.checkReads(capability, ["pkg/public.ts"]).pipe(Effect.exit)
+            checks.push({
+              root: scope.readRoot,
+              blocked: Exit.isFailure(privateRead),
+              readable: Exit.isSuccess(publicRead),
+            })
+            return clean()
+          })
+        for (const directory of [alias, path.join(alias, "pkg")]) {
+          const { ops } = recorder()
+          const run = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+          expect(run.result?.state).toBe("completed")
+        }
+        expect(seen).toHaveLength(2)
+        expect(checks).toEqual([
+          { root: canonical, blocked: true, readable: true },
+          { root: canonical, blocked: true, readable: true },
+        ])
+      }
+    }),
+  )
+
+  it.instance("a subfolder alias cannot make its unrelated lexical parent a review root", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-source-parent-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "requested")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/public.ts", "export {}")
+      yield* write(repository, "public.ts", "export {}")
+      yield* write(outside, "public.ts", "WITHHELD_UNRELATED_PARENT")
+      yield* Effect.promise(() =>
+        fs.symlink(path.join(repository, "pkg"), alias, process.platform === "win32" ? "junction" : "dir"),
+      )
+      const { hub, requester } = yield* setup([
+        { permission: "read", pattern: "*", action: "allow" },
+        { permission: "read", pattern: path.join(outside, "public.ts"), action: "deny" },
+      ])
+      const checks: boolean[] = []
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          expect(context.reviewService).toBeDefined()
+          checks.push(
+            Exit.isSuccess(
+              yield* ConnectReviewService.checkReads(context.reviewService!, ["public.ts"]).pipe(Effect.exit),
+            ),
+          )
+          return clean()
+        })
+      const { ops } = recorder()
+      const run = yield* hub.run({ request: review(requester.id, alias), call: { ...asker(), promptOps: ops } })
+      expect(run.result?.state).toBe("completed")
+      expect(checks).toEqual([true])
+      expect(seen).toHaveLength(1)
+    }),
+  )
+
   it.instance("a diff outside the instance retains its actual source's absolute secret question", () =>
     Effect.gen(function* () {
       const outside = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-diff-origin-")))

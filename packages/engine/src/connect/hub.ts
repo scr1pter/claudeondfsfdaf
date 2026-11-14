@@ -1889,16 +1889,24 @@ export async function reviewRoot(
   instance: { readonly directory: string; readonly worktree: string },
 ): Promise<{ readonly root: string; readonly prefixes: readonly string[] }> {
   const folder = await realpath(directory)
+  const place = async (root: string, prefixes: readonly string[] = []) => {
+    const requested = path.resolve(directory, path.relative(folder, root))
+    const canonical = await realpath(requested)
+    // An absolute rule may use a junction or Windows short-name spelling. Retain it only when its derived root
+    // really names this repository; a link into a subfolder must not invent authority for its unrelated parent.
+    const alias = path.relative(canonical, root) === "" && path.relative(requested, root) !== ""
+    return { root, prefixes: alias ? [...new Set([...prefixes, requested])] : prefixes }
+  }
   const worktree = instance.worktree === "/" ? undefined : await realpath(instance.worktree).catch(() => undefined)
-  if (worktree && FSUtil.contains(worktree, folder)) return { root: worktree, prefixes: [] }
+  if (worktree && FSUtil.contains(worktree, folder)) return place(worktree)
   const home = await realpath(instance.directory).catch(() => undefined)
   if (instance.worktree === "/" && home && FSUtil.contains(home, folder)) {
     const named = [path.resolve(directory), folder].map((value) => path.relative("/", value).replaceAll("\\", "/"))
-    return { root: folder, prefixes: [...new Set(named)].filter(Boolean) }
+    return place(folder, [...new Set(named)].filter(Boolean))
   }
   for (let current = folder; ; current = path.dirname(current)) {
-    if (await exists(path.join(current, ".git"))) return { root: current, prefixes: [] }
-    if (path.dirname(current) === current) return { root: folder, prefixes: [] }
+    if (await exists(path.join(current, ".git"))) return place(current)
+    if (path.dirname(current) === current) return place(folder)
   }
 }
 
