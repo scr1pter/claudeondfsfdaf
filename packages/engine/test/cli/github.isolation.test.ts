@@ -117,6 +117,72 @@ test("mask diagnostic vocabulary rejects paths, invented predicates and wrong or
     GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, mode: "0755", owner: "private" }), "prepare"),
   ).toEqual([])
 })
+test("fixed keeper failure stages project only bounded outcome, phase and error enums", () => {
+  for (const stage of [
+    "prepare-keeper-child-exit",
+    "prepare-keeper-timeout",
+    "prepare-keeper-ready-record",
+    ...["child-exit", "timeout"].flatMap((outcome) =>
+      ["identity", "capabilities", "environment", "ready-write"].map((phase) => `prepare-keeper-${outcome}-${phase}`),
+    ),
+  ]) {
+    const timeout = stage.startsWith("prepare-keeper-timeout")
+    const readyRecord = stage === "prepare-keeper-ready-record"
+    const entry: GithubIsolation.FailureRecord = {
+      ...failureRecord(),
+      stage,
+      class: timeout ? "TimeoutExpired" : readyRecord ? "RuntimeError" : "CalledProcessError",
+      errno: null,
+      exit: timeout || readyRecord ? null : 125,
+      signal: null,
+    }
+    const transport: GithubIsolation.FailureRecord = {
+      ...entry,
+      origin: "transport",
+      stage: "close",
+      class: "ChildExit",
+      exit: 1,
+    }
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(entry), "prepare")).toEqual([entry])
+    const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, entry] }
+    expect(GithubIsolation.failureMetadata(new Error("private keeper diagnostics", { cause }))).toEqual(cause)
+    if (!timeout && !readyRecord) {
+      const signaled: GithubIsolation.FailureRecord = { ...entry, exit: null, signal: "SIGKILL" }
+      expect(GithubIsolation.decodeFailureRecords(failureBytes(signaled), "prepare")).toEqual([signaled])
+    }
+  }
+})
+test("keeper diagnostic vocabulary rejects invented phases, raw paths, extra fields and wrong origins", () => {
+  const entry: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    stage: "prepare-keeper-child-exit-identity",
+    class: "CalledProcessError",
+    errno: null,
+    exit: 125,
+  }
+  for (const stage of [
+    "prepare-keeper-child-exit-network",
+    "prepare-keeper-timeout-private",
+    "prepare-keeper-stopped-identity",
+    "prepare-keeper-child-exit-/run/private",
+    "prepare-keeper-timeout-environment:/owner/private",
+    "prepare-keeper-child-exit-identity-125",
+    "prepare-keeper-ready-record-/owner/private",
+    "prepare-keeper-timeout-ready-write\nprivate-value",
+    "live-final",
+  ])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+  for (const origin of ["control", "client", "transport"])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, origin }), "prepare")).toEqual([])
+  for (const value of [
+    { ...entry, phase: "identity" },
+    { ...entry, outcome: "child-exit" },
+    { ...entry, path: "/owner/private" },
+    { ...entry, class: "KeeperChildExit" },
+    { ...entry, signal: "SIGPRIVATE" },
+  ])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(value), "prepare")).toEqual([])
+})
 test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
   const ordinary = failureRecord()
   for (const value of [

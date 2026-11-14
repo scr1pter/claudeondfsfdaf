@@ -26,7 +26,7 @@ PURE = {
     "require", "integer", "exact", "canonical", "object_identity", "construction_namespace",
     "filesystem", "json_digest", "digest_value", "mask_records", "mount_field", "mount_path", "parse_mount_table",
     "beneath", "hidden", "refuse_mask_aliases", "require_private_mounts", "require_known_mask_origins",
-    "require_capture_closure",
+    "require_capture_closure", "keeper_log_stage",
 }
 CONSTANTS = {"HOST_TEMP", "MASKS"}
 SELECTED = [node for node in TREE.body if
@@ -39,7 +39,7 @@ if ({node.name for node in SELECTED if isinstance(node, ast.FunctionDef)} != PUR
 SAFE_CALLS = PURE | {"RuntimeError", "type", "len", "all", "any", "ord", "chr", "int", "str", "set", "sorted", "list"}
 SAFE_MODULE_CALLS = {"os.major", "os.minor", "os.path.normpath", "os.path.relpath", "os.path.join",
                      "hashlib.sha256", "json.dumps", "re.sub", "re.fullmatch", "stat.S_ISDIR", "stat.S_ISREG"}
-SAFE_METHODS = {"encode", "startswith", "rstrip", "values", "count", "isascii", "isdigit", "split", "items", "decode",
+SAFE_METHODS = {"encode", "startswith", "endswith", "rstrip", "values", "count", "isascii", "isdigit", "split", "items", "decode",
                 "splitlines", "index", "append", "add", "hexdigest"}
 for node in SELECTED:
     if isinstance(node, ast.FunctionDef):
@@ -374,6 +374,42 @@ class OriginClosureTests(unittest.TestCase):
                 NATIVE["require_known_mask_origins"](value, candidate, set())
 
 
+class KeeperLogTests(unittest.TestCase):
+    def test_only_exact_ordered_lf_markers_return_fixed_stages(self):
+        prefix = b"VECTOR_NATIVE_KEEPER_STAGE "
+        phases = ("identity", "capabilities", "environment", "ready-write")
+        for count, phase in enumerate(phases, start=1):
+            data = b"private-path argv token=never-forward\xff\n" + b"".join(
+                prefix + item.encode("ascii") + b"\nraw-undecodable-stderr\xfe\n" for item in phases[:count])
+            with self.subTest(phase=phase):
+                self.assertEqual(NATIVE["keeper_log_stage"](data), phase)
+        marker = prefix + b"identity\n"
+        exact_bound = b"x" * (65536 - len(marker) - 1) + b"\n" + marker
+        self.assertEqual(len(exact_bound), 65536)
+        self.assertEqual(NATIVE["keeper_log_stage"](exact_bound), "identity")
+        self.assertIsNone(NATIVE["keeper_log_stage"](b"\xffprivate-stderr-only\xfe\n"))
+
+    def test_malformed_markers_nonbytes_and_overbound_stderr_never_escape(self):
+        prefix = b"VECTOR_NATIVE_KEEPER_STAGE "
+        identity = prefix + b"identity\n"
+        full = b"".join(prefix + phase + b"\n" for phase in
+                        (b"identity", b"capabilities", b"environment", b"ready-write"))
+        malformed = (
+            prefix + b"capabilities\n", identity + prefix + b"environment\n", identity + identity,
+            full + prefix + b"ready-write\n", identity + prefix + b"unknown-secret-value\n",
+            prefix + b"identity", identity + prefix + b"capabilities", prefix + b"identity\r\n",
+            prefix + b"identity\r", prefix + b"identity \n", prefix + b"identity\0\n",
+            b"VECTOR_NATIVE_KEEPER_STAGE\n", b"VECTOR_NATIVE_KEEPER_STAGE_EXTRA identity\n",
+            identity + b"VECTOR_NATIVE_KEEPER_STAGE", identity + prefix + b"\xff\n",
+        )
+        for data in malformed:
+            with self.subTest(data=data):
+                self.assertIsNone(NATIVE["keeper_log_stage"](data))
+        for data in (None, "VECTOR_NATIVE_KEEPER_STAGE identity\n", bytearray(identity), memoryview(identity),
+                     7, identity + b"x" * 65536, b"x" * 65537):
+            self.assertIsNone(NATIVE["keeper_log_stage"](data))
+
+
 class SourceStructureTests(unittest.TestCase):
     def test_only_allowlisted_pure_definitions_are_executed(self):
         self.assertEqual({node.name for node in SELECTED if isinstance(node, ast.FunctionDef)}, PURE)
@@ -424,6 +460,86 @@ class SourceStructureTests(unittest.TestCase):
                             if isinstance(node, ast.If)))
         self.assertTrue(calls("broker", "validate_descriptors"))
         self.assertTrue(calls("broker", "validate_source_view"))
+        wait = FUNCTIONS["wait_keeper"]
+        self.assertEqual(wait.args.args[-1].arg, "seconds")
+        self.assertEqual([ast.literal_eval(value) for value in wait.args.defaults], [5])
+        invocation = calls("prepare_in_capture", "wait_keeper")
+        self.assertEqual(len(invocation), 1)
+        self.assertEqual(len(invocation[0].args), 4)
+        self.assertFalse(invocation[0].keywords)
+        self.assertEqual(len(calls("wait_keeper", "process.poll")), 1)
+        self.assertEqual([ast.literal_eval(call.args[0]) for call in calls("wait_keeper", "time.sleep")], [0.01])
+        child_error = calls("wait_keeper", "subprocess.CalledProcessError")
+        timeout = calls("wait_keeper", "subprocess.TimeoutExpired")
+        self.assertEqual(len(child_error), 1)
+        self.assertEqual(len(timeout), 1)
+        self.assertEqual([ast.dump(value) for value in child_error[0].args],
+                         [ast.dump(value) for value in ast.parse("f(result, ('fixed-keeper',))", mode="eval").body.args])
+        self.assertEqual([ast.dump(value) for value in timeout[0].args],
+                         [ast.dump(value) for value in ast.parse("f(('fixed-keeper',), seconds)", mode="eval").body.args])
+        self.assertEqual({ast.dump(node.exc) for node in ast.walk(wait) if isinstance(node, ast.Raise)},
+                         {ast.dump(child_error[0]), ast.dump(timeout[0])})
+        self.assertEqual(len(calls("wait_keeper", "read_keeper_stage")), 2)
+        self.assertTrue(all(ast.unparse(call.args[0]) == "log" for call in calls("wait_keeper", "read_keeper_stage")))
+        stages = {ast.dump(node.value) for node in ast.walk(wait) if isinstance(node, ast.Assign) and
+                  any(isinstance(target, ast.Name) and target.id == "_DIAGNOSTIC_STAGE" for target in node.targets)}
+        expected_stages = {
+            ast.dump(ast.parse(expression, mode="eval").body) for expression in (
+                "'prepare-keeper-child-exit' + ('-' + phase if phase else '')",
+                "'prepare-keeper-timeout' + ('-' + phase if phase else '')",
+                "'prepare-keeper-ready-record'",
+            )}
+        self.assertEqual(stages, expected_stages)
+        expressions = {ast.dump(node) for node in ast.walk(wait)}
+        for expression in ("time.monotonic() + seconds", "time.monotonic() >= deadline", "read_json(name, owner)"):
+            self.assertIn(ast.dump(ast.parse(expression, mode="eval").body), expressions)
+        reader = FUNCTIONS["read_keeper_stage"]
+        opened = calls("read_keeper_stage", "os.open")
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(ast.dump(opened[0].args[1]),
+                         ast.dump(ast.parse("os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK", mode="eval").body))
+        read = calls("read_keeper_stage", "os.read")
+        self.assertEqual(len(read), 1)
+        self.assertEqual(ast.literal_eval(read[0].args[1]), 65537)
+        snapshots = calls("read_keeper_stage", "os.fstat")
+        self.assertEqual(len(snapshots), 2)
+        self.assertLess(snapshots[0].lineno, read[0].lineno)
+        self.assertLess(read[0].lineno, snapshots[1].lineno)
+        expressions = {ast.dump(node) for node in ast.walk(reader)}
+        for expression in (
+            "stat.S_ISREG(before.st_mode)", "before.st_uid == before.st_gid == 0", "before.st_nlink == 1",
+            "stat.S_IMODE(before.st_mode) == 0o600", "before.st_size <= 65536", "len(data) == before.st_size",
+            "(before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid, before.st_nlink, "
+            "before.st_size, before.st_mtime_ns, before.st_ctime_ns) == "
+            "(after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid, after.st_nlink, "
+            "after.st_size, after.st_mtime_ns, after.st_ctime_ns)",
+        ):
+            self.assertIn(ast.dump(ast.parse(expression, mode="eval").body), expressions)
+        self.assertEqual({ast.dump(node.value) for node in ast.walk(reader) if isinstance(node, ast.Return)},
+                         {ast.dump(ast.parse("keeper_log_stage(data)", mode="eval").body), ast.dump(ast.Constant(None))})
+        handlers = [node for node in ast.walk(reader) if isinstance(node, ast.ExceptHandler)]
+        self.assertEqual(len(handlers), 1)
+        self.assertEqual(ast.dump(handlers[0].type),
+                         ast.dump(ast.parse("(OSError, RuntimeError, ValueError)", mode="eval").body))
+        self.assertEqual(len(calls("read_keeper_stage", "os.close")), 1)
+        keeper = FUNCTIONS["keeper"]
+        markers = calls("keeper", "keeper_marker")
+        self.assertEqual([ast.literal_eval(call.args[0]) for call in markers],
+                         ["identity", "capabilities", "environment", "ready-write"])
+        guard_expressions = (
+            "require(os.getuid() == os.getgid() == 0 and os.getgroups() == [])",
+            "assert_capabilities_dropped()",
+            "require(set(os.environ) <= {'PATH', 'HOME', 'LC_ALL', 'LC_CTYPE'})",
+        )
+        for index, expression in enumerate(guard_expressions):
+            guard = keeper.body[index * 2 + 1]
+            self.assertEqual(ast.dump(guard.value), ast.dump(ast.parse(expression, mode="eval").body))
+            self.assertLess(markers[index].lineno, guard.lineno)
+            self.assertLess(guard.lineno, markers[index + 1].lineno)
+        ready = calls("keeper", "write_json")
+        self.assertEqual(len(ready), 1)
+        self.assertLess(markers[-1].lineno, ready[0].lineno)
+        self.assertEqual(ast.literal_eval(ready[0].args[2]), 0o600)
 
     def test_cleanup_record_validation_has_no_live_source_dependencies(self):
         self.assertTrue(calls("read_state", "mask_records"))

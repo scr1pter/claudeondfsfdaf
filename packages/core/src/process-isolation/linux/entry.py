@@ -867,15 +867,86 @@ def fixed(argv, **options):
 
 
 def keeper(scratch):
+    keeper_marker("identity")
     require(os.getuid() == os.getgid() == 0 and os.getgroups() == [])
+    keeper_marker("capabilities")
     assert_capabilities_dropped()
+    keeper_marker("environment")
     require(set(os.environ) <= {"PATH", "HOME", "LC_ALL", "LC_CTYPE"})
+    keeper_marker("ready-write")
     write_json(scratch + "/keeper-ready.json", {
         "v": 1, "pid": os.getpid(), "uid": os.getuid(), "gid": os.getgid(),
         "namespaces": {kind: os.stat("/proc/self/ns/" + kind).st_ino for kind in KINDS},
     }, 0o600)
     while True:
         signal.pause()
+
+
+def keeper_marker(stage):
+    require(stage in ("identity", "capabilities", "environment", "ready-write"))
+    marker = b"VECTOR_NATIVE_KEEPER_STAGE " + stage.encode("ascii") + b"\n"
+    require(os.write(2, marker) == len(marker))
+
+
+def keeper_log_stage(data):
+    # The private log can contain arbitrary child stderr. Recognize only the fixed ordered marker prefix;
+    # no raw line, exception text, path, argv, environment or unknown marker ever becomes a diagnostic.
+    if type(data) is not bytes or len(data) > 65536:
+        return None
+    phases = (b"identity", b"capabilities", b"environment", b"ready-write")
+    markers = []
+    tag = b"VECTOR_NATIVE_KEEPER_STAGE"
+    prefix = tag + b" "
+    for line in data.splitlines(keepends=True):
+        if not line.startswith(tag):
+            continue
+        if (not line.startswith(prefix) or not line.endswith(b"\n") or len(markers) == len(phases) or
+                line[len(prefix):-1] != phases[len(markers)]):
+            return None
+        markers.append(phases[len(markers)])
+    return markers[-1].decode("ascii") if markers else None
+
+
+def read_keeper_stage(name):
+    descriptor = None
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        before = os.fstat(descriptor)
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0 and before.st_nlink == 1 and
+                stat.S_IMODE(before.st_mode) == 0o600 and before.st_size <= 65536)
+        data = os.read(descriptor, 65537)
+        after = os.fstat(descriptor)
+        require(len(data) == before.st_size and
+                (before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid, before.st_nlink,
+                 before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
+                (after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid, after.st_nlink,
+                 after.st_size, after.st_mtime_ns, after.st_ctime_ns))
+        return keeper_log_stage(data)
+    except (OSError, RuntimeError, ValueError):
+        # Diagnostic uncertainty preserves the actual failure outcome and never delays owned cleanup.
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def wait_keeper(name, log, owner, process, seconds=5):
+    global _DIAGNOSTIC_STAGE
+    deadline = time.monotonic() + seconds
+    while not os.path.lexists(name):
+        result = process.poll()
+        if result is not None:
+            phase = read_keeper_stage(log)
+            _DIAGNOSTIC_STAGE = "prepare-keeper-child-exit" + ("-" + phase if phase else "")
+            # Only the numeric returncode reaches control_failure's existing finite exit/signal projection.
+            raise subprocess.CalledProcessError(result, ("fixed-keeper",))
+        if time.monotonic() >= deadline:
+            phase = read_keeper_stage(log)
+            _DIAGNOSTIC_STAGE = "prepare-keeper-timeout" + ("-" + phase if phase else "")
+            raise subprocess.TimeoutExpired(("fixed-keeper",), seconds)
+        time.sleep(0.01)
+    _DIAGNOSTIC_STAGE = "prepare-keeper-ready-record"
+    return read_json(name, owner)
 
 
 def wait_json(name, owner, process=None, seconds=5):
@@ -1511,7 +1582,7 @@ def prepare_in_capture(uid, gid, container, namespace, pins):
         os.close(info_fd)
         os.close(log_fd)
     _DIAGNOSTIC_STAGE = "prepare-keeper-wait"
-    ready = wait_json(value["scratch"] + "/keeper-ready.json", uid, process)
+    ready = wait_keeper(value["scratch"] + "/keeper-ready.json", value["directory"] + "/keeper.log", uid, process)
     _DIAGNOSTIC_STAGE = "prepare-keeper-identity"
     details = read_json(info_path)
     require(type(details) is dict and integer(details.get("child-pid")))

@@ -143,6 +143,12 @@ const FAILURE_STAGES = {
     "prepare-record",
     "prepare-keeper-start",
     "prepare-keeper-wait",
+    "prepare-keeper-child-exit",
+    "prepare-keeper-timeout",
+    "prepare-keeper-ready-record",
+    ...["child-exit", "timeout"].flatMap((outcome) =>
+      ["identity", "capabilities", "environment", "ready-write"].map((phase) => `prepare-keeper-${outcome}-${phase}`),
+    ),
     "prepare-keeper-identity",
     "prepare-namespaces",
     "prepare-mounts",
