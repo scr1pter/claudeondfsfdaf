@@ -4,31 +4,41 @@ The build contract is [hands-build-spec.md](./hands-build-spec.md). Read [hands-
 
 The historical continuation prompt, superseded by the checkpoint below, is [hands-handoff.md](./hands-handoff.md), in the original five-section briefing format. It recorded the code checkpoint at `49155228` and the then-remaining work packages and validation boundaries. Implementation resumed from that handoff with D5b, committed on `hands` on top of `50ac11c9`.
 
-## Current continuation: main integration and native validation pending
+## Current continuation: hosted Windows native checks passed; integration and release pending
 
-**Reviewed compatibility candidate; runtime not yet verified.** The remaining executed failure is registration readback at `d883e2d7`. A narrowly scoped candidate now records the successful native registration of both exact classes with `INPUTSINK | DEVNOTIFY`, bound to this listener generation and private HWND. Only that one-shot witness can recognize readback of exact `INPUTSINK` with the notification bit omitted; all other route facts and flags remain exact. The witness permanently retires before failure, removal, destruction or close, including late publication races. Default classification stays strict. Calibration, health, guardian receipts and deadlines are unchanged. Independent source reviews found no concrete defect; 53 native pure groups await actual execution. The finer `741a3379` diagnostic remains queued and has not established which readback field differed. This is a candidate, not a confirmed cause or release pass.
+**Current executed result, 13 November (Pacific).** Dedicated Windows run [43552459826](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43552459826) completed successfully at exact `60300433519493740408b2971a778ce3926730a5`. The Windows selector, baseline job `132319235889` and independent MOVE-probe job `132319235899` all succeeded. Both x64 native builds and unit/fresh version/probe checks passed, including all 53 W9 pure groups. Baseline core was **30 passed / 0 failed / 1 skipped**; its isolated report was **37 passed / 0 failed / 11 skipped**, code 0, with `privileged.input-listener-health` explicitly passed. These are actual hosted results, not source-only checks.
 
-Follow-up lifecycle review also retires the witness on an unexpected attached `WM_NCDESTROY`, invalidates local calibration synchronously, and stops the listener. Normal owned teardown remains benign; a creation-time failure keeps the existing closed window-failure category. Actual execution remains pending.
+The independent normal baseline Stop passed with `stop.ok=true`, exit 0 and `native-os-stop=true`; the separate `MOVE-PROBE-ONLY` invocation also passed without replacing the baseline. Both actual hidden PowerShell 7 signature observations reported `NotSigned`. The baseline and probe stage manifests identify helper **1.0.15**, still **unreleased**, with source digest `c814ce315e0759ec39d5b0d52ff23af1d75fbdfbeaa739a317478746f3c239b9`.
 
-**CI scheduling workaround.** The `741a3379` selector job remained queued without a runner for over 25 minutes while same-repository Windows jobs actually started. Windows-unit diagnostic dispatches now run their unchanged builtins-only Bash selector validation on `windows-2025`; PR, push and every other mode retain Ubuntu. Validation remains required before expensive jobs, with unchanged permissions, timeout and selector rejection. Focused workflow checks passed 3 tests / 340 assertions; actual hosted execution is pending. This scheduling change is not native success evidence.
+Verified baseline archives:
 
-**Current executed result, 13 November.** At `6f53a6ec`, dedicated Windows run `43547207683` passed the original normal Stop test (`stop.ok=true`, exit 0) in baseline job `132301309020`; the independent MOVE-probe VM also passed, with its narrower scope retained. Both passed actual PowerShell 7 signature observation as `NotSigned`. Baseline core was 30/0/1; isolated checks were 36/2/10 because the passive input-listener check failed at setup. Full PR run `43547212497` reproduced that failure on a different VM. These overall-success jobs do not make the failed diagnostic pass. The current candidate adds closed startup-stage diagnostics without changing any input, health or startup deadline, to identify the remaining failure. Its 50 native pure groups await execution; the wrapper passed 48 tests / 1,089 assertions locally.
+- Core artifact `14097228129`, 554 bytes, SHA-256 `13ec149f29c7e5de0a7d1b4af7879f16c6f3bd3acdea36fc1ba534a081602ed0`.
+- Isolated artifact `14097627052`, 835 bytes, SHA-256 `d886d0a65bb92e27d23433924c2814fe4ebc5cfbe424e8e1ae85c484d33ca05f`.
+- Normal Stop artifact `14098065165`, 4,924 bytes, SHA-256 `9a279aad26821da1eb6835f7adc1762f4d613c01810dd4f53f4cae4d9e631675`.
 
-At `d883e2d7`, diagnostic `43548977935` narrows the actual failure to `input-start-native-readback`: registration succeeded, then exact readback or the closed check refused startup. Verified isolated artifact `14095777103` (876 bytes) has archive SHA-256 `00d0f58d472e9a1fce9e419cc079ab0272fef05be68ef678d1f958c6f339d102`; totals remain 36/2/10. Worker and native-ready timeout hypotheses are not supported by that result. The next metadata-only refinement distinguishes query, presence, exact target, missing-notification-only, other flags and closed; all original refusals remain. Its 51 native pure groups await execution; local wrapper checks passed 48 tests / 1,111 assertions. The user guide and owner Windows checklist now describe real calibration, separate listener health and explicit Finish/Resume.
+**Health and calibration remain separate.** The passed passive-health fixture verifies listener/thread/route health at its check and asserts that hardware calibration and foreground mutation remain unavailable. The isolated report's 11 named skips and reasons are retained in the [dated evidence](./evidence/hands-windows-validation-2026-11-13.json); they are not passes. Actual mouse/Shift calibration, hardware takeover, foreground input/UIA cases and owner OS grants are not established by this run.
 
-**13 November continuation.** The owner approved the W9 calibration/listener-health redesign. Its native service, trusted desktop setup UI and protocol wiring are implemented in the current candidate. Real mouse motion and a Shift press/release after a current health acknowledgement are required; metadata health alone cannot grant input. Fresh status gates enabling and all explicit Resume routes. The actual passive-health fixture is separate from hardware-calibration proof. Local focused checks and app/desktop typechecking passed; native execution of this redesign remains pending. Earlier owner-pending statements below retain their historical scope.
+**Verified compatibility path; exact earlier cause unobserved.** A successful native registration of both exact classes with `INPUTSINK | DEVNOTIFY` now creates a one-shot witness bound to this listener generation and private HWND. Only that current witness can recognize readback of exact `INPUTSINK` with the notification bit omitted; all other route facts and flags remain exact. It permanently retires before failure, removal, destruction or close, including late publication races. Default classification stays strict. Unexpected attached `WM_NCDESTROY` retires the witness, invalidates calibration synchronously and stops the listener; normal owned teardown stays benign. Calibration, health, guardian receipts and deadlines remain unchanged. Source reviews, compilation, pure tests and actual passive listener health passed at `60300433`. The strict `741a3379` field diagnostic was cancelled while queued and never executed, so **DEVNOTIFY-only stripping was not observed**. The earlier `d883e2d7` result proves only a startup-readback refusal, not which field differed or a universal Windows behavior.
 
-Full PR run `43167728467`, head `6d23cdb5` and tested merge `2eea3fa83c1a2959e8cb366e65c2269aa7c0fb0d`, supplied new executed evidence: core 30/0/1, isolated 36/0/11, but Stop failed with `guardian-observe-reply-negative-low32-tag-candidate`. This is weak projected-marker correlation, not proof of a matching DOWN or universal Windows truncation. The next candidate uses a nonzero random DWORD-sized launch marker stored as uint64; all received-marker comparisons remain exact, without masking. Its event-marker collision domain is 32 bits rather than the previous 64 bits; the private channel nonce is separate and does not increase event-marker entropy. Native verification is still required.
+**CI scheduling workaround executed.** After the `741a3379` Ubuntu selector remained queued without a runner for over 25 minutes, Windows-unit diagnostic dispatches moved their unchanged builtins-only Bash selector to `windows-2025`; PR, push and every other mode retain Ubuntu. Validation is still required, with unchanged permissions, timeout and rejection rules. Focused routing checks passed 3 tests / 340 assertions, and the actual `60300433` selector passed. This scheduling result is separate from the native results above.
 
-The dedicated `6d23cdb5` diagnostic `43167720423` instead stopped at the legacy PowerShell signature block (exit 21); it did not execute its runtime cases. Signature observation now requires the fixed absolute PowerShell 7 toolchain host, with unchanged actual OS verification, bounds and signing policy. The required observer runs after independent native diagnostics so its failure cannot hide their results. This host choice still needs actual runtime verification.
+**Remaining gates.** Broad PR/integration CI and final cross-platform packaging remain open, including the actual final packaged helper/Main pin verifiers. The pending unsigned preview `43552031298` is at `d9f7985b`; its application/native source is identical to `60300433`, but its whole revision is different. Owner-device Windows calibration/takeover and ARM64 checks, Mac grants, signing/notarization and owner publication remain required. No merge, package release, granted OS permission or hardware-delivery pass is claimed. The current machine-readable record is [hands-windows-validation-2026-11-13.json](./evidence/hands-windows-validation-2026-11-13.json).
 
-Current machine-readable continuation evidence is [hands-windows-validation-2026-11-13.json](./evidence/hands-windows-validation-2026-11-13.json). No native success, release, signing or owner-device proof is claimed by these source changes.
+**Historical checkpoints below retain their exact source/run scope.** Their then-pending candidates and failures are preserved; the current `60300433` results above supersede pending assertions about the hosted x64 native checks.
 
-Follow-up review preserves an in-flight private setup health challenge when only the actual session's paused phase changes; the retained setup ticket and deadline cannot authorize the new actual phase. Its regression brings W9 pure coverage to 47 groups, still awaiting native execution. The shared schema fixture now includes the new operation: the focused core file passed 90 tests / 657 assertions after CI identified its missing fixture. The earlier failing run remains recorded rather than being counted as passed.
+At `6f53a6ec`, dedicated Windows run `43547207683` passed normal Stop in baseline job `132301309020` and the independent MOVE probe, plus both actual PowerShell 7 `NotSigned` observations. Core was 30/0/1; isolated checks were 36/2/10 because passive listener setup failed. Full PR `43547212497` reproduced that failure on another VM. Overall-success jobs did not erase those failed diagnostic rows. The then-next startup diagnostic had 50 native pure groups pending; local wrapper checks passed 48 tests / 1,089 assertions.
 
-Native `43546191575` compiled both Windows x64 candidates and passed actual hidden PowerShell 7 signature observation. Its units failed one fixture timing assertion before runtime stages; no Stop pass is claimed. The fixture now drains its initial observation, and a separate race test verifies refusal throughout and the correct notice by 200 ms. The 500 ms production limit remains unchanged. All 48 pure groups execute once and collect static failures before failing the module, avoiding one failure per build without any skip, retry or weakened assertion.
+At `d883e2d7`, diagnostic `43548977935` narrowed the failure to `input-start-native-readback`: registration succeeded, then exact readback or the closed check refused startup. Verified isolated artifact `14095777103` (876 bytes) has SHA-256 `00d0f58d472e9a1fce9e419cc079ab0272fef05be68ef678d1f958c6f339d102`; totals were 36/2/10. Worker and native-ready timeout hypotheses were not supported. The then-next metadata-only refinement classified query, presence, targets, flags and closed without relaxing refusals; its 51 native pure groups were unexecuted at that checkpoint. Local wrapper checks passed 48 tests / 1,111 assertions. Later hosted execution passed all 53 groups as recorded above.
 
-**Latest native observation.** Independent-VM diagnostic
+The 13 November continuation implemented the owner-approved W9 redesign. Its native service, trusted setup UI and protocol require real mouse motion and a same-Shift press/release after current listener health; health alone never grants input or automatically resumes a phase. Fresh status gates enabling and explicit Resume. Follow-up review preserved an in-flight private setup challenge across an actual-session paused-phase update, while retaining its exact setup ticket and deadline. Its regression first brought coverage to 47 groups. The shared schema fixture passed 90 tests / 657 assertions after CI exposed its omission; the earlier failure remains recorded.
+
+Native `43546191575` compiled both x64 candidates and passed actual hidden PowerShell 7 observation, but units failed a fixture timing assertion before runtime stages; it supplied no Stop pass. The corrected fixture drains its initial observation, and an independent race test verifies refusal throughout and the correct notice by 200 ms. The 500 ms production deadline remains unchanged. All pure groups execute once, collect static failures and still fail the module on any failure, without skipping or retrying tests.
+
+Earlier full PR `43167728467`, head `6d23cdb5` and tested merge `2eea3fa83c1a2959e8cb366e65c2269aa7c0fb0d`, passed core 30/0/1 and isolated 36/0/11 but failed Stop with `guardian-observe-reply-negative-low32-tag-candidate`. That was projected-marker correlation, not a matching DOWN receipt or proof of universal Windows truncation. The subsequent marker uses a nonzero random DWORD zero-extended to uint64, with exact received-value comparisons and no masking. Event-marker entropy is 32 bits; the independent private nonce does not enlarge it. Scoped runtime passes are now recorded at `60300433`, without asserting the earlier cause.
+
+Dedicated `6d23cdb5` run `43167720423` instead stopped at the legacy PowerShell signature block (exit 21), so it executed no runtime cases. The fixed absolute PowerShell 7 observer retains OS verification, bounds and signing policy and runs after independent diagnostics. Actual observer passes are now recorded at `6f53a6ec` and `60300433`; final package verification remains open.
+
+**Historical native observation.** Independent-VM diagnostic
 [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
 at `b286accd` completed with failure. Baseline job `131006042604` passed core
 30/0/1 and isolated 36/0/11, including the three required fresh worker reads.
@@ -68,14 +78,14 @@ a matching DOWN receipt nor grounds to call the failure an environment skip.
 Private VIG2 diagnostics remain failure-only; external protocol, input
 authority, receipt requirements, success conditions and budgets are unchanged.
 
-**Executed diagnostics and next candidate.** The failure-only atomic capture
+**Historical diagnostics and then-next candidate.** The failure-only atomic capture
 checkpoint and exact-full-own-tag/missing-injected-flag metadata compiled and
 ran at `9ec38ce4` and `8570aedb`. They do not participate in pixel acceptance or
 input/cleanup authority. The missing-injected-flag category was not observed;
 neither extension establishes the cause of the baseline Stop failure. The fresh
-VM comparison now ran at `b286accd`. The next reviewed metadata-only diagnostic
+VM comparison ran at `b286accd`. The then-next reviewed metadata-only diagnostic
 records weak low32 marker correlation for an opted-in reservation, without
-changing full64 receipt authority. Its four new native groups remain pending;
+changing full64 receipt authority. Its four new native groups were pending then;
 source report 45/28,211 assertions and source checks 19/174 passed.
 
 **Previous scoped passes.** At `51e8f63d`, diagnostic
@@ -91,27 +101,27 @@ Stale-capture-refusal was skipped for `input_detection_unavailable`, and the
 hardware-input scenario was skipped. Preserve these results at their exact
 source scope; they do not override the later failures or prove stability.
 
-**Current unsigned preview.** The exact `655ac0e6` preview
+**Historical unsigned preview.** The exact `655ac0e6` preview
 [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544)
-has a known Windows installer failure in job `130997275856`. Both explicit
+had a known Windows installer failure in job `130997275856`. Both explicit
 PowerShell 7 unsigned-helper signature checks passed, but the full x64 package
 verifier failed when its Windows PowerShell 5 Authenticode observer could not
 return an accepted result. Its generic nonzero/output-bound error does not
 identify the underlying cause. The final packaged ARM64 verifier was skipped.
-At the 06:13 UTC audit, 28 jobs had succeeded, one failed, three were skipped
+At that checkpoint's 06:13 UTC audit, 28 jobs had succeeded, one failed, three were skipped
 and the macOS installer was still active; Linux installer success is API
 metadata only. No actual package-signature/source-pin/full-verifier pass is
 claimed from the failed Windows check. A reviewed .NET Framework console
-encoding compatibility candidate is being built, not yet an observed fix.
+encoding compatibility candidate was then being built, not yet an observed fix.
 
-**Pending native and design work.** The reviewed low32-correlation diagnostic
-is a next candidate, not a demonstrated fix. Its 172-stage catalog preserves
-the full64 receipt and cleanup requirements. The signature-observer candidate
-passed 20 local tests / 131 assertions and typechecking; signer reuse is being
-prepared, while actual PowerShell 5/package-path proof remains pending.
-W9 proposal `20202293` is pushed and awaiting an owner decision; production W9
-code remains unchanged. Repeated capture passes do not establish stability or
-the skipped input behavior.
+**Historical pre-approval native/design checkpoint.** The reviewed low32-correlation
+diagnostic was then a next candidate, not a demonstrated fix. Its 172-stage catalog
+preserved full64 receipt and cleanup requirements. The signature-observer candidate
+passed 20 local tests / 131 assertions and typechecking; signer reuse was being
+prepared while PowerShell 5/package-path proof remained pending at that checkpoint.
+W9 proposal `20202293` was then awaiting an owner decision and production W9 was
+unchanged. Later approval and current hosted results are recorded above. Repeated
+capture passes do not establish stability or the skipped input behavior.
 
 **Integrated regression.** Ordinary full PR run
 [43146183368](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368)

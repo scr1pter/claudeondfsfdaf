@@ -8,7 +8,7 @@
   "w9": {
     "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
     "nativeGroups": 53,
-    "nativeExecution": "At 6f53a6ec native units passed; passive listener setup failed on two VMs. New closed startup diagnostics pending.",
+    "nativeExecution": "At 60300433 native compilation and all 53 W9 pure groups passed; live privileged.input-listener-health passed. Real hardware calibration remains unverified.",
     "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
     "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
   },
@@ -37,7 +37,7 @@
     "generation": "Nonzero CSPRNG DWORD, zero-extended to uint64",
     "unchanged": "Exact full-value received marker equality, injected flag, reservation descriptor, actual DOWN/UP, sequence, deadline and release authority; no received value masking.",
     "collisionDomainBits": 32,
-    "qualification": "Explicit entropy-domain change, not a claim of 64-bit event entropy. Private channel nonce remains separate. Runtime results pending."
+    "qualification": "Explicit entropy-domain change, not a claim of 64-bit event entropy. Private channel nonce remains separate. Normal baseline and independent probe Stop passed at 60300433; the earlier marker failure's exact cause remains unproven."
   },
   "localChecks": {
     "coreComputerSchema": {
@@ -101,7 +101,7 @@
     "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
     "stagedStop": "not run because units failed"
   },
-  "pending": "Passive listener startup/health, broad CI and final packaging; actual device calibration/takeover, Mac grants, signing and owner publication gates.",
+  "pending": "Broad PR/integration CI and final cross-platform packaging, including final packaged helper/Main pin verification; owner-device calibration/takeover and ARM64 checks, Mac grants, signing/notarization and owner publication. Helper 1.0.15 remains unreleased. Current 60300433 hosted x64 native checks, passive listener health and normal baseline Stop passed.",
   "native6fObservation": {
     "revision": "6f53a6ec9130220bf3fe7a03cc256802d227ee89",
     "run": 43547207683,
@@ -119,7 +119,7 @@
     "reportArchiveSha256": "b945dd09bad376969a7ff2fb2d643de276b6960874143fb4debd447f0ca69786",
     "baselineStopArtifact": 14095032090,
     "baselineStopArchiveSha256": "b4633f89a04391260ee0928f45f05dda3745b3daf0508c53a352f594029fb454",
-    "qualification": "Overall successful job does not erase failed diagnostic rows. Closed startup diagnostics pending; no startup budget or admission change."
+    "qualification": "Overall successful job did not erase failed diagnostic rows at this revision. Closed startup diagnostics were pending then; d883 later narrowed the refusal and 60300433 passed hosted passive health without a startup budget or admission change."
   },
   "nativeD883Observation": {
     "revision": "d883e2d78adfae311665e2215389ce876f8b964b",
@@ -130,15 +130,134 @@
     "artifact": 14095777103,
     "artifactBytes": 876,
     "archiveSha256": "00d0f58d472e9a1fce9e419cc079ab0272fef05be68ef678d1f958c6f339d102",
-    "followup": "Closed route readback classification only; no acceptance or deadline change. 51 native pure groups pending."
+    "followup": "The then-next refinement classified route readback without changing acceptance or deadlines; 51 native pure groups were pending at that checkpoint. Later 60300433 execution passed all 53 W9 groups and passive listener health."
   },
   "routeCompatibilityCandidate": {
-    "status": "reviewed source, native execution pending",
-    "trigger": "Actual d883 startup readback refusal; exact field diagnostic 741a still queued",
+    "status": "native listener startup and passive health verified at 60300433; exact omitted DEVNOTIFY stage was not observed",
+    "trigger": "Actual d883 startup readback refusal; exact field diagnostic 741a was cancelled while queued and never executed",
     "witness": "Actual successful two-class INPUTSINK|DEVNOTIFY registration, exact listener generation and private HWND; one-shot publication with permanent retirement before failure/removal/destruction/close",
     "acceptance": "With current native witness only, returned flags may be exact requested flags or exact INPUTSINK with only DEVNOTIFY omitted. All other flags, wrong targets, missing classes and query failure remain refused. Default classifier strict.",
     "reviews": "Independent native and UI source reviews; no concrete defect found",
-    "tests": "53 native pure groups pending; no local native/OS execution",
-    "qualification": "Not a confirmed root cause or passing runtime; no input, calibration, health, guardian or deadline change."
+    "tests": "53 native pure groups passed in hosted Windows checks; no local native/OS execution",
+    "qualification": "Actual health success verifies the candidate path. DEVNOTIFY-only normalization remains a source-based explanation, not an observed Windows flag trace. Real hardware delivery remains a separate owner check."
+  },
+  "native603Probe": {
+    "revision": "60300433519493740408b2971a778ce3926730a5",
+    "run": 43552459826,
+    "job": 132319235899,
+    "nativeCompilation": "passed",
+    "nativeUnits": "passed, including 53 W9 groups",
+    "coreArtifact": 14097271419,
+    "stop": "passed: stop.ok=true, exit 0, native-os-stop=true; MOVE-PROBE-ONLY",
+    "signature": "actual PowerShell 7 observer: NotSigned",
+    "overlayArtifact": 14096913703,
+    "overlayArtifactBytes": 4959,
+    "overlayArchiveSha256": "bfced6abaff3eceede420774ceee364d260c0447fe28b5984d26bf4f69dbbef9",
+    "helperVersion": "1.0.15",
+    "stageHelperSourceDigest": "c814ce315e0759ec39d5b0d52ff23af1d75fbdfbeaa739a317478746f3c239b9",
+    "qualification": "No baseline Stop, isolated listener health or real hardware calibration credit from the probe job."
+  },
+  "scheduling603": {
+    "run": 43552459826,
+    "selectorHost": "windows-2025",
+    "selectorResult": "passed",
+    "runStatus": "completed",
+    "runConclusion": "success",
+    "baselineConclusion": "success",
+    "probeConclusion": "success",
+    "old741Diagnostic": "cancelled while queued; exact DEVNOTIFY-only stage never executed",
+    "previewRun": 43552031298,
+    "previewRevision": "d9f7985bbfec40fe02ce59eeaf2aaf67d751b0fb",
+    "previewScope": "d9f to 603 changes only test.yml, workflow test and progress documentation; identical application/native source, not identical whole revision",
+    "fullPRRun": 43552396408,
+    "fullPRRevision": "60300433519493740408b2971a778ce3926730a5"
+  },
+  "native603Baseline": {
+    "revision": "60300433519493740408b2971a778ce3926730a5",
+    "run": 43552459826,
+    "job": 132319235889,
+    "nativeCompilation": "passed",
+    "nativeUnits": "passed, including 53 W9 groups",
+    "corePassed": 30,
+    "coreFailed": 0,
+    "coreSkipped": 1,
+    "coreArtifact": 14097228129,
+    "coreArtifactBytes": 554,
+    "coreArchiveSha256": "13ec149f29c7e5de0a7d1b4af7879f16c6f3bd3acdea36fc1ba534a081602ed0",
+    "isolatedPassed": 37,
+    "isolatedFailed": 0,
+    "isolatedSkipped": 11,
+    "healthRow": "privileged.input-listener-health: passed",
+    "isolatedTopLevelCode": 0,
+    "isolatedArtifact": 14097627052,
+    "isolatedArtifactBytes": 835,
+    "isolatedArchiveSha256": "d886d0a65bb92e27d23433924c2814fe4ebc5cfbe424e8e1ae85c484d33ca05f",
+    "isolatedSkips": [
+      {
+        "name": "privileged",
+        "status": "skipped",
+        "reason": "native-skip"
+      },
+      {
+        "name": "privileged.apps-installed-target",
+        "status": "skipped",
+        "reason": "target_not_installed"
+      },
+      {
+        "name": "privileged.uia-counter-increment",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.uia-value-set-and-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.secure-field-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.tagged-click-increments",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.unicode-type-readback",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.stale-capture-refusal",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.owned-input-release",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.input-detection-probe",
+        "status": "skipped",
+        "reason": "input_detection_unavailable"
+      },
+      {
+        "name": "privileged.hardware-user-input-pauses",
+        "status": "skipped",
+        "reason": "hardware_input_required"
+      }
+    ],
+    "normalStop": "passed: stop.ok=true, exit 0, native-os-stop=true; independent unchanged baseline",
+    "signature": "actual PowerShell 7 observer: NotSigned",
+    "overlayArtifact": 14098065165,
+    "overlayArtifactBytes": 4924,
+    "overlayArchiveSha256": "9a279aad26821da1eb6835f7adc1762f4d613c01810dd4f53f4cae4d9e631675",
+    "helperVersion": "1.0.15",
+    "releaseStatus": "unreleased",
+    "stageHelperSourceDigest": "c814ce315e0759ec39d5b0d52ff23af1d75fbdfbeaa739a317478746f3c239b9",
+    "artifactVerification": "Core, isolated and overlay archives downloaded and SHA-256 verified against GitHub artifact metadata; Stop result and native-os-stop row read from the baseline archive log.",
+    "qualification": "Hosted x64 compilation, units, core, passive listener health and independent normal Stop passed at this exact revision. All 11 named isolated skips remain skips. Real hardware calibration, foreground input/takeover, ARM64 runtime and OS grants are not inferred. Exact DEVNOTIFY-only diagnostic never executed."
   }
 }
