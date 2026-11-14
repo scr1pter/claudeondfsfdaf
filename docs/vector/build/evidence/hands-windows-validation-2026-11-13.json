@@ -1210,6 +1210,24 @@
           "total": 8
         },
         "qualification": "Actual current PR Windows log confirms all244 app files once, no failed child marker, and overall integrated unit-job success. Existing suite/platform skips remain skips."
+      },
+      "linuxBrowser": {
+        "job": 132343890155,
+        "conclusion": "success",
+        "logBytes": 116008,
+        "logSha256": "f1fd86c5ed72212d2e0e2df9465975b21f41986de236ddba40122ed9a20b799b",
+        "passed": 356,
+        "flaky": 0,
+        "skipped": 1,
+        "unrecoveredFailures": 0,
+        "retryMarkers": 0,
+        "skippedCase": "regression/remote-tab-busy.spec.ts:12 tab busy indicator reflects the tab server's own session status",
+        "skipSourceReason": "Existing source-level test.skip: redesigned workspace uses project sidebar instead of a second global session tab strip.",
+        "publicViewer": {
+          "passed": 5,
+          "failed": 0
+        },
+        "qualification": "Actual full scripted Chromium suite includes all corrected Hands cases; no physical calibration claim."
       }
     },
     "unsignedArtifactsOnlyPreview": {
@@ -1331,7 +1349,7 @@
           "qualification": "Both architecture manifests match this actual digest/toolchain; do not substitute the earlier 60300433 digest."
         }
       },
-      "remaining": "Remaining broad tests/build smokes and final macOS/Windows/Linux package verifiers, including the separate final ARM64 actual packed Main/helper verifier. Native ARM64/Intel/Mac26 core matrix passed within these reported scopes.",
+      "remaining": "Final macOS/Windows/Linux package verifiers and the separate final ARM64 actual packed Main/helper verifier. Required executed preview prerequisites passed; configured dry-run/publish skips remain skips.",
       "macIntelCore": {
         "job": 132350256389,
         "logBytes": 34350,
@@ -1398,6 +1416,34 @@
           "failed": 0
         },
         "qualification": "Actual log ends Desktop: 189/189 test files passed. Host-specific skips within test files remain skips; not final package verification."
+      },
+      "coreTests": {
+        "job": 132344208758,
+        "conclusion": "success",
+        "logBytes": 65142,
+        "logSha256": "4dc759b1058a1b3119611be5c2a34ad8d413c4c06967bceecf88871c9c25095c",
+        "passed": 3959,
+        "failed": 0,
+        "skipped": 17,
+        "files": 343,
+        "qualification": "Actual downloaded hosted core-suite summary; existing17 skips remain skips and do not supply owner OS or package proof."
+      },
+      "desktopBuildSmoke": {
+        "job": 132351843251,
+        "conclusion": "success",
+        "logBytes": 217307,
+        "logSha256": "9f0b46fbb4fcd7e34a4b475bf75261a16b42bf6e51754155ba848eca6270ea04",
+        "nodeComputerSmoke": "passed: bridge screenshot/click, HTTP app/sensitive approvals, exact image attachments and clean lease finish; fake bridge, no native OS evidence",
+        "brainUtilitySmoke": "passed on Electron42.11.4/Node24.19.0 and plain Node, fixture model",
+        "qualification": "Actual success markers in downloaded log, following production build. No paid model or owner desktop used."
+      },
+      "packageJobs": {
+        "spawnedAtUtc": "2026-11-14T06:24:58Z",
+        "windows": 132360549033,
+        "linux": 132360549034,
+        "mac": 132360549035,
+        "statusAtSpawn": "queued",
+        "arm64FinalPackedVerifier": "not yet spawned; depends on Windows package success"
       }
     },
     "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."
