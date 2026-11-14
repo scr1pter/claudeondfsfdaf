@@ -417,25 +417,30 @@ class NativeScenario final {
   NativeReply capture_affinity_display(const CaptureReceipt& frame, const WindowsTargetState& shown, const std::shared_ptr<WindowsTargetClient>& target) {
     const auto plan = diagnostic_stage(L"affinity-sample-plan", [&] {
       const auto phase = session();
-      require(state->available() && target && target->current() && frame.window && valid_windows_target_state(shown) && shown.affinity && shown.excluded_visible && shown.patch.contains(shown.excluded_bounds));
-      require(target->pid() == shown.pid && frame.window->hwnd == shown.window && frame.window->surface == shown.window && frame.window->bounds == shown.bounds &&
-        frame.window->owner.process.pid == shown.pid && frame.window->physical_owner.process.pid == shown.pid && frame.window->window_class == windows_target_class);
-      require(frame.session_id == phase.id && frame.run_epoch == phase.run_epoch && frame.observation_epoch == phase.observation_epoch && frame.revision == phase.revision && state->captures->current(frame, phase));
+      diagnostic_stage(L"affinity-plan-context", [&] { require(state->available()); });
+      diagnostic_stage(L"affinity-plan-target", [&] { require(target && target->current()); });
+      diagnostic_stage(L"affinity-plan-fixture", [&] { require(frame.window && valid_windows_target_state(shown) && shown.affinity && shown.excluded_visible && shown.patch.contains(shown.excluded_bounds)); });
+      diagnostic_stage(L"affinity-plan-main", [&] { require(target->pid() == shown.pid && frame.window->hwnd == shown.window && frame.window->surface == shown.window && frame.window->bounds == shown.bounds &&
+        frame.window->owner.process.pid == shown.pid && frame.window->physical_owner.process.pid == shown.pid && frame.window->window_class == windows_target_class); });
+      diagnostic_stage(L"affinity-plan-session", [&] { require(frame.session_id == phase.id && frame.run_epoch == phase.run_epoch && frame.observation_epoch == phase.observation_epoch && frame.revision == phase.revision); });
+      diagnostic_stage(L"affinity-plan-current-frame", [&] { require(state->captures->current(frame, phase)); });
       const auto display = std::find_if(frame.inventory.displays.begin(), frame.inventory.displays.end(), [&](const auto& value) { return value.id == frame.display_id; });
       const auto excluded = std::find_if(frame.inventory.windows.begin(), frame.inventory.windows.end(), [&](const auto& value) { return value.hwnd == shown.excluded; });
-      require(display != frame.inventory.displays.end() && display->bounds.contains(shown.excluded_bounds) && excluded != frame.inventory.windows.end() && excluded->window);
-      require(excluded->window->surface == shown.excluded && excluded->window->bounds == shown.excluded_bounds && excluded->window->owner.process.pid == shown.pid &&
-        excluded->window->physical_owner.process.pid == shown.pid && excluded->window->window_class == L"VectorComputerIsolatedTargetExcluded");
+      diagnostic_stage(L"affinity-plan-display", [&] { require(display != frame.inventory.displays.end() && display->bounds.contains(shown.excluded_bounds)); });
+      diagnostic_stage(L"affinity-plan-excluded-surface", [&] { require(excluded != frame.inventory.windows.end() && excluded->window); });
+      diagnostic_stage(L"affinity-plan-excluded-owner", [&] { require(excluded->window->surface == shown.excluded && excluded->window->bounds == shown.excluded_bounds && excluded->window->owner.process.pid == shown.pid &&
+        excluded->window->physical_owner.process.pid == shown.pid && excluded->window->window_class == L"VectorComputerIsolatedTargetExcluded"); });
       const auto fit = fit_capture(display->bounds, {1024, 1024, 1'048'576});
       const auto x = std::floor((double(shown.excluded_bounds.x - display->bounds.x) + double(shown.excluded_bounds.width) / 2) * fit.scale);
       const auto y = std::floor((double(shown.excluded_bounds.y - display->bounds.y) + double(shown.excluded_bounds.height) / 2) * fit.scale);
       const auto source_x = std::floor((x + 0.5) / fit.scale), source_y = std::floor((y + 0.5) / fit.scale);
-      require(x >= 0 && y >= 0 && x < fit.width && y < fit.height && source_x >= 0 && source_y >= 0 && source_x < display->bounds.width && source_y < display->bounds.height);
-      require(next < 999'999);
+      diagnostic_stage(L"affinity-plan-geometry", [&] { require(x >= 0 && y >= 0 && x < fit.width && y < fit.height && source_x >= 0 && source_y >= 0 && source_x < display->bounds.width && source_y < display->bounds.height); });
+      diagnostic_stage(L"affinity-plan-request", [&] { require(next < 999'999); });
       auto value = std::make_shared<AffinitySamplePlan>(); value->request_id = next + 1; value->client = target; value->fixture = shown;
       value->main = *frame.window; value->excluded = *excluded->window; value->session = phase; value->display = *display;
       value->sample_x = static_cast<uint32_t>(source_x); value->sample_y = static_cast<uint32_t>(source_y);
-      require(value->current() && state->available()); return value;
+      diagnostic_stage(L"affinity-plan-current", [&] { require(value->current()); });
+      diagnostic_stage(L"affinity-plan-current-context", [&] { require(state->available()); }); return value;
     });
     JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})");
     JsonObject selection; selection.Insert(L"display", JsonValue::CreateStringValue(plan->display.id)); args.Insert(L"target", selection);
@@ -563,11 +568,13 @@ JsonObject click_args(const WindowsTargetState& target, const Captured& frame) {
   auto args = input_target(target); const auto [x, y] = image_point(frame.receipt, target.button); args.Insert(L"captureId", JsonValue::CreateStringValue(frame.receipt.id)); args.Insert(L"x", JsonValue::CreateNumberValue(static_cast<double>(x))); args.Insert(L"y", JsonValue::CreateNumberValue(static_cast<double>(y))); args.Insert(L"button", JsonValue::CreateStringValue(L"left")); args.Insert(L"count", JsonValue::CreateNumberValue(1)); args.Insert(L"modifiers", JsonArray{}); return args;
 }
 bool running_target(const NativeReply& reply, DWORD pid, HWND window) {
-  NativeScenario::success(reply);
-  for (const auto& raw : reply.document.GetNamedArray(L"apps")) { const auto app = raw.GetObject(); if (number(app.GetNamedObject(L"identity"), L"pid") != pid) continue;
-    for (const auto& item : app.GetNamedArray(L"windows")) if (item.GetObject().GetNamedString(L"windowId", L"") == window_id(window)) return true;
-  }
-  return false;
+  NativeScenario::success(reply, L"apps-list-reply");
+  return diagnostic_stage(L"apps-list-decode", [&] {
+    for (const auto& raw : reply.document.GetNamedArray(L"apps")) { const auto app = raw.GetObject(); if (number(app.GetNamedObject(L"identity"), L"pid") != pid) continue;
+      for (const auto& item : app.GetNamedArray(L"windows")) if (item.GetObject().GetNamedString(L"windowId", L"") == window_id(window)) return true;
+    }
+    return false;
+  });
 }
 }
 
@@ -731,7 +738,10 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
     if (!authority->current()) throw ScenarioFailure{L"target_validation_failed"};
     const auto initial = target->request(); require(valid_windows_target_state(initial)); native = std::make_unique<NativeScenario>(initial, authority, cleanup);
     report.checks[0] = {std::wstring(windows_privileged_checks[0]), true, false, {}};
-    run(1, [&] { require(running_target(native->request(L"apps.list", object(LR"({"installed":false})")), initial.pid, initial.window)); });
+    run(1, [&] {
+      const auto reply = diagnostic_stage(L"apps-list-request", [&] { return native->request(L"apps.list", object(LR"({"installed":false})")); });
+      diagnostic_stage(L"apps-list-target", [&] { require(running_target(reply, initial.pid, initial.window)); });
+    });
     run(2, [&] {
       diagnostic_stage(L"installed-list-reply", [&] {
         const auto reply = native->request(L"apps.list", object(LR"({"installed":true})")); NativeScenario::success(reply, L"installed-list-reply");
@@ -884,7 +894,9 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
         const auto deadline = GetTickCount64() + 750;
         while (native->state->available() && target->current() && !detector->listener_health_ready() && GetTickCount64() < deadline)
           std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        require(native->state->available() && target->current() && detector->listener_health_ready());
+        diagnostic_stage(L"input-health-context", [&] { require(native->state->available()); });
+        diagnostic_stage(L"input-health-target", [&] { require(target->current()); });
+        diagnostic_stage(L"input-health-ready", [&] { require(detector->listener_health_ready()); });
       });
       diagnostic_stage(L"input-calibration-required", [&] {
         const auto status = detector->setup_status();

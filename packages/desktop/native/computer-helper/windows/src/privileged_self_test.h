@@ -21,7 +21,7 @@ inline constexpr std::array<std::wstring_view, 17> windows_privileged_checks{
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
   L"capture-isolated-window-worker", L"input-listener-health"};
-inline constexpr std::array<std::wstring_view, 199> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 219> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -85,7 +85,12 @@ inline constexpr std::array<std::wstring_view, 199> windows_privileged_stages{
   L"input-readback-query", L"input-readback-mouse-missing", L"input-readback-keyboard-missing",
   L"input-readback-mouse-target", L"input-readback-keyboard-target", L"input-readback-devnotify-both",
   L"input-readback-devnotify-mouse", L"input-readback-devnotify-keyboard", L"input-readback-mouse-flags",
-  L"input-readback-keyboard-flags", L"input-readback-closed"};
+  L"input-readback-keyboard-flags", L"input-readback-closed",
+  L"apps-list-request", L"apps-list-reply", L"apps-list-decode", L"apps-list-target",
+  L"affinity-plan-context", L"affinity-plan-target", L"affinity-plan-fixture", L"affinity-plan-main",
+  L"affinity-plan-session", L"affinity-plan-current-frame", L"affinity-plan-display", L"affinity-plan-excluded-surface",
+  L"affinity-plan-excluded-owner", L"affinity-plan-geometry", L"affinity-plan-request", L"affinity-plan-current",
+  L"affinity-plan-current-context", L"input-health-context", L"input-health-target", L"input-health-ready"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",

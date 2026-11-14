@@ -1,6 +1,6 @@
 # Vector Hands build: deviations from the contract
 
-**14 November diagnostic candidate:** helper `1.0.16` records the first expired UIA ticket's closed phase without changing the 50 ms budget, retirement or input authority. It is not a Stop fix. The measured Mac lock remains enforced at `1.0.15` until fresh qualified evidence is reviewed. [Details and required requalification](./hands-uia-timeout-diagnostic.md).
+**14 November diagnostic candidate:** helper `1.0.17` retains the immutable expired UIA phase and adds closed substages for observed ARM64 inventory, affinity-plan and listener-health failures. It changes no predicate, 50/750 ms budget, retirement, input authority or success policy and is not a functional repair. The measured Mac lock remains enforced at `1.0.15` until fresh qualified evidence is reviewed. [Details and required requalification](./hands-uia-timeout-diagnostic.md).
 
 Current continuation is recorded in [hands-progress.md](./hands-progress.md).
 The owner-approved W9 redesign is implemented. Exact `a0e5ce8e` full PR CI and

@@ -149,6 +149,20 @@ size_t run_privileged_self_test_tests() {
       "privileged.unknown-native-codes-do-not-disclose-text");
   });
   test([] {
+    for (const auto code : {L"unavailable", L"changed", L"no_ui_tree"}) {
+      const auto reply = response_failure(42, {code, L"PRIVATE native explanation"});
+      const auto stage = windows_privileged_origin_stage(reply.GetNamedString(L"error"), L"apps-list-reply");
+      auto report = passed_report(); report.checks[1] = {std::wstring(windows_privileged_checks[1]), false, false,
+        L"native_operation_failed", stage, windows_privileged_native_code(reply.GetNamedString(L"code"))};
+      require(stage == L"apps-list-reply" && report.valid() && report.exit_code() == 1, "privileged.apps-reply-fallback-retains-original-failure");
+      const auto row = report.wire().GetNamedArray(L"checks").GetObjectAt(1);
+      require(row.GetNamedString(L"nativeCode") == code && !row.GetNamedBoolean(L"ok") && std::wstring(report.wire().Stringify()).find(L"PRIVATE") == std::wstring::npos,
+        "privileged.apps-reply-retains-only-closed-native-code-not-explanation");
+    }
+    require(windows_privileged_origin_stage(L"The computer session changed during the operation.", L"apps-list-reply") == L"authority-completion",
+      "privileged.apps-fallback-cannot-hide-an-existing-authority-origin");
+  });
+  test([] {
     const WindowsPrivilegedCheck failed{std::wstring(windows_privileged_checks[3]), false, false,
       L"native_operation_failed", L"window-capture-reply", L"capture_unavailable"};
     for (size_t variation = 0; variation < 7; ++variation) {
