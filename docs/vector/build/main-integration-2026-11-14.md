@@ -109,8 +109,9 @@ The owner subsequently approved merging historical `benchmark-before` at
 `3abfbd1c3555c8efdc4e7a26b1ac178e3488c9d6` into active code. Its mock task/workflow/config support was already present;
 the current superset, including missing-capability 404 responses and nested computer capabilities, is preserved unchanged.
 The original `benchmark-source.json` is included verbatim. The active metric recorder includes it as
-`historicalReference`, distinct from the actual checked-out `commit`; an older pinned source without that file records
-null. Current strict workflow selectors are retained, including the historical production-only exclusion. This merge
+`historicalReference`, distinct from the actual checked-out `commit`; only the approved baseline source
+`2f88021845bd5fc74ea001d96729b4fcfb2524fa` may record null for the missing historical file. Other missing-reference sources
+fail before measurement. Current strict workflow selectors are retained, including the historical production-only exclusion. This merge
 does not relabel current metrics as a pre-implementation measurement or change performance thresholds/workloads.
 
 ## Branch cleanup

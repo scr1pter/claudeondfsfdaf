@@ -2,6 +2,12 @@
 
 Vector v2 is the next release. It ships together with the desktop redesign. There is no separate 1.99.113 release.
 
+**Current source assembly (14 November):** PR #33 joins the surviving feature branches for direct integration into
+`main`, including the owner-approved historical benchmark and the archive-only legal disposition. It is awaiting
+exact-head CI and preview qualification. The earlier `v2` merge-order table below is historical; see
+[the current integration record](./main-integration-2026-11-14.md) for included source and held runtime/owner gates.
+No branch should be deleted from this assembly until its contents are verified in `main` and its last SHA is recorded.
+
 **How integration works:**
 - Every finished feature branch merges into the `v2` branch. Only Vercel previews deploy from it.
 - `main` and the live site stay as they are until v2 ships. Then `v2` merges into `main` once, and that merge publishes the site.
