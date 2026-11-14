@@ -467,7 +467,7 @@ class KeeperDiagnosticTests(unittest.TestCase):
         for data in (None, "private stderr", bytearray(b""), memoryview(b""), 7, b"x" * 65537):
             self.assertEqual(classify(data), "invalid")
 
-    def test_all_eleven_pinned_fatal_labels_return_only_ten_fixed_categories(self):
+    def test_pinned_fatal_labels_return_only_fixed_private_output_free_categories(self):
         labels = (
             ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
             ("bwrap-capset", b"bwrap: capset failed: ", False),
@@ -479,10 +479,20 @@ class KeeperDiagnosticTests(unittest.TestCase):
             ("bwrap-setgroups", b"bwrap: error writing to setgroups: ", False),
             ("bwrap-mount-propagation", b"bwrap: Failed to make / slave: ", False),
             ("bwrap-root-tmpfs", b"bwrap: Failed to mount tmpfs: ", False),
+            ("bwrap-source", b"bwrap: Can't find source path ", False),
+            ("bwrap-source", b"bwrap: Can't get type of source ", False),
+            ("bwrap-destination", b"bwrap: Can't mkdir ", False),
+            ("bwrap-bind", b"bwrap: Can't bind mount ", False),
+            ("bwrap-remount", b"bwrap: Can't remount readonly on ", False),
+            ("bwrap-proc", b"bwrap: Can't mount proc on ", False),
+            ("bwrap-mask-tmpfs", b"bwrap: Can't mount tmpfs on ", False),
+            ("bwrap-devpts", b"bwrap: Can't mount devpts on ", False),
+            ("bwrap-pivot", b"bwrap: pivot_root: ", False),
+            ("bwrap-pivot", b"bwrap: pivot_root(/newroot): ", False),
             ("bwrap-exec", b"bwrap: execvp /usr/bin/python3: ", False),
         )
-        self.assertEqual(len(labels), 11)
-        self.assertEqual(len({category for category, _, _ in labels}), 10)
+        self.assertEqual(len(labels), 21)
+        self.assertEqual(len({category for category, _, _ in labels}), 18)
         for category, label, exact_label in labels:
             suffix = b"" if exact_label else b"Permission denied /owner/private synthetic-private-token\xff"
             data = b"opaque stderr\xfe\n" + label + suffix + b"\n"
@@ -567,7 +577,8 @@ class KeeperDiagnosticTests(unittest.TestCase):
             "empty", "no-marker", "invalid", "unstable", "unreadable", "phase-identity", "phase-capabilities",
             "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
             "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
-            "bwrap-root-tmpfs", "bwrap-exec",
+            "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
+            "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec",
         )
         stages = []
         for outcome in ("child-exit", "timeout"):

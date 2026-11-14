@@ -935,6 +935,16 @@ def keeper_log_classification(data):
         ("bwrap-setgroups", b"bwrap: error writing to setgroups: ", False),
         ("bwrap-mount-propagation", b"bwrap: Failed to make / slave: ", False),
         ("bwrap-root-tmpfs", b"bwrap: Failed to mount tmpfs: ", False),
+        ("bwrap-source", b"bwrap: Can't find source path ", False),
+        ("bwrap-source", b"bwrap: Can't get type of source ", False),
+        ("bwrap-destination", b"bwrap: Can't mkdir ", False),
+        ("bwrap-bind", b"bwrap: Can't bind mount ", False),
+        ("bwrap-remount", b"bwrap: Can't remount readonly on ", False),
+        ("bwrap-proc", b"bwrap: Can't mount proc on ", False),
+        ("bwrap-mask-tmpfs", b"bwrap: Can't mount tmpfs on ", False),
+        ("bwrap-devpts", b"bwrap: Can't mount devpts on ", False),
+        ("bwrap-pivot", b"bwrap: pivot_root: ", False),
+        ("bwrap-pivot", b"bwrap: pivot_root(/newroot): ", False),
         ("bwrap-exec", b"bwrap: execvp /usr/bin/python3: ", False),
     )
     fatal = None
@@ -1004,7 +1014,8 @@ def keeper_failure_stage(outcome, log, info):
             log in ("empty", "no-marker", "invalid", "unstable", "unreadable", "phase-identity", "phase-capabilities",
                     "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
                     "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
-                    "bwrap-root-tmpfs", "bwrap-exec") and
+                    "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
+                    "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec") and
             info in ("empty", "child-created", "invalid"))
     return "prepare-keeper-" + outcome + "-log-" + log + "-info-" + info
 

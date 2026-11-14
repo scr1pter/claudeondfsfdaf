@@ -23,3 +23,34 @@ Independent source review, Engine typecheck, pure manifest boundary checks, stat
 Actual CI must first prove the installed Python metadata observer and runtime/profile provenance on the same host. Then a reviewed immutable installer and workflow must run the complete baseline matrix and four fresh Engine-death cells, including owned cleanup on every path. The stock Ubuntu reader fix is being qualified separately on `build-scope`/`build-scope-witness`; an integration must preserve its exact reviewed implementation instead of substituting a path-only interpreter check.
 
 Full bootstrap, preconstruction alias/canary cases, native profile/LSM compatibility, installed runtime provenance, root installation and production floor qualification remain open. No production activation is authorized by this document.
+
+## Prepare diagnostic continuation, 14 November 2026
+
+The genuine baseline at source `faa1fa09b697b900e6125ad316a7e961de616981`
+([run 43566766483](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43566766483),
+job `132362207081`) failed before the first keeper marker. Its closed diagnostic
+was `prepare-keeper-child-exit-log-no-marker-info-child-created`, exit 1. Cleanup
+also refused its proof; neither result is a successful isolation or cleanup
+witness. The child-created metadata alone does not prove completed mounts,
+interpreter startup or execution of the keeper.
+
+The `native-finish` source extends only the private-output-free diagnostic
+projection for setup failures between child creation and keeper execution.
+Additional fixed bubblewrap operation prefixes come from the already-pinned
+[v0.9.0 source](https://github.com/containers/bubblewrap/blob/8e51677abd7e3338e4952370bf7d902e37d8cbb6/bubblewrap.c).
+Unknown prose, paths, arguments and stderr remain private. The native decoder
+accepts the exact expanded closed product; malformed and unknown values still
+refuse. No mount, capability, profile, admission, timeout or cleanup requirement
+is relaxed, and the native build remains inactive outside its existing CI seam.
+
+Both Python sources parse and `git diff --check` passes at this checkpoint.
+The pure diagnostic tests and Engine types await the coordinator's serial Bun
+slot. One explicitly selected Bun/own-key/baseline hosted cell is intended to
+locate the remaining prepare failure; it is not the full qualification matrix.
+The workflow permits that branch only through manual dispatch. No native code,
+privileged operation or owner application was executed locally.
+
+The separate legacy @vector sandbox job `132364311238` at source `ceed2426`
+also refused prepare before its runtime probes. Its generic error is not evidence
+of the same cause as the native keeper failure. No native implementation is
+transplanted wholesale into the legacy preparation path by this diagnostic step.
