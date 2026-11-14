@@ -50,8 +50,8 @@ export default defineConfig({
       from: fileURLToPath(new URL("../app/dist-phone/", import.meta.url)),
       to: fileURLToPath(new URL("./dist/phone/", import.meta.url)),
     }),
-    react({ include: ["**/components/marketing/**/*.tsx"] }),
-    solidJs({ exclude: ["**/components/marketing/**/*.tsx"] }),
+    react({ include: ["**/components/marketing/**/*.tsx", "**/components/workspaces/**/*.tsx"] }),
+    solidJs({ exclude: ["**/components/marketing/**/*.tsx", "**/components/workspaces/**/*.tsx"] }),
     starlight({
       title: "Vector",
       defaultLocale: "root",

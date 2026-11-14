@@ -8,6 +8,7 @@ const dist = path.join(root, "packages", "web", "dist")
 const keep = new Set([
   "_astro",
   "account",
+  "workspaces",
   "codium",
   "auth",
   "design",

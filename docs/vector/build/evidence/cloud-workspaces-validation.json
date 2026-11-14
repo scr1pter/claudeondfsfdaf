@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-08T21:05:11.687739+00:00",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "cloud-workspaces",
+  "sourceRevision": "b258a726be0e451f3805a55246fce579a1e55297",
+  "baseRevision": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+  "scope": "Local private-pilot implementation checks; no deployed hosted service or real paid model inference",
+  "runtime": {
+    "bun": "1.3.14",
+    "node": "24",
+    "platform": "linux-x64"
+  },
+  "checks": [
+    {
+      "name": "cloud-package",
+      "cwd": "packages/cloud-workspaces",
+      "command": "bun test test --timeout 30000",
+      "passed": true,
+      "tests": 67,
+      "assertions": 590
+    },
+    {
+      "name": "gateway-node-account-delete-site-pruning",
+      "cwd": "test",
+      "command": "bun test cloud-workspaces-api.test.ts cloud-workspaces-node.test.ts account-delete-api.test.ts site-publication.test.ts --timeout 30000",
+      "passed": true,
+      "tests": 38,
+      "assertions": 289
+    },
+    {
+      "name": "browser-client",
+      "cwd": "packages/web",
+      "command": "bun test src/lib/cloud-workspaces-client.test.ts --timeout 30000",
+      "passed": true,
+      "tests": 18,
+      "assertions": 67
+    },
+    {
+      "name": "cloud-typecheck",
+      "cwd": "packages/cloud-workspaces",
+      "command": "bun typecheck",
+      "passed": true
+    },
+    {
+      "name": "website-typecheck",
+      "cwd": "packages/web",
+      "command": "bun typecheck",
+      "passed": true,
+      "errors": 0,
+      "warnings": 0,
+      "hints": 195
+    },
+    {
+      "name": "production-website-build",
+      "cwd": "packages/web",
+      "command": "bun run build",
+      "passed": true,
+      "reportedBuildSeconds": 14.15
+    },
+    {
+      "name": "retain-workspaces-route",
+      "cwd": ".",
+      "command": "node script/prune-vector-site.mjs",
+      "passed": true
+    },
+    {
+      "name": "desktop-fresh-mobile-browser",
+      "cwd": "packages/cloud-workspaces",
+      "command": "VECTOR_WORKSPACES_TEST_URL=http://127.0.0.1:3457 VECTOR_WORKSPACES_CHROMIUM_PATH=/usr/bin/chromium bun script/browser-smoke.ts",
+      "passed": true,
+      "checks": 13,
+      "receipt": "cloud-workspaces-browser.json",
+      "backend": "test-only intercepted API"
+    },
+    {
+      "name": "actual-node-engine-container",
+      "cwd": "packages/cloud-workspaces",
+      "command": "VECTOR_WORKSPACES_TEST_IMAGE=sha256:f726ac173d7f71113c2c4594e474ed8619356971ea1ca3266599a6d010f091b7 bun script/runtime-smoke.ts",
+      "passed": true,
+      "receipt": "cloud-workspaces-runtime.json",
+      "provider": "scripted zero-cost fixture",
+      "productionIsolation": false
+    },
+    {
+      "name": "git-diff-check",
+      "command": "git diff --check",
+      "passed": true
+    }
+  ],
+  "externalValidation": {
+    "hostedCI": "not run at this local evidence checkpoint",
+    "productionDeployment": "not performed",
+    "realProviderInference": "not performed",
+    "liveGitHubPublication": "not performed",
+    "productionRunscQuotaAndNetworkIsolation": "operator validation required"
+  },
+  "sourceSha256": {
+    ".github/workflows/vector-workspaces.yml": "1721f25eae0a4a151ab2aa44bc8a03b95132554f237027e678bce89f1e58b472",
+    "api/_lib/cloud-workspaces.ts": "f5000ea4ae1db00c9127632641e19117da5cbb0f7116c742a35a9f3c85b85d7e",
+    "api/account/delete.ts": "8df8e304dbb21ecb0269295e50e8e978546eb97d6ad897949e2a8db8f6f4b68b",
+    "api/cloud-workspaces.ts": "0bb7b1e382088e8a3c9c196de32e621ea44f367751a1213f00b853c66e64faaa",
+    "bun.lock": "4ec044ef28f2336178e8e801853103ba716a201ab82dbe9b57ed062e293f2be3",
+    "docs/vector/build/cloud-workspaces.md": "86e2fcb4db750e438d76f7e1cdf3e763c46671cadc58f652dd86f680a3dd02ab",
+    "packages/cloud-workspaces/.env.example": "7e4677286fc45b8be64d0deb2ab30a877b2e97c79c81ffe095ce5cd1c8351bcb",
+    "packages/cloud-workspaces/container/engine.Dockerfile": "35138a9c0aacd5af81bfcd7bfa88c44f529364970c86bf0f0bd46aab86c3eb34",
+    "packages/cloud-workspaces/package.json": "e3c5b17913038350dd5b8dd65da2fdc9b36574ae0549992dad0aff0192204063",
+    "packages/cloud-workspaces/script/browser-smoke.ts": "508db851dcac945317f6f13a8284767a657fe26a7af6ae320056907946c9a9e3",
+    "packages/cloud-workspaces/script/prepare-engine.ts": "78492ff8392be4090860ea907ed87f27688dc10f4eabfd25b5d1b0d6d5b4b894",
+    "packages/cloud-workspaces/script/runtime-smoke.ts": "1ddbfb892030aa948eaafaf0f336605f7a64eb25dad5d8ab55d0f0588a63dd6c",
+    "packages/cloud-workspaces/script/serve-preview.mjs": "8dda1b85c15f35330c5293d2b4aac3a0b4bc5ad56234fb9c1907a5b1449f8667",
+    "packages/cloud-workspaces/src/docker.ts": "98f444b20855137ccb2fe944d9259a40f28231f7f8aea88b79a3e537a1084fef",
+    "packages/cloud-workspaces/src/github.ts": "3fc89463ad03313f93060c2f79ed24cf0d791f2d6da2cb7ea3c8a04c20d6cb1b",
+    "packages/cloud-workspaces/src/main.ts": "18a29ff1fd2e8288c5217c8ba02c5e09937fb297cd843385b5887d6437cf2604",
+    "packages/cloud-workspaces/src/message-identities.ts": "87c795edb7f838a451050e305ef95b20fb419ef49e89902169206461ed7471c2",
+    "packages/cloud-workspaces/src/protocol.ts": "fc6e1b0670b2908237dee5e7a497307f2d7e22312815ebd79ec3da7a5962161f",
+    "packages/cloud-workspaces/src/service.ts": "50ebc46defc1ce4996404daa8bc4a8768a0c27a2ca277718ad0d9e09d0e33df2",
+    "packages/cloud-workspaces/src/signing.ts": "8cca0795fcb532a5a58bbea15e019626e2452644334fe7136d80598a43b4d86a",
+    "packages/cloud-workspaces/src/store.ts": "6165bba7d28c465d55881db4e790ad3be8410bd547a918293e3a71a436853ed4",
+    "packages/cloud-workspaces/test/docker.test.ts": "4ffdd7e08c1c8377071f7188b959464642145ddaee8f77770183bab783d59160",
+    "packages/cloud-workspaces/test/github.test.ts": "698cfe206bef6e782c4720b740197f3730eab612718f9e1fad1d7261ac6fb501",
+    "packages/cloud-workspaces/test/message-identities.test.ts": "3e3e030d77d3c1acfe645d8cde7b63841802cc7ad37d76ef142536fff0614eda",
+    "packages/cloud-workspaces/test/protocol.test.ts": "731209d8e0f214147a2a960a6e223389777a878c63a58c0e07cae200aaad136e",
+    "packages/cloud-workspaces/test/service.test.ts": "33906e36587d056e0d964c67b19db4cabab6371befb1f32a786c17d9e7c856e3",
+    "packages/cloud-workspaces/test/store.test.ts": "f5a0c3e210ec321bf226170e4d55397b7f20b8bcde35ec0bc8b9ad7c16441b29",
+    "packages/cloud-workspaces/tsconfig.json": "a63d6a7204613a52fbceed7fcf8b1dc4fce3452bcbd4e5c20500f1f7bc7fa1b8",
+    "packages/cloud-workspaces/worker/entry.mjs": "05c466ad53733552fa81dbd23b9f9c5b7506525e6e5a46bdc5ea552fa83803f0",
+    "packages/web/astro.config.mjs": "c8752505146af07e357e5de4efd8a18c0da29171b9223aa945761fbea0a07c7e",
+    "packages/web/src/components/marketing/account/AccountPage.tsx": "4a50767eeb83bf2a066d370be934ec87dc2a593f1ddb975ac00e8bf9052f5ac8",
+    "packages/web/src/components/workspaces/CloudWorkspaces.tsx": "dc05f0dec15f9b2bc4bf16b1317299b2e049dbd0f600a23affb004ea575a0b31",
+    "packages/web/src/components/workspaces/cloud-workspaces.css": "2c0ff23cb4cabd2b4342abfdf162f50f7be6a3f42d046153febb2dad9102bf16",
+    "packages/web/src/lib/cloud-workspaces-client.test.ts": "6263da716cc5866332ab6406343a8c2d78a38681853e9a9ee7a395782a809d91",
+    "packages/web/src/lib/cloud-workspaces-client.ts": "c8fc697e7b57ce418599d5238324a2610322f5b67640bfbddcb2c42082af687d",
+    "packages/web/src/pages/workspaces.astro": "1b6cd1601d4661aec4fffb89e69e35a063cf4b3d98292c37722cbc9369fdd1f5",
+    "script/prune-vector-site.mjs": "bc3eef376f80ae7232b84df226bdcc64eb3d66b58413ebfe9763ca1069970f65",
+    "test/cloud-workspaces-api.test.ts": "d4093ac37d420eb672071e09543731c2776d36e6b121425e141f5ba63546a386",
+    "test/cloud-workspaces-node.test.ts": "c0ecf19c5feda5db43fcda39037721decc15abde74b17fbb348da636d49aaee4"
+  }
+}

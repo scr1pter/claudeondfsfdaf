@@ -3,6 +3,7 @@ import { LoaderCircle } from "lucide-react"
 import { useEffect, useState } from "react"
 import vectorMark from "../../../assets/vector-mark.webp"
 import { readAccountApiResponse, takeAccountReturnPath, vectorAccountClient } from "../../../lib/account-client"
+import { cloudWorkspacesClient } from "../../../lib/cloud-workspaces-client"
 import { FreeDownload } from "../download/FreeDownload"
 import { CliLaunchPanel } from "./CliLaunchPanel"
 import { ModelPlans } from "./ModelPlans"
@@ -21,9 +22,12 @@ type AccountState = {
  * /account — the signed-in page. One column, flat sections, no marketing.
  * Download, CLI, account.
  */
-export function AccountPage(props: { preview?: AccountState }) {
+export function AccountPage(props: { preview?: AccountState; previewWorkspaces?: boolean }) {
   const [token, setToken] = useState("")
   const [account, setAccount] = useState<AccountState | undefined>(props.preview)
+  // Cloud workspaces are a closed pilot, off by default: their section and deletion copy appear only once the gateway
+  // answers `enabled` for this account. The gateway and the host authorize every workspace request on their own.
+  const [workspaces, setWorkspaces] = useState(props.preview ? props.previewWorkspaces === true : false)
   const [loading, setLoading] = useState(!props.preview)
   const [action, setAction] = useState("")
   const [error, setError] = useState("")
@@ -76,6 +80,21 @@ export function AccountPage(props: { preview?: AccountState }) {
       .finally(() => setLoading(false))
     return () => unsubscribe?.()
   }, [])
+
+  useEffect(() => {
+    if (props.preview) return
+    setWorkspaces(false)
+    if (!token) return
+    const controller = new AbortController()
+    // Until it answers (or if it never does), the section stays hidden.
+    void cloudWorkspacesClient(token)
+      .list(controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setWorkspaces(value.enabled === true)
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [token, props.preview])
 
   const deleteAccount = () => {
     if (!token || !account) return
@@ -152,6 +171,16 @@ export function AccountPage(props: { preview?: AccountState }) {
           <FreeDownload accessToken={token} />
         </section>
 
+        {account && workspaces && (
+          <section className="acct-section">
+            <h2>Cloud workspaces</h2>
+            <p>Code with Vector in a GitHub repository and return to your saved cloud chats from another device.</p>
+            <a className="acct-button acct-button-secondary" href="/workspaces">
+              Open cloud workspaces
+            </a>
+          </section>
+        )}
+
         <CliLaunchPanel
           accessToken={token}
           previewToken={props.preview ? "vct_eyJ2IjoxLCJzdWIiOiJwcmV2aWV3IiwiZXhwIjoxfQ.previewsignature0000000000000000000000" : undefined}
@@ -182,8 +211,10 @@ export function AccountPage(props: { preview?: AccountState }) {
                 <p className="acct-fine">
                   This cannot be undone. Vector deletes your account and sign-in and stops the CLI tokens this account
                   has issued. Any Vector Codium plan ends at once, and what is left of this month can no longer be used.
-                  Repositories on your own machine are not touched, and neither is anything you have
-                  already published to your own cloud accounts.
+                  {workspaces &&
+                    " Access to your Vector cloud workspaces closes immediately, and their files are queued for cleanup, which may take time."}{" "}
+                  Repositories on your own machine are not touched, and neither is anything you have already published
+                  to your own cloud accounts.
                 </p>
                 <label className="acct-danger-label" htmlFor="acct-delete-confirm">
                   Type <strong>{account?.user.email}</strong> to confirm
@@ -226,7 +257,9 @@ export function AccountPage(props: { preview?: AccountState }) {
             ) : (
               <>
                 <p className="acct-fine">
-                  Deleting removes your sign-in and stops your CLI tokens. It cannot be undone.
+                  {workspaces
+                    ? "Deleting removes your sign-in, stops your CLI tokens and closes your cloud workspaces. Workspace files are queued for cleanup. It cannot be undone."
+                    : "Deleting removes your sign-in and stops your CLI tokens. It cannot be undone."}
                 </p>
                 <button
                   className="acct-button acct-button-quiet"
