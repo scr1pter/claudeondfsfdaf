@@ -242,6 +242,11 @@ const api: ElectronAPI = {
     ipcRenderer.on("browser-agent-page-event", handler)
     return () => ipcRenderer.removeListener("browser-agent-page-event", handler)
   },
+  onBrowserAgentActivity: (cb) => {
+    const handler = (_: unknown, event: Parameters<typeof cb>[0]) => cb(event)
+    ipcRenderer.on("browser-agent-activity", handler)
+    return () => ipcRenderer.removeListener("browser-agent-activity", handler)
+  },
   parallelWorkspaces: {
     list: (scope) => ipcRenderer.invoke("parallel-workspaces-list", scope),
     create: (input) => ipcRenderer.invoke("parallel-workspaces-create", input),

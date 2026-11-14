@@ -31,6 +31,7 @@ import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import {
   getLastFocusedWindow,
   getMainWindow,
+  getMainWindows,
   registerRendererProtocol,
   setRelaunchHandler,
   setAppQuitting,
@@ -62,6 +63,7 @@ import { readDesktopLocal } from "./local-policy"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { cleanupStoreFiles, removeLegacyAccessFiles } from "./store-cleanup"
 import { startBrowserBridge, stopBrowserBridge } from "./browser-bridge"
+import { setActivityTargets } from "./browser-agent"
 import { startCloudBridge, stopCloudBridge } from "./cloud-bridge"
 import { setupSecureRuntimeSecrets } from "./secure-runtime"
 import { forgetRetiredCloudProviders, handleCloudOAuthDeepLinks } from "./cloud-connections"
@@ -395,6 +397,8 @@ const main = Effect.gen(function* () {
       }),
     ),
   )
+  // The agent browser's activity reaches every main window, so the app shows it with Preview closed too.
+  setActivityTargets(getMainWindows)
   const browserBridge = yield* Effect.promise(() => startBrowserBridge())
   process.env.VECTOR_BROWSER_BRIDGE_URL = browserBridge.url
   process.env.VECTOR_BROWSER_BRIDGE_TOKEN = browserBridge.token

@@ -448,6 +448,20 @@ export type BrowserAgentPageEvent = {
   loading: boolean
 }
 
+/**
+ * What the agent's browser for one task is doing, sent to every main window whether or not a Preview shows it: its
+ * active page, its tab count, whether a command runs, whether a Preview shows it, and `closed` once it is gone.
+ */
+export type BrowserAgentActivity = {
+  contextId: string
+  url: string
+  title: string
+  tabs: number
+  busy: boolean
+  shown: boolean
+  closed: boolean
+}
+
 export type BrowserAgentBounds = { x: number; y: number; width: number; height: number }
 
 export type BrowserAutomationRun = {
@@ -595,6 +609,10 @@ export type BrowserAgentInput = {
   tabId?: string
   /** selectOption: the option values or visible labels to select. */
   values?: string[]
+  /** click and clickRef: 2 for a double click (1 by default). */
+  clickCount?: number
+  /** click and clickRef: which mouse button (left by default). */
+  button?: "left" | "right"
   /** A driving command runs only while the active tab's page still has this origin: the one the engine checked and asked about. */
   expectOrigin?: string
   /** A click runs only while its target still has this name (clickTargetLabel): the one the engine judged. */
@@ -976,6 +994,7 @@ export type ElectronAPI = {
   runBrowserAgent: (input: BrowserAgentInput) => Promise<BrowserAutomationRun>
   prepareAgentTask: (root: string, task: string) => Promise<AgentTaskPreparation>
   onBrowserAgentPageEvent: (cb: (event: BrowserAgentPageEvent) => void) => () => void
+  onBrowserAgentActivity: (cb: (event: BrowserAgentActivity) => void) => () => void
   parallelWorkspaces: {
     list: (scope?: { sourcePath?: string; parentSessionId?: string }) => Promise<ParallelWorkspaceRecord[]>
     create: (input: CreateParallelWorkspaceInput) => Promise<ParallelWorkspaceRecord>

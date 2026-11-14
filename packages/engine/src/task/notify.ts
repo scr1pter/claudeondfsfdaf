@@ -33,8 +33,10 @@ import { TaskLimits } from "./limits"
 // starts one. A note that should not start a turn is recorded with noReply and marked taskQuiet.
 
 export type Note = {
-  kind: "result" | "message" | "attention" | "interrupted" | "shell" | "hosted"
+  kind: "result" | "message" | "attention" | "interrupted" | "shell" | "hosted" | "terminal"
   hostedID?: string
+  /** A terminal the agent opened with notify: the note says it exited or printed the pattern it watches for. */
+  terminalID?: string
   /** Trusted engine receipt, never read from public part metadata. A retry upserts these same two IDs. */
   receipt?: { messageID: MessageID; partID: PartID }
   taskID?: SessionID
@@ -244,6 +246,14 @@ function metadata(note: Note, quiet: boolean): Record<string, unknown> {
             ? { hostedJobNotification: { jobID: note.hostedID, state: note.state } }
           : note.kind === "interrupted"
             ? { taskInterrupted: { taskIDs: note.taskIDs ?? [] } }
+          : note.kind === "terminal"
+            ? {
+                terminalNotification: {
+                  terminalID: note.terminalID,
+                  state: note.state,
+                  ...(note.exitCode === undefined ? {} : { exitCode: note.exitCode }),
+                },
+              }
             : {
                 shellNotification: {
                   shellID: note.shellID,

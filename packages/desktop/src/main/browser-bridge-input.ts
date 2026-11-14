@@ -59,6 +59,8 @@ export function parseBrowserAgentInput(value: unknown): BrowserAgentInput {
     deltaY: optionalNumber(input.deltaY, "deltaY"),
     tabId: optionalTab(input.tabId),
     values: optionalValues(input.values),
+    clickCount: optionalClickCount(input.clickCount),
+    button: optionalButton(input.button),
     expectOrigin: optionalString(input.expectOrigin, "expectOrigin", 2048),
     expectLabel: optionalString(input.expectLabel, "expectLabel", 300),
     settle: optionalBoolean(input.settle, "settle"),
@@ -217,6 +219,19 @@ function boundedString(value: unknown, name: string, max: number) {
 function optionalString(value: unknown, name: string, max: number) {
   if (value === undefined) return
   if (typeof value !== "string" || value.length > max) throw new Error(`Invalid browser ${name}.`)
+  return value
+}
+
+// A click is a single or a double click, with the left or the right button; nothing else is a click the agent makes.
+function optionalClickCount(value: unknown) {
+  if (value === undefined) return
+  if (value !== 1 && value !== 2) throw new Error("Invalid browser clickCount.")
+  return value
+}
+
+function optionalButton(value: unknown) {
+  if (value === undefined) return
+  if (value !== "left" && value !== "right") throw new Error("Invalid browser button.")
   return value
 }
 

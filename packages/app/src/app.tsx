@@ -411,6 +411,9 @@ declare global {
       onBrowserAgentPageEvent?: (
         cb: (event: import("@/features/browser-agent/types").BrowserAgentPageEvent) => void,
       ) => () => void
+      onBrowserAgentActivity?: (
+        cb: (event: import("@/features/browser-agent/types").BrowserAgentActivity) => void,
+      ) => () => void
       onZoomFactorChanged?: (cb: (factor: number) => void) => () => void
       vectorLocal?: {
         status: () => Promise<import("@/utils/desktop-local").DesktopLocal>

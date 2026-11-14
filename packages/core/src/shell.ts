@@ -5,7 +5,6 @@ import { spawn, type ChildProcess } from "child_process"
 import { readFile } from "fs/promises"
 import { realpathSync, statSync } from "fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Option, Schema } from "effect"
 import { untrustedChildEnvironment } from "./child-environment"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
@@ -180,37 +179,29 @@ function info(file: string): Item {
   }
 }
 
-export function args(file: string, command: string, cwd: string) {
-  const n = name(file)
-  if (n === "nu" || n === "fish") return ["-c", command]
-  if (n === "zsh") {
-    return [
-      "-l",
-      "-c",
-      `
+// The bash and zsh wrappers `args` builds: the rc files, then the working directory, then the command line. The
+// directory and the command line reach the script as its positional parameters ($1 and $2) and `eval "$2"` runs the
+// line exactly as written, once. Written into the script itself, inside double quotes, the shell would expand `$VAR`,
+// `$(…)` and backticks in it before eval ran, even where single quotes keep them literal for the permission scan.
+const WRAPPER_NAME = "vector"
+const ZSH_WRAPPER = `
         [[ -f ~/.zshenv ]] && source ~/.zshenv >/dev/null 2>&1 || true
         [[ -f "\${ZDOTDIR:-$HOME}/.zshrc" ]] && source "\${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true
         cd -- "$1"
-        eval ${JSON.stringify(command)}
-      `,
-      "vector",
-      cwd,
-    ]
-  }
-  if (n === "bash") {
-    return [
-      "-l",
-      "-c",
+        eval "$2"
       `
+const BASH_WRAPPER = `
         shopt -s expand_aliases
         [[ -f ~/.bashrc ]] && source ~/.bashrc >/dev/null 2>&1 || true
         cd -- "$1"
-        eval ${JSON.stringify(command)}
-      `,
-      "vector",
-      cwd,
-    ]
-  }
+        eval "$2"
+      `
+
+export function args(file: string, command: string, cwd: string) {
+  const n = name(file)
+  if (n === "nu" || n === "fish") return ["-c", command]
+  if (n === "zsh") return ["-l", "-c", ZSH_WRAPPER, WRAPPER_NAME, cwd, command]
+  if (n === "bash") return ["-l", "-c", BASH_WRAPPER, WRAPPER_NAME, cwd, command]
   if (n === "cmd") return ["/c", command]
   if (ps(file)) return ["-NoProfile", "-Command", command]
   return ["-c", command]
@@ -221,12 +212,32 @@ export function args(file: string, command: string, cwd: string) {
  * line it evaluates, so the rc-file lines do not take its place; otherwise the program and its arguments as one line.
  */
 export function commandLine(file: string, argv: readonly string[]) {
-  const wrapped =
-    argv.length === 5 && argv[0] === "-l" && argv[1] === "-c" && argv[3] === "vector"
-      ? /\n\s*eval ("(?:[^"\\]|\\.)*")\s*$/.exec(argv[2])
-      : null
-  const line = wrapped ? Schema.decodeUnknownOption(Schema.fromJsonString(Schema.String))(wrapped[1]) : Option.none()
-  return Option.getOrElse(line, () => [file, ...argv].join(" "))
+  return wrapped(argv) ?? [file, ...argv].join(" ")
+}
+
+/** The command line inside the bash or zsh wrapper `args` builds, or undefined when argv is no such wrapper. */
+export function wrapped(argv: readonly string[]) {
+  if (
+    argv.length === 6 &&
+    argv[0] === "-l" &&
+    argv[1] === "-c" &&
+    (argv[2] === ZSH_WRAPPER || argv[2] === BASH_WRAPPER) &&
+    argv[3] === WRAPPER_NAME
+  )
+    return argv[5]
+}
+
+/**
+ * Whether a program started with `argv` is an interactive shell reading its commands from the terminal: a shell Vector
+ * knows (bash, zsh, sh, dash, ksh, PowerShell, cmd), started with no command and no script, only the options that make
+ * it a login or interactive shell. Anything else (a command line run with -c, a script, a REPL, a dev server, ssh) reads
+ * the terminal as its own input, so what is typed there is no shell command.
+ */
+export function interactive(file: string, argv: readonly string[]) {
+  if (posix(file)) return argv.every((arg) => /^-(?:l|i|il|li|-login)$/.test(arg))
+  if (ps(file)) return argv.every((arg) => /^-(?:nologo|noprofile|interactive)$/i.test(arg))
+  if (name(file) === "cmd") return argv.every((arg) => /^\/(?:q|d)$/i.test(arg))
+  return false
 }
 
 /**
