@@ -141,9 +141,8 @@ test("a fresh engine lists the account's last catalog while vectordev.ai is slow
   await ModelPlans.createClient({ file, request: async () => Response.json(active) }).catalog(account, { force: true })
   // The file names the account by digest; the token itself is never written.
   expect(await Bun.file(file).text()).not.toContain(account)
-  // Next launch: vectordev.ai has not answered by the listing deadline. It never answers here, because a late answer
-  // from one launch saves its catalog over the file that the later launches below replace and read.
-  const slow = () => new Promise<Response>(() => {})
+  // Next launch: vectordev.ai answers after the listing deadline.
+  const slow = () => Bun.sleep(50).then(() => Response.json(active))
   const restarted = ModelPlans.createClient({ file, timeout: 5, request: slow })
   expect(await restarted.catalog(account)).toEqual(active)
   expect(await restarted.catalog("vct_another-account.token")).toEqual(off)
