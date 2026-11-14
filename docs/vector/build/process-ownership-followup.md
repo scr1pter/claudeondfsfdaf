@@ -119,9 +119,7 @@ concluded `success`. The counts come from the official GitHub job logs.
 - [Vector standalone installers 43151686001](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151686001):
   `windows` and `windows-native` passed, both on `windows-2025`.
 
-The containment and installer workflows filter `pull_request` by path. A later
-docs-only commit does not trigger them, and it does not change the code these
-runs tested.
+Later docs-only commits to this PR do not change the code these runs tested.
 
 ## Relationship to PR #23
 
