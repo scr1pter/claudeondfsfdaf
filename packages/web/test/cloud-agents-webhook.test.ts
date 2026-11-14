@@ -1,6 +1,19 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import { createCloudAgentsWebhookHandler } from "../../../api/_lib/github-webhook-handlers/cloud-agents"
 import type { RepoBinding, SuspendReason } from "../../../api/_lib/cloud-agents-binding"
+
+// The handler does nothing while the service is off (cloud-agents-service-off.test.ts); these cases run it on.
+const variables = ["MODEL_PLANS_ENABLED", "VECTOR_GITHUB_BRAIN_ENABLED"]
+const previous = Object.fromEntries(variables.map((name) => [name, process.env[name]]))
+beforeAll(() => {
+  Object.assign(process.env, { MODEL_PLANS_ENABLED: "true", VECTOR_GITHUB_BRAIN_ENABLED: "true" })
+})
+afterAll(() => {
+  for (const name of variables) {
+    if (previous[name] === undefined) delete process.env[name]
+    else process.env[name] = previous[name]
+  }
+})
 
 function fixture() {
   const state = {

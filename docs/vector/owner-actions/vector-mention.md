@@ -12,7 +12,7 @@ The source checkpoints in [the build progress](../build/vector-at-mention-progre
 | `VECTOR_GITHUB_APP_ENABLED`, App id/client id/slug/private key | Scoped installation verification and opt-in publication/desktop dispatch | Existing App setup policy; activate only for a selected test installation |
 | `VECTOR_RUN_TOKEN_SECRET` | Signed, short-lived run-domain authority | Dedicated random secret in the production secret store |
 | `VECTOR_RUN_ARTIFACT_SECRET` | Per-conversation encrypted artifact keys and separately labeled upload key wraps | Dedicated random secret; rotation can make older artifacts unreadable |
-| `VECTOR_GITHUB_BRAIN_ENABLED` | Explicit desktop Brain upload, run and owner-read routes | Unset/false until the complete desktop/run/return path is accepted |
+| `VECTOR_GITHUB_BRAIN_ENABLED` | Explicit desktop Brain upload, run and owner-read routes. With `MODEL_PLANS_ENABLED`, it also gates every `api/cloud-agents` bind, binding, run, mint and run-report route and the `cloud-agents` webhook handler: while either is not `true` they answer `CLOUD_AGENTS_UNAVAILABLE` (the handler does nothing) before any store read or write | Unset/false until the complete desktop/run/return path is accepted |
 | `CODIUM_LISTED_PERKS` | Public/UI display permission | Add `github-agents` last; `github-no-secret`, `scheduled` and `brain-cloud` retain their own gates |
 | `CODIUM_TRACK_B_LIVE` | Track B Brain/playbook listing readiness | Existing Codium rollout rules apply |
 

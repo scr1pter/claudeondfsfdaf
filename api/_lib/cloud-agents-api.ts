@@ -25,6 +25,7 @@ import { githubApp, type createGithubApp } from "./github-app.js"
 import { githubApiVersion, githubId, githubRecord, githubResponseBytes, githubUnavailable } from "./github-http.js"
 import { consumeGithubOidc, verifyGithubOidc, type GithubIdentity } from "./github-oidc.js"
 import { ApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
+import { cloudAgentsEnabled } from "./model-plan-config.js"
 import { persistentStore } from "./persistent-store.js"
 import { requireUnrevokedAccount } from "./revocation.js"
 import { cloudRunArtifactKey } from "./cloud-agents-artifact.js"
@@ -605,6 +606,10 @@ function needsDefaultBranch() {
   return new ApiError(409, "BIND_NEEDS_DEFAULT_BRANCH", "Connect this repository from its default branch.")
 }
 
+function serviceOff() {
+  return new ApiError(503, "CLOUD_AGENTS_UNAVAILABLE", "Cloud agents are unavailable.")
+}
+
 function storeUnavailable() {
   return new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "Repository connections are temporarily unavailable.")
 }
@@ -623,7 +628,8 @@ function safe(handler: (request: ApiRequest, response: ApiResponse) => Promise<v
   return async (request: ApiRequest, response: ApiResponse) => {
     response.setHeader("x-content-type-options", "nosniff")
     response.setHeader("referrer-policy", "no-referrer")
-    await handler(request, response).catch((error: unknown) => {
+    // Checked before the handler runs: rate limits, OIDC replay marks and revocation reads all touch the store.
+    await (cloudAgentsEnabled() ? handler(request, response) : Promise.reject(serviceOff())).catch((error: unknown) => {
       if (!request.readableEnded) response.setHeader("connection", "close")
       request.resume()
       const known = error instanceof ApiError ? error : undefined

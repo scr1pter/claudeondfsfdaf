@@ -39,6 +39,8 @@ function journey() {
   })
   const environment = [
     "NODE_ENV",
+    "MODEL_PLANS_ENABLED",
+    "VECTOR_GITHUB_BRAIN_ENABLED",
     "KV_REST_API_URL",
     "KV_REST_API_TOKEN",
     "VECTOR_ABUSE_SECRET",
@@ -50,6 +52,8 @@ function journey() {
     await redis.connect()
     Object.assign(process.env, {
       NODE_ENV: "production",
+      MODEL_PLANS_ENABLED: "true",
+      VECTOR_GITHUB_BRAIN_ENABLED: "true",
       KV_REST_API_URL: upstream.url.origin,
       KV_REST_API_TOKEN: "journey-fixture-kv",
       VECTOR_ABUSE_SECRET: `journey-fixture-${crypto.randomUUID()}`,
