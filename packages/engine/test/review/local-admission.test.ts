@@ -3,24 +3,35 @@ import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import { symlinkSync, unlinkSync } from "node:fs"
 import path from "node:path"
-import { Effect, Exit, Option, Schema } from "effect"
+import { Effect, Exit, Option, Result, Schema } from "effect"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { selectFindings } from "@vectordevai/core/review/select"
 import { invocationProblems } from "@vectordevai/core/review/invocation"
 import { ReviewRun } from "@vectordevai/schema/review-run"
+import { SessionProjector } from "@vectordevai/core/session/projector"
 import type { LocalReviewDeps } from "@/cli/cmd/review"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { ReviewLocalAdmission } from "@/review/local-admission"
 import type { RunInput } from "@/review/run"
 import { ReviewService } from "@/review/service"
+import { Session } from "@/session/session"
 import { TRUNCATION_DIR } from "@/tool/truncation-dir"
-import { tmpdirScoped } from "../fixture/fixture"
+import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Git.node, CrossSpawnSpawner.node])))
+const linux = process.platform === "linux" ? it.live : it.live.skip
+const owner = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([Git.node, CrossSpawnSpawner.node, Session.node, SessionProjector.node, EventV2Bridge.node]),
+  ),
+)
+const windows = process.platform === "win32" ? owner.instance : owner.instance.skip
 const git = (cwd: string, ...args: string[]) =>
   Effect.promise(() => $`git ${args}`.cwd(cwd).quiet().text()).pipe(Effect.map((value) => value.trim()))
 
@@ -129,7 +140,7 @@ describe("server-owned local review admission", () => {
     }),
   )
 
-  it.live("runs nested local changes with inherited asks withheld and without GitHub authority", () =>
+  linux("runs nested local changes with inherited asks withheld and without GitHub authority", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const admitted = yield* ReviewLocalAdmission.prepare(
@@ -155,7 +166,7 @@ describe("server-owned local review admission", () => {
     }),
   )
 
-  it.live("retains admitted canonical paths and parent when async Git setup changes caller objects or a symlink", () =>
+  linux("retains admitted canonical paths and parent when async Git setup changes caller objects or a symlink", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const link = path.join(repo.directory, "secret-link")
@@ -226,5 +237,55 @@ describe("server-owned local review admission", () => {
       ])
         expect(Exit.isFailure(yield* ReviewLocalAdmission.prepare(repo.request, source).pipe(Effect.exit))).toBe(true)
     }),
+  )
+
+  windows(
+    "Windows refuses genuine local admission before model setup or review",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "Windows admission owner" }, "owner")
+        const head = yield* git(test.directory, "rev-parse", "HEAD")
+        const run = adapter()
+        let resolutions = 0
+        const result = yield* Effect.gen(function* () {
+          const admitted = yield* ReviewLocalAdmission.prepare(
+            { requestID: "windows_admission_refusal", target: { kind: "working-tree", head } },
+            {
+              sessionID: parent.id,
+              directory: test.directory,
+              worktree: test.directory,
+              permission: [{ permission: "*", pattern: "*", action: "allow" }],
+            },
+          )
+          return yield* ReviewService.execute(
+            admitted.invocation,
+            {
+              ...run.deps,
+              resolveModel: (input) =>
+                Effect.gen(function* () {
+                  resolutions++
+                  return yield* run.deps.resolveModel(input)
+                }),
+            },
+            admitted.placement,
+          )
+        }).pipe(Effect.result)
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(ReviewLocalAdmission.Refused)
+          if (result.failure instanceof ReviewLocalAdmission.Refused) {
+            expect(result.failure.code).toBe("placement")
+            expect(result.failure.message).toBe(
+              "Read-only Git inspection is unavailable: this host has no pinned-directory adapter.",
+            )
+          }
+        }
+        expect(resolutions).toBe(0)
+        expect(run.calls).toEqual([])
+        expect((yield* sessions.get(parent.id)).id).toBe(parent.id)
+      }),
+    { git: true },
   )
 })

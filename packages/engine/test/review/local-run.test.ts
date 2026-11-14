@@ -39,7 +39,7 @@ import { Git } from "@/git"
 import { ReviewLocalRun } from "@/review/local-run"
 import { ReviewMemoryScope } from "@/review/memory-scope"
 import { ReviewMemoryAuthority } from "@/review/memory-authority"
-import type { ReviewLocalAdmission } from "@/review/local-admission"
+import { ReviewLocalAdmission } from "@/review/local-admission"
 import type { RunInput } from "@/review/run"
 import { Session } from "@/session/session"
 import { SessionCleanup } from "@/session/cleanup"
@@ -64,6 +64,8 @@ const it = testEffect(
     [[RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })]],
   ),
 )
+const linux = process.platform === "linux" ? it.instance : it.instance.skip
+const windows = process.platform === "win32" ? it.instance : it.instance.skip
 const options = { git: true, config: { lsp: false as const, formatter: false as const } }
 const git = (cwd: string, ...args: string[]) =>
   Effect.promise(() => $`git ${args}`.cwd(cwd).quiet().text()).pipe(Effect.map((value) => value.trim()))
@@ -87,6 +89,63 @@ const fixture = Effect.gen(function* () {
   const request: ReviewRun.Start = { requestID: "request_local_1", target: { kind: "working-tree", head } }
   return { directory: test.directory, parent, source, request }
 })
+
+windows(
+  "Windows refuses a genuine durable review before model setup or background reservation",
+  () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const sessions = yield* Session.Service
+      const database = yield* Database.Service
+      const jobs = yield* BackgroundJob.Service
+      const store = yield* BackgroundJobStore.Service
+      const before = yield* database.db.select().from(SessionTable).orderBy(SessionTable.id)
+      let resolutions = 0
+      let reviews = 0
+      const runs = yield* ReviewLocalRun.make({
+        resolveModel: () => {
+          resolutions++
+          return resolveModel()
+        },
+        runReview: (input: RunInput) => {
+          reviews++
+          return Effect.succeed(outcome(input))
+        },
+      })
+      expect(yield* jobs.list()).toEqual([])
+      expect(yield* store.forParent(repo.parent.id)).toEqual([])
+      expect(
+        yield* database.db
+          .select()
+          .from(ReviewRequestTable)
+          .where(eq(ReviewRequestTable.parent_session_id, repo.parent.id)),
+      ).toEqual([])
+      const result = yield* runs.start(repo.request, repo.source).pipe(Effect.result)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(ReviewLocalAdmission.Refused)
+        if (result.failure instanceof ReviewLocalAdmission.Refused) {
+          expect(result.failure.code).toBe("placement")
+          expect(result.failure.message).toBe(
+            "Read-only Git inspection is unavailable: this host has no pinned-directory adapter.",
+          )
+        }
+      }
+      expect(resolutions).toBe(0)
+      expect(reviews).toBe(0)
+      expect((yield* sessions.get(repo.parent.id)).id).toBe(repo.parent.id)
+      expect(yield* database.db.select().from(SessionTable).orderBy(SessionTable.id)).toEqual(before)
+      expect(
+        yield* database.db
+          .select()
+          .from(ReviewRequestTable)
+          .where(eq(ReviewRequestTable.parent_session_id, repo.parent.id)),
+      ).toEqual([])
+      expect(yield* jobs.list()).toEqual([])
+      expect(yield* store.forParent(repo.parent.id)).toEqual([])
+    }),
+  options,
+)
 
 const resolveModel = () =>
   Effect.succeed({
@@ -183,7 +242,7 @@ function outcome(input: RunInput, partial = false): ReviewOutcome {
 }
 
 describe("durable server-owned local review runs", () => {
-  it.instance(
+  linux(
     "an enabled first winner registers both genuine witnesses before the runner and exact retry adds nothing",
     () =>
       Effect.gen(function* () {
@@ -245,7 +304,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "default-off runs cannot gain witnesses on later enable while a fresh review gets a new pair",
     () =>
       Effect.gen(function* () {
@@ -292,7 +351,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "a required real SQLite registration failure settles its fixed request before any runner or retry takeover",
     () =>
       Effect.gen(function* () {
@@ -336,7 +395,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "actual session deletion retires a registered zero-content source and removes both markers",
     () =>
       Effect.gen(function* () {
@@ -364,7 +423,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "closing after the Brain commit still prevents the first runner and leaves no usable partial Main source",
     () =>
       Effect.gen(function* () {
@@ -479,7 +538,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "survives request disconnect, joins exact retries, and reloads the placed result without another review",
     () =>
       Effect.gen(function* () {
@@ -538,7 +597,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "serializes duplicate starts and stops only the addressed run while retaining its completed partial findings",
     () =>
       Effect.gen(function* () {
@@ -599,7 +658,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "two coordinators arbitrate one request durably and a crashed pending reservation never starts paid work",
     () =>
       Effect.gen(function* () {
@@ -681,7 +740,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "joins a force-stop when a reviewer does not return partial output after abort",
     () =>
       Effect.gen(function* () {
@@ -710,7 +769,7 @@ describe("durable server-owned local review runs", () => {
     15_000,
   )
 
-  it.instance(
+  linux(
     "reconciles only a dead durable lease and never restarts or stops live, unknown, or missing owners",
     () =>
       Effect.gen(function* () {
@@ -813,7 +872,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "refuses corrupted or oversized saved output without recomputing a review",
     () =>
       Effect.gen(function* () {
@@ -859,7 +918,7 @@ describe("durable server-owned local review runs", () => {
     options,
   )
 
-  it.instance(
+  linux(
     "actual Session.remove erases approved review provenance before removal and refuses corrupt review state without changing any Brain table",
     () =>
       Effect.gen(function* () {

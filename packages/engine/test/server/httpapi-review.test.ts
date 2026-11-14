@@ -26,6 +26,7 @@ import { InstanceHooks } from "@/project/instance-hooks"
 import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { ReviewApiError } from "@/server/routes/instance/httpapi/groups/review"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { pollWithTimeout, testEffect } from "../lib/effect"
@@ -74,6 +75,8 @@ const fileIt = testEffect(
   ),
 )
 const call = <A>(run: () => Promise<A>) => Effect.promise(run)
+const linuxLive = process.platform === "linux" ? it.live : it.live.skip
+const windowsLive = process.platform === "win32" ? it.live : it.live.skip
 const git = (cwd: string, ...args: string[]) =>
   call(() => $`git ${args}`.cwd(cwd).quiet().text()).pipe(Effect.map((text) => text.trim()))
 const report = (findings: unknown[] = []) => ({
@@ -304,6 +307,26 @@ afterEach(async () => {
 })
 
 describe("owner local review HTTP boundary", () => {
+  windowsLive("Windows owner HTTP refuses private Git admission before creating a helper or calling the model", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const before = (yield* call(() => f.sdk.session.list({ directory: f.directory, internal: true }))).data
+      expect(before?.map((session) => session.id)).toEqual([parentID])
+      const response = yield* f.raw("POST", root, owner, f.request)
+      expect(response.status).toBe(400)
+      const failure = yield* call(() => response.json()).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(ReviewApiError)),
+      )
+      expect(failure.code).toBe("placement")
+      expect(failure.message).toContain("this host has no pinned-directory adapter")
+      expect((yield* call(() => f.sdk.session.list({ directory: f.directory, internal: true }))).data).toEqual(before)
+      expect(
+        (yield* f.raw("GET", root).pipe(Effect.flatMap((response) => data(response, ReviewRun.List)))).runs,
+      ).toEqual([])
+      expect(yield* f.llm.calls).toBe(0)
+    }),
+  )
+
   fileIt.live(
     "deletion returns structured busy before changing foreign work, then denies the foreign process's late launch",
     () =>
@@ -366,7 +389,7 @@ describe("owner local review HTTP boundary", () => {
     30_000,
   )
 
-  it.live("a repository flag cannot enable the owner's default-off service", () =>
+  linuxLive("a repository flag cannot enable the owner's default-off service", () =>
     Effect.gen(function* () {
       const f = yield* fixture(false)
       const target = yield* f
@@ -472,7 +495,7 @@ describe("owner local review HTTP boundary", () => {
     }),
   )
 
-  it.live(
+  linuxLive(
     "local execution and bounded cross-client discovery need no GitHub connection and never leak result JSON in summaries",
     () => {
       const state = diagnostic("discovery")
@@ -558,7 +581,7 @@ describe("owner local review HTTP boundary", () => {
     30_000,
   )
 
-  it.live(
+  linuxLive(
     "the server derives inherited read asks and excludes protected payloads and tools",
     () => {
       const state = diagnostic("read-asks")
@@ -602,7 +625,7 @@ describe("owner local review HTTP boundary", () => {
     30_000,
   )
 
-  it.live(
+  linuxLive(
     "turning new reviews off still allows owned stop and retained partial read without another provider attempt",
     () =>
       Effect.gen(function* () {
@@ -637,7 +660,7 @@ describe("owner local review HTTP boundary", () => {
     30_000,
   )
 
-  it.live(
+  linuxLive(
     "wrong-parent, nested-parent and different-project requests never retarget an admitted review",
     () =>
       Effect.gen(function* () {

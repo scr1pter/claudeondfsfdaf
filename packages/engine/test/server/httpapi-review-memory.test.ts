@@ -11,12 +11,19 @@ import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ReviewMemory } from "@vectordevai/core/brain/review-memory"
 import { ReviewStore } from "@vectordevai/core/brain/review-store"
 import { ReviewWitness } from "@vectordevai/core/brain/review-witness"
-import { BrainEntryTable, BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
+import {
+  BrainEntryTable,
+  BrainEvidenceTable,
+  BrainReviewMemorySourceTable,
+  BrainReviewMemoryStateTable,
+  BrainReviewMemoryTable,
+} from "@vectordevai/core/brain/sql"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { Project } from "@vectordevai/core/project"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
+import { ReviewRequestTable } from "@vectordevai/core/review/request.sql"
 import { reviewVerdict } from "@vectordevai/core/review/verdict"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { EffectFlock } from "@vectordevai/core/util/effect-flock"
@@ -383,7 +390,112 @@ const approvedOutcome = (setup: Setup, http: Effect.Success<ReturnType<typeof li
   })
 const reopenReason = "The owner found a missing HTTP input case and asks to reassess this outcome."
 
-describe("registered review-memory owner HTTP group", () => {
+test.skipIf(process.platform !== "win32")(
+  "registered Windows owner HTTP refuses unavailable physical scope, enforces auth and strict wire, and leaves memory unchanged",
+  async () => {
+    await using directory = await tmpdir({ git: true })
+    const instance: InstanceContext = {
+      directory: directory.path,
+      worktree: directory.path,
+      project: { id: repository, worktree: directory.path, time: { created: 1, updated: 1 }, sandboxes: [] },
+    }
+    let trustReads = 0
+    const settings = {
+      trust: () =>
+        Effect.sync(() => {
+          trustReads++
+          return {
+            workspace: directory.path,
+            fingerprint: "http-windows-fixture",
+            trusted: true,
+            settings: false,
+            ignored: false,
+          }
+        }),
+    }
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        const brain = yield* BrainDatabase.Service
+        const requests = ReviewRequestStore.make(database.db)
+        const eraser = ReviewMemoryErasure.make(requests, brain.db)
+        yield* Effect.gen(function* () {
+          const lifecycle = yield* ReviewLifecycle.Service
+          const authority = ReviewMemoryAuthority.make({ database: database.db, requests, lifecycle, settings })
+          const memory = yield* ReviewMemory.Service.pipe(
+            Effect.provide(
+              ReviewMemory.layerWith(authority).pipe(Layer.provide(Layer.succeed(BrainDatabase.Service, brain))),
+            ),
+          )
+          const controls = ReviewMemoryOwner.make({ memory, settings })
+          yield* Effect.addFinalizer(() => Effect.sync(() => controls.dispose()))
+          const http = yield* listen(controls, instance)
+          const snapshot = Effect.all({
+            sessions: database.db.select().from(SessionTable),
+            requests: database.db.select().from(ReviewRequestTable),
+            entries: brain.db.select().from(BrainReviewMemoryTable),
+            states: brain.db.select().from(BrainReviewMemoryStateTable),
+            sources: brain.db.select().from(BrainReviewMemorySourceTable),
+            markers: brain.db.select().from(BrainEntryTable),
+            evidence: brain.db.select().from(BrainEvidenceTable),
+          })
+          const before = yield* snapshot
+          expect(Object.values(before).every((rows) => rows.length === 0)).toBe(true)
+          const response = yield* http("GET")
+          expect(response.status).toBe(400)
+          const failure = yield* call(() => response.json()).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(ReviewMemoryApiError)),
+          )
+          expect(failure.code).toBe("unavailable")
+          for (const [headers, status] of [
+            [{}, 401],
+            [guestHeaders, 403],
+            [forwardedHeaders, 403],
+          ] as const)
+            expect((yield* http("GET", root, undefined, headers)).status).toBe(status)
+          for (const query of ["?limit=51", "?offset=201", "?limit=0", "?root=/", "?owner=true"])
+            expect((yield* http("GET", `${root}${query}`)).status).toBe(400)
+          // This is untrusted wire input, never an acquired physical scope.
+          const payload = {
+            expectedScope: `vrs1_${"0".repeat(64)}`,
+            command: { action: "configure", expected: 0, enabled: true },
+          }
+          for (const extra of [{ root: directory.path }, { repository }, { owner: true }, { source }]) {
+            const rejected = yield* http("POST", `${root}/prepare`, { ...payload, ...extra })
+            expect(rejected.status).toBe(400)
+            expect(yield* call(() => rejected.json())).toMatchObject({ name: "BadRequest", data: { kind: "Payload" } })
+          }
+          expect(trustReads).toBe(0)
+          expect(yield* snapshot).toEqual(before)
+        }).pipe(
+          Effect.provide(
+            ReviewLifecycle.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(ReviewRequestStore.Service, requests),
+                  Layer.succeed(ReviewMemoryErasure.Service, eraser),
+                  LayerNode.compile(EffectFlock.node),
+                ),
+              ),
+            ),
+          ),
+        )
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Database.layerFromPath(path.join(directory.path, "http-main.sqlite")),
+            BrainDatabase.layerFor(path.join(directory.path, "http-brain.sqlite")),
+          ),
+        ),
+        Effect.scoped,
+      ),
+    )
+  },
+)
+
+// These thirteen integration cases require the actual Linux pinned-directory proof.
+const linux = describe.skipIf(process.platform !== "linux")
+linux("registered review-memory owner HTTP group (Linux)", () => {
   test("owner HTTP reopens only the sealed approved outcome and a separate human reason; guest/forwarded requests reveal nothing and cannot consume it", async () => {
     await run((setup) =>
       Effect.gen(function* () {

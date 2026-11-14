@@ -19,6 +19,8 @@ import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Git.node, CrossSpawnSpawner.node])))
+const linux = process.platform === "linux" ? it.live : it.live.skip
+const windows = process.platform === "win32" ? it.live : it.live.skip
 const git = (cwd: string, ...args: string[]) =>
   Effect.promise(() => $`git ${args}`.cwd(cwd).quiet().text()).pipe(Effect.map((value) => value.trim()))
 
@@ -103,7 +105,7 @@ const request = (repo: { directory: string; base: string; head: string }): Input
 })
 
 describe("shared review service", () => {
-  it.live("a real repository filter executes in the control but never in cold or warmed bound collection", () =>
+  linux("a real repository filter executes in the control but never in cold or warmed bound collection", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const outside = yield* tmpdirScoped()
@@ -165,7 +167,7 @@ describe("shared review service", () => {
     }),
   )
 
-  it.live("unsupported repository metadata refuses before model resolution or review", () =>
+  linux("unsupported repository metadata refuses before model resolution or review", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       yield* git(repo.directory, "config", "include.path", "untrusted-config")
@@ -187,7 +189,7 @@ describe("shared review service", () => {
     }),
   )
 
-  it.live("unsupported collector authority is refused without a live Git fallback", () =>
+  linux("unsupported collector authority is refused without a live Git fallback", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const bound = yield* ReviewGit.metadata(repo.directory)
@@ -204,7 +206,7 @@ describe("shared review service", () => {
       expect(result._tag).toBe("Failure")
     }),
   )
-  it.live("retains requester read authority when the review runs in a real Git worktree", () =>
+  linux("retains requester read authority when the review runs in a real Git worktree", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const directory = yield* tmpdirScoped()
@@ -227,7 +229,7 @@ describe("shared review service", () => {
     }),
   )
 
-  it.live("keeps admitted read denials when the caller mutates its array during model setup", () =>
+  linux("keeps admitted read denials when the caller mutates its array during model setup", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const run = adapter()
@@ -267,7 +269,7 @@ describe("shared review service", () => {
       expect(run.calls).toEqual([])
     }),
   )
-  it.live("uses pinned settings and parent placement without GitHub or durable branch state", () =>
+  linux("uses pinned settings and parent placement without GitHub or durable branch state", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       yield* Effect.promise(() => fs.writeFile(path.join(repo.directory, ".vector/review.json"), '{"maxComments":99}'))
@@ -300,7 +302,7 @@ describe("shared review service", () => {
     }),
   )
 
-  it.live("withholds denied files from the diff and context and reports incomplete coverage", () =>
+  linux("withholds denied files from the diff and context and reports incomplete coverage", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const run = adapter()
@@ -314,7 +316,7 @@ describe("shared review service", () => {
     }),
   )
 
-  it.live("rejects a stale head and unavailable settings before any reviewer starts", () =>
+  linux("rejects a stale head and unavailable settings before any reviewer starts", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       for (const input of [
@@ -330,7 +332,7 @@ describe("shared review service", () => {
     }),
   )
 
-  it.live("checks the head again after asynchronous model setup", () =>
+  linux("checks the head again after asynchronous model setup", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
       const run = adapter()
@@ -345,6 +347,27 @@ describe("shared review service", () => {
       expect(result.exitCode).toBe(2)
       expect(run.calls).toEqual([])
       expect(result.error).toContain("changed before")
+    }),
+  )
+
+  windows("Windows refuses a valid local review before model resolution or reviewer callbacks", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const run = adapter()
+      let resolutions = 0
+      const result = yield* execute(request(repo), {
+        ...run.deps,
+        resolveModel: (input) =>
+          Effect.gen(function* () {
+            resolutions++
+            return yield* run.deps.resolveModel(input)
+          }),
+      })
+      expect(result.exitCode).toBe(2)
+      expect(result.error).toBe("Read-only Git inspection is unavailable: this host has no pinned-directory adapter.")
+      expect(result.verdict.verdict).toBe("not-reviewed")
+      expect(resolutions).toBe(0)
+      expect(run.calls).toEqual([])
     }),
   )
 })
