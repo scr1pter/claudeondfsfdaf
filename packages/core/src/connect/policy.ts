@@ -719,6 +719,26 @@ export function firstReadBlock(paths: Iterable<string>, requester: Ruleset, revi
   return undefined
 }
 
+/** Git collects diffs without asking the read tool, so its paths keep every requester rule, including secrets. */
+export function diffReadBlock(paths: Iterable<string>, requester: Ruleset, roots: readonly string[] = []) {
+  const absolute = requester.filter(
+    (rule) => reads(rule) && (rule.pattern.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rule.pattern)),
+  )
+  const aliases: Rule[] = [{ permission: "read", pattern: "*", action: "allow" }, ...absolute]
+  for (const path of paths) {
+    const block = readBlock(path, requester, [])
+    if (block) return block
+    // Relative rules name the tool's worktree. Check explicit absolute rules separately, under every admitted
+    // source spelling, so a default ask does not erase a relative allow and an isolated worktree cannot reopen one.
+    for (const root of roots) {
+      const full = `${root.replaceAll("\\", "/").replace(/\/$/, "")}/${path}`
+      const alias = readBlock(full, aliases, [])
+      if (alias) return { ...alias, path }
+    }
+  }
+  return undefined
+}
+
 /** The refusal for a file a review must not read. It names the requester's pattern, so the user knows what to change. */
 export function readRefusal(block: {
   readonly path: string

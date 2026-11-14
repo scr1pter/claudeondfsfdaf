@@ -415,6 +415,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
             })
             const { scope, edited } = yield* settings()
             if (edited.length > 0) return settingsResult(target, edited)
+            yield* ConnectReviewService.checkReads(capability, scope.changed)
 
             // Check 2: the models, the dollar cap, and `connect_model` when a model is priced, has no readable price, or is
             // the repository's choice and not the user's own review model.
@@ -491,7 +492,13 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
             const out: string[] = []
             const local: LocalReviewDeps = {
               runReview: (input) =>
-                selected.check().pipe(
+                // Collection can happen after model consent. Recheck the actual diff, including both sides of
+                // renames, before any of its text reaches the provider; a late file cannot bypass admission.
+                ConnectReviewService.checkReads(
+                  capability,
+                  input.anchors.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]),
+                ).pipe(
+                  Effect.andThen(selected.check()),
                   Effect.orDie,
                   Effect.flatMap(() =>
                     runReview({ ...input, parentID: context.reviewParentID ?? context.sessionID }).pipe(

@@ -561,6 +561,46 @@ describe("fixes (CW-07)", () => {
 })
 
 describe("read rules a review must not get around", () => {
+  test("diff read authority keeps requester secret asks even when review tools deny the same files", () => {
+    for (const path of [".env", ".env.development", "nested/server.key", "id.pem", ".ssh/id_ed25519"])
+      expect(ConnectPolicy.diffReadBlock([path], buildRules)?.action).toBe("ask")
+    for (const path of [".env.example", "src/a.ts"])
+      expect(ConnectPolicy.diffReadBlock([path], buildRules)).toBeUndefined()
+    expect(ConnectPolicy.diffReadBlock([".env.development"], buildRules)).toEqual({
+      path: ".env.development",
+      pattern: "*.env.*",
+      action: "ask",
+    })
+    const denied = [...buildRules, ...rules("read", { "*.key": "deny" })]
+    expect(ConnectPolicy.diffReadBlock(["nested/server.key"], denied)?.action).toBe("deny")
+    expect(
+      ConnectPolicy.diffReadBlock(["nested/server.key"], [...denied, ...rules("read", { "*": "allow" })]),
+    ).toBeUndefined()
+  })
+
+  test("diff checks map absolute source rules without turning a relative allow into a default ask", () => {
+    const requester: Rule[] = [
+      { permission: "read", pattern: "*", action: "ask" },
+      { permission: "read", pattern: "public.ts", action: "allow" },
+      { permission: "read", pattern: "renamed.ts", action: "allow" },
+      { permission: "read", pattern: "private.key", action: "allow" },
+      { permission: "read", pattern: "/source/repo/private.key", action: "deny" },
+    ]
+    expect(ConnectPolicy.diffReadBlock(["public.ts"], requester, ["/source/repo", "/canonical/repo"])).toBeUndefined()
+    expect(ConnectPolicy.diffReadBlock(["private.key"], requester, ["/source/repo", "/canonical/repo"])).toEqual({
+      path: "private.key",
+      pattern: "/source/repo/private.key",
+      action: "deny",
+    })
+    expect(ConnectPolicy.diffReadBlock(["renamed.ts", "private.key"], requester, ["/source/repo"])?.path).toBe(
+      "private.key",
+    )
+    const windows = [...buildRules, ...rules("read", { "C:/source/repo/private.key": "deny" })]
+    expect(ConnectPolicy.diffReadBlock(["private.key"], windows, ["C:\\source\\repo"])?.action).toBe("ask")
+    const permitted = [...windows, ...rules("read", { "private.key": "allow" })]
+    expect(ConnectPolicy.diffReadBlock(["private.key"], permitted, ["C:\\source\\repo"])?.action).toBe("deny")
+  })
+
   test("under the build agent's defaults only the docker and kube patterns are looked for", () => {
     expect(ConnectPolicy.readPatterns(buildRules)).toEqual([
       ".docker/config.json",

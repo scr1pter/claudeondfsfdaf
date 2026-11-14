@@ -1517,7 +1517,7 @@ const REVIEW = (hit: { body: Record<string, unknown> }) =>
 
 describe("in process", () => {
   live.instance(
-    "the real review runs on the fake model, with the requester as its sessions' parent, and its findings arrive",
+    "the real review keeps requester secrets out of provider requests and returns its readable findings",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -1545,6 +1545,8 @@ describe("in process", () => {
             model: "lmstudio/test-model",
           }),
           "src/list.ts": LIST,
+          ".env.development": "TOKEN=WITHHELD_ENV_BEFORE\n",
+          "signing.key": "WITHHELD_RENAMED_KEY\n".repeat(12),
         })
         yield* git(directory, "add", "-A")
         yield* git(directory, "commit", "-q", "-m", "base")
@@ -1609,6 +1611,34 @@ describe("in process", () => {
         // A local model on this computer: no connect_model question.
         expect(modelAsks(asks)).toHaveLength(0)
         expect(run.result?.cost?.usd).toBeUndefined()
+
+        const before = yield* llm.calls
+        const refuse = () =>
+          Effect.gen(function* () {
+            const blocked = yield* hub.run({ request: review(requester.id, directory), call: { ask, promptOps: ops } })
+            expect(blocked.result?.state).toBe("refused")
+            expect(blocked.result?.refusal).toBe("read-rule")
+            expect(blocked.result?.verdict).toBe("not-reviewed")
+            expect(yield* llm.calls).toBe(before)
+          })
+        yield* write(directory, { ".env": "TOKEN=WITHHELD_UNTRACKED_ENV\n" })
+        yield* refuse()
+        yield* Effect.promise(() => fs.rm(path.join(directory, ".env")))
+        yield* write(directory, { ".env.development": "TOKEN=WITHHELD_ENV_AFTER\n" })
+        yield* refuse()
+        yield* write(directory, { ".env.development": "TOKEN=WITHHELD_ENV_BEFORE\n" })
+        // A readable new name must not reopen the denied old path of a rename.
+        yield* git(directory, "mv", "signing.key", "public.ts")
+        yield* refuse()
+        const payloads = JSON.stringify(yield* llm.inputs)
+        expect(payloads).toContain("items[index]")
+        for (const marker of [
+          "WITHHELD_UNTRACKED_ENV",
+          "WITHHELD_ENV_BEFORE",
+          "WITHHELD_ENV_AFTER",
+          "WITHHELD_RENAMED_KEY",
+        ])
+          expect(payloads).not.toContain(marker)
       }),
     { git: true },
     60_000,

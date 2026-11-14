@@ -558,6 +558,38 @@ describe("lifecycle", () => {
 })
 
 describe("checks before anything is asked", () => {
+  it.instance("the qualified diff authority keeps secret asks and denies without widening requester reads", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup([
+        { permission: "read", pattern: "*.env.development", action: "deny" },
+      ])
+      yield* write(directory, ".env", "TOKEN=WITHHELD_UNTRACKED")
+      yield* write(directory, ".env.development", "TOKEN=WITHHELD_MODIFIED")
+      yield* write(directory, "server.key", "WITHHELD_KEY")
+      yield* write(directory, "src/app.ts", "export {}")
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          expect(context.reviewService).toBeDefined()
+          for (const file of [".env", ".env.development", "server.key"])
+            expect(
+              Exit.isFailure(yield* ConnectReviewService.checkReads(context.reviewService!, [file]).pipe(Effect.exit)),
+            ).toBe(true)
+          for (const file of ["src/app.ts", ".env.example"])
+            expect(
+              Exit.isSuccess(yield* ConnectReviewService.checkReads(context.reviewService!, [file]).pipe(Effect.exit)),
+            ).toBe(true)
+          return clean()
+        })
+      const { ops } = recorder()
+      const run = yield* hub.run({
+        request: review(requester.id, directory),
+        call: { ...asker(), promptOps: ops },
+      })
+      expect(run.result?.state).toBe("completed")
+      expect(seen).toHaveLength(1)
+    }),
+  )
+
   it.instance("a run whose effects the requester lacks is refused with no ask", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup([{ permission: "read", pattern: "*", action: "deny" }])

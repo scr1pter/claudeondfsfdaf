@@ -18,6 +18,7 @@ interface Admission {
   readonly active: () => boolean
   readonly readRoot: string
   readonly readDenies: readonly string[]
+  readonly checkReads?: (paths: readonly string[]) => Effect.Effect<void, Connect.Refusal>
 }
 const admissions = new WeakMap<Capability, Admission>()
 
@@ -29,6 +30,7 @@ export function qualify(input: {
   readonly active: () => boolean
   readonly readRoot: string
   readonly readDenies: readonly string[]
+  readonly checkReads?: (paths: readonly string[]) => Effect.Effect<void, Connect.Refusal>
 }): Capability {
   const valid =
     path.isAbsolute(input.readRoot) &&
@@ -48,6 +50,7 @@ export function qualify(input: {
       active: () => valid && input.active(),
       readRoot: input.readRoot,
       readDenies: Object.freeze([...authority.absolute]),
+      ...(input.checkReads ? { checkReads: input.checkReads } : {}),
     }),
   )
   return capability
@@ -65,6 +68,16 @@ const admission = (capability: Capability) =>
 
 export const scope = (capability: Capability) =>
   admission(capability).pipe(Effect.map(({ readRoot, readDenies }) => ({ readRoot, readDenies })))
+
+/** Only the hub's qualified capability can check the requester's original rules, never request JSON. */
+export const checkReads = (capability: Capability, paths: readonly string[]) =>
+  admission(capability).pipe(
+    Effect.flatMap((found) =>
+      found.checkReads
+        ? found.checkReads(paths)
+        : Effect.fail(new Connect.Refusal({ code: "read-rule", message: "The review's read policy is unavailable." })),
+    ),
+  )
 
 export const ALLOWED = ["prompt", "cancel"] as const
 export function refusedMessage(member: string) {
