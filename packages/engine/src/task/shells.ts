@@ -540,7 +540,9 @@ const layer = Layer.effect(
           },
           catch: (error) => new Error(`Vector could not create the command's output file: ${String(error)}`),
         })
-        // Dynamic authority must settle before a durable row, process owner or child exists.
+        // Hands' dynamic authority recheck may ask the user, so it runs before any durable row, owner or process
+        // exists, and before the platform split: the POSIX owned spawn and the Windows holder both sit behind it.
+        // A refusal here leaves no job row and reaches the caller with its own message.
         if (input.beforeSpawn) yield* input.beforeSpawn
         const metadata = {
           parentSessionId: session.id,

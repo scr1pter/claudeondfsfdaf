@@ -2,6 +2,7 @@ import { createEffect, onCleanup, type Accessor } from "solid-js"
 import { toaster } from "@vectordevai/ui/toast"
 import { getFilename } from "@vectordevai/core/util/path"
 import { useLanguage } from "../../context/language"
+import { alertTitle, sendPhoneAlert } from "../../context/phone-alerts"
 import { usePermission } from "../../context/permission"
 import { usePlatform } from "../../context/platform"
 import { useServerSDK } from "../../context/server-sdk"
@@ -55,10 +56,11 @@ export function useAskNotificationAlerts(input: {
       },
       notify: (title, description, href) => platform.notify(title, description, href),
       sound: () => playSoundById(settings.sounds.permissions()),
+      // Its title names the session only (WP A41).
       phoneAlert: (session) =>
         sendPhoneAlert(platform, settings.notifications, {
           event: "needsYou",
-          title: alertTitle("Needs you", session.title ?? undefined),
+          title: alertTitle("Needs you", session.title ?? language.t("command.session.new")),
           route: "approvals",
         }),
       viewed(session, directory) {

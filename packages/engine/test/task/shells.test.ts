@@ -319,6 +319,80 @@ describe("background shell commands", () => {
     }
   })
 
+  it.instance("the pre-spawn recheck runs before the durable job row, and a refusal leaves no row", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const jobs = yield* BackgroundJob.Service
+      const root = yield* sessions.create()
+      const shellJobs = () =>
+        jobs
+          .list()
+          .pipe(
+            Effect.map((all) => all.filter((job) => job.type === "shell" && job.metadata?.parentSessionId === root.id)),
+          )
+      const checking = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      const running = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "refused after the recheck",
+          process: sleeper(),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            yield* Deferred.succeed(checking, undefined)
+            yield* Deferred.await(answer)
+            return yield* Effect.die(new Error("Vector Hands holds the computer; this command was refused."))
+          }),
+        })
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(checking)
+      // While the recheck waits (it could be a permission prompt), nothing durable or running exists yet.
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shellJobs()).toEqual([])
+      yield* Deferred.succeed(answer, undefined)
+      const result = yield* Fiber.join(running)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result))
+        expect(String(Cause.squash(result.cause))).toContain(
+          "Vector Hands holds the computer; this command was refused.",
+        )
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shellJobs()).toEqual([])
+      expect(yield* shells.list(root.id)).toEqual([])
+      expect(yield* shells.full(root.id)).toBe(false)
+    }),
+  )
+
+  it.instance("allowed authority rechecks bracket durable admission before the command starts", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const root = yield* sessions.create()
+      const seen: number[] = []
+      const shell = yield* shells.start({
+        sessionID: root.id,
+        command: "allowed after the recheck",
+        process: script("console.log('allowed')"),
+        ops,
+        agent: "build",
+        beforeSpawn: store.forParent(root.id).pipe(
+          Effect.map((rows) => {
+            seen.push(rows.length)
+          }),
+        ),
+      })
+      // The recheck ran exactly once, when the session had no job row yet.
+      expect(seen).toEqual([0, 1])
+      expect((yield* shells.wait([shell.id], 20_000))[0]).toMatchObject({ status: "completed", exitCode: 0 })
+      expect((yield* store.forParent(root.id)).map((row) => row.id)).toEqual([shell.id])
+      expect(seen).toEqual([0, 1])
+    }),
+  )
+
   it.instance("start writes the output file, and the exit note carries the exit code and the output's end", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
