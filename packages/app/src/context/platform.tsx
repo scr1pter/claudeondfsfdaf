@@ -6,6 +6,7 @@ import type { ServerConnection } from "./server"
 import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
+import type { Computer } from "@vectordevai/schema/computer"
 import type { ReportsPlatform } from "../support-reports"
 import type { PhoneAlertEvent } from "./settings"
 import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
@@ -232,6 +233,15 @@ type PlatformBase = {
 
   /** Desktop account status and sign-in; credentials stay in the main process. */
   vectorAccount?: VectorAccountPlatform
+
+  /** Desktop app control; absent in web builds. Linux reports supported: false. */
+  computer?: Computer.ComputerPlatform
+
+  /**
+   * Desktop only: the built-in engine deleted computer screenshots (retention or Delete all). The value is unchecked
+   * here; the listener decodes it with ComputerScreenshotHistory.decode.
+   */
+  onComputerScreenshotsRemoved?(cb: (removal: unknown) => void): () => void
 
   /** Bug reports this computer sent and what became of each (desktop only); the report ids stay in the main process. */
   reports?: ReportsPlatform

@@ -121,6 +121,13 @@ export const TaskWaitInput = Schema.Struct({
 // limit values.
 const CapabilitiesResponse = Schema.Struct({
   backgroundSubagents: Schema.Boolean,
+  computer: Schema.optional(
+    Schema.Struct({
+      available: Schema.Boolean,
+      protocol: Schema.optional(NonNegativeInt),
+      reason: Schema.optional(Schema.String),
+    }),
+  ),
   workDelegation: Schema.optional(Schema.Boolean),
   subagentLimits: Schema.optional(Schema.Boolean),
   sessionStop: Schema.optional(Schema.Boolean),

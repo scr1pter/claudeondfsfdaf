@@ -37,8 +37,19 @@ import path from "node:path"
 import { createReadStream } from "node:fs"
 import { lstat, readdir } from "node:fs/promises"
 import { Readable } from "node:stream"
+import { fileURLToPath } from "node:url"
 
-const root = path.resolve(import.meta.dir, "..")
+// This build-only audit uses Bun streams without granting ambient Bun APIs to desktop runtime code.
+declare const Bun: {
+  file(file: string): {
+    size: number
+    text(): Promise<string>
+    stream(): ReadableStream<Uint8Array<ArrayBuffer>>
+    slice(start: number, end?: number): Blob
+  }
+}
+
+const root = path.resolve(fileURLToPath(new URL("../", import.meta.url)))
 // Bytes of surrounding text kept around each match: longer than any notice line.
 const CONTEXT = 256
 // The Codex CLI's public client is the one borrowed registration allowed. The owner re-enabled Sign in with ChatGPT

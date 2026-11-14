@@ -2,6 +2,8 @@ export * as SessionTaskSize from "./task-size"
 
 import { TaskSize } from "@vectordevai/core/task-size"
 import { SessionV1 } from "@vectordevai/core/v1/session"
+import { Computer } from "@vectordevai/schema/computer"
+import { Schema } from "effect"
 import { isRecord } from "@/util/record"
 
 // Sizes the request a run is answering from the projected history alone, on every step. Nothing is decided at
@@ -683,6 +685,9 @@ function describe(message: SessionV1.WithParts) {
     files: files.filter((part) => part.type === "file" && !part.mime.startsWith("image/")).length,
     images: files.filter((part) => part.type === "file" && part.mime.startsWith("image/")).length,
     agents: message.parts.flatMap((part) => (part.type === "agent" ? [part.name] : [])),
+    computer: message.parts.some(
+      (part) => part.type === "text" && !part.ignored && Schema.is(Computer.MentionPart)(part),
+    ),
     choice: info?.size,
     structured: info?.format?.type === "json_schema",
   }

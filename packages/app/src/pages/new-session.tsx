@@ -20,7 +20,7 @@ import { useComposerCommands } from "@/pages/session/use-composer-commands"
 import { NEW_SESSION_CONTENT_WIDTH } from "@/pages/session/new-session-layout"
 import { PromptWorkspaceSelector } from "@/components/prompt-workspace-selector"
 import { ProjectTrustPrompt } from "@/components/project-trust-prompt"
-import { composerTakes, onComposerPrompt } from "@/utils/composer-handoff"
+import { composerTakes, handoffPrompt, onComposerPrompt, type ComposerPrompt } from "@/utils/composer-handoff"
 
 const showWorkspaceBar = import.meta.env.VITE_VECTOR_CHANNEL !== "prod"
 
@@ -73,9 +73,9 @@ export default function NewSessionPage() {
     return serverSync().child(worktree)[0].vcs?.branch ?? localBranch()
   })
 
-  const takePrompt = (text: string, send: boolean) => {
-    prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
-    if (send) setAutoSubmit(text)
+  const takePrompt = (request: ComposerPrompt) => {
+    prompt.set(handoffPrompt(request), request.text.length)
+    if (request.send) setAutoSubmit(request.text)
   }
 
   createEffect(() => {
@@ -83,7 +83,7 @@ export default function NewSessionPage() {
     untrack(() => {
       const text = searchParams.prompt
       if (!text) return
-      takePrompt(text, searchParams.send === "1")
+      takePrompt({ text, send: searchParams.send === "1" })
       setSearchParams({ ...searchParams, prompt: undefined, send: undefined })
     })
   })
@@ -93,7 +93,7 @@ export default function NewSessionPage() {
   onCleanup(
     onComposerPrompt((request) => {
       if (!composerTakes({ dirty: prompt.dirty(), context: prompt.context.items(), open: true })) return false
-      takePrompt(request.text, request.send)
+      takePrompt(request)
       return true
     }),
   )

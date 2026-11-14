@@ -1,5 +1,8 @@
+import { Schema } from "effect"
 import type { AgentPart as MessageAgentPart, FilePart, Part, TextPart } from "@vectordevai/sdk/v2"
-import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
+import { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
+import type { AgentPart, ComputerPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
 
 type Inline =
   | {
@@ -21,6 +24,13 @@ type Inline =
       end: number
       value: string
       name: string
+    }
+  | {
+      type: "computer"
+      start: number
+      end: number
+      value: string
+      app?: { key: string; name: string }
     }
 
 function selectionFromFileUrl(url: string): Extract<Inline, { type: "file" }>["selection"] {
@@ -76,8 +86,15 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
 
   const inline: Inline[] = []
   const images: ImageAttachmentPart[] = []
+  const markers: Computer.MentionMarker[] = []
 
   for (const part of parts) {
+    // Only a schema-valid synthetic marker restores a computer pill; nothing is inferred from typed "@" text.
+    if (Schema.is(Computer.MentionPart)(part)) {
+      markers.push(part.metadata[Hands.MARKER])
+      continue
+    }
+
     if (part.type === "file") {
       const filePart = part as FilePart
       const sourceText = filePart.source?.text
@@ -131,9 +148,44 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
     return a.end - b.end
   })
 
+  // File and agent pills keep their recorded places first.
+  const placed: Inline[] = []
+  let cursor = 0
+  for (const item of inline) {
+    if (item.start < 0 || item.end < item.start) continue
+
+    const expected = item.value
+    if (!expected) continue
+
+    const mismatch = item.end > text.length || item.start < cursor || text.slice(item.start, item.end) !== expected
+    const start = mismatch ? text.indexOf(expected, cursor) : item.start
+    if (start === -1) continue
+    const end = mismatch ? start + expected.length : item.end
+
+    placed.push({ ...item, start, end })
+    cursor = end
+  }
+
+  // Each marker, in order, takes the next exact "@Name" in text no other pill holds. One with no such text restores
+  // no pill, and that text stays plain.
+  const claimed = (start: number, end: number) => placed.some((item) => start < item.end && end > item.start)
+  let from = 0
+  for (const marker of markers) {
+    const value = marker.kind === "feature" ? `@${Hands.MENTION}` : `@${marker.name}`
+    const start = unclaimed(text, value, from, claimed)
+    if (start === undefined) continue
+    placed.push({
+      type: "computer",
+      start,
+      end: start + value.length,
+      value,
+      ...(marker.kind === "app" ? { app: { key: marker.key, name: marker.name } } : {}),
+    })
+    from = start + value.length
+  }
+
   const result: Prompt = []
   let position = 0
-  let cursor = 0
 
   const pushText = (content: string) => {
     if (!content) return
@@ -173,26 +225,31 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
     position += content.length
   }
 
-  for (const item of inline) {
-    if (item.start < 0 || item.end < item.start) continue
+  const pushComputer = (item: Extract<Inline, { type: "computer" }>) => {
+    const content = item.value
+    const mention: ComputerPart = {
+      type: "computer",
+      content,
+      start: position,
+      end: position + content.length,
+      ...(item.app ? { app: { ...item.app } } : {}),
+    }
+    result.push(mention)
+    position += content.length
+  }
 
-    const expected = item.value
-    if (!expected) continue
-
-    const mismatch = item.end > text.length || item.start < cursor || text.slice(item.start, item.end) !== expected
-    const start = mismatch ? text.indexOf(expected, cursor) : item.start
-    if (start === -1) continue
-    const end = mismatch ? start + expected.length : item.end
-
-    pushText(text.slice(cursor, start))
+  let consumed = 0
+  for (const item of placed.toSorted((a, b) => a.start - b.start)) {
+    pushText(text.slice(consumed, item.start))
 
     if (item.type === "file") pushFile(item)
     if (item.type === "agent") pushAgent(item)
+    if (item.type === "computer") pushComputer(item)
 
-    cursor = end
+    consumed = item.end
   }
 
-  pushText(text.slice(cursor))
+  pushText(text.slice(consumed))
 
   if (result.length === 0) {
     result.push({ type: "text", content: "", start: 0, end: 0 })
@@ -200,4 +257,13 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
 
   if (images.length === 0) return result
   return [...result, ...images]
+}
+
+const WORD = /[\p{L}\p{N}_]/u
+
+// The first place from `from` where `value` stands whole (not the start of a longer word) outside claimed text.
+function unclaimed(text: string, value: string, from: number, claimed: (start: number, end: number) => boolean) {
+  for (let at = text.indexOf(value, from); at !== -1; at = text.indexOf(value, at + 1)) {
+    if (!claimed(at, at + value.length) && !WORD.test(text[at + value.length] ?? "")) return at
+  }
 }

@@ -214,7 +214,11 @@
   [data-slot="text-part-body"] {
     margin-top: 0;
   }
+}
 
+/* A Hands run card carries the turn's copy button and details when every text of the turn is a note inside it. */
+[data-component="text-part"],
+[data-component="computer-run"] {
   [data-slot="text-part-copy-wrapper"] {
     min-height: 24px;
     margin-top: 4px;

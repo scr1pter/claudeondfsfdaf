@@ -16,6 +16,7 @@ import * as Statement from "effect/unstable/sql/Statement"
 import { Sqlite } from "./sqlite"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
+const QUERY_CACHE_SIZE = 20
 
 const TypeId = "~@vectordevai/core/database/SqliteBun" as const
 type TypeId = typeof TypeId
@@ -47,6 +48,31 @@ interface SqliteConnection extends Connection {
 const make = (options: Config) =>
   Effect.gen(function* () {
     const native = (yield* Sqlite.Native) as Database
+    // Bun's query() leaves overflow statements outside its cache and close() cannot finalize them.
+    // Own every prepared statement so eviction and scoped shutdown release it without waiting for GC.
+    const statements = new Map<string, ReturnType<Database["prepare"]>>()
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        for (const statement of statements.values()) statement.finalize()
+        statements.clear()
+      }),
+    )
+    const prepare = (query: string) => {
+      const cached = statements.get(query)
+      if (cached) {
+        statements.delete(query)
+        statements.set(query, cached)
+        return cached
+      }
+      if (statements.size >= QUERY_CACHE_SIZE) {
+        const [key, statement] = statements.entries().next().value!
+        statement.finalize()
+        statements.delete(key)
+      }
+      const statement = native.prepare(query)
+      statements.set(query, statement)
+      return statement
+    }
 
     const compiler = Statement.makeCompilerSqlite(options.transformQueryNames)
     const transformRows = options.transformResultNames
@@ -55,10 +81,10 @@ const make = (options: Config) =>
 
     const run = (query: string, params: ReadonlyArray<unknown> = []) =>
       Effect.withFiber<Array<Record<string, unknown>>, SqlError>((fiber) => {
-        const statement = native.query(query)
-        // @ts-ignore bun-types missing safeIntegers method, fixed in https://github.com/oven-sh/bun/pull/26627
-        statement.safeIntegers(Context.get(fiber.context, Client.SafeIntegers))
         try {
+          const statement = prepare(query)
+          // @ts-ignore bun-types missing safeIntegers method, fixed in https://github.com/oven-sh/bun/pull/26627
+          statement.safeIntegers(Context.get(fiber.context, Client.SafeIntegers))
           return Effect.succeed((statement.all(...(params as any)) ?? []) as Array<Record<string, unknown>>)
         } catch (cause) {
           return Effect.fail(
@@ -71,10 +97,10 @@ const make = (options: Config) =>
 
     const runValues = (query: string, params: ReadonlyArray<unknown> = []) =>
       Effect.withFiber<Array<unknown[]>, SqlError>((fiber) => {
-        const statement = native.query(query)
-        // @ts-ignore bun-types missing safeIntegers method, fixed in https://github.com/oven-sh/bun/pull/26627
-        statement.safeIntegers(Context.get(fiber.context, Client.SafeIntegers))
         try {
+          const statement = prepare(query)
+          // @ts-ignore bun-types missing safeIntegers method, fixed in https://github.com/oven-sh/bun/pull/26627
+          statement.safeIntegers(Context.get(fiber.context, Client.SafeIntegers))
           return Effect.succeed((statement.values(...(params as any)) ?? []) as Array<unknown[]>)
         } catch (cause) {
           return Effect.fail(

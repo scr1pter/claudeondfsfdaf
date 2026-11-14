@@ -1,0 +1,371 @@
+{
+  "run": 42102037799,
+  "head": "402476d4b3b7a5e52d4f531fe890a5379ed96f43",
+  "helperVersion": "1.0.14",
+  "macJob": 127507186167,
+  "jobName": "computer-helper / mac-build",
+  "jobConclusion": "failure",
+  "reportsArtifact": {
+    "id": 13452070281,
+    "name": "computer-helper-darwin-reports-pr-402476d4b3b7a5e52d4f531fe890a5379ed96f43",
+    "zipBytes": 2218,
+    "zipSha256": "40755ca439854773250be5f575501707192bc48a6b3d807ec6c08edb626d479b",
+    "apiDigest": "sha256:40755ca439854773250be5f575501707192bc48a6b3d807ec6c08edb626d479b",
+    "zipDigestMatchesApi": true,
+    "createdAt": "2026-11-05T20:33:51Z",
+    "expiresAt": "2026-11-19T20:33:50Z",
+    "artifactRun": 42102037799,
+    "artifactHead": "402476d4b3b7a5e52d4f531fe890a5379ed96f43"
+  },
+  "steps": {
+    "Build the channel universal helper twice": "success",
+    "Require identical shipping bytes": "success",
+    "Run required grant-free native checks": "success",
+    "Run explicitly isolated privileged scenarios": "success",
+    "Enforce the measured production identity lock": "success",
+    "Require the measured macOS helper version and toolchain for this channel": "success",
+    "Check helper signing contracts and actual Node modules": "success",
+    "Verify unsigned helper entitlements and final fuse signatures": "success",
+    "Verify certificate signing with a temporary trusted CI identity": "success",
+    "Remove any interrupted signing fixture trust and keychain": "success",
+    "Run real Electron overlay properties and controller lifecycle": "success",
+    "Build the source-bound never-shipped native overlay stage": "success",
+    "Run actual isolated macOS overlay Stop and capture": "failure",
+    "Archive the verified never-shipped overlay stage separately": "skipped",
+    "Upload the immutable never-shipped overlay stage": "skipped",
+    "Preserve check reports": "success"
+  },
+  "enforcedLock": {
+    "helperVersion": "1.0.14",
+    "sourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
+    "enforce": true,
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "check": "passed",
+    "independentSourceDigestRecomputedForThisRecord": false
+  },
+  "reports": {
+    "computer-darwin-core.json": {
+      "rawBytes": 2611,
+      "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+      "code": 0,
+      "counts": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        }
+      ]
+    },
+    "computer-darwin-privileged.json.unit-diagnostic.json": {
+      "rawBytes": 438,
+      "rawSha256": "fe4184acfc0988d32a9b1cae97468c94f54d24994a2c1c10bc49d3d355323d06",
+      "diagnostic": {
+        "schemaVersion": 1,
+        "trigger": "complete",
+        "spawned": true,
+        "exitObserved": true,
+        "closeObserved": true,
+        "signaled": false,
+        "stdoutBytes": 36,
+        "stderrBytes": 2309,
+        "elapsedMs": 1811,
+        "exitAfterMs": 1811,
+        "closeAfterMs": 1811,
+        "sample": {
+          "status": "target-exited",
+          "suites": [],
+          "waits": []
+        },
+        "progress": {
+          "entered": true,
+          "passed": 24,
+          "complete": true,
+          "invalid": false
+        }
+      }
+    },
+    "computer-darwin-privileged.json": {
+      "rawBytes": 4368,
+      "rawSha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+      "code": 0,
+      "counts": {
+        "passed": 33,
+        "failed": 0,
+        "skipped": 13
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "native-skip"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.capture-overlay-exclusion",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.ax-counter-increment",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.ax-value-set-and-readback",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-ax-without-pointer-or-focus",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-selection-insertion",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.helper-tagged-escape-ignored",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.foreign-escape-stops",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        }
+      ]
+    },
+    "computer-darwin-core.json.unit-diagnostic.json": {
+      "rawBytes": 438,
+      "rawSha256": "493ba4ec768ebc0852f1e8853431f24e7f4002b5a153a9b58f8180f8ae242703",
+      "diagnostic": {
+        "schemaVersion": 1,
+        "trigger": "complete",
+        "spawned": true,
+        "exitObserved": true,
+        "closeObserved": true,
+        "signaled": false,
+        "stdoutBytes": 36,
+        "stderrBytes": 2309,
+        "elapsedMs": 1802,
+        "exitAfterMs": 1802,
+        "closeAfterMs": 1802,
+        "sample": {
+          "status": "target-exited",
+          "suites": [],
+          "waits": []
+        },
+        "progress": {
+          "entered": true,
+          "passed": 24,
+          "complete": true,
+          "invalid": false
+        }
+      }
+    }
+  },
+  "certificateFixtureCleanup": {
+    "temporaryCertificateSigning": "passed",
+    "ownedFixtureCleanup": "verified",
+    "closedReceipts": [
+      "signing-cleanup identity-inventory count=1 fixture-present=true scope=owned-keychain",
+      "signing-cleanup effective-trust=revoked deny-metadata=retained-until-disposable-runner-destruction",
+      "signing-cleanup stage=revoke result=verified",
+      "signing-cleanup stage=restore result=verified",
+      "signing-cleanup owned-keychain=deleted exact-identity=absent-from-restored-search-list",
+      "signing-cleanup stage=keychain result=verified"
+    ],
+    "lastReceiptAt": "2026-11-05T20:33:00.9118320Z",
+    "scope": "Disposable CI signing-fixture evidence; production Apple Developer ID and notarization are not established by this fixture."
+  },
+  "genericElectron": {
+    "report": {
+      "time": "2026-11-05T20:33:13.2537170Z",
+      "protocol": 1,
+      "platform": "darwin",
+      "electron": "42.11.4",
+      "checks": [
+        {
+          "name": "overlay-count",
+          "ok": true
+        },
+        {
+          "name": "overlay-bounds",
+          "ok": true
+        },
+        {
+          "name": "overlay-window-properties",
+          "ok": true
+        },
+        {
+          "name": "overlay-stack-level",
+          "ok": true
+        },
+        {
+          "name": "overlay-ignore-pointer",
+          "ok": true
+        },
+        {
+          "name": "overlay-workspaces",
+          "ok": true
+        },
+        {
+          "name": "overlay-content-protection",
+          "ok": false,
+          "skipped": true,
+          "reason": "not_applicable"
+        },
+        {
+          "name": "overlay-banner-copy",
+          "ok": true
+        },
+        {
+          "name": "overlay-sandbox",
+          "ok": true
+        },
+        {
+          "name": "overlay-ipc-rejected",
+          "ok": true
+        },
+        {
+          "name": "transparent-theme-switch",
+          "ok": true
+        },
+        {
+          "name": "window-all-closed",
+          "ok": true
+        },
+        {
+          "name": "focus-preserved",
+          "ok": true
+        },
+        {
+          "name": "controller-stop-cancels-helper",
+          "ok": true
+        },
+        {
+          "name": "heartbeat-loss-removes-overlays",
+          "ok": true
+        },
+        {
+          "name": "helper-crash-removes-overlays",
+          "ok": true
+        },
+        {
+          "name": "native-os-stop",
+          "ok": false,
+          "skipped": true,
+          "reason": "native_harness_unavailable"
+        },
+        {
+          "name": "native-capture-exclusion",
+          "ok": false,
+          "skipped": true,
+          "reason": "native_harness_unavailable"
+        }
+      ]
+    },
+    "counts": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 3
+    },
+    "controllerMilestones": [
+      "underlay",
+      "stop-acquire",
+      "stop-check",
+      "stop-close",
+      "heartbeat-acquire",
+      "heartbeat-check",
+      "heartbeat-close",
+      "crash-acquire",
+      "crash-check",
+      "crash-close",
+      "native-acquire",
+      "native-pause",
+      "native-ready",
+      "native-listener",
+      "native-proof",
+      "native-close"
+    ],
+    "phases": ["boot", "ready", "properties", "controller", "cleanup", "report"]
+  },
+  "nativeStagePreparation": {
+    "runtimeReceipt": {
+      "time": "2026-11-05T20:33:20.3377490Z",
+      "mode": "c4-deep-ad-hoc",
+      "sourceBytesUnchanged": true,
+      "nestedBytePolicy": "re-signed-not-preserved",
+      "nestedBytesChanged": true,
+      "nestedFiles": 267,
+      "helperExecutables": 4,
+      "profileSha256": "16b05c93e71cebb2b645afa60a55a0dd29d022702d9c95c7076c7fd51e5d6a5a",
+      "profileApplied": true,
+      "finalMetadata": {
+        "identifier": "com.github.Electron",
+        "flags": 65538,
+        "runtime": "26.2.0",
+        "entitlements": "a8a40d1b00745a8b4ffada49b4f10d548e2fd2cbf685ff72785f0d95c2deb5d8"
+      },
+      "strictVerified": true,
+      "deepVerified": true,
+      "versionVerified": true
+    },
+    "profileSha256MatchesPinnedSource": true,
+    "version": "42.11.4",
+    "buildAndVerification": {
+      "time": "2026-11-05T20:33:49.3971610Z",
+      "receipt": "Built and verified the separate source-bound computer overlay stage."
+    },
+    "scope": "The stage preparation re-signed nested runtime bytes explicitly and verified strict/deep signatures, the fixed profile, the version launch and unchanged source bytes. This is preparation, not an OS Stop or capture result."
+  },
+  "nativeOsStep": {
+    "status": "failed-before-native-invocation",
+    "time": "2026-11-05T20:33:49.5084540Z",
+    "closedError": "line 5: required[@]: unbound variable",
+    "workflowSource": {
+      "path": ".github/workflows/computer-helper.yml",
+      "emptyArray": "required=()",
+      "expansion": "\"${required[@]}\"",
+      "nounset": true
+    },
+    "actualOsStepReached": false,
+    "nativeStopCredit": false,
+    "nativeCaptureCredit": false,
+    "stageArchiveStatus": "skipped",
+    "stageUploadStatus": "skipped"
+  },
+  "scope": "Build-host helper14 reproducibility, enforced measured-lock, grant-free/core and explicitly skipped-grant reports; disposable certificate-signing/cleanup fixture; generic Electron controller checks and source-bound native stage preparation. The actual staged OS Stop/capture invocation never started because the shell rejected the empty-array expansion under nounset. No stage archive bytes, OS results, independent matrix result, final release artifact, production signing/notarization, or release approval is credited here.",
+  "releaseReady": false
+}

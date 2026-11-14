@@ -2,18 +2,29 @@
 // and how that composer decides whether to take it. A surface whose prompt no
 // composer takes starts a new task with it instead.
 
+import type { Prompt } from "@/context/prompt"
+import { ComputerMention } from "@/features/computer/mention"
+
 export const COMPOSER_PROMPT_EVENT = "vector:composer-prompt"
 
 export type ComposerPrompt = {
   text: string
   /** Send it straight away, starting the agent, instead of leaving it in the composer. */
   send: boolean
+  /** A leading @Hands in the text becomes a real mention pill, so the message carries its marker. */
+  mention?: "computer"
 }
 
 /** Hands a prompt to the session composer on screen. False when no composer took it. */
 export function requestComposerPrompt(request: ComposerPrompt) {
   const event = new CustomEvent<ComposerPrompt>(COMPOSER_PROMPT_EVENT, { detail: request, cancelable: true })
   return !(globalThis.window?.dispatchEvent(event) ?? true)
+}
+
+/** What a composer puts in for a handed-over prompt: a computer mention becomes its pill, the rest stays text. */
+export function handoffPrompt(request: ComposerPrompt): Prompt {
+  if (request.mention === "computer") return ComputerMention.examplePrompt(request.text)
+  return [{ type: "text", content: request.text, start: 0, end: request.text.length }]
 }
 
 /**

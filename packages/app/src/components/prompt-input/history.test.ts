@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { Prompt } from "@/context/prompt"
+import type { ComputerPart, Prompt } from "@/context/prompt"
+import { Hands } from "@vectordevai/schema/hands"
 import {
   canNavigateHistoryAtCursor,
   clonePromptParts,
@@ -149,5 +150,55 @@ describe("prompt-input history", () => {
     expect(canNavigateHistoryAtCursor("down", "abc", 3, true)).toBe(true)
     expect(canNavigateHistoryAtCursor("up", "abc", 1, true)).toBe(false)
     expect(canNavigateHistoryAtCursor("down", "abc", 1, true)).toBe(false)
+  })
+
+  test("computer history clones app identities and restores them without sharing mutable names", () => {
+    const part: ComputerPart = {
+      type: "computer",
+      content: "@Notes",
+      start: 0,
+      end: 6,
+      app: { key: "app:macos:com.apple.notes", name: "Notes" },
+    }
+    const entries = prependHistoryEntry([], [part])
+    part.app!.name = "Changed original"
+    const normalized = normalizePromptHistoryEntry(entries[0])
+    expect(normalized.prompt[0]).toMatchObject({ app: { name: "Notes" } })
+    if (normalized.prompt[0]?.type !== "computer") throw new Error("expected computer pill")
+    normalized.prompt[0].app!.key = "app:macos:other"
+    expect(normalizePromptHistoryEntry(entries[0]).prompt[0]).toMatchObject({
+      app: { key: "app:macos:com.apple.notes" },
+    })
+    const restored = navigatePromptHistory({
+      direction: "up",
+      entries,
+      historyIndex: -1,
+      currentPrompt: [part],
+      currentComments: [],
+      savedPrompt: null,
+    })
+    if (!restored.handled) throw new Error("expected restored history")
+    expect(restored.entry.prompt[0]).toMatchObject({ type: "computer", app: { name: "Notes" } })
+    expect(restored.savedPrompt?.prompt[0]).toMatchObject({ app: { name: "Changed original" } })
+    part.app!.name = "Changed again"
+    expect(restored.savedPrompt?.prompt[0]).toMatchObject({ app: { name: "Changed original" } })
+  })
+
+  test("computer history deduplicates only the same feature or app identity and display content", () => {
+    const content = `@${Hands.MENTION}`
+    const feature: ComputerPart = { type: "computer", content, start: 0, end: content.length }
+    const entries = prependHistoryEntry([], [feature])
+    expect(prependHistoryEntry(entries, [{ ...feature }])).toBe(entries)
+    const app: ComputerPart = { ...feature, app: { key: "app:macos:one", name: "One" } }
+    const withApp = prependHistoryEntry(entries, [app])
+    expect(withApp).toHaveLength(2)
+    expect(prependHistoryEntry(withApp, [{ ...app, app: { ...app.app! } }])).toBe(withApp)
+    for (const different of [
+      { ...app, content: "@Different display" },
+      { ...app, app: { ...app.app!, key: "app:macos:two" } },
+      { ...app, app: { ...app.app!, name: "Renamed" } },
+    ])
+      expect(prependHistoryEntry(withApp, [different])).toHaveLength(3)
+    expect(promptLength([feature, app])).toBe(content.length * 2)
   })
 })

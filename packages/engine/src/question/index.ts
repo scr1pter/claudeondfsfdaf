@@ -58,6 +58,7 @@ export interface Interface {
     sessionID: SessionID
     questions: ReadonlyArray<Info>
     tool?: Tool
+    metadata?: Request["metadata"]
   }) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
   readonly reply: (input: {
     requestID: QuestionID
@@ -98,17 +99,22 @@ const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Question.ask")(
-      function* (input: { sessionID: SessionID; questions: ReadonlyArray<Info>; tool?: Tool }) {
+      function* (input: {
+        sessionID: SessionID
+        questions: ReadonlyArray<Info>
+        tool?: Tool
+        metadata?: Request["metadata"]
+      }) {
         const pending = (yield* InstanceState.get(state)).pending
         const id = QuestionID.ascending()
         yield* Effect.logInfo("asking", { id, questions: input.questions.length })
-
         const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
         const info: Request = {
           id,
           sessionID: input.sessionID,
           questions: input.questions,
           tool: input.tool,
+          ...(input.metadata ? { metadata: input.metadata } : {}),
         }
         pending.set(id, { info, deferred })
         yield* events.publish(Event.Asked, info)

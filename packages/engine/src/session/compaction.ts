@@ -56,6 +56,158 @@ type CompletedCompaction = {
   summary: string | undefined
 }
 
+type ImageSize = { width: number; height: number }
+
+/** Preflight estimate: image pixels consume visual tokens, not the text tokens of their base64 transport. */
+export const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
+  messages: SessionV1.WithParts[]
+  model: Provider.Model
+}) {
+  const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
+  const hints = new Map<string, ImageSize>()
+  for (const message of input.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool" || part.tool !== "computer" || part.state.status !== "completed") continue
+      const frame = part.state.metadata.frame
+      if (typeof frame !== "object" || frame === null || !("width" in frame) || !("height" in frame)) continue
+      if (typeof frame.width !== "number" || typeof frame.height !== "number" || !validSize(frame.width, frame.height))
+        continue
+      for (const image of part.state.attachments ?? []) {
+        if (!image.mime.startsWith("image/")) continue
+        const size = { width: frame.width, height: frame.height }
+        hints.set(image.url, size)
+        if (image.url.startsWith("data:")) hints.set(image.url.slice(image.url.indexOf(",") + 1), size)
+      }
+    }
+  }
+  const images: number[] = []
+  const withoutImage = (part: unknown) => {
+    if (typeof part !== "object" || part === null || !("type" in part)) return part
+    if (part.type !== "image" && part.type !== "file" && part.type !== "media") return part
+    if (
+      part.type !== "image" &&
+      (!("mediaType" in part) || typeof part.mediaType !== "string" || !part.mediaType.startsWith("image/"))
+    )
+      return part
+    const data = "image" in part ? part.image : "data" in part ? part.data : undefined
+    images.push(imageTokens(input.model, imageSize(data) ?? (typeof data === "string" ? hints.get(data) : undefined)))
+    return "image" in part ? { ...part, image: "[image]" } : { ...part, data: "[image]" }
+  }
+  const text = msgs.map((message) =>
+    typeof message.content === "string"
+      ? message
+      : {
+          ...message,
+          content: message.content.map((part) => {
+            if (part.type !== "tool-result" || part.output.type !== "content") return withoutImage(part)
+            return { ...part, output: { ...part.output, value: part.output.value.map(withoutImage) } }
+          }),
+        },
+  )
+  return Token.estimate(JSON.stringify(text)) + images.reduce((total, tokens) => total + tokens, 0)
+})
+
+// These are preflight visual-token estimates; exact usage is reported by the provider after the request.
+// Unknown dimensions use the ordinary attachment limit, without fetching remote media or decoding image pixels.
+function imageTokens(model: Provider.Model, size: ImageSize = { width: 2000, height: 2000 }) {
+  const id = model.api.id.toLowerCase()
+  const npm = model.api.npm.toLowerCase()
+  if (npm.includes("anthropic") || id.includes("claude")) {
+    const scale = Math.min(
+      1,
+      1568 / Math.max(size.width, size.height),
+      Math.sqrt(1_150_000 / (size.width * size.height)),
+    )
+    return Math.max(1, Math.ceil((size.width * size.height * scale * scale) / 750))
+  }
+  if (npm.includes("google") || id.includes("gemini")) {
+    if (size.width <= 384 && size.height <= 384) return 258
+    // Media resolution is provider-controlled; extreme saved headers must not dominate tail selection.
+    return Math.min(8192, 258 * Math.ceil(size.width / 768) * Math.ceil(size.height / 768))
+  }
+  if (npm === "@ai-sdk/openai" || npm === "@ai-sdk/azure" || /^(?:gpt-|o[1-9]|computer-use)/.test(id)) {
+    if (/^(?:gpt-4\.1-(?:mini|nano)|o4-mini)/.test(id)) {
+      const scale = Math.min(1, Math.sqrt((1536 * 32 * 32) / (size.width * size.height)))
+      const patches = Math.min(1536, Math.ceil((size.width * scale) / 32) * Math.ceil((size.height * scale) / 32))
+      return Math.ceil(patches * (id.startsWith("gpt-4.1-nano") ? 2.46 : id.startsWith("o4-mini") ? 1.72 : 1.62))
+    }
+    const scale = Math.min(1, 2048 / Math.max(size.width, size.height), 768 / Math.min(size.width, size.height))
+    const tiles = Math.ceil((size.width * scale) / 512) * Math.ceil((size.height * scale) / 512)
+    const base = id.includes("gpt-4o-mini")
+      ? 2833
+      : id.startsWith("computer-use")
+        ? 65
+        : id.startsWith("gpt-5")
+          ? 70
+          : /^o[13]/.test(id)
+            ? 75
+            : 85
+    const tile = id.includes("gpt-4o-mini")
+      ? 5667
+      : id.startsWith("computer-use")
+        ? 129
+        : id.startsWith("gpt-5")
+          ? 140
+          : /^o[13]/.test(id)
+            ? 150
+            : 170
+    return base + tile * tiles
+  }
+  return Math.min(8192, Math.max(256, Math.ceil((size.width * size.height) / 750)))
+}
+
+function validSize(width: number, height: number) {
+  return (
+    Number.isInteger(width) &&
+    Number.isInteger(height) &&
+    width > 0 &&
+    height > 0 &&
+    width <= 1_000_000 &&
+    height <= 1_000_000
+  )
+}
+
+/** Reads only a bounded header; malformed or unsupported formats fall back to saved metadata or the default estimate. */
+function imageSize(data: unknown): ImageSize | undefined {
+  const header =
+    typeof data === "string"
+      ? /^https?:/i.test(data)
+        ? undefined
+        : Buffer.from((data.startsWith("data:") ? data.slice(data.indexOf(",") + 1) : data).slice(0, 87_384), "base64")
+      : data instanceof Uint8Array
+        ? Buffer.from(data.subarray(0, 65_536))
+        : undefined
+  if (!header || header.length < 10) return
+  const sized = (width: number, height: number) => (validSize(width, height) ? { width, height } : undefined)
+  if (header.length >= 24 && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    return sized(header.readUInt32BE(16), header.readUInt32BE(20))
+  if (header.toString("ascii", 0, 6) === "GIF87a" || header.toString("ascii", 0, 6) === "GIF89a")
+    return sized(header.readUInt16LE(6), header.readUInt16LE(8))
+  if (header.length >= 30 && header.toString("ascii", 0, 4) === "RIFF" && header.toString("ascii", 8, 12) === "WEBP") {
+    if (header.toString("ascii", 12, 16) === "VP8X")
+      return sized(header.readUIntLE(24, 3) + 1, header.readUIntLE(27, 3) + 1)
+    if (header.toString("ascii", 12, 16) === "VP8 " && header[23] === 0x9d && header[24] === 1 && header[25] === 0x2a)
+      return sized(header.readUInt16LE(26) & 0x3fff, header.readUInt16LE(28) & 0x3fff)
+    if (header.toString("ascii", 12, 16) === "VP8L" && header[20] === 0x2f) {
+      const bits = header.readUInt32LE(21)
+      return sized((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1)
+    }
+  }
+  if (header[0] !== 0xff || header[1] !== 0xd8) return
+  for (let at = 2; at + 3 < header.length; ) {
+    if (header[at] !== 0xff) return
+    while (at < header.length && header[at] === 0xff) at++
+    const marker = header[at++]
+    if (marker === 0xda || marker === 0xd9 || at + 2 > header.length) return
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue
+    const length = header.readUInt16BE(at)
+    if (length < 2 || at + length > header.length) return
+    if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker) && length >= 7)
+      return sized(header.readUInt16BE(at + 5), header.readUInt16BE(at + 3))
+    at += length
+  }
+}
+
 function summaryText(message: SessionV1.WithParts) {
   const text = message.parts
     .filter((part): part is SessionV1.TextPart => part.type === "text")
@@ -145,14 +297,6 @@ export function splitTurn(input: {
     return { start, id: input.messages[start]!.info.id } satisfies Tail
   })
 }
-
-const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
-  messages: SessionV1.WithParts[]
-  model: Provider.Model
-}) {
-  const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-  return Token.estimate(JSON.stringify(msgs))
-})
 
 /**
  * The recent turns a summary keeps word for word, within the preserve budget. With a `floor` (a fork's first own

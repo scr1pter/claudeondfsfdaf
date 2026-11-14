@@ -1,5 +1,9 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
+import type { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
+import { createFakeComputer } from "@/features/computer/fake-platform"
+import { ComputerSendGate } from "@/features/computer/send-gate"
 import { isLocalSessionNotFoundError, sessionNotFoundError } from "@/utils/server-errors"
 import { enqueue, resume, type FollowupItem, type PauseReason } from "./followup-model"
 import type { DrainEnv, FollowupDrain } from "./followup-queue"
@@ -105,7 +109,14 @@ function drainer(input: { store: FollowupStore; env: DrainEnv; locks?: FollowupL
  * sendFollowupDraft against a fake engine, as the app's drainer calls it. `received` holds the message IDs the engine
  * took; with `hang` set, a command or shell input is taken and answered only when its run ends, which is never.
  */
-function engine(options: { commands?: { name: string }[]; fail?: Error } = {}) {
+function engine(
+  options: {
+    commands?: { name: string }[]
+    fail?: Error
+    computer?: Computer.ComputerPlatform
+    capabilities?: () => unknown
+  } = {},
+) {
   const prompts: { messageID?: string; parts: { text?: string; synthetic?: boolean }[] }[] = []
   const commands: { command: string; arguments: string; messageID?: string }[] = []
   const shells: { command: string; messageID?: string }[] = []
@@ -118,6 +129,9 @@ function engine(options: { commands?: { name: string }[]; fail?: Error } = {}) {
     return { data: undefined }
   }
   const client = {
+    experimental: {
+      capabilities: { get: async () => ({ data: options.capabilities?.() }) },
+    },
     session: {
       promptAsync: async (input: (typeof prompts)[number]) => {
         if (options.fail) throw options.fail
@@ -158,6 +172,7 @@ function engine(options: { commands?: { name: string }[]; fail?: Error } = {}) {
   const send = (entry: FollowupDraft, messageID?: string) =>
     sendFollowupDraft({
       client: client as unknown as SendInput["client"],
+      computer: options.computer,
       sync: sync as unknown as SendInput["sync"],
       serverSync: serverSync as unknown as SendInput["serverSync"],
       draft: entry,
@@ -168,15 +183,103 @@ function engine(options: { commands?: { name: string }[]; fail?: Error } = {}) {
   const sendQueued = (item: FollowupItem, messageID: string) =>
     queue.sendQueued({
       client: client as unknown as SendInput["client"],
+      computer: options.computer,
       sync: sync as unknown as SendInput["sync"],
       serverSync: serverSync as unknown as SendInput["serverSync"],
       item,
       messageID,
     })
-  return { prompts, commands, shells, received, known, state, statuses, writes, send, sendQueued }
+  return { client, prompts, commands, shells, received, known, state, statuses, writes, send, sendQueued }
 }
 
 describe("follow-up drainer", () => {
+  test("queued Hands work rechecks local and engine readiness before sending, retaining its failed claim for explicit retry", async () => {
+    for (const blocked of ["local", "engine"] as const) {
+      const local = createFakeComputer({
+        prefs: { enabled: true, consentedAt: 1 },
+        permissions: {
+          rows: [
+            { id: "screen", status: "granted", pane: "untrusted:screen" },
+            { id: "accessibility", status: "granted", pane: "untrusted:accessibility" },
+          ],
+          canReset: false,
+          adhoc: false,
+          helperStart: "ok",
+          vectorHoldsGrant: { screen: false, accessibility: false },
+        },
+      })
+      let probes = 0
+      const computer: Computer.ComputerPlatform = {
+        ...local,
+        permissions: () => (probes++, local.permissions()),
+      }
+      let available = true
+      const fake = engine({
+        computer,
+        capabilities: () => ({ computer: { available, protocol: 1, ...(available ? {} : { reason: "disabled" }) } }),
+      })
+      const mention = `@${Hands.MENTION}`
+      const entry = draft(mention, { prompt: [{ type: "computer", content: mention, start: 0, end: mention.length }] })
+      expect(
+        await ComputerSendGate.check({
+          prompt: entry.prompt,
+          computer,
+          client: fake.client as unknown as Parameters<typeof ComputerSendGate.check>[0]["client"],
+        }),
+      ).toBeUndefined()
+      expect(probes).toBe(1)
+
+      const locks = fakeLocks()
+      const store = createFollowupStore({ backend: memoryBackend(), locks })
+      const failures: unknown[] = []
+      const { drain, held } = drainer({
+        store,
+        locks,
+        env: fakeEnv({
+          send: (item, id) => fake.sendQueued(item, id),
+          delivered: async (_item, id) => fake.received.has(id),
+          failed: (_item, error) => failures.push(error),
+        }),
+      })
+      try {
+        await held
+        await add(store, queue.queuedItem(entry, "item_hands"))
+        await add(store, queue.queuedItem(draft("after the computer task"), "item_next"))
+        if (blocked === "local") await local.setPrefs({ enabled: false })
+        else available = false
+
+        expect(await drain.attempt(SESSION)).toBe("failed")
+        expect(probes).toBe(2)
+        expect(failures).toHaveLength(1)
+        expect(failures[0]).toBeInstanceOf(ComputerSendGate.Refusal)
+        expect(failures[0]).toMatchObject({
+          key: blocked === "local" ? "computer.mention.setupFirst" : "computer.availability.disabled",
+        })
+        expect(fake.prompts).toEqual([])
+        expect(fake.writes).toEqual([])
+        const retained = await store.read(SERVER, SESSION)
+        expect(retained?.failed).toBe("item_hands")
+        expect(retained?.items.map((item) => item.id)).toEqual(["item_hands", "item_next"])
+        expect(retained?.items[0]?.prompt).toEqual(entry.prompt)
+        expect(retained?.items[0]?.claim?.messageID).toBe("msg_fresh_1")
+        expect(await drain.attempt(SESSION)).toBe("held")
+        expect(probes).toBe(2)
+
+        await local.setPrefs({ enabled: true })
+        available = true
+        expect(await drain.send(SESSION, "item_hands")).toBe(true)
+        expect(probes).toBe(3)
+        expect(fake.prompts).toHaveLength(1)
+        expect(fake.prompts[0]?.messageID).toBe("msg_fresh_1")
+        expect(fake.writes).toEqual(["busy"])
+        expect((await store.read(SERVER, SESSION))?.items.map((item) => item.id)).toEqual(["item_next"])
+        expect((await store.read(SERVER, SESSION))?.failed).toBeUndefined()
+      } finally {
+        drain.dispose()
+      }
+    }
+  })
+
   test("only the lock holder drains, and the next window takes over when it closes", async () => {
     const backend = memoryBackend()
     const locks = fakeLocks()

@@ -1,6 +1,7 @@
 export * as EventManifest from "./event-manifest"
 
 import { Catalog } from "./catalog"
+import { ComputerEvent } from "./computer-event"
 import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
 import { FileSystem } from "./filesystem"
@@ -77,6 +78,7 @@ export const Definitions = Event.inventory(
   ...Project.Event.Definitions,
   ...SessionStatusEvent.Definitions,
   ...QuestionV1.Event.Definitions,
+  ...ComputerEvent.Definitions,
   ...SessionCompactionEvent.Definitions,
   ...Research.Event.Definitions,
   ...LocalEvent.Definitions,

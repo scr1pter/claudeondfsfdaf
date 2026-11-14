@@ -95,6 +95,8 @@ export type StartInput = {
   command: string
   /** The process to spawn, made by the shell tool's foreground helper (its sandbox and environment included). */
   process: ChildProcess.Command
+  /** Rechecks dynamic permissions after asynchronous setup and immediately before process creation. */
+  beforeSpawn?: Effect.Effect<void>
   /** Milliseconds, at most MAX_TIMEOUT. Without it the command runs until it exits or is stopped. */
   timeout?: number
   /** How the exit note reaches the session. */
@@ -528,6 +530,10 @@ const layer = Layer.effect(
           },
           catch: (error) => new Error(`Vector could not create the command's output file: ${String(error)}`),
         })
+        // Hands' dynamic authority recheck may ask the user, so it runs before any durable row, owner or process
+        // exists, and before the platform split: the POSIX owned spawn and the Windows holder both sit behind it.
+        // A refusal here leaves no job row and reaches the caller with its own message.
+        if (input.beforeSpawn) yield* input.beforeSpawn
         const metadata = {
           parentSessionId: session.id,
           background: true,

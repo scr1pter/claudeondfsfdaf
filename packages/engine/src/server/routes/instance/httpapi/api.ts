@@ -8,6 +8,7 @@ import { SkillV2 } from "@vectordevai/core/skill"
 import { InstanceDisposed } from "@/server/event"
 import { Question } from "@/question"
 import { ConfigApi } from "./groups/config"
+import { ComputerApi } from "./groups/computer"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
 import { EventApi } from "./groups/event"
@@ -63,6 +64,7 @@ export const RootHttpApi = HttpApi.make("vector-root")
   .middleware(Authorization)
 
 export const InstanceHttpApi = HttpApi.make("vector-instance")
+  .addHttpApi(ComputerApi)
   .addHttpApi(ConfigApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)

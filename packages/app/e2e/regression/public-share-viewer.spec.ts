@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { Hands } from "@vectordevai/schema/hands"
 
 const id = "a".repeat(32)
 const api = `https://vectordev.ai/api/shares/${id}`
@@ -103,6 +104,86 @@ test("pruned production viewer renders ordered inert content and checks deletion
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")))
   await expect(page.getByRole("status")).toContainText("expired or is no longer shared")
   await expect(page.locator("article")).toHaveCount(0)
+})
+
+test("opted-in computer screenshots render as embedded images and fetch nothing", async ({ page }) => {
+  const png =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+  const outside: string[] = []
+  let revision = 1
+  let updatedAt = Date.now()
+  await page.route(api, (route) =>
+    route.fulfill({
+      headers: { "access-control-allow-origin": "*" },
+      json: {
+        ...snapshot(),
+        revision,
+        updatedAt,
+        archive: {
+          ...snapshot().archive,
+          messages: [
+            ...snapshot().archive.messages,
+            {
+              id: "b-third",
+              role: "assistant",
+              createdAt: 3,
+              parts: [
+                {
+                  type: "tool",
+                  name: "computer",
+                  callID: "computer-call",
+                  status: "completed",
+                  input: '{"action":"screenshot"}',
+                  output: "Captured the screen",
+                  // A live update never carries the one-time screenshot choice.
+                  ...(revision === 1
+                    ? { screenshots: [{ name: "screen.png", mediaType: "image/png", url: png }] }
+                    : {}),
+                },
+              ],
+            },
+          ],
+        },
+      },
+    }),
+  )
+  page.on("request", (request) => {
+    const url = request.url()
+    if (!url.startsWith(test.info().project.use.baseURL!) && url !== api && !url.startsWith("data:")) outside.push(url)
+  })
+  const notice = page.getByText(`The person who shared this chose to include screenshots from ${Hands.NAME}`)
+  await page.goto(`/s/${id}`)
+  await expect(page.getByRole("heading", { name: "Public viewer security fixture", exact: true })).toBeVisible()
+  await expect(notice).toBeVisible()
+  await page.getByText("computer · completed · 1 screenshot", { exact: true }).click()
+  const image = page.getByRole("img", { name: `Screenshot 1 from ${Hands.NAME}`, exact: true })
+  await expect(image).toBeVisible()
+  await expect(image).toHaveAttribute("src", png)
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0)
+  await page.getByText("shell · completed", { exact: true }).click()
+  await expect(page.locator("article").nth(1).locator("img")).toHaveCount(0)
+  await expect(page.locator("article img")).toHaveCount(1)
+  expect(outside).toEqual([])
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: test.info().outputPath("public-viewer-screenshots.png"), fullPage: true })
+  // A check that finds the same revision updates the copy's details but keeps the transcript, so the opened step and
+  // its image stay as they were.
+  const step = page.locator("details.public-tool").filter({ has: image })
+  await image.evaluate((element) => element.setAttribute("data-kept", ""))
+  updatedAt = Date.UTC(2026, 0, 2, 3, 4, 5)
+  const updated = await page.evaluate((value) => new Date(value).toLocaleString(), updatedAt)
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")))
+  await expect(page.locator(".public-meta")).toContainText(`Updated ${updated}`)
+  await expect(step).toHaveJSProperty("open", true)
+  await expect(image).toHaveAttribute("data-kept", "")
+  await expect(image).toBeVisible()
+  revision = 2
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")))
+  await expect(page.getByText("computer · completed", { exact: true })).toBeVisible()
+  await expect(page.locator("article img")).toHaveCount(0)
+  await expect(notice).toHaveCount(0)
+  expect(outside).toEqual([])
 })
 
 test("expiry removes a snapshot even when subsequent requests fail", async ({ page }) => {

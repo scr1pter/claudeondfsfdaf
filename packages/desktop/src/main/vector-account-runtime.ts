@@ -5,6 +5,7 @@ import { getStore, removeStoreFileIfEmpty } from "./store"
 import { vaultSecrets } from "./vault-secrets"
 import { createVectorAccount, refreshVectorModels, syncVectorAccount } from "./vector-account"
 import { createManagedAccountLifecycle } from "./vector-account-lifecycle"
+import { isComputerOverlay } from "./computer-overlay-registry"
 
 const STORE = "vector-account"
 const TOKEN_PURPOSE = "vector-account-token"
@@ -53,7 +54,8 @@ export const vectorAccount = createVectorAccount({
   },
   changed: (status) => {
     BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed() && !isBillingWindow(window)) window.webContents.send("vector-account-changed", status)
+      if (!window.isDestroyed() && !isBillingWindow(window) && !isComputerOverlay(window))
+        window.webContents.send("vector-account-changed", status)
     })
     accountListeners.forEach((listener) => listener(status))
   },

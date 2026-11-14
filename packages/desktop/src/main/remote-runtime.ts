@@ -10,6 +10,7 @@ import type { EngineRequest } from "./remote-routes"
 import { getStore } from "./store"
 import { vaultSecrets } from "./vault-secrets"
 import { onVectorAccountChanged, vectorAccount } from "./vector-account-runtime"
+import { isComputerOverlay } from "./computer-overlay-registry"
 
 // Vector Remote in the running app (WP A41): the link (remote-link.ts) and the phone-alert sender (remote-notify.ts)
 // with Electron's pieces. The identity and the paired phones are sealed in-process with the key the OS credential store
@@ -22,8 +23,9 @@ const PURPOSE = "vector-remote-identity"
 const state: { link?: RemoteLink; notify?: RemoteNotify; stopAccount?: () => void } = {}
 
 function broadcast(status: RemoteStatus) {
+  // Hands' overlay window gets no account broadcasts, like every other one (computer-overlay-registry).
   for (const window of BrowserWindow.getAllWindows())
-    if (!window.isDestroyed()) window.webContents.send("remote-changed", status)
+    if (!window.isDestroyed() && !isComputerOverlay(window)) window.webContents.send("remote-changed", status)
 }
 
 /** Starts Remote once the local engine is up. Safe to call once per launch. */

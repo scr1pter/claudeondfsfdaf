@@ -23,6 +23,7 @@ import { SettingsUsageV2 } from "./usage"
 import { SettingsAboutV2 } from "./about"
 import { SettingsProjectTrustV2 } from "./project-trust"
 import { SettingsSubagentsV2 } from "./subagents"
+import { SettingsComputerV2 } from "./computer"
 import { SettingsSpendLimitsV2 } from "./spend-limits"
 import { SettingsMemoryV2 } from "./memory"
 import { SettingsLocalV2 } from "./local"
@@ -88,6 +89,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   const available = (item: SettingsTab) => {
     if (item === "spend") return !!spendLimitsApi()
     if (item === "account") return !!platform.vectorAccount
+    if (item === "computer") return !!platform.computer
     if (item === "roadmap") return voting()
     if (item === "remote") return remoting()
     if (item === "production") return producing()
@@ -142,6 +144,8 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "trust")
       return <SettingsProjectTrustV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
     if (item === "subagents") return <SettingsSubagentsV2 />
+    if (item === "computer")
+      return <Show when={platform.computer}>{(computer) => <SettingsComputerV2 computer={computer()} />}</Show>
     if (item === "memory")
       return <SettingsMemoryV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
     if (item === "local") return <SettingsLocalV2 />

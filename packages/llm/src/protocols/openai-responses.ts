@@ -24,6 +24,7 @@ import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { OpenAIComputer } from "./utils/openai-computer"
 
 const ADAPTER = "openai-responses"
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -81,6 +82,8 @@ const OpenAIResponsesInputItem = Schema.Union([
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
   OpenAIResponsesReasoningItem,
   OpenAIResponsesItemReference,
+  OpenAIComputer.Call,
+  OpenAIComputer.Output,
   Schema.Struct({
     type: Schema.tag("function_call"),
     call_id: Schema.String,
@@ -105,18 +108,22 @@ type OpenAIResponsesReasoningInput = {
 }
 type OpenAIResponsesReasoningReplay = Omit<OpenAIResponsesReasoningInput, "id">
 
-const OpenAIResponsesTool = Schema.Struct({
-  type: Schema.tag("function"),
-  name: Schema.String,
-  description: Schema.String,
-  parameters: JsonObject,
-  strict: Schema.optional(Schema.Boolean),
-})
+const OpenAIResponsesTool = Schema.Union([
+  Schema.Struct({
+    type: Schema.tag("function"),
+    name: Schema.String,
+    description: Schema.String,
+    parameters: JsonObject,
+    strict: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({ type: Schema.Literal("computer") }),
+])
 type OpenAIResponsesTool = Schema.Schema.Type<typeof OpenAIResponsesTool>
 
 const OpenAIResponsesToolChoice = Schema.Union([
   Schema.Literals(["auto", "none", "required"]),
   Schema.Struct({ type: Schema.tag("function"), name: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("computer") }),
 ])
 
 // Fields shared between the HTTP body and the WebSocket `response.create`
@@ -191,6 +198,8 @@ const OpenAIResponsesStreamItem = Schema.Struct({
   // hand-rolling a per-tool schema.
   status: Schema.optional(Schema.String),
   action: Schema.optional(Schema.Unknown),
+  actions: Schema.optional(Schema.Unknown),
+  pending_safety_checks: Schema.optional(Schema.Unknown),
   queries: Schema.optional(Schema.Unknown),
   results: Schema.optional(Schema.Unknown),
   code: Schema.optional(Schema.String),
@@ -244,6 +253,7 @@ interface ParserState {
   readonly lifecycle: Lifecycle.State
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
   readonly store: boolean | undefined
+  readonly lastReasoningItemID?: string
 }
 
 type ReasoningSummaryStatus = "active" | "can-conclude" | "concluded"
@@ -261,21 +271,27 @@ const invalid = ProviderShared.invalidRequest
 // =============================================================================
 // Request Lowering
 // =============================================================================
-const lowerTool = (tool: ToolDefinition, inputSchema: JsonSchema): OpenAIResponsesTool => ({
-  type: "function",
-  name: tool.name,
-  description: tool.description,
-  parameters: ToolSchemaProjection.openAI(inputSchema),
-  // TODO: Read this from OpenAI-specific tool options so direct LLM callers can opt into strict schemas.
-  strict: false,
-})
+const lowerTool = (tool: ToolDefinition, inputSchema: JsonSchema): OpenAIResponsesTool =>
+  tool.native === "computer"
+    ? { type: "computer" }
+    : {
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: ToolSchemaProjection.openAI(inputSchema),
+        // TODO: Read this from OpenAI-specific tool options so direct LLM callers can opt into strict schemas.
+        strict: false,
+      }
 
-const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
+const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>, tools: LLMRequest["tools"]) =>
   ProviderShared.matchToolChoice("OpenAI Responses", toolChoice, {
     auto: () => "auto" as const,
     none: () => "none" as const,
     required: () => "required" as const,
-    tool: (name) => ({ type: "function" as const, name }),
+    tool: (name) =>
+      tools.some((tool) => tool.name === name && tool.native === "computer")
+        ? { type: "computer" as const }
+        : { type: "function" as const, name },
   })
 
 const lowerToolCall = (part: ToolCallPart): OpenAIResponsesInputItem => ({
@@ -353,6 +369,37 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
+  const computerCalls = new Map(
+    request.messages.flatMap((message) =>
+      message.content.flatMap((part) => {
+        if (part.type !== "tool-call") return []
+        const call = OpenAIComputer.call(part)
+        return call ? [[part.id, { part, call }] as const] : []
+      }),
+    ),
+  )
+  const declined = new Set(
+    request.messages.flatMap((message) =>
+      message.content.flatMap((part) =>
+        part.type === "tool-result" &&
+        part.name === "computer" &&
+        computerCalls.has(part.id) &&
+        OpenAIComputer.declined(part)
+          ? [part.id]
+          : [],
+      ),
+    ),
+  )
+  const declinedReasoning = new Set<string>()
+  for (const message of request.messages) {
+    let previous: string | undefined
+    for (const part of message.content) {
+      if (part.type === "reasoning") previous = lowerReasoning(part)?.id ?? previous
+      if (part.type !== "tool-call" || !declined.has(part.id)) continue
+      const id = OpenAIComputer.reasoningID(part) ?? previous
+      if (id) declinedReasoning.add(id)
+    }
+  }
 
   for (const message of request.messages) {
     if (message.role === "system") {
@@ -390,7 +437,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
         if (part.type === "reasoning") {
           flushText()
           const reasoning = lowerReasoning(part)
-          if (!reasoning) continue
+          if (!reasoning || declinedReasoning.has(reasoning.id)) continue
           if (store !== false) {
             if (!reasoningReferences.has(reasoning.id)) input.push({ type: "item_reference", id: reasoning.id })
             reasoningReferences.add(reasoning.id)
@@ -415,6 +462,16 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
         if (part.type === "tool-call") {
           flushText()
           if (part.providerExecuted === true) continue
+          const computer = computerCalls.get(part.id)
+          if (computer) {
+            if (declined.has(part.id))
+              input.push({
+                role: "assistant",
+                content: [{ type: "output_text", text: "The computer call was declined and was not executed." }],
+              })
+            else input.push(computer.call)
+            continue
+          }
           input.push(lowerToolCall(part))
           continue
         }
@@ -440,6 +497,13 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     for (const part of message.content) {
       if (!ProviderShared.supportsContent(part, ["tool-result"]))
         return yield* ProviderShared.unsupportedContent("OpenAI Responses", "tool", ["tool-result"])
+      const computer = part.name === "computer" ? computerCalls.get(part.id) : undefined
+      if (computer) {
+        const result = yield* OpenAIComputer.result(part, computer.call)
+        if (!declined.has(part.id)) input.push(result.output)
+        if (result.text) input.push({ role: "user", content: [{ type: "input_text", text: result.text }] })
+        continue
+      }
       input.push({
         type: "function_call_output",
         call_id: part.id,
@@ -493,7 +557,7 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
         : request.tools.map((tool) =>
             lowerTool(tool, ToolSchemaProjection.modelCompatibility(tool.inputSchema, toolSchemaCompatibility)),
           ),
-    tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
+    tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice, request.tools) : undefined,
     stream: true as const,
     max_output_tokens: generation?.maxTokens,
     temperature: generation?.temperature,
@@ -554,7 +618,6 @@ const HOSTED_TOOLS = {
     name: "code_interpreter",
     input: (item) => ({ code: item.code, container_id: item.container_id }),
   },
-  computer_use_call: { name: "computer_use", input: (item) => item.action ?? {} },
   image_generation_call: { name: "image_generation", input: () => ({}) },
   mcp_call: {
     name: "mcp",
@@ -666,6 +729,7 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
     return [
       {
         ...state,
+        lastReasoningItemID: item.id,
         lifecycle: Lifecycle.reasoningStart(state.lifecycle, events, `${item.id}:0`, reasoningMetadata(item)),
         reasoningItems: {
           ...state.reasoningItems,
@@ -818,6 +882,19 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
   const item = event.item
   if (!item) return [state, NO_EVENTS] satisfies StepResult
 
+  if (item.type === "computer_call") {
+    const parsed = yield* OpenAIComputer.parse(item)
+    const providerMetadata = OpenAIComputer.metadata(parsed.call, state.lastReasoningItemID)
+    const events: LLMEvent[] = []
+    const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+    events.push(
+      LLMEvent.toolInputStart({ id: parsed.call.call_id, name: "computer", providerMetadata }),
+      LLMEvent.toolInputEnd({ id: parsed.call.call_id, name: "computer", providerMetadata }),
+      LLMEvent.toolCall({ id: parsed.call.call_id, name: "computer", input: parsed.input, providerMetadata }),
+    )
+    return [{ ...state, lifecycle, hasFunctionCall: true }, events] satisfies StepResult
+  }
+
   if (item.type === "function_call") {
     if (!item.id || !item.call_id || !item.name) return [state, NO_EVENTS] satisfies StepResult
     const tools = state.tools[item.id]
@@ -861,16 +938,20 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
           state.lifecycle,
         )
       const { [item.id]: _removed, ...reasoningItems } = state.reasoningItems
-      return [{ ...state, lifecycle, reasoningItems }, events] satisfies StepResult
+      return [{ ...state, lifecycle, reasoningItems, lastReasoningItemID: item.id }, events] satisfies StepResult
     }
     if (!state.lifecycle.reasoning.has(item.id)) {
       const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
       events.push(LLMEvent.reasoningStart({ id: item.id, providerMetadata }))
       events.push(LLMEvent.reasoningEnd({ id: item.id, providerMetadata }))
-      return [{ ...state, lifecycle }, events] satisfies StepResult
+      return [{ ...state, lifecycle, lastReasoningItemID: item.id }, events] satisfies StepResult
     }
     return [
-      { ...state, lifecycle: Lifecycle.reasoningEnd(state.lifecycle, events, item.id, providerMetadata) },
+      {
+        ...state,
+        lifecycle: Lifecycle.reasoningEnd(state.lifecycle, events, item.id, providerMetadata),
+        lastReasoningItemID: item.id,
+      },
       events,
     ] satisfies StepResult
   }

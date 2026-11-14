@@ -102,6 +102,7 @@ test.skipIf(process.platform !== "darwin")("the macOS profile holds the same set
     autoupdate: json.autoupdate,
     model: json.model,
     small_model: json.small_model,
+    computer: json.computer,
     local: json.local,
   })
 })

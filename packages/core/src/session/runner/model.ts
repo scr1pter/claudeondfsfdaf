@@ -146,9 +146,14 @@ export const withPricing = (model: Model, cost: ModelV2.Info["cost"]) => {
 
 // Models sent through the free route, which refuses any request that is not priced at zero.
 const freeRoutes = new WeakSet<Model>()
+// Runtime-only policy travels with the resolved route, never through message or model-generated input.
+const withheldScreenshots = new WeakSet<Model>()
 
-export const withFreeRoute = (model: Model) => {
+export const computerScreenshotsAllowed = (model: Model) => !withheldScreenshots.has(model)
+
+export const withFreeRoute = (model: Model, freeModel?: ModelV2.Info["freeModel"]) => {
   freeRoutes.add(model)
+  if (freeModel?.dataPolicy !== "no-training") withheldScreenshots.add(model)
   return withPricing(model, [{ input: 0, output: 0, cache: { read: 0, write: 0 } }])
 }
 
@@ -408,6 +413,7 @@ export const fromCatalogModel = (
   const key = apiKey(resolved, credential)
   const settled = (built: Model) => {
     if (resolved.api.settings?.["forwards"] === true) forwarders.add(built)
+    if (resolved.freeModel && resolved.freeModel.dataPolicy !== "no-training") withheldScreenshots.add(built)
     return withPricing(built, resolved.cost)
   }
   if (resolved.api.url && !WorkspaceTrust.userRemoteUrlAllowed(resolved.api.url)) {
@@ -571,7 +577,10 @@ export const locationLayer = Layer.effect(
         // Configuration can overwrite API metadata or add a free ID after catalog validation.
         // Free intent always crosses the final eligibility and zero-price request guard.
         if (requiresFreeRoute(selected))
-          return withFreeRoute(freeModelRoute(selected, freeModels, freeCredentials, guests.marked(session.id)))
+          return withFreeRoute(
+            freeModelRoute(selected, freeModels, freeCredentials, guests.marked(session.id)),
+            selected.freeModel,
+          )
         const provider = yield* catalog.provider.get(selected.providerID)
         const connection = yield* integrations.connection.active(
           provider?.integrationID ?? Integration.ID.make(selected.providerID),

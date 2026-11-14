@@ -23,6 +23,7 @@ import { SessionV2 } from "@vectordevai/core/session"
 import { ProjectV2 } from "@vectordevai/core/project"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Agent } from "@/agent/agent"
+import { ComputerAvailability } from "@/computer/availability"
 import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { Provider } from "@/provider/provider"
@@ -1786,6 +1787,7 @@ describe("a guest's task resume and background command rows", () => {
           ),
           RuntimeFlags.layer({ backgroundSubagents: true }),
           // These unrelated experimental endpoints are never called by this test.
+          Layer.mock(ComputerAvailability.Service)({}),
           Layer.mock(Agent.Service)({}),
           Layer.mock(MCP.Service)({}),
           Layer.mock(Project.Service)({}),

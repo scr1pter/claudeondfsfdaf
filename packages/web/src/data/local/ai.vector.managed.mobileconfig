@@ -23,6 +23,67 @@
       <string>company/coder</string>
       <key>small_model</key>
       <string>company/small</string>
+      <key>computer</key>
+      <dict>
+        <key>enabled</key>
+        <true/>
+        <key>default_app_access</key>
+        <string>ask</string>
+        <key>allow_always</key>
+        <true/>
+        <key>background</key>
+        <true/>
+        <key>keep_awake</key>
+        <true/>
+        <key>away_minutes</key>
+        <integer>30</integer>
+        <key>screenshot_retention_days</key>
+        <integer>7</integer>
+        <key>max_actions</key>
+        <integer>300</integer>
+        <key>max_minutes</key>
+        <integer>45</integer>
+        <key>native_tools</key>
+        <string>off</string>
+        <key>screenshots</key>
+        <dict>
+          <key>keep</key>
+          <integer>3</integer>
+          <key>max_width</key>
+          <integer>1440</integer>
+          <key>max_height</key>
+          <integer>900</integer>
+        </dict>
+        <key>apps</key>
+        <dict>
+          <key>macos</key>
+          <dict>
+            <key>com.apple.calculator</key>
+            <string>allow</string>
+            <key>com.microsoft.Excel@UBF8T346G9</key>
+            <string>deny</string>
+          </dict>
+          <key>windows</key>
+          <array>
+            <dict>
+              <key>aumid</key>
+              <string>Microsoft.WindowsCalculator_8wekyb3d8bbwe!App</string>
+              <key>access</key>
+              <string>allow</string>
+            </dict>
+            <dict>
+              <key>publisher</key>
+              <string>Microsoft Corporation</string>
+              <key>product</key>
+              <string>Microsoft Excel</string>
+              <key>binary</key>
+              <string>EXCEL.EXE</string>
+              <key>access</key>
+              <string>deny</string>
+            </dict>
+          </array>
+        </dict>
+      </dict>
       <key>local</key>
       <dict>
         <key>enabled</key>
@@ -82,7 +143,7 @@
   <key>PayloadDisplayName</key>
   <string>Vector</string>
   <key>PayloadDescription</key>
-  <string>Vector Local and the settings your company sets for Vector.</string>
+  <string>Vector Local and company computer policy. Every engine reading this policy requires Vector 1.99.112 or later.</string>
   <key>PayloadIdentifier</key>
   <string>com.example.vector</string>
   <key>PayloadType</key>

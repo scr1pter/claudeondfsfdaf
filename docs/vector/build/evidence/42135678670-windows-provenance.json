@@ -1,0 +1,775 @@
+{
+  "repository": "scr1pter/claudeondfsfdaf",
+  "source": "edbb0cdbbb20050eac3a4b293106e05d5f21ddde",
+  "run": {
+    "id": 42135678670,
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "updatedAt": "2026-11-06T00:32:34Z"
+  },
+  "jobs": [
+    {
+      "id": 127623153579,
+      "name": "computer-helper / windows-build",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-06T00:17:16Z",
+          "completed_at": "2026-11-06T00:17:18Z"
+        },
+        {
+          "name": "Checkout repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-06T00:17:18Z",
+          "completed_at": "2026-11-06T00:17:32Z"
+        },
+        {
+          "name": "Setup Node for the real Electron smoke",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-06T00:17:32Z",
+          "completed_at": "2026-11-06T00:17:38Z"
+        },
+        {
+          "name": "Setup Bun",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-06T00:17:38Z",
+          "completed_at": "2026-11-06T00:17:40Z"
+        },
+        {
+          "name": "Configure the MSVC environment",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-06T00:17:40Z",
+          "completed_at": "2026-11-06T00:17:49Z"
+        },
+        {
+          "name": "Install frozen dependencies without lifecycle scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-06T00:17:49Z",
+          "completed_at": "2026-11-06T00:20:47Z"
+        },
+        {
+          "name": "Restore immutable helpers from an earlier attempt",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 7,
+          "started_at": "2026-11-06T00:20:47Z",
+          "completed_at": "2026-11-06T00:20:47Z"
+        },
+        {
+          "name": "Verify restored Windows source before native checks",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-11-06T00:20:47Z",
+          "completed_at": "2026-11-06T00:20:47Z"
+        },
+        {
+          "name": "Build both channel helper architectures",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-06T00:20:47Z",
+          "completed_at": "2026-11-06T00:29:18Z"
+        },
+        {
+          "name": "Run Windows unit and fresh version/probe checks",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-06T00:29:18Z",
+          "completed_at": "2026-11-06T00:29:21Z"
+        },
+        {
+          "name": "Run required Windows protocol and lifecycle checks",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-11-06T00:29:21Z",
+          "completed_at": "2026-11-06T00:29:34Z"
+        },
+        {
+          "name": "Run explicitly isolated Windows scenarios",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-11-06T00:29:34Z",
+          "completed_at": "2026-11-06T00:29:49Z"
+        },
+        {
+          "name": "Summarize Windows protocol readiness",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-11-06T00:29:49Z",
+          "completed_at": "2026-11-06T00:29:49Z"
+        },
+        {
+          "name": "Install the exact pinned Electron runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-11-06T00:29:49Z",
+          "completed_at": "2026-11-06T00:29:54Z"
+        },
+        {
+          "name": "Run real Electron overlay properties and controller lifecycle",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-11-06T00:29:54Z",
+          "completed_at": "2026-11-06T00:30:07Z"
+        },
+        {
+          "name": "Restore the immutable never-shipped overlay stage",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 16,
+          "started_at": "2026-11-06T00:30:07Z",
+          "completed_at": "2026-11-06T00:30:07Z"
+        },
+        {
+          "name": "Build the source-bound never-shipped native overlay stage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-11-06T00:30:07Z",
+          "completed_at": "2026-11-06T00:32:22Z"
+        },
+        {
+          "name": "Run actual isolated medium-token Windows overlay Stop",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 18,
+          "started_at": "2026-11-06T00:32:22Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Archive the verified never-shipped overlay stage separately",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 19,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Upload the immutable never-shipped overlay stage",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 20,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Expose the verified source digest",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 21,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Archive shipping files and tests separately",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Upload shipping helpers",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Upload native tests",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 24,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:27Z"
+        },
+        {
+          "name": "Preserve check reports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-11-06T00:32:27Z",
+          "completed_at": "2026-11-06T00:32:29Z"
+        },
+        {
+          "name": "Post Setup Bun",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 48,
+          "started_at": "2026-11-06T00:32:29Z",
+          "completed_at": "2026-11-06T00:32:29Z"
+        },
+        {
+          "name": "Post Setup Node for the real Electron smoke",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 49,
+          "started_at": "2026-11-06T00:32:29Z",
+          "completed_at": "2026-11-06T00:32:29Z"
+        },
+        {
+          "name": "Post Checkout repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 50,
+          "started_at": "2026-11-06T00:32:29Z",
+          "completed_at": "2026-11-06T00:32:31Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 51,
+          "started_at": "2026-11-06T00:32:31Z",
+          "completed_at": "2026-11-06T00:32:31Z"
+        }
+      ]
+    },
+    {
+      "id": 127629508082,
+      "name": "computer-helper / windows-arm64-test",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "receipts": [
+    {
+      "at": "2026-11-06T00:29:21.7818993Z",
+      "line": "vector-caller-context initial r=restricted d=parent o=u a=g c=s"
+    },
+    {
+      "at": "2026-11-06T00:29:25.3812379Z",
+      "line": "vector-caller-context initial r=restricted d=parent o=u a=g c=b"
+    },
+    {
+      "at": "2026-11-06T00:29:37.9906497Z",
+      "line": "vector-caller-context initial r=restricted d=parent o=u a=g c=b"
+    },
+    {
+      "at": "2026-11-06T00:29:56.1739334Z",
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"boot\"}"
+    },
+    {
+      "at": "2026-11-06T00:29:56.2091617Z",
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"ready\"}"
+    },
+    {
+      "at": "2026-11-06T00:29:56.2092855Z",
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"properties\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:01.1150898Z",
+      "line": "computer-smoke-window-region {\"protocol\":1,\"windows\":4,\"owned\":4,\"simple\":4,\"matched\":4,\"painted\":4,\"ok\":true}"
+    },
+    {
+      "at": "2026-11-06T00:30:01.4105258Z",
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"controller\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:01.4106545Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"underlay\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:01.5264676Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-acquire\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:01.9515278Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-check\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:01.9605375Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-close\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:02.0215468Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-acquire\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:02.4366120Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-check\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:06.1961579Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-close\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:06.2405135Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-acquire\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:06.6342954Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-check\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:06.6613126Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-close\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:06.6662283Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-acquire\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.0831685Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-pause\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.0841170Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-ready\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.0842134Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-listener\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.0844428Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-proof\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.0890382Z",
+      "line": "computer-smoke-asar {\"protocol\":1,\"rawRegular\":true,\"rawBounded\":true,\"rawBytes\":110862,\"rawRead\":true,\"virtualDirectory\":true,\"virtualRead\":false}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.0892048Z",
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-close\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.1442942Z",
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"cleanup\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.1545574Z",
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"report\"}"
+    },
+    {
+      "at": "2026-11-06T00:30:07.2397526Z",
+      "line": "computer-smoke {\"protocol\":1,\"platform\":\"win32\",\"electron\":\"42.11.4\",\"checks\":[{\"name\":\"overlay-count\",\"ok\":true},{\"name\":\"overlay-bounds\",\"ok\":true},{\"name\":\"overlay-window-properties\",\"ok\":true},{\"name\":\"overlay-stack-level\",\"ok\":true},{\"name\":\"overlay-ignore-pointer\",\"ok\":true},{\"name\":\"overlay-workspaces\",\"ok\":false,\"skipped\":true,\"reason\":\"not_applicable\"},{\"name\":\"overlay-content-protection\",\"ok\":true},{\"name\":\"overlay-banner-copy\",\"ok\":true},{\"name\":\"overlay-sandbox\",\"ok\":true},{\"name\":\"overlay-ipc-rejected\",\"ok\":true},{\"name\":\"transparent-theme-switch\",\"ok\":true},{\"name\":\"window-all-closed\",\"ok\":true},{\"name\":\"focus-preserved\",\"ok\":true},{\"name\":\"controller-stop-cancels-helper\",\"ok\":true},{\"name\":\"heartbeat-loss-removes-overlays\",\"ok\":true},{\"name\":\"helper-crash-removes-overlays\",\"ok\":true},{\"name\":\"native-os-stop\",\"ok\":false,\"skipped\":true,\"reason\":\"native_harness_unavailable\"},{\"name\":\"native-capture-exclusion\",\"ok\":false,\"skipped\":true,\"reason\":\"not_applicable\"}]}"
+    },
+    {
+      "at": "2026-11-06T00:32:27.3801069Z",
+      "line": "computer-smoke-bootstrap-token {\"protocol\":1,\"route\":\"restricted\",\"owner\":\"u\",\"access\":\"n\",\"cause\":\"r\"}"
+    },
+    {
+      "at": "2026-11-06T00:32:27.4687518Z",
+      "line": "computer-smoke-failure {\"protocol\":1,\"cause\":\"missing_report\",\"phase\":\"none\",\"hint\":\"none\"}"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 13466008963,
+      "name": "computer-helper-win32-reports-pr-edbb0cdbbb20050eac3a4b293106e05d5f21ddde",
+      "size_in_bytes": 1392,
+      "url": "https://api.github.com/repos/scr1pter/claudeondfsfdaf/actions/artifacts/13466008963",
+      "archive_download_url": "https://api.github.com/repos/scr1pter/claudeondfsfdaf/actions/artifacts/13466008963/zip",
+      "expired": false,
+      "created_at": "2026-11-06T00:32:28Z",
+      "expires_at": "2026-11-20T00:32:28Z",
+      "updated_at": "2026-11-06T00:32:28Z",
+      "digest": "sha256:037855875c53abb14bc8c51ce8d7a9ca167b3115d6e333b15a73d88978e5314b",
+      "workflow_run": {
+        "id": 42135678670,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "edbb0cdbbb20050eac3a4b293106e05d5f21ddde"
+      }
+    }
+  ],
+  "limitations": [
+    "This records fixed receipts from the completed job logs, not raw report contents.",
+    "The optional isolated scenarios command actually exited 1 despite its continue-on-error step conclusion of success. Its artifact report still requires inspection.",
+    "Staged bootstrap emitted restricted/u/n/r then missing_report before boot; no native Stop evidence.",
+    "ARM64 skipped after windows-build failed. No immutable stage, shipping helper or native-test archive exists in this run."
+  ],
+  "verifiedReportArchive": {
+    "zipPath": "/workspace/attachments/8fa95f29-1cf7-478c-bdda-25b0e6c50614/windows-regular-reports-42135678670.zip",
+    "zipBytes": 1392,
+    "zipSha256": "037855875c53abb14bc8c51ce8d7a9ca167b3115d6e333b15a73d88978e5314b",
+    "reports": [
+      {
+        "member": "computer-win32-core.json",
+        "rawBytes": 2466,
+        "rawSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+        "counts": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "report": {
+          "schemaVersion": 1,
+          "platform": "win32",
+          "privileged": "off",
+          "checks": [
+            {
+              "name": "catalog",
+              "status": "passed"
+            },
+            {
+              "name": "unit",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged",
+              "status": "passed"
+            },
+            {
+              "name": "packaged",
+              "status": "passed"
+            },
+            {
+              "name": "target-control",
+              "status": "passed"
+            },
+            {
+              "name": "probe.first",
+              "status": "passed"
+            },
+            {
+              "name": "probe.fresh",
+              "status": "passed"
+            },
+            {
+              "name": "responsible",
+              "status": "passed"
+            },
+            {
+              "name": "unverified-parent",
+              "status": "passed"
+            },
+            {
+              "name": "channel-eof",
+              "status": "passed"
+            },
+            {
+              "name": "parent-death",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.cancel-idle",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.eof",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.frame-too-large",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.heartbeat-loss",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.hello",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.malformed-json",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.permissions",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.session",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.shutdown",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.unsupported-action",
+              "status": "passed"
+            },
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            },
+            {
+              "name": "unprivileged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "target-control.windows-test-target-control-schema",
+              "status": "passed"
+            }
+          ],
+          "code": 0
+        }
+      },
+      {
+        "member": "computer-win32-privileged.json",
+        "rawBytes": 4425,
+        "rawSha256": "1840e08b1f88ca4755eebb78d5735eba0b3fb4d90aa5631c43cc13e04ab02bdb",
+        "counts": {
+          "passed": 34,
+          "failed": 2,
+          "skipped": 10
+        },
+        "report": {
+          "schemaVersion": 1,
+          "platform": "win32",
+          "privileged": "auto",
+          "checks": [
+            {
+              "name": "catalog",
+              "status": "passed"
+            },
+            {
+              "name": "unit",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged",
+              "status": "passed"
+            },
+            {
+              "name": "packaged",
+              "status": "passed"
+            },
+            {
+              "name": "target-control",
+              "status": "passed"
+            },
+            {
+              "name": "probe.first",
+              "status": "passed"
+            },
+            {
+              "name": "probe.fresh",
+              "status": "passed"
+            },
+            {
+              "name": "responsible",
+              "status": "passed"
+            },
+            {
+              "name": "unverified-parent",
+              "status": "passed"
+            },
+            {
+              "name": "channel-eof",
+              "status": "passed"
+            },
+            {
+              "name": "parent-death",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.cancel-idle",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.eof",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.frame-too-large",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.heartbeat-loss",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.hello",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.malformed-json",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.permissions",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.session",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.shutdown",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.unsupported-action",
+              "status": "passed"
+            },
+            {
+              "name": "privileged",
+              "status": "failed",
+              "reason": "native-check-failed"
+            },
+            {
+              "name": "unprivileged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "target-control.windows-test-target-control-schema",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.privileged-isolated-target",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.apps-running-target",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.apps-installed-target",
+              "status": "skipped",
+              "reason": "target_not_installed"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "failed",
+              "reason": "native_operation_failed",
+              "stage": "capture-window-item-expired-cancelled",
+              "nativeCode": "capture_unavailable"
+            },
+            {
+              "name": "privileged.capture-affinity-exclusion",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.uia-counter-increment",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.uia-value-set-and-readback",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.unicode-type-readback",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.input-detection-probe",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.hardware-user-input-pauses",
+              "status": "skipped",
+              "reason": "hardware_input_required"
+            },
+            {
+              "name": "privileged.isolated-target-cleanup",
+              "status": "passed"
+            }
+          ],
+          "code": 1
+        }
+      }
+    ]
+  }
+}

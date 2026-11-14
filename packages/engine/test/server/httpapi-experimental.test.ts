@@ -1,7 +1,9 @@
 import { afterEach, describe, expect } from "bun:test"
+import Http from "node:http"
+import { NodeHttpServer } from "@effect/platform-node"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { Deferred, Effect, Fiber, Layer } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { Context, Deferred, Effect, Fiber, Layer } from "effect"
+import { HttpClient, HttpClientResponse, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { eq } from "drizzle-orm"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/groups/experimental"
@@ -10,6 +12,7 @@ import { SessionTable } from "@vectordevai/core/session/sql"
 import { Database } from "@vectordevai/core/database/database"
 import { AccountV2 } from "@vectordevai/core/account"
 import { AccountTable } from "@vectordevai/core/account/sql"
+import { Computer } from "@vectordevai/schema/computer"
 import { Worktree } from "../../src/worktree"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
@@ -29,6 +32,36 @@ function createSession(input?: Session.CreateInput) {
 
 function json<T>(response: HttpClientResponse.HttpClientResponse) {
   return response.json.pipe(Effect.map((value) => value as T))
+}
+
+function withComputerBridge<A, E, R>(
+  bridge: { url: string; token: string } | undefined,
+  effect: Effect.Effect<A, E, R>,
+) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous = {
+        url: process.env.VECTOR_COMPUTER_BRIDGE_URL,
+        token: process.env.VECTOR_COMPUTER_BRIDGE_TOKEN,
+      }
+      if (bridge) {
+        process.env.VECTOR_COMPUTER_BRIDGE_URL = bridge.url
+        process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = bridge.token
+      } else {
+        delete process.env.VECTOR_COMPUTER_BRIDGE_URL
+        delete process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+      }
+      return previous
+    }),
+    () => effect,
+    (previous) =>
+      Effect.sync(() => {
+        if (previous.url === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_URL
+        else process.env.VECTOR_COMPUTER_BRIDGE_URL = previous.url
+        if (previous.token === undefined) delete process.env.VECTOR_COMPUTER_BRIDGE_TOKEN
+        else process.env.VECTOR_COMPUTER_BRIDGE_TOKEN = previous.token
+      }),
+  )
 }
 
 function waitReady(input: { directory?: string; name?: string }) {
@@ -137,6 +170,59 @@ afterEach(async () => {
 })
 
 describe("experimental HttpApi", () => {
+  it.instance("capabilities explain that computer use needs a desktop bridge", () =>
+    withComputerBridge(
+      undefined,
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const response = yield* request(ExperimentalPaths.capabilities, tmp.directory)
+        expect(response.status).toBe(200)
+        expect(yield* json(response)).toMatchObject({
+          backgroundSubagents: expect.any(Boolean),
+          computer: { available: false, reason: "no_desktop_bridge" },
+        })
+      }),
+    ),
+  )
+
+  for (const reason of [undefined, "permissions"] as const) {
+    it.instance(`capabilities report computer availability with bridge reason ${reason ?? "ready"}`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const context = yield* Layer.build(NodeHttpServer.layer(Http.createServer, { host: "127.0.0.1", port: 0 }))
+        const server = Context.get(context, HttpServer.HttpServer)
+        yield* server.serve(
+          HttpServerRequest.HttpServerRequest.use((input) => {
+            if (input.method !== "GET" || input.url !== Computer.BRIDGE.capabilitiesPath)
+              return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+            if (input.headers.authorization !== "Bearer computer-capabilities-fixture")
+              return Effect.succeed(HttpServerResponse.empty({ status: 401 }))
+            if (input.headers[Computer.BRIDGE.protocolHeader.toLowerCase()] !== String(Computer.PROTOCOL))
+              return Effect.succeed(HttpServerResponse.empty({ status: 426 }))
+            return HttpServerResponse.json({
+              protocol: Computer.PROTOCOL,
+              available: reason === undefined,
+              ...(reason ? { reason } : {}),
+              backend: "fake",
+              actions: ["list_apps", "read_ui"],
+              features: { background: false, uiTree: true, zoom: false, clipboard: false, locked: false },
+            } satisfies Computer.Capabilities)
+          }),
+        )
+        yield* withComputerBridge(
+          { url: HttpServer.formatAddress(server.address), token: "computer-capabilities-fixture" },
+          Effect.gen(function* () {
+            const response = yield* request(ExperimentalPaths.capabilities, tmp.directory)
+            expect(response.status).toBe(200)
+            expect(yield* json(response)).toMatchObject({
+              computer: { available: true, protocol: Computer.PROTOCOL },
+            })
+          }),
+        )
+      }),
+    )
+  }
+
   it.instance(
     "serves read-only experimental endpoints through the default server app",
     () =>
