@@ -242,3 +242,14 @@ export function storeInteger(value: unknown): number {
   if (!Number.isSafeInteger(number)) throw storeUnavailable()
   return number
 }
+
+/**
+ * A cooldown deadline read with ZSCORE: no score is 0. Native Redis may answer a number and REST bridges a string;
+ * anything else, or a negative deadline, is a store fault rather than a cooldown.
+ */
+export function storeScore(value: unknown): number {
+  if (value === null || value === undefined) return 0
+  const at = storeInteger(value)
+  if (at < 0) throw storeUnavailable()
+  return at
+}

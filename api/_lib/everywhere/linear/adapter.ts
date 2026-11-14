@@ -13,6 +13,7 @@ import type { Ports } from "../ports.js"
 import { fencedStore } from "../authority.js"
 import { getValue, setValue, swapValue } from "../store.js"
 import { linearApi, LinearFailure, type LinearApi } from "./client.js"
+import { linearCooldown } from "./cooldown.js"
 import { linearAccess } from "./credentials.js"
 import { linearPlan, linearThought } from "./render.js"
 import { linearOptions, restoreLinearSelection } from "./selection.js"
@@ -81,15 +82,7 @@ export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
         }
       },
       // Access-token auth failures are renewable or ambiguous; they never prove grant revocation.
-      cooldown: {
-        read: async () => {
-          const score = await ctx().store(["ZSCORE", everywhereKeys.linearRetry(view.installation), "until"])
-          if (score === null || score === undefined) return 0
-          if (typeof score !== "string" || !/^[0-9]{1,16}$/.test(score)) throw new LinearFailure(false)
-          return Number(score)
-        },
-        write: async (at) => { await scoped(["ZADD", everywhereKeys.linearRetry(view.installation), "GT", Math.ceil(at), "until"]); await scoped(["PEXPIRE", everywhereKeys.linearRetry(view.installation), 86_400_000]) },
-      },
+      cooldown: linearCooldown(ctx().store, scoped, view.installation),
     })(operation, variables)
   }
 
