@@ -280,5 +280,18 @@
     },
     "fileUrlIssue": "The other recorded Windows issue, the release-copy.test.ts file-URL ENOENT, was repaired in f9773571 (windowsReleaseCopyFollowUp).",
     "qualification": "CI runs the website release copy tests on Linux only, so no Windows CI run exercises these files. No full website-suite pass is claimed."
+  },
+  "windowsGuideExtractionFollowUp20261114": {
+    "parentRevision": "220c50662281ce0611dfd04804e280aa90049dad",
+    "cause": "The 2026-11-13 local check converted only the engine task sources to CRLF. With every file the test reads as text converted, the same test file still failed one case: the workflows-page test read the guide's examples with a pattern that required LF after the json fence and before the closing fence, so packages/engine/src/orchestration/guide.txt with CRLF yielded no examples.",
+    "repair": "Accept an optional carriage return at both fence line ends. No assertion, product copy or feature code changed.",
+    "localCheck": {
+      "platform": "macOS arm64, with 21 of the 22 repository files the test reads as text converted to CRLF, then restored. The remaining docs page is read only through whitespace folding, which removes carriage returns.",
+      "command": "packages/web: bun test --timeout 30000 test/release-113-multiagent-docs.test.ts",
+      "beforeRepairCrlf": "10 passed, 1 failed (the workflows page shows the guide's three examples: expected length 3, received 0)",
+      "afterRepairCrlf": "11 passed, 0 failed, 554 assertions",
+      "afterRepairLf": "11 passed, 0 failed, 554 assertions"
+    },
+    "qualification": "A simulated CRLF checkout on macOS, not a Windows run. CI still runs these website tests on Linux only. No full website-suite pass is claimed."
   }
 }

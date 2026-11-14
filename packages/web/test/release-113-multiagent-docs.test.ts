@@ -206,7 +206,7 @@ test("the workflow numbers on the pages are WorkflowLimits", async () => {
 
 test("the workflows page shows the guide's three examples, and says it is not Workflow insights", async () => {
   const guide = await read("packages/engine/src/orchestration/guide.txt")
-  const expected = [...guide.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => JSON.parse(match[1]!))
+  const expected = [...guide.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)].map((match) => JSON.parse(match[1]!))
   const raw = await read("packages/web/src/pages/docs/workflows.astro")
   const shown = [...raw.matchAll(/<pre data-sample="workflow"><code>\{`([\s\S]*?)`\}<\/code><\/pre>/g)].map((match) =>
     JSON.parse(match[1]!),
