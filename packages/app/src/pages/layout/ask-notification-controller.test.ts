@@ -199,6 +199,27 @@ test("paired-phone alerts share the observed-ask cooldown without duplicating de
   expect(fake.state.phones).toHaveLength(2)
 })
 
+test("replacing an unviewed toast preserves the new alert's phone cooldown", async () => {
+  const fake = fixture()
+  fake.state.viewed = false
+  await fake.controller.observe(question("que_first_toast"))
+  fake.state.now += 5000
+  await fake.controller.observe(question("que_replacement_toast"))
+  expect(fake.state.phones).toEqual([sessionID, sessionID])
+  expect(fake.state.dismissed).toEqual([1])
+  expect(fake.state.toasts).toHaveLength(2)
+  fake.state.now += 4999
+  await fake.controller.observe(question("que_replacement_cooldown"))
+  expect(fake.state.phones).toHaveLength(2)
+  expect(fake.state.toasts).toHaveLength(2)
+  fake.state.now++
+  await fake.controller.observe(question("que_after_replacement_cooldown"))
+  expect(fake.state.phones).toEqual([sessionID, sessionID, sessionID])
+  expect(fake.state.dismissed).toEqual([1, 2])
+  expect(fake.state.toasts).toHaveLength(3)
+  fake.controller.close()
+})
+
 test("the asynchronous phone-turn decision can retain an auto-accept request for a person", async () => {
   const fake = fixture()
   fake.state.auto = Promise.resolve(false)

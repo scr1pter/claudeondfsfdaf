@@ -62,7 +62,6 @@ export function createAskNotificationController(input: {
       const kind = detail.type === "permission.asked" ? "permission" : "question"
       const copy = input.copy(kind, session, event.name)
       const href = `/${base64Encode(event.name)}/session/${detail.properties.sessionID}`
-      void input.phoneAlert?.(session)
       const notifies = rendererNotifies(detail, input.desktopOwns())
       const preferences = input.preferences()
       // The paired phones hear of every ask that alerts here, whoever owns the OS notification or is looking at it.
@@ -71,7 +70,9 @@ export function createAskNotificationController(input: {
       if (notifies && (kind === "permission" ? preferences.permissions : preferences.agent))
         void input.notify(copy.title, copy.description, href)
       if (input.viewed(session, event.name)) return
-      dismiss(event.name, detail.properties.sessionID)
+      // Replacing a toast must not clear the cooldown just established for this new alert.
+      const previous = toasts.get(sessionKey)
+      if (previous !== undefined) input.dismissToast(previous)
       toasts.set(sessionKey, input.toast(kind, copy.title, copy.description, href))
     },
     close() {
