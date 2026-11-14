@@ -605,9 +605,17 @@ const layer = Layer.effect(
                       bridge.promise(persist(pid).pipe(Effect.andThen(input.beforeSpawn ?? Effect.void))),
                     onOutput: (chunk) => bridge.promise(write(chunk)),
                   })
-                  const handle = yield* Effect.tryPromise(() => windows!)
+                  const handle = yield* Effect.tryPromise({
+                    try: () => windows!,
+                    catch: (cause) =>
+                      cause instanceof Error ? cause : new Error("Windows shell startup failed", { cause }),
+                  })
                   yield* Deferred.succeed(ready, undefined)
-                  return Effect.tryPromise(() => handle.completion).pipe(Effect.map((result) => result.exitCode))
+                  return Effect.tryPromise({
+                    try: () => handle.completion,
+                    catch: (cause) =>
+                      cause instanceof Error ? cause : new Error("Windows shell execution failed", { cause }),
+                  }).pipe(Effect.map((result) => result.exitCode))
                 })
               : yield* Effect.gen(function* () {
                   if (input.beforeSpawn) yield* input.beforeSpawn
