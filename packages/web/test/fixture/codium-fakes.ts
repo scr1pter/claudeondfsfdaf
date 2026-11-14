@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Option, Schema } from "effect"
+import { FOUNDING_SCRIPTS } from "../../../../api/_lib/codium-founding"
 import { FUNDING_SCRIPTS } from "../../../../api/_lib/codium-funding"
 import { RAMP_SCRIPTS } from "../../../../api/_lib/codium-ramp"
 import { POOL_SCRIPTS } from "../../../../api/_lib/codium-pool"
@@ -67,6 +68,20 @@ const LEASE_CHECK = "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end
 const LEASE_RELEASE = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end; return 0"
 if (OUTBOX_SCRIPTS.LOCK_CHECK !== LEASE_CHECK || OUTBOX_SCRIPTS.LOCK_RELEASE !== LEASE_RELEASE)
   throw new Error("The outbox lock's scripts no longer match the billing lease's.")
+
+/** A Redis SCAN glob (`*`, `?` and backslash escapes) as a regular expression over the whole key. */
+function globPattern(pattern: string) {
+  const literal = (char: string) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  let source = ""
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index]!
+    if (char === "\\" && index + 1 < pattern.length) source += literal(pattern[++index]!)
+    else if (char === "*") source += ".*"
+    else if (char === "?") source += "."
+    else source += literal(char)
+  }
+  return new RegExp(`^${source}$`, "s")
+}
 
 /**
  * Enough of Valkey for Codium: strings with NX/PX, hashes, sorted sets, expiry on the fake clock, and the scripts
@@ -138,7 +153,10 @@ export class FakeStore {
       case "SCAN": {
         const pattern = args[args.indexOf("MATCH") + 1] ?? "*"
         const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern
-        return ["0", this.keys().filter((key) => key.startsWith(prefix))]
+        if (!/[*?\\]/.test(prefix)) return ["0", this.keys().filter((key) => key.startsWith(prefix))]
+        // A pattern with a wildcard before its end (account deletion's sweep, WP A57): a Redis glob.
+        const glob = globPattern(pattern)
+        return ["0", this.keys().filter((key) => glob.test(key))]
       }
       case "SMEMBERS":
         return [...this.members(args[0]!)]
@@ -161,8 +179,30 @@ export class FakeStore {
         return 1
       case "HGET":
         return this.hash(args[0]!).get(args[1]!) ?? null
+      case "HDEL": {
+        const fields = this.hash(args[0]!)
+        const removed = args.slice(1).reduce((sum, field) => sum + (fields.delete(field) ? 1 : 0), 0)
+        this.prune(args[0]!)
+        return removed
+      }
+      case "INCRBY": {
+        const current = this.live(args[0]!)
+        if (current && current.kind !== "string") throw new Error("WRONGTYPE")
+        const value = Number(current?.value ?? "0") + Number(args[1])
+        const at = this.expires.get(args[0]!)
+        this.set(args[0]!, String(value))
+        if (at !== undefined) this.expires.set(args[0]!, at)
+        return value
+      }
+      case "PEXPIRE": {
+        if (!this.live(args[0]!)) return 0
+        this.expires.set(args[0]!, this.clock.now + Number(args[1]))
+        return 1
+      }
       case "HSCAN":
         return ["0", [...this.hash(args[0]!)].flat()]
+      case "HGETALL":
+        return this.hashFields(args[0]!)
       case "ZADD": {
         const [key, ...rest] = args
         const flags = new Set<string>()
@@ -282,6 +322,149 @@ export class FakeStore {
     return this.ordered(set).filter(
       ([, score]) => (low.open ? score > low.at : score >= low.at) && (high.open ? score < high.at : score <= high.at),
     )
+  }
+
+  /** A hash's fields as Lua's HGETALL answers them, or [] when the key holds no hash; never creates one. */
+  private hashFields(key: string) {
+    const value = this.live(key)
+    return value?.kind === "hash" ? [...value.value].flat() : []
+  }
+
+  /** WP A31's founding scripts (codium-founding.ts), as TypeScript; test/codium-founding.test.ts runs them on Valkey too. */
+  private registerFoundingScripts() {
+    const held = (key: string, now: number) => [...this.zset(key).values()].filter((score) => score > now).length
+    const current = (member: string) => {
+      const value = this.live(member)
+      return value?.kind === "hash" && value.value.has("number") && !value.value.has("ended") ? value.value : undefined
+    }
+    const scripts: [string, Script][] = [
+      [
+        FOUNDING_SCRIPTS.WINDOW,
+        ([reserved, count, opened], [now, override]) => {
+          const at = override || this.get(opened!) || ""
+          const result = [Number(this.get(count!) ?? 0), held(reserved!, Number(now)), at]
+          this.prune(reserved!)
+          return result
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.RESERVE,
+        ([reserved, count, opened, member], [token, until, now, limit, windowMs, override]) => {
+          const slots = this.zset(reserved!)
+          for (const [slot, score] of slots) if (score <= Number(now)) slots.delete(slot)
+          const existing = slots.get(token!)
+          if (existing !== undefined) {
+            if (Number(until) > existing) slots.set(token!, Number(until))
+            return 1
+          }
+          const refuse = () => {
+            this.prune(reserved!)
+            return 0
+          }
+          if (this.live(member!)) return refuse()
+          const at = override || this.get(opened!) || ""
+          if (at !== "" && Number(now) >= Number(at) + Number(windowMs)) return refuse()
+          if (Number(this.get(count!) ?? 0) + slots.size >= Number(limit)) return refuse()
+          slots.set(token!, Number(until))
+          return 1
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.ASSIGN,
+        ([member, count, reserved], [token, subscription, at]) => {
+          const value = this.live(member!)
+          if (value?.kind === "hash" && value.value.has("number")) return this.hashFields(member!)
+          this.zset(reserved!).delete(token!)
+          this.prune(reserved!)
+          const number = Number(this.get(count!) ?? 0) + 1
+          this.set(count!, String(number))
+          const fields = this.hash(member!)
+          for (const [name, field] of [
+            ["number", String(number)],
+            ["token", token!],
+            ["subscription", subscription!],
+            ["at", at!],
+          ] as const)
+            fields.set(name, field)
+          return this.hashFields(member!)
+        },
+      ],
+      [FOUNDING_SCRIPTS.READ, ([member]) => this.hashFields(member!)],
+      [
+        FOUNDING_SCRIPTS.CARRY,
+        ([member], [subscription]) => {
+          const fields = current(member!)
+          if (!fields) return 0
+          fields.set("subscription", subscription!)
+          return 1
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.END,
+        ([member, listed, names], [account, at]) => {
+          const value = this.live(member!)
+          if (value?.kind !== "hash" || !value.value.has("number")) return 0
+          if (!value.value.has("ended")) value.value.set("ended", at!)
+          this.zset(listed!).delete(account!)
+          this.prune(listed!)
+          this.hash(names!).delete(account!)
+          this.prune(names!)
+          return 1
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.OPT,
+        ([member, listed, names], [account, show, name, hidden]) => {
+          const fields = current(member!)
+          if (!fields) return 0
+          fields.set("listed", show!)
+          if (name === "") this.hash(names!).delete(account!)
+          else this.hash(names!).set(account!, name!)
+          this.prune(names!)
+          if (show === "1" && hidden === "0") this.zset(listed!).set(account!, Number(fields.get("number")))
+          else this.zset(listed!).delete(account!)
+          this.prune(listed!)
+          return 1
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.SYNC,
+        ([member, listed], [account, hidden]) => {
+          const fields = current(member!)
+          if (fields && fields.get("listed") === "1" && hidden === "0") {
+            this.zset(listed!).set(account!, Number(fields.get("number")))
+            return 1
+          }
+          this.zset(listed!).delete(account!)
+          this.prune(listed!)
+          return 0
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.LIST,
+        ([listed, names]) => {
+          const rows = this.ordered(this.zset(listed!)).flatMap(([account, number]) => [
+            String(number),
+            this.hash(names!).get(account) ?? "",
+          ])
+          this.prune(listed!)
+          this.prune(names!)
+          return rows
+        },
+      ],
+      [
+        FOUNDING_SCRIPTS.ERASE,
+        ([member, listed, names], [account]) => {
+          this.remove(member!)
+          this.zset(listed!).delete(account!)
+          this.prune(listed!)
+          this.hash(names!).delete(account!)
+          this.prune(names!)
+          return 1
+        },
+      ],
+    ]
+    for (const [text, run] of scripts) this.scripts.set(text, run)
   }
 
   private registerBuiltInScripts() {
@@ -588,6 +771,7 @@ export class FakeStore {
       ],
     ]
     for (const [text, run] of scripts) this.scripts.set(text, run)
+    this.registerFoundingScripts()
     // A17's ledger, fence and common hold (codium-spend-emulation.ts), on this store's values and clock.
     const spend = spendScripts({
       read: (key) => this.live(key),

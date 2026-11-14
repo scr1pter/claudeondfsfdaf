@@ -114,7 +114,8 @@ it.instance(
       // Every entry, in the catalog's order, each with what a picker shows of it and never its hidden weight.
       expect(Object.keys(listed.models)).toEqual([codiumModel.id, ModelPlans.AUTO_ID, "vendor/locked", "vendor/long"])
       expect(Object.fromEntries(Object.entries(listed.models).map(([key, model]) => [key, model.codium]))).toEqual({
-        [codiumModel.id]: { lab: "deepseek", role: "default" },
+        // WP A35: the listing also names the entry's part in the plan's review pair (the catalog's `review`).
+        [codiumModel.id]: { lab: "deepseek", role: "default", review: ["triage"] },
         [ModelPlans.AUTO_ID]: {
           lab: "deepseek",
           auto: { floor: codiumModel.id, default: codiumModel.id, ceiling: codiumModel.id },

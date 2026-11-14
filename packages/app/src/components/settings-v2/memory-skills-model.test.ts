@@ -149,7 +149,7 @@ describe("Settings > Memory > Skills", () => {
 
   test("keeps to the privacy statements, and never promises more", () => {
     expect(SKILLS.privacy).toBe(
-      "Learned skills and workflow insights are stored only in brain.db on this computer. Vector sends them nowhere, except that the optional skill drafter, when you set it to Always, sends one run's commands, file names and a short redacted error excerpt to your model provider. By default it runs only with Vector Local on.",
+      "Learned skills and workflow insights are stored locally in brain.db by default. The optional skill drafter, when you set it to Always, sends one run's commands, file names and a short redacted error excerpt to your model provider. Codium Brain helpers require a separate opt-in; a subscription alone grants no permission. Without that opt-in, the default model helper runs only with Vector Local on. Explicit Brain attachment to a GitHub run you start from the desktop and encrypted Brain Vault backup are separate opt-in transfers; their controls appear only in builds where they are available.",
     )
     expect(SKILLS.intro).toContain("A learned skill is guidance the agent may load, never a rule.")
     expect(SKILLS.share).toBe(

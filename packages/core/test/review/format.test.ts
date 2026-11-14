@@ -906,11 +906,38 @@ describe("numbers and cost", () => {
       "Vector Codium · vector-velocity · Codium",
     )
     expect(costWording({ ...priced, model: "anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity" })).toBe(
-      "anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity · $0.21 + Codium",
+      "anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium",
     )
     expect(costWording({ ...priced, model: "other/vector-plan/model" })).toBe(
       "other/vector-plan/model · $0.21 (48.2k in, 31.0k of it cached / 3.1k out)",
     )
+  })
+
+  // Label plan §2: `vector-plan` is never printed as a provider name; a Codium model reads "Vector Codium · <model>".
+  // Mixed wording keeps its "<models> · <own figure> + Codium" layout and renames only the Codium model's segment.
+  test("a mixed review names its Codium models Vector Codium, never by the vector-plan id", () => {
+    const mixed = "anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity"
+    const named = "anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity"
+    const cost: ReviewCost = { ...priced, codium: true, model: mixed }
+    const wordings = [
+      costWording({ ...cost, tokensOwnOnly: true }),
+      costWording({ ...cost, partial: true }),
+      costWording({ ...cost, usageMissing: true }),
+      costWording({ ...plan, codium: true, model: "openai/gpt-5 + vector-plan/vector-flash" }),
+      costWording({ ...unknown, codium: true, costUsd: 0.21, model: "vector-plan/vector-flash + provider/model" }),
+      noteFailed("timeout", cost),
+      buildSummaryBody({ head: HEAD, baseRef: "main", mode: "full", cost }),
+    ]
+    expect(wordings.slice(0, 5)).toEqual([
+      `${named} · $0.21 + Codium (48.2k in, 31.0k of it cached / 3.1k out)`,
+      `${named} · at least $0.21 + Codium: a reply that stopped early reported no usage`,
+      `${named} · $0.21 + Codium · additional cost and token usage unavailable`,
+      "openai/gpt-5 + Vector Codium · vector-flash · subscription sign-in, no per-token price + Codium",
+      "Vector Codium · vector-flash + provider/model · $0.21 + Codium · additional cost unknown: pricing or complete usage is unavailable",
+    ])
+    expect(wordings[5]).toContain(`Used before it stopped: ${named} · $0.21 + Codium.`)
+    expect(wordings[6]).toContain(`· ${named} · $0.21 + Codium</sub>`)
+    for (const wording of wordings) expect(wording).not.toContain("vector-plan")
   })
 
   test("costWording for every kind", () => {

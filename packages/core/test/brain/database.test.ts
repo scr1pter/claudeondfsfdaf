@@ -90,6 +90,8 @@ describe("BrainDatabase", () => {
         { id: "20261210000000_learned_skills" },
         { id: "20261211000000_workflow" },
         { id: "20261212000000_research_claims" },
+        { id: "20261213000000_codium_brain" },
+        { id: "20261214000000_codium_workflow" },
       ],
       state: [{ repository_id: "repo-1" }],
     })

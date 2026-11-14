@@ -1,0 +1,84 @@
+/* Settings > Remote (WP A42). The Settings workspace's charcoal tokens, like Settings > Roadmap vote. The QR code
+   keeps black modules on white, whatever the theme, so every phone camera reads it. */
+.settings-remote-muted,
+.settings-remote-state {
+  margin: 0;
+  color: var(--settings-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-remote-state--problem,
+.settings-remote-error {
+  margin: 0;
+  color: #fda4af;
+  font-size: 12px;
+}
+
+.settings-remote-pair {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.settings-remote-qr {
+  width: 232px;
+  height: 232px;
+  border-radius: 10px;
+  image-rendering: pixelated;
+}
+
+.settings-remote-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  color: var(--settings-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.settings-remote-code {
+  margin: 0;
+  color: var(--settings-text);
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-remote-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-remote-phones {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.settings-remote-phone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 10px;
+}
+
+.settings-remote-phone div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-remote-phone strong {
+  color: var(--settings-text);
+  font-size: 13px;
+  font-weight: 540;
+}

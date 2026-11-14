@@ -6,6 +6,11 @@ claim: the changes have not run in GitHub CI and have had no independent review 
 request, Stripe or OpenRouter call, account setting, deployment or release-catalog change was made. Every service in the
 tests is a loopback fake or a disposable local `redis-server` 7.0.15 (Lua-compatible; CI uses Valkey 7.2.14).
 
+**Status on 8 Nov 2026.** A18's commit `87b1e128` has since run in GitHub CI: Vector Codium run 41106060065 (push)
+passed. Its Codium tests job 124236079138 shows `packages/web/test/model-plan-estimate-api.test.ts` (12 pass),
+`model-plan-models-api.test.ts` (11), `model-plan-status-api.test.ts` (19) and `model-plans-api.test.ts` (75), with 65
+of 65 picked files passing. The P3 phase review (`codium-p3-repairs.md`) later covered A17 to A20.
+
 ## What changed
 
 | File                                                             | Change                                                                                                                                                                                                                                                                                                                                                          |

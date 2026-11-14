@@ -42,6 +42,7 @@ import { clearWorkspaceTerminals } from "@/context/terminal"
 import { pickSessionCacheEvictions } from "@/context/global-sync/session-cache"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
+import { alertTitle, sendPhoneAlert } from "@/context/phone-alerts"
 import { Binary } from "@vectordevai/core/util/binary"
 import { playSoundById } from "@/utils/sound"
 import { createAim } from "@/utils/aim"
@@ -366,7 +367,12 @@ export default function LegacyLayout(props: ParentProps) {
         const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
         const directory = e.name
         const props = e.details.properties
-        if (e.details.type === "permission.asked" && permission.autoResponds(e.details.properties, directory)) return
+        // A request auto-accept answers needs nobody; one in a turn a phone started is left to a person (WP A41).
+        if (
+          e.details.type === "permission.asked" &&
+          (await permission.willAutoRespond(e.details.properties, directory))
+        )
+          return
 
         // A helper's request belongs to the surface that launched it; never point the user at the helper session.
         const session = await serverSync()
@@ -387,6 +393,13 @@ export default function LegacyLayout(props: ParentProps) {
         const lastAlerted = alertedAtBySession.get(sessionKey) ?? 0
         if (now - lastAlerted < cooldownMs) return
         alertedAtBySession.set(sessionKey, now)
+
+        // The paired phones hear of a request waiting on a person (WP A41): its title names the session only.
+        void sendPhoneAlert(platform, settings.notifications, {
+          event: "needsYou",
+          title: alertTitle("Needs you", sessionTitle),
+          route: "approvals",
+        })
 
         if (e.details.type === "permission.asked") {
           if (settings.sounds.permissionsEnabled()) {

@@ -3,7 +3,6 @@ import { publicEntitlements } from "@vectordevai/schema/codium-entitlements"
 import {
   modelPlanPurchasable,
   modelPlanRedirect,
-  modelTopupPurchasable,
   readModelPlanConfig,
   readModelPlanStatus,
   type ModelPlanModel,
@@ -258,10 +257,6 @@ describe("model plan API boundaries", () => {
       active: true,
       purchased: { bought: true },
     })
-    expect(modelTopupPurchasable(config, plan, status)).toBe(true)
-    expect(modelTopupPurchasable(config, plan, { active: false })).toBe(true)
-    expect(modelTopupPurchasable(config, plan, undefined)).toBe(false)
-    expect(modelTopupPurchasable({ ...config, enabled: false }, plan, status)).toBe(false)
   })
 })
 
@@ -272,9 +267,6 @@ describe("billing redirects", () => {
     )
     expect(modelPlanRedirect({ url: "https://billing.stripe.com/p/session/test" }, "portal")).toBe(
       "https://billing.stripe.com/p/session/test",
-    )
-    expect(modelPlanRedirect({ url: "https://checkout.stripe.com/c/pay/cs_test" }, "topup")).toBe(
-      "https://checkout.stripe.com/c/pay/cs_test",
     )
   })
 

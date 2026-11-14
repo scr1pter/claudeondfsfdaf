@@ -1,0 +1,234 @@
+name: Vector hosted deploy
+
+# Deploys Vector's Cloudflare Workers (contract WP A58, §6.2): the Remote relay (packages/relay, `vector-remote-relay`,
+# WP A39) and the ops Worker (packages/ops-worker, `vector-ops`, WP A46). The owner dispatches it and picks the target.
+#
+# - The preflight job holds no secret. It requires the hosted-production environment to have a required reviewer and to
+#   take protected branches only, main to be a protected branch, and the commit to be on main; it then hands that
+#   exact commit to the deploy jobs.
+# - Each deploy job runs in hosted-production, so it waits for the owner's approval, and is the only place
+#   CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are read. It checks out that commit again, installs from the lockfile
+#   with no shared cache, checks the committed wrangler.jsonc (the real kill-flag namespace id, no secret in vars), runs
+#   the same dry run CI runs, requires the Worker's secrets to be set already, then deploys.
+# - Worker secrets are set once by the owner with `wrangler secret put` (owner-actions/remote.md and hosted-ops.md),
+#   never by this workflow. It reads their names only, through `wrangler secret list`, and never their values.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which Worker to deploy
+        required: true
+        default: relay
+        type: choice
+        options: [relay, ops, all]
+
+concurrency:
+  group: vector-hosted-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  preflight:
+    name: Require hosted-production and protected main
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require protected hosted-production environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/hosted-production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length') || {
+            echo "Create the hosted-production environment with the owner as required reviewer before deploying."
+            exit 1
+          }
+          test "$reviewers" -gt 0 || {
+            echo "hosted-production must have at least one required reviewer before anything deploys."
+            exit 1
+          }
+
+      # A workflow file changed on another branch could drop these checks, so the environment itself must refuse
+      # every branch that is not protected.
+      - name: Require hosted-production to take protected branches only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branches=$(gh api "repos/$GITHUB_REPOSITORY/environments/hosted-production" \
+            --jq '.deployment_branch_policy.protected_branches // false') || {
+            echo "Could not read hosted-production's deployment branches."
+            exit 1
+          }
+          test "$branches" = true || {
+            echo "Set hosted-production's deployment branches to protected branches only before anything deploys."
+            exit 1
+          }
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a commit on protected main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "No commit to deploy."; exit 1; }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo "The checkout is not the dispatched commit."; exit 1; }
+          protected=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected') || {
+            echo "Could not read main's protection."
+            exit 1
+          }
+          test "$protected" = true || { echo "Protect main before anything deploys from it."; exit 1; }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Deploy only a commit on protected main."
+            exit 1
+          }
+          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  relay:
+    name: Deploy the Remote relay
+    needs: preflight
+    if: inputs.target == 'relay' || inputs.target == 'all'
+    runs-on: ubuntu-24.04
+    environment: hosted-production
+    timeout-minutes: 20
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm the commit is still on protected main
+        env:
+          VECTOR_DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$VECTOR_DEPLOY_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$VECTOR_DEPLOY_SHA" origin/main
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      # From the lockfile, with no shared dependency cache that another run could have written.
+      - name: Install the locked dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Check the relay's committed configuration
+        run: bun packages/cloud/src/hosted-workers.ts config relay
+
+      - name: Dry-run the relay deploy
+        working-directory: packages/relay
+        run: bun run dry-run
+
+      - name: Require the relay's secrets
+        working-directory: packages/relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bun run secret-names | bun ../cloud/src/hosted-workers.ts secrets relay
+
+      - name: Deploy the relay
+        working-directory: packages/relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bun run deploy
+
+  ops:
+    name: Deploy the ops Worker
+    needs: preflight
+    if: inputs.target == 'ops' || inputs.target == 'all'
+    runs-on: ubuntu-24.04
+    environment: hosted-production
+    timeout-minutes: 20
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm the commit is still on protected main
+        env:
+          VECTOR_DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$VECTOR_DEPLOY_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$VECTOR_DEPLOY_SHA" origin/main
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      # From the lockfile, with no shared dependency cache that another run could have written.
+      - name: Install the locked dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Check the ops Worker's committed configuration
+        run: bun packages/cloud/src/hosted-workers.ts config ops
+
+      - name: Dry-run the ops Worker deploy
+        working-directory: packages/ops-worker
+        run: bun run dry-run
+
+      - name: Require the ops Worker's secrets
+        working-directory: packages/ops-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bun run secret-names | bun ../cloud/src/hosted-workers.ts secrets ops
+
+      - name: Deploy the ops Worker
+        working-directory: packages/ops-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bun run deploy

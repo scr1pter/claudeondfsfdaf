@@ -14,9 +14,26 @@ import { requireUnrevokedAccount } from "./revocation.js"
 const BODY_LIMIT = 128 * 1024
 const RESPONSE_LIMIT = 2 * 1024 * 1024
 
-/** Fence a verified account durably before deleting its identity; the host then reaps its data asynchronously. */
-export async function closeCloudWorkspaces(accountID: string, fetcher: typeof fetch = fetch) {
-  if (!process.env.VECTOR_WORKSPACES_ORIGIN?.trim() && !process.env.VECTOR_WORKSPACES_SECRET?.trim()) return
+/**
+ * Whether this deployment was ever pointed at a workspace host. Only a deployment with neither setting held no
+ * workspaces; a partial setting counts, so account deletion fails and retries instead of skipping the host.
+ */
+export function cloudWorkspacesConfigured() {
+  return Boolean(process.env.VECTOR_WORKSPACES_ORIGIN?.trim() || process.env.VECTOR_WORKSPACES_SECRET?.trim())
+}
+
+/**
+ * Fence a verified account durably before deleting its identity; the host then reaps its data asynchronously. Account
+ * deletion runs this as its `workspaces` erase part (codium-erase.ts), again on every retry and on the follow-up pass:
+ * the host answers `closed` for an account it already closed. `deadline` (real time, ms) shortens the wait for the host
+ * so the part stops inside the deletion's time budget.
+ */
+export async function closeCloudWorkspaces(
+  accountID: string,
+  fetcher: typeof fetch = fetch,
+  options: { deadline?: number } = {},
+) {
+  if (!cloudWorkspacesConfigured()) return
   if (!accountId(accountID)) throw unavailable()
   // Cleanup remains mandatory after the pilot or public feature switch is disabled.
   const configuration = workspaceHost()
@@ -30,7 +47,9 @@ export async function closeCloudWorkspaces(accountID: string, fetcher: typeof fe
     },
     body,
     redirect: "error",
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(
+      options.deadline === undefined ? 30_000 : Math.max(1_000, Math.min(30_000, options.deadline - Date.now())),
+    ),
   }).catch(() => {
     throw unavailable()
   })

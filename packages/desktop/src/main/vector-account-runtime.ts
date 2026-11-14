@@ -12,6 +12,13 @@ const engine: {
   ready?: () => Promise<{ url: string; username: string | null; password: string | null }>
 } = {}
 const managed = createManagedAccountLifecycle()
+/** Main-process listeners for sign-in and sign-out, such as Vector Remote's connection (remote-runtime.ts). */
+const accountListeners = new Set<(status: { authenticated: boolean }) => void>()
+
+export function onVectorAccountChanged(listener: (status: { authenticated: boolean }) => void) {
+  accountListeners.add(listener)
+  return () => void accountListeners.delete(listener)
+}
 
 export const vectorAccount = createVectorAccount({
   read: () => getStore(STORE).get("account"),
@@ -44,10 +51,12 @@ export const vectorAccount = createVectorAccount({
     if (!engine.ready) return
     await refreshVectorModels(await engine.ready(), token)
   },
-  changed: (status) =>
+  changed: (status) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed() && !isBillingWindow(window)) window.webContents.send("vector-account-changed", status)
-    }),
+    })
+    accountListeners.forEach((listener) => listener(status))
+  },
   // The window that asked is the one focused when the person clicked; the billing window opens over it.
   billingWindow: (url) => openBillingWindow(url, ModelPlanStatus.SITE, BrowserWindow.getFocusedWindow()),
   focusBilling: () => void focusBillingWindow(),

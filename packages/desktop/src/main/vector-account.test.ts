@@ -32,6 +32,9 @@ function fixture() {
     config: {} as unknown,
     deletion: (_init: RequestInit) =>
       Response.json({ deleted: true, email: "fixture@example.test", cliTokens: "revoked" }) as Response,
+    // The roadmap vote (WP A34).
+    roadmap: (_init: RequestInit) =>
+      Response.json({ quarter: "2026-q4", vote: { allowed: true }, nominate: { allowed: false } }) as Response,
     // What the exchange answers, when a test needs something other than a sign-in token.
     exchange: undefined as ((init: RequestInit) => Response) | undefined,
     outcome: "completed" as "completed" | "cancelled" | "closed" | "failed" | "busy",
@@ -84,6 +87,7 @@ function fixture() {
       if (url === "https://vectordev.ai/api/model-plans/config") return Response.json(state.config)
       if (url.startsWith("https://vectordev.ai/api/model-plans/")) return state.billing(url, init)
       if (url === "https://vectordev.ai/api/account/delete") return state.deletion(init)
+      if (url === "https://vectordev.ai/api/roadmap") return state.roadmap(init)
       if (url !== "https://vectordev.ai/api/account/cli-exchange") return state.photo()
       await state.fetchDelay
       if (state.exchange) return state.exchange(init)
@@ -478,6 +482,78 @@ test("Codium balances are read in the main process and only the result reaches t
     low: false,
   })
   expect(JSON.stringify(status)).not.toContain(app.token)
+})
+
+test("the roadmap vote is read and sent from the main process with the account token, in Settings' shapes only", async () => {
+  const signedOut = fixture()
+  expect(await signedOut.controller.roadmap({ kind: "read" })).toEqual({
+    ok: false,
+    code: "SIGN_IN",
+    message: "Sign in to Vector to see the roadmap vote.",
+  })
+  expect(signedOut.fetched).toEqual([])
+
+  const app = await signedIn()
+  const read = await app.controller.roadmap({ kind: "read" })
+  expect(read).toEqual({
+    ok: true,
+    roadmap: { quarter: "2026-q4", vote: { allowed: true }, nominate: { allowed: false } },
+  })
+  expect(app.fetched).toEqual(["https://vectordev.ai/api/roadmap"])
+  expect(app.requests[0]!.method).toBe("GET")
+  expect(app.requests[0]!.body).toBeUndefined()
+  expect(app.requests[0]!.redirect).toBe("error")
+  expect(new Headers(app.requests[0]!.headers).get("authorization")).toBe(`Bearer ${app.token}`)
+  expect(JSON.stringify(read)).not.toContain(app.token)
+
+  await app.controller.roadmap({ kind: "vote", quarter: "2026-q4", choice: "diff-search" })
+  await app.controller.roadmap({
+    kind: "nominate",
+    quarter: "2026-q4",
+    title: "Pinned agent tabs",
+    detail: "Keep them.",
+  })
+  expect(app.requests.slice(1).map((request) => [request.method, JSON.parse(String(request.body))])).toEqual([
+    ["POST", { action: "vote", quarter: "2026-q4", choice: "diff-search" }],
+    ["POST", { action: "nominate", quarter: "2026-q4", title: "Pinned agent tabs", detail: "Keep them." }],
+  ])
+  expect(new Headers(app.requests[1]!.headers).get("content-type")).toBe("application/json")
+
+  // Anything Settings does not send never leaves the main process.
+  app.fetched.length = 0
+  for (const input of [
+    undefined,
+    { kind: "delete" },
+    { kind: "vote", quarter: "Q4", choice: "diff-search" },
+    { kind: "vote", quarter: "2026-q4", choice: "Not An Id" },
+    { kind: "nominate", quarter: "2026-q4", title: 5 },
+    { kind: "nominate", quarter: "2026-q4", title: "x".repeat(401) },
+  ])
+    expect(await app.controller.roadmap(input)).toEqual({
+      ok: false,
+      message: "Vector could not send that to the roadmap vote.",
+    })
+  expect(app.fetched).toEqual([])
+
+  // vectordev.ai's refusal comes back as its own words; a failed connection says so.
+  app.state.roadmap = () =>
+    Response.json(
+      {
+        error: {
+          code: "CODIUM_PERK_REQUIRED",
+          message: "Your Vector Codium plan does not include this.",
+          perk: "vote",
+        },
+      },
+      { status: 403 },
+    )
+  expect(await app.controller.roadmap({ kind: "vote", quarter: "2026-q4", choice: "diff-search" })).toEqual({
+    ok: false,
+    code: "CODIUM_PERK_REQUIRED",
+    message: "Your Vector Codium plan does not include this.",
+  })
+  app.state.roadmap = () => Response.json(["not", "a", "roadmap"])
+  expect((await app.controller.roadmap({ kind: "read" })).ok).toBe(false)
 })
 
 test("the signed-in name is kept for the sidebar, and older sign-ins without one still work", async () => {

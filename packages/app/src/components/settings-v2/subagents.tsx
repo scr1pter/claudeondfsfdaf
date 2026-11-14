@@ -15,6 +15,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { showToast } from "@/utils/toast"
 import { formatServerError } from "@/utils/server-errors"
 import { helperLabel, isInternalSession } from "@/utils/internal-sessions"
+import { SettingsPlaybooks } from "./playbooks"
 import {
   SPECIALIST_IDS,
   agentEnabled,
@@ -694,6 +695,7 @@ function WorkflowsCard(props: CardProps) {
             Save workflow limits
           </Button>
         </div>
+        <SettingsPlaybooks />
       </div>
     </div>
   )

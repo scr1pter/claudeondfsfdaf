@@ -42,6 +42,7 @@ import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
 import { LayoutProvider } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
+import { CodiumBrainConsent } from "@/components/settings-v2/memory-brain"
 import { PermissionProvider } from "@/context/permission"
 import { PlanModeProvider } from "@/context/plan-mode"
 import { ProjectTrustProvider } from "@/context/project-trust"
@@ -509,6 +510,7 @@ function SharedProviders(props: ParentProps) {
         <ProjectTrustProvider>
           <CommandProvider>
             <DesktopCommands />
+            <CodiumBrainConsent />
             <HighlightsProvider>{props.children}</HighlightsProvider>
           </CommandProvider>
         </ProjectTrustProvider>
