@@ -134,9 +134,10 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
   std::atomic<bool> attempted{false},closed{false},installed{false},registered{false},alive{false};
   std::atomic<uint64_t> listener_generation{0},context_generation{0};
   std::atomic<UserInputFailure> first_failure{UserInputFailure::none};
+  UserInputRouteWriteWitness route_write;
 
   void record_failure(UserInputFailure reason)noexcept {auto expected=UserInputFailure::none;(void)first_failure.compare_exchange_strong(expected,reason);}
-  [[noreturn]] void reject(UserInputFailure reason) {record_failure(reason);throw reason;}
+  [[noreturn]] void reject(UserInputFailure reason) {route_write.retire();record_failure(reason);throw reason;}
 
   UserInputListenerStatus status()const noexcept {
     UserInputListenerStatus value;
@@ -175,6 +176,7 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     sample(std::move(value));
   }
   void fail(UserInputFailure reason=UserInputFailure::native_failed) noexcept {
+    route_write.retire();
     record_failure(reason);
     alive.store(false); registration_poisoned.store(true);
     if (stop_event) SetEvent(stop_event.get());
@@ -267,10 +269,10 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     for (size_t i=0;i<count && !closed.load() && alive.load();++i) {
       const auto& challenge=queued[i];
       if (!challenge_current(challenge,monotonic())) continue;
-      if (!own_routes(hwnd)) { record_failure(UserInputFailure::native_route_lost);configuration(); registered.store(false); fail(UserInputFailure::native_route_lost); return; }
+      if (!own_routes(hwnd)) { route_write.retire();record_failure(UserInputFailure::native_route_lost);configuration(); registered.store(false); fail(UserInputFailure::native_route_lost); return; }
       const auto observed_environment=environment();
       if (closed.load()) continue;
-      if (!own_routes(hwnd)) { record_failure(UserInputFailure::native_route_lost);configuration(); registered.store(false); fail(UserInputFailure::native_route_lost); return; }
+      if (!own_routes(hwnd)) { route_write.retire();record_failure(UserInputFailure::native_route_lost);configuration(); registered.store(false); fail(UserInputFailure::native_route_lost); return; }
       // Charge every route/environment query to the original absolute challenge deadline.
       const auto observed=monotonic(); const auto listener=status();
       if (closed.load() || observed<challenge.sent_at_ms || observed>=challenge.deadline_ms) continue;
@@ -287,14 +289,15 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
   }
   UserInputFailure route_failure(HWND hwnd,bool include_closed=false) noexcept {
     UserInputRouteReadback value;value.closed=include_closed && closed.load();
-    if(value.closed)return user_input_route_failure(value);
+    if(value.closed)return user_input_route_failure(value,&route_write,listener_generation.load(),hwnd);
     const auto actual=routes();
     value.query_ok=actual.has_value();
     if(actual){value.mouse_present=actual->have_mouse;value.keyboard_present=actual->have_keyboard;value.mouse_target=actual->mouse==hwnd;value.keyboard_target=actual->keyboard==hwnd;value.mouse_flags=actual->mouse_flags;value.keyboard_flags=actual->keyboard_flags;}
-    return user_input_route_failure(value);
+    return user_input_route_failure(value,&route_write,listener_generation.load(),hwnd);
   }
   bool own_routes(HWND hwnd) noexcept {return route_failure(hwnd)==UserInputFailure::none;}
   void retire_routes(HWND hwnd) noexcept {
+    route_write.retire();
     const auto actual=routes();
     if (!actual) { registration_poisoned.store(true); return; }
     std::array<RAWINPUTDEVICE,2> remove{}; UINT count=0;
@@ -324,13 +327,14 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
       hwnd=CreateWindowExW(0,class_name,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,module,&attachment);
       if (!hwnd || closed.load()) reject(UserInputFailure::native_window);
       installed.store(true);
-      const RAWINPUTDEVICE devices[]={{0x01,0x02,RIDEV_INPUTSINK|RIDEV_DEVNOTIFY,hwnd},{0x01,0x06,RIDEV_INPUTSINK|RIDEV_DEVNOTIFY,hwnd}};
+      const std::array<RAWINPUTDEVICE,2> devices{{{0x01,0x02,RIDEV_INPUTSINK|RIDEV_DEVNOTIFY,hwnd},{0x01,0x06,RIDEV_INPUTSINK|RIDEV_DEVNOTIFY,hwnd}}};
       const auto actual=routes();
       if (!actual) reject(UserInputFailure::native_routes_query);
       if (actual->have_mouse || actual->have_keyboard) reject(UserInputFailure::native_routes_existing);
-      did_register=RegisterRawInputDevices(devices,static_cast<UINT>(std::size(devices)),static_cast<UINT>(sizeof(RAWINPUTDEVICE)))!=FALSE;
-      if (did_register) registered.store(true);
+      did_register=RegisterRawInputDevices(devices.data(),static_cast<UINT>(devices.size()),static_cast<UINT>(sizeof(RAWINPUTDEVICE)))!=FALSE;
       if (!did_register) reject(UserInputFailure::native_register);
+      if(!route_write.publish(listener_generation.load(),hwnd,devices))reject(UserInputFailure::native_status);
+      registered.store(true);
       const auto readback=route_failure(hwnd,true);
       if (readback!=UserInputFailure::none) reject(readback);
       alive.store(true); SetEvent(ready_event.get());
@@ -341,18 +345,19 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
         if (result==WAIT_FAILED || result==WAIT_ABANDONED_0 || result==WAIT_ABANDONED_0+1) reject(UserInputFailure::native_wait);
         const bool pumped=pump_messages();
         if (WaitForSingleObject(stop_event.get(),0)==WAIT_OBJECT_0) break;
-        if (!closed.load() && !own_routes(hwnd)) { record_failure(UserInputFailure::native_route_lost);configuration(); registered.store(false); fail(UserInputFailure::native_route_lost); break; }
+        if (!closed.load() && !own_routes(hwnd)) { route_write.retire();record_failure(UserInputFailure::native_route_lost);configuration(); registered.store(false); fail(UserInputFailure::native_route_lost); break; }
         if (pumped && WaitForSingleObject(health_event.get(),0)==WAIT_OBJECT_0) process_health(hwnd);
         if (WaitForSingleObject(stop_event.get(),0)==WAIT_OBJECT_0) break;
       }
       alive.store(false);
       if (did_register) { retire_routes(hwnd); did_register=false; }
-      if (hwnd) { SetWindowLongPtrW(hwnd,GWLP_USERDATA,0); DestroyWindow(hwnd); hwnd=nullptr; installed.store(false); }
+      if (hwnd) { route_write.retire();SetWindowLongPtrW(hwnd,GWLP_USERDATA,0); DestroyWindow(hwnd); hwnd=nullptr; installed.store(false); }
     } catch (...) {
+      route_write.retire();
       record_failure(UserInputFailure::native_failed);
       alive.store(false); registration_poisoned.store(true);
       if (did_register) retire_routes(hwnd);
-      if (hwnd) { SetWindowLongPtrW(hwnd,GWLP_USERDATA,0); DestroyWindow(hwnd); installed.store(false); }
+      if (hwnd) { route_write.retire();SetWindowLongPtrW(hwnd,GWLP_USERDATA,0); DestroyWindow(hwnd); installed.store(false); }
     }
     { std::lock_guard lock(registration_mutex); if (const auto owner=registration_owner.lock();owner.get()==this) registration_owner.reset(); }
     alive.store(false); SetEvent(ready_event.get());
@@ -362,24 +367,24 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     const auto state=*context; context.reset(); state->run(); return 0;
   }
   bool start(std::function<void(UserInputSample)> callback,std::function<void(UserInputHealthReceipt)> health_callback) noexcept {
-    if (!callback || !health_callback || closed.load() || attempted.exchange(true)) {record_failure(UserInputFailure::native_status);return false;}
+    if (!callback || !health_callback || closed.load() || attempted.exchange(true)) {route_write.retire();record_failure(UserInputFailure::native_status);return false;}
     try {
-      { std::lock_guard lock(registration_mutex); if (registration_poisoned.load() || registration_owner.lock()) { record_failure(UserInputFailure::native_owner);closed.store(true); return false; } registration_owner=shared_from_this(); }
+      { std::lock_guard lock(registration_mutex); if (registration_poisoned.load() || registration_owner.lock()) { route_write.retire();record_failure(UserInputFailure::native_owner);closed.store(true); return false; } registration_owner=shared_from_this(); }
       { std::lock_guard lock(lifecycle_mutex);
-        if (closed.load()) {record_failure(UserInputFailure::native_status);return false;}
-        const auto issued=generation(); if (!issued) {record_failure(UserInputFailure::native_generation);return false;} listener_generation.store(issued); context_generation.store(1); receive=std::move(callback); receive_health=std::move(health_callback);
+        if (closed.load()) {route_write.retire();record_failure(UserInputFailure::native_status);return false;}
+        const auto issued=generation(); if (!issued) {route_write.retire();record_failure(UserInputFailure::native_generation);return false;} listener_generation.store(issued); context_generation.store(1); receive=std::move(callback); receive_health=std::move(health_callback);
         stop_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr)); ready_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr)); health_event.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr));
-        if (!stop_event || !ready_event || !health_event) { record_failure(UserInputFailure::native_events);closed.store(true); registration_poisoned.store(true); return false; }
+        if (!stop_event || !ready_event || !health_event) { route_write.retire();record_failure(UserInputFailure::native_events);closed.store(true); registration_poisoned.store(true); return false; }
         stop_signal.store(stop_event.get());
         auto context=std::make_unique<std::shared_ptr<NativeListener>>(shared_from_this());
         const auto launched=CreateThread(nullptr,0,thread_proc,context.get(),0,nullptr);
-        if (!launched) { record_failure(UserInputFailure::native_thread);closed.store(true); registration_poisoned.store(true); return false; }
+        if (!launched) { route_write.retire();record_failure(UserInputFailure::native_thread);closed.store(true); registration_poisoned.store(true); return false; }
         thread.attach(launched); thread_witness.store(launched); (void)context.release();
       }
       const auto ready=WaitForSingleObject(ready_event.get(),200);
-      if (ready!=WAIT_OBJECT_0 || !status().alive) { record_failure(ready==WAIT_TIMEOUT?UserInputFailure::native_ready_timeout:UserInputFailure::native_status);registration_poisoned.store(true); close(); return false; }
+      if (ready!=WAIT_OBJECT_0 || !status().alive) { route_write.retire();record_failure(ready==WAIT_TIMEOUT?UserInputFailure::native_ready_timeout:UserInputFailure::native_status);registration_poisoned.store(true); close(); return false; }
       return true;
-    } catch (...) { record_failure(UserInputFailure::native_failed);registration_poisoned.store(true); close(); return false; }
+    } catch (...) { route_write.retire();record_failure(UserInputFailure::native_failed);registration_poisoned.store(true); close(); return false; }
   }
   bool health(const UserInputHealthChallenge& challenge) noexcept {
     if (closed.load() || !status().alive || !challenge_current(challenge,monotonic())) return false;
@@ -391,6 +396,7 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     return true;
   }
   void close() noexcept {
+    route_write.retire();
     closed.store(true); alive.store(false);
     // Published handles are immutable and retained by this shared state, including quarantined
     // threads. Close never waits for a startup/lifecycle mutex before signaling cancellation.

@@ -98,19 +98,39 @@ std::wstring_view user_input_failure_stage(UserInputFailure failure)noexcept {
   const auto index=static_cast<size_t>(failure);return index<stages.size()?stages[index]:std::wstring_view{};
 }
 
-UserInputFailure user_input_route_failure(const UserInputRouteReadback& value)noexcept {
+bool UserInputRouteWriteWitness::valid(HWND target,const std::array<RAWINPUTDEVICE,2>& requested)noexcept {
+  constexpr DWORD expected=RIDEV_INPUTSINK|RIDEV_DEVNOTIFY;
+  return target && requested[0].usUsagePage==0x01 && requested[0].usUsage==0x02 && requested[1].usUsagePage==0x01 && requested[1].usUsage==0x06 &&
+    requested[0].hwndTarget==target && requested[1].hwndTarget==target && requested[0].dwFlags==expected && requested[1].dwFlags==expected;
+}
+bool UserInputRouteWriteWitness::publish(uint64_t generation,HWND target,const std::array<RAWINPUTDEVICE,2>& requested)noexcept {
+  if(!generation || !valid(target,requested)){retire();return false;}
+  auto expected=Phase::empty;if(!phase_.compare_exchange_strong(expected,Phase::writing))return false;
+  generation_=generation;target_=target;requested_=requested;
+  expected=Phase::writing;return phase_.compare_exchange_strong(expected,Phase::live);
+}
+bool UserInputRouteWriteWitness::current(uint64_t generation,HWND target)const noexcept {
+  if(phase_.load()!=Phase::live)return false;
+  return generation && generation_==generation && target_==target && valid(target,requested_) && phase_.load()==Phase::live;
+}
+void UserInputRouteWriteWitness::retire()noexcept {(void)phase_.exchange(Phase::retired);}
+
+UserInputFailure user_input_route_failure(const UserInputRouteReadback& value,const UserInputRouteWriteWitness* own_write,uint64_t generation,HWND target)noexcept {
   if(value.closed)return UserInputFailure::native_readback_closed;
+  if(own_write && !own_write->current(generation,target))return UserInputFailure::native_status;
   if(!value.query_ok)return UserInputFailure::native_readback_query;
   if(!value.mouse_present)return UserInputFailure::native_readback_mouse_missing;
   if(!value.keyboard_present)return UserInputFailure::native_readback_keyboard_missing;
   if(!value.mouse_target)return UserInputFailure::native_readback_mouse_target;
   if(!value.keyboard_target)return UserInputFailure::native_readback_keyboard_target;
   constexpr DWORD expected=RIDEV_INPUTSINK|RIDEV_DEVNOTIFY;
-  if(value.mouse_flags==expected && value.keyboard_flags==expected)return UserInputFailure::none;
-  // Classification only: missing DEVNOTIFY remains a refusal, with every other bit exact.
-  if(value.mouse_flags==RIDEV_INPUTSINK && value.keyboard_flags==RIDEV_INPUTSINK)return UserInputFailure::native_readback_devnotify_both;
-  if(value.mouse_flags==RIDEV_INPUTSINK && value.keyboard_flags==expected)return UserInputFailure::native_readback_devnotify_mouse;
-  if(value.keyboard_flags==RIDEV_INPUTSINK && value.mouse_flags==expected)return UserInputFailure::native_readback_devnotify_keyboard;
+  const auto accepted=[&]{return (!own_write || own_write->current(generation,target))?UserInputFailure::none:UserInputFailure::native_status;};
+  if(value.mouse_flags==expected && value.keyboard_flags==expected)return accepted();
+  // Default classification is strict. Only a current native successful-write witness may
+  // recognize omitted DEVNOTIFY on otherwise exact routes; no other flag is canonicalized.
+  if(value.mouse_flags==RIDEV_INPUTSINK && value.keyboard_flags==RIDEV_INPUTSINK)return own_write?accepted():UserInputFailure::native_readback_devnotify_both;
+  if(value.mouse_flags==RIDEV_INPUTSINK && value.keyboard_flags==expected)return own_write?accepted():UserInputFailure::native_readback_devnotify_mouse;
+  if(value.keyboard_flags==RIDEV_INPUTSINK && value.mouse_flags==expected)return own_write?accepted():UserInputFailure::native_readback_devnotify_keyboard;
   if(value.mouse_flags!=expected)return UserInputFailure::native_readback_mouse_flags;
   return UserInputFailure::native_readback_keyboard_flags;
 }

@@ -2,6 +2,7 @@
 #include "availability.h"
 #include "server.h"
 #include <array>
+#include <atomic>
 #include <memory>
 
 namespace vector::computer {
@@ -26,7 +27,20 @@ struct UserInputRouteReadback {
   bool query_ok=false,closed=false,mouse_present=false,keyboard_present=false,mouse_target=false,keyboard_target=false;
   DWORD mouse_flags=0,keyboard_flags=0;
 };
-UserInputFailure user_input_route_failure(const UserInputRouteReadback&)noexcept;
+// Production keeps this witness inside NativeListener and publishes only after the actual write.
+// Pure tests may exercise its structural lifetime; a witness never proves hardware calibration.
+class UserInputRouteWriteWitness final {
+ public:
+  bool publish(uint64_t generation,HWND target,const std::array<RAWINPUTDEVICE,2>& requested)noexcept;
+  bool current(uint64_t generation,HWND target)const noexcept;
+  void retire()noexcept;
+ private:
+  enum class Phase { empty,writing,live,retired };
+  static bool valid(HWND,const std::array<RAWINPUTDEVICE,2>&)noexcept;
+  std::atomic<Phase> phase_{Phase::empty};
+  uint64_t generation_=0;HWND target_=nullptr;std::array<RAWINPUTDEVICE,2> requested_{};
+};
+UserInputFailure user_input_route_failure(const UserInputRouteReadback&,const UserInputRouteWriteWitness* own_write=nullptr,uint64_t generation=0,HWND target=nullptr)noexcept;
 struct UserInputSetupStatus {
   UserInputSetupState state=UserInputSetupState::needs_calibration;
   bool mouse=false,keyboard=false;

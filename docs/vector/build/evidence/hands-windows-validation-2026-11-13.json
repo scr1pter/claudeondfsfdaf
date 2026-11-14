@@ -7,7 +7,7 @@
   "ownerApprovedW9": true,
   "w9": {
     "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
-    "nativeGroups": 51,
+    "nativeGroups": 53,
     "nativeExecution": "At 6f53a6ec native units passed; passive listener setup failed on two VMs. New closed startup diagnostics pending.",
     "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
     "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
@@ -131,5 +131,14 @@
     "artifactBytes": 876,
     "archiveSha256": "00d0f58d472e9a1fce9e419cc079ab0272fef05be68ef678d1f958c6f339d102",
     "followup": "Closed route readback classification only; no acceptance or deadline change. 51 native pure groups pending."
+  },
+  "routeCompatibilityCandidate": {
+    "status": "reviewed source, native execution pending",
+    "trigger": "Actual d883 startup readback refusal; exact field diagnostic 741a still queued",
+    "witness": "Actual successful two-class INPUTSINK|DEVNOTIFY registration, exact listener generation and private HWND; one-shot publication with permanent retirement before failure/removal/destruction/close",
+    "acceptance": "With current native witness only, returned flags may be exact requested flags or exact INPUTSINK with only DEVNOTIFY omitted. All other flags, wrong targets, missing classes and query failure remain refused. Default classifier strict.",
+    "reviews": "Independent native and UI source reviews; no concrete defect found",
+    "tests": "53 native pure groups pending; no local native/OS execution",
+    "qualification": "Not a confirmed root cause or passing runtime; no input, calibration, health, guardian or deadline change."
   }
 }
