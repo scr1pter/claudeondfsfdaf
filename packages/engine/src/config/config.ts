@@ -1907,14 +1907,16 @@ const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (current: InstanceContext) {
-        const ctx = yield* Effect.tryPromise({
+        const resolved = yield* Effect.tryPromise({
           try: () => ConfigPaths.canonicalScope(current),
           catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
         }).pipe(
+          Effect.map(Option.some),
           Effect.catch((cause) =>
-            Effect.logWarning("configuration scope could not be canonicalized", { cause }).pipe(Effect.as(current)),
+            Effect.logWarning("configuration scope could not be canonicalized", { cause }).pipe(Effect.as(Option.none())),
           ),
         )
+        const ctx = Option.getOrElse(resolved, () => current)
         const auth = yield* authSvc.all().pipe(Effect.orDie)
         const managed = ConfigManaged.read()
         const projectFiles = Flag.VECTOR_DISABLE_PROJECT_CONFIG
@@ -1980,6 +1982,8 @@ const layer = Layer.effect(
           ...(tuiConfig?.project ? [tuiConfig.path] : []),
         ]
         const captureTrustSnapshot = async () => {
+          if (Option.isNone(resolved))
+            return WorkspaceTrust.unavailableSnapshot(trustWorkspace, new Error("The configuration scope is unavailable."))
           try {
             const captured = await WorkspaceTrust.snapshot(trustWorkspace, trustInputs)
             const latest = await ConfigPaths.canonicalScope(current)
