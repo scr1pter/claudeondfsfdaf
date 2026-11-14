@@ -104,6 +104,25 @@ const SUBCOMMANDS = [
 const SNAPSHOT_ENV = { COLUMNS: "120" }
 
 describe("vector CLI help-text snapshots", () => {
+  cliIt.live(
+    "connected tools appear in top-level help only with the explicit experimental opt-in",
+    ({ vector }) =>
+      Effect.gen(function* () {
+        for (const [broad, connect, visible] of [
+          ["0", "0", false],
+          ["0", "1", true],
+          ["1", "0", false],
+        ] as const) {
+          const result = yield* vector.spawn(["--help"], {
+            env: { ...SNAPSHOT_ENV, VECTOR_EXPERIMENTAL: broad, VECTOR_EXPERIMENTAL_CONNECT: connect },
+          })
+          expect(result.exitCode).toBe(0)
+          expect(result.stderr.includes("vector connected")).toBe(visible)
+        }
+      }),
+    60_000,
+  )
+
   // Single test, parallel spawns. Each command's help fires under
   // `concurrency: 8` — wall-clock stays under ~10s even for ~35 commands,
   // versus ~1 minute if we serialized.

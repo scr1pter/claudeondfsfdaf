@@ -7,7 +7,8 @@ export const BeforeCommit = Schema.Literals(["off", "offer", "run"])
 
 export const Review = Schema.Struct({
   after_run: Schema.optional(AfterRun).annotate({
-    description: "Review changed files after a run: off (default), report, or repair.",
+    description:
+      "Review changed files after a run: off (default) or report. The reserved repair mode is not available yet and only reports findings.",
   }),
   before_commit: Schema.optional(BeforeCommit).annotate({
     description:

@@ -63,7 +63,9 @@ export async function executeConnectedCommand(client: ReturnType<typeof createVe
 
 export const ConnectedCommand = cmd({
   command: "connected <action> [runID]",
-  describe: "list connected tools, inspect review runs, start a review or cancel it on a running server",
+  describe: Flag.VECTOR_EXPERIMENTAL_CONNECT
+    ? "list connected tools, inspect review runs, start a review or cancel it on a running server"
+    : false,
   builder: (yargs) =>
     yargs
       .positional("action", { type: "string", choices: CONNECTED_ACTIONS, demandOption: true })
