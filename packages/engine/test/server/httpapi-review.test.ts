@@ -624,7 +624,9 @@ describe("owner local review HTTP boundary", () => {
         if (state) state.phase = "idle"
       }).pipe(diagnosed(state))
     },
-    30_000,
+    // Three real reviews each retain finished()'s independent 15-second bound.
+    // Leave room for all three and the discovery/idempotency HTTP checks.
+    60_000,
   )
 
   linuxLive(
