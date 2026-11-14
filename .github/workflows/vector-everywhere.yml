@@ -50,6 +50,8 @@ on:
       - api/_lib/cli-token.ts
       - api/_lib/revocation.ts
       - api/_lib/codium-switches.ts
+      - api/_lib/codium-keys.ts
+      - integrations/linear/**
       - packages/desktop/src/main/github-auth.ts
       - packages/desktop/src/main/github-api.ts
   workflow_dispatch:

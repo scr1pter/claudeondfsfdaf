@@ -2,8 +2,8 @@ name: Connected workspace app validation
 "on":
   push:
     branches:
-      - build-connect
-      - build-candidate
+      - main
+  workflow_dispatch:
 permissions:
   contents: read
 env:
