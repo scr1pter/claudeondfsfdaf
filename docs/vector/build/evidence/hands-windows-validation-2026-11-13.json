@@ -1194,6 +1194,22 @@
           "HttpApi exerciser gates"
         ],
         "qualification": "Actual full integrated PR log independently confirms app containment. Existing unrelated suite skips remain skips; this is not real hardware, final package, signing or release proof."
+      },
+      "windowsUnit": {
+        "job": 132343890156,
+        "conclusion": "success",
+        "logBytes": 911807,
+        "logSha256": "379f3e463f8f59e02fd9480cd9c2664f2831df9017238a08145dc519d9edb40a",
+        "nodeHarnessPassed": 13,
+        "perFileAppInvocations": 244,
+        "distinctAppFiles": 244,
+        "appFilesPassed": 244,
+        "appFilesFailed": 0,
+        "turboTasks": {
+          "successful": 8,
+          "total": 8
+        },
+        "qualification": "Actual current PR Windows log confirms all244 app files once, no failed child marker, and overall integrated unit-job success. Existing suite/platform skips remain skips."
       }
     },
     "unsignedArtifactsOnlyPreview": {
@@ -1385,5 +1401,263 @@
       }
     },
     "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."
+  },
+  "ciPriorityIntervention": {
+    "kind": "owner-authorized-ci-priority",
+    "observedAtUtc": "2026-11-14T06:12:27.694364+00:00",
+    "authorization": "Owner explicitly authorized prioritizing Hands autonomously; root specified only the already-failing ordinary build-candidate test run.",
+    "run": 43562005635,
+    "revision": "bb2cd55578de82d401b324a807e951ef95cc2a85",
+    "branch": "build-candidate",
+    "event": "workflow_dispatch",
+    "workflowPath": ".github/workflows/test.yml",
+    "statusBefore": "queued",
+    "conclusionBefore": null,
+    "countsBefore": {
+      "success": 5,
+      "failure": 1,
+      "queued": 11,
+      "in_progress": 4,
+      "skipped": 3,
+      "cancelled": 0
+    },
+    "cancelHttpStatus": 202,
+    "action": "cancel requested",
+    "observedAfterUtc": "2026-11-14T06:13:50.023576+00:00",
+    "statusAfter": "completed",
+    "conclusionAfter": "cancelled",
+    "countsAfter": {
+      "success": 5,
+      "failure": 1,
+      "queued": 0,
+      "in_progress": 0,
+      "skipped": 3,
+      "cancelled": 15
+    },
+    "noCodeChanged": true,
+    "rerunRequired": "If build-candidate validation is still needed, rerun its interrupted tests after its owner addresses the already-recorded failure. Existing passed/failed/skipped rows retain their actual conclusions.",
+    "auditBytes": 13870,
+    "auditSha256": "0fca2dd895f1b80323a4169a094f33768921c592cc389f1445d418dead1b9eaa",
+    "jobs": [
+      {
+        "id": 132347549641,
+        "name": "desktop engine bundle (node)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549816,
+        "name": "engine (linux, shard 1/4)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549839,
+        "name": "engine (linux, shard 2/4)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549863,
+        "name": "engine (linux, shard 4/4)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549865,
+        "name": "engine (linux, shard 3/4)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549868,
+        "name": "e2e (windows)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549901,
+        "name": "engine (windows, shard 9/12)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549904,
+        "name": "unit (linux)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549912,
+        "name": "unit (windows)",
+        "statusBefore": "completed",
+        "conclusionBefore": "failure",
+        "statusAfter": "completed",
+        "conclusionAfter": "failure",
+        "failedStepsBefore": [
+          "Run unit tests"
+        ]
+      },
+      {
+        "id": 132347549915,
+        "name": "engine (windows, shard 12/12)",
+        "statusBefore": "completed",
+        "conclusionBefore": "success",
+        "statusAfter": "completed",
+        "conclusionAfter": "success",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549950,
+        "name": "engine (windows, shard 4/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549960,
+        "name": "engine (windows, shard 10/12)",
+        "statusBefore": "in_progress",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549972,
+        "name": "e2e (linux)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549980,
+        "name": "engine (windows, shard 5/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549982,
+        "name": "engine (windows, shard 11/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549991,
+        "name": "engine (windows, shard 1/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347549999,
+        "name": "engine (windows, shard 7/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550002,
+        "name": "engine (windows, shard 6/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550037,
+        "name": "engine (windows, shard 8/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550039,
+        "name": "engine (windows, shard 3/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550091,
+        "name": "engine (windows, shard 2/12)",
+        "statusBefore": "queued",
+        "conclusionBefore": null,
+        "statusAfter": "completed",
+        "conclusionAfter": "cancelled",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347550665,
+        "name": "production app benchmark (manual)",
+        "statusBefore": "completed",
+        "conclusionBefore": "skipped",
+        "statusAfter": "completed",
+        "conclusionAfter": "skipped",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347551040,
+        "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})",
+        "statusBefore": "completed",
+        "conclusionBefore": "skipped",
+        "statusAfter": "completed",
+        "conclusionAfter": "skipped",
+        "failedStepsBefore": []
+      },
+      {
+        "id": 132347551042,
+        "name": "published release engine evidence (manual)",
+        "statusBefore": "completed",
+        "conclusionBefore": "skipped",
+        "statusAfter": "completed",
+        "conclusionAfter": "skipped",
+        "failedStepsBefore": []
+      }
+    ],
+    "qualification": "Only this already-failing ordinary sibling test dispatch was cancelled after explicit owner authorization to prioritize Hands. Its existing failure, passes and skips remain recorded. No sibling code, healthy codium-legal run, deployment or paid benchmark was changed; no interrupted test is counted as passed."
   }
 }
