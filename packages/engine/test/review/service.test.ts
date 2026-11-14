@@ -13,7 +13,7 @@ import type { ReviewOutcome } from "@vectordevai/core/review/types"
 import type { LocalReviewDeps } from "@/cli/cmd/review"
 import { Git } from "@/git"
 import type { RunInput } from "@/review/run"
-import { execute, type Input } from "@/review/service"
+import { execute, environment, type Input, type Options } from "@/review/service"
 import { ReviewGit } from "@/review/git"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -368,6 +368,108 @@ describe("shared review service", () => {
       expect(result.verdict.verdict).toBe("not-reviewed")
       expect(resolutions).toBe(0)
       expect(run.calls).toEqual([])
+    }),
+  )
+})
+
+describe("trusted review adapter options", () => {
+  it.effect("unknown or unsupported options refuse before Git or model work", () =>
+    Effect.gen(function* () {
+      const run = adapter()
+      let resolutions = 0
+      const deps = {
+        ...run.deps,
+        resolveModel: () =>
+          Effect.sync(() => {
+            resolutions += 1
+            return {
+              providerID: ProviderV2.ID.make("local"),
+              modelID: ModelV2.ID.make("review"),
+              context: 100_000,
+              costKind: "local" as const,
+            }
+          }),
+      }
+      const input = request({ directory: "/not-a-real-review-root", head: "1".repeat(40), base: "2".repeat(40) })
+      for (const options of [
+        { security: "always" },
+        { maxComments: 51 },
+        { maxComments: -1 },
+        { environment: { PATH: "/untrusted" } },
+        { cache: { full: false, trusted: true } },
+        { tools: { bash: true } },
+      ]) {
+        const result = yield* execute(input, deps, undefined, options as unknown as Options)
+        expect(result.exitCode).toBe(2)
+        expect(result.error).toContain("Invalid review invocation")
+        expect(result.verdict.verdict).toBe("not-reviewed")
+      }
+      expect(resolutions).toBe(0)
+      expect(run.calls).toEqual([])
+      expect(
+        environment({
+          MODEL: "local/review",
+          REVIEW_SECURITY: "off",
+          PATH: "/not-forwarded",
+          GITHUB_TOKEN: "fixture-not-forwarded",
+        }),
+      ).toEqual({ MODEL: "local/review", REVIEW_SECURITY: "off" })
+    }),
+  )
+
+  linux("scoped options preserve security, selection limits, environment and read authority", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const run = adapter()
+      const options: Options = { security: false, maxComments: 50, environment: { REVIEW_MIN_CONFIDENCE: "0.9" } }
+      const result = yield* execute(
+        { ...request(repo), readRoot: repo.directory, readDenies: ["private.ts"] },
+        {
+          ...run.deps,
+          resolveModel: (input) => {
+            options.security = true
+            options.maxComments = 1
+            options.environment = { REVIEW_MIN_CONFIDENCE: "0.1" }
+            return run.deps.resolveModel(input)
+          },
+        },
+        undefined,
+        options,
+      )
+      expect(result.error).toBeUndefined()
+      expect(run.calls).toHaveLength(1)
+      expect(run.calls[0]!.identity).toBe("vectorscope")
+      expect(run.calls[0]!.config.security).toBe("off")
+      expect(run.calls[0]!.config.maxComments).toBe(50)
+      expect(run.calls[0]!.config.minConfidence).toBe(0.9)
+      expect(run.calls[0]!.files.map((file) => file.path)).toEqual(["visible.ts"])
+      expect(run.calls[0]!.readRoot).toBe(repo.directory)
+      expect(run.calls[0]!.admittedReads?.denied("private.ts")).toBe(true)
+    }),
+  )
+
+  linux("only an explicit trusted cache option reuses the branch outcome", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const run = adapter()
+      const stdout: string[] = []
+      const deps = {
+        ...run.deps,
+        stdout: async (text: string) => {
+          stdout.push(text)
+        },
+      }
+      const first = yield* execute(request(repo), deps, undefined, { cache: { full: true } })
+      expect(first.error).toBeUndefined()
+      expect(run.calls).toHaveLength(1)
+      const second = yield* execute(request(repo), deps, undefined, { cache: { full: false } })
+      expect(second.error).toBeUndefined()
+      expect(run.calls).toHaveLength(1)
+      expect(JSON.parse(stdout.at(-1)!).cached).toBe(true)
+      const third = yield* execute(request(repo), deps)
+      expect(third.error).toBeUndefined()
+      expect(run.calls).toHaveLength(2)
+      expect(JSON.parse(stdout.at(-1)!).cached).not.toBe(true)
     }),
   )
 })

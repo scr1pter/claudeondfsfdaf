@@ -17,13 +17,14 @@ import { Connect } from "@vectordevai/schema/connect"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import type { ConnectAdapter } from "@/connect/adapter"
 import { ConnectHub } from "@/connect/hub"
+import { ConnectReviewService } from "@/connect/review-service"
 import { ConnectMembers } from "@/connect/members"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
-import type { SessionPrompt } from "@/session/prompt"
+import { SessionPrompt } from "@/session/prompt"
 import { MessageID, PartID, type SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import type { TaskPromptOps } from "@/tool/task"
@@ -1042,6 +1043,44 @@ describe("consent", () => {
 })
 
 describe("the helper handle", () => {
+  it.instance("only the private service capability qualifies the vectorscope identity", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, sessions } = yield* setup()
+      const { ops, prompts } = recorder()
+      let retained: ConnectReviewService.Capability | undefined
+      const exits: Record<string, boolean> = {}
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          const mine = (yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })).id
+          const input = { sessionID: mine, agent: "vectorscope", parts: [{ type: "text" as const, text: "Review" }] }
+          exits.ordinary = Exit.isSuccess(yield* Effect.exit(context.helper!.prompt(input)))
+          const capability = context.reviewService
+          if (!capability) throw new Error("The review had no private service capability")
+          retained = capability
+          exits.copied = Exit.isSuccess(yield* Effect.exit(ConnectReviewService.scope({ ...capability })))
+          const provided = yield* ConnectReviewService.service(capability, () => Effect.void)
+          const service = yield* SessionPrompt.Service.pipe(Effect.provideContext(provided))
+          exits.service = Exit.isSuccess(yield* Effect.exit(service.prompt(input)))
+          exits.tools = Exit.isSuccess(yield* Effect.exit(service.prompt({ ...input, tools: { bash: true } })))
+          exits.budget = Exit.isSuccess(yield* Effect.exit(service.prompt({ ...input, budget: { usd: 100 } })))
+          exits.otherAgent = Exit.isSuccess(yield* Effect.exit(service.prompt({ ...input, agent: "build" })))
+          return clean()
+        })
+      const result = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(result.result?.state).toBe("completed")
+      expect(exits).toEqual({
+        ordinary: false,
+        copied: false,
+        service: true,
+        tools: false,
+        budget: false,
+        otherAgent: false,
+      })
+      expect(prompts).toHaveLength(1)
+      expect(Exit.isFailure(yield* Effect.exit(ConnectReviewService.scope(retained!)))).toBe(true)
+    }),
+  )
+
   it.instance("reaches only the run's own hidden helper sessions, and only while the run is going", () =>
     Effect.gen(function* () {
       const { directory, hub, requester, sessions } = yield* setup()

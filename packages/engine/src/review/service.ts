@@ -11,6 +11,55 @@ import { readAuthority } from "./read-authority"
 import { ReviewGit } from "./git"
 
 export type Input = ReviewInvocation & { stopSignal?: AbortSignal }
+// Trusted adapter options are separate from the strict serialized invocation.
+// Omitting cache preserves the service's stateless behavior.
+export interface Options {
+  security?: boolean
+  maxComments?: number
+  environment?: Readonly<Record<string, string | undefined>>
+  cache?: { full: boolean }
+}
+
+export function environment(input: Record<string, string | undefined>) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([name]) => name === "MODEL" || /^REVIEW_[A-Z0-9_]+$/.test(name)),
+  )
+}
+
+function optionProblems(options: Options): string[] {
+  if (!options || typeof options !== "object" || Array.isArray(options)) return ["options"]
+  const problems = Object.keys(options).filter(
+    (key) => !["security", "maxComments", "environment", "cache"].includes(key),
+  )
+  if (options.security !== undefined && typeof options.security !== "boolean") problems.push("security")
+  if (
+    options.maxComments !== undefined &&
+    (!Number.isInteger(options.maxComments) || options.maxComments < 0 || options.maxComments > 50)
+  )
+    problems.push("maxComments")
+  if (
+    options.cache !== undefined &&
+    (!options.cache ||
+      typeof options.cache !== "object" ||
+      Array.isArray(options.cache) ||
+      typeof options.cache.full !== "boolean" ||
+      Object.keys(options.cache).some((key) => key !== "full"))
+  )
+    problems.push("cache")
+  if (
+    options.environment !== undefined &&
+    (!options.environment ||
+      typeof options.environment !== "object" ||
+      Array.isArray(options.environment) ||
+      Object.entries(options.environment).some(
+        ([key, value]) =>
+          (key !== "MODEL" && !/^REVIEW_[A-Z0-9_]+$/.test(key)) || (value !== undefined && typeof value !== "string"),
+      ))
+  )
+    problems.push("environment")
+  return problems
+}
+
 export interface Result extends LocalReviewResult {
   verdict: VerdictResult
 }
@@ -19,10 +68,11 @@ export function execute<RunR, ModelR>(
   input: Input,
   deps: LocalReviewDeps<RunR, ModelR>,
   placement?: ReadOnlyGit.Metadata,
+  options: Options = {},
 ) {
   return Effect.gen(function* () {
     const { stopSignal, ...invocation } = input
-    const problems = invocationProblems(invocation)
+    const problems = [...invocationProblems(invocation), ...optionProblems(options)]
     if (problems.length) {
       const refused: Result = {
         exitCode: 2 as const,
@@ -30,6 +80,12 @@ export function execute<RunR, ModelR>(
         verdict: reviewVerdict({ kind: "failure", stage: "config" }),
       }
       return refused
+    }
+    const scoped: Options = {
+      ...(options.security === undefined ? {} : { security: options.security }),
+      ...(options.maxComments === undefined ? {} : { maxComments: options.maxComments }),
+      ...(options.environment ? { environment: { ...options.environment } } : {}),
+      ...(options.cache ? { cache: { ...options.cache } } : {}),
     }
     // Callers may retain their objects while model setup yields. Keep the admitted
     // target and restrictive read authority fixed for the whole invocation.
@@ -78,13 +134,16 @@ export function execute<RunR, ModelR>(
                 ...(request.maxCost ? { maxCost: request.maxCost } : {}),
                 checks: false,
                 post: false,
-                full: true,
+                full: scoped.cache?.full ?? true,
+                ...(scoped.security === undefined ? {} : { security: scoped.security }),
+                ...(scoped.maxComments === undefined ? {} : { maxComments: scoped.maxComments }),
+                ...(scoped.environment ? { env: scoped.environment } : {}),
                 json: true,
                 context: {
                   ...(request.parentID ? { parentID: SessionID.make(request.parentID) } : {}),
                   expectedHead: request.target.head,
                   settingsRef: request.settingsRef,
-                  stateless: true,
+                  stateless: scoped.cache === undefined,
                   identity: "vectorscope",
                   ...(request.readDenies ? { readDenies: request.readDenies } : {}),
                   ...(readRoot ? { readRoot } : {}),

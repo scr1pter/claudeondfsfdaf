@@ -27,7 +27,7 @@ import { executeLocalReview, type LocalReviewDeps } from "@/cli/cmd/review"
 import type { ConnectAdapter } from "@/connect/adapter"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
 import { ConnectHub } from "@/connect/hub"
-import { ConnectReviewPrompt } from "@/connect/review-prompt"
+import { ConnectReviewService } from "@/connect/review-service"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -156,7 +156,12 @@ const fakeRun: NonNullable<VectorScopeAdapter.Deps["runReview"]> = (input) =>
         internal: `vectorscope.${name}`,
         parentID: input.parentID,
       })
-      yield* prompts.prompt({ sessionID: session.id, agent: name, parts: [{ type: "text", text: "Review" }] })
+      yield* prompts.prompt({
+        sessionID: session.id,
+        agent: "vectorscope",
+        model: { providerID: input.model.providerID, modelID: input.model.modelID },
+        parts: [{ type: "text", text: "Review" }],
+      })
       made.push(session.id)
     }
     const outcome = outcomeOf(input, { sessions: made, ...script.outcome?.(input) })
@@ -437,14 +442,14 @@ describe("the bridge over the helper handle", () => {
         prompt: (input) => Effect.sync(() => (seen.push(`prompt ${input.sessionID}`), promptReply(input))),
         cancel: (sessionID) => Effect.sync(() => void seen.push(`cancel ${sessionID}`)),
       }
-      const bridge = ConnectReviewPrompt.bridge(helper)
+      const bridge = ConnectReviewService.bridge(helper)
       const id = "ses_reviewer" as SessionID
       yield* bridge.prompt({ sessionID: id, agent: "review", parts: [{ type: "text", text: "x" }] })
       yield* bridge.cancel(id)
       expect(seen).toEqual([`prompt ${id}`, `cancel ${id}`])
 
       const others = Object.keys(bridge).filter(
-        (key) => !(ConnectReviewPrompt.ALLOWED as readonly string[]).includes(key),
+        (key) => !(ConnectReviewService.ALLOWED as readonly string[]).includes(key),
       )
       expect(others.toSorted()).toEqual([
         "admit",
@@ -460,7 +465,7 @@ describe("the bridge over the helper handle", () => {
         const member = (bridge as unknown as Record<string, (...args: unknown[]) => Effect.Effect<unknown>>)[key]!
         const exit = yield* Effect.exit(member({ sessionID: id }))
         expect(Exit.isFailure(exit)).toBe(true)
-        expect(String(Exit.isFailure(exit) ? exit.cause : "")).toContain(ConnectReviewPrompt.refusedMessage(key))
+        expect(String(Exit.isFailure(exit) ? exit.cause : "")).toContain(ConnectReviewService.refusedMessage(key))
       }
       // Prompt options would change how the loop treats a reviewer's prompt; the bridge takes none.
       const withOptions = yield* Effect.exit(
@@ -470,7 +475,10 @@ describe("the bridge over the helper handle", () => {
       expect(seen).toHaveLength(2)
 
       // As a service, it is the prompt loop `Review.run` reads.
-      const context = yield* ConnectReviewPrompt.service(helper)
+      const context = yield* ConnectReviewService.service(
+        ConnectReviewService.qualify({ helper, active: () => true, readRoot: "/repo", readDenies: [] }),
+        () => Effect.void,
+      )
       const served = yield* Effect.gen(function* () {
         return yield* SessionPrompt.Service
       }).pipe(Effect.provideContext(context))
@@ -539,6 +547,9 @@ describe("a review through connect", () => {
         expect(run.result?.state).toBe("completed")
         expect(calls).toHaveLength(1)
         expect(calls[0]!.parentID).toBe(requester.id)
+        expect(calls[0]!.identity).toBe("vectorscope")
+        expect(calls[0]!.instructionsFromContext).toBe(true)
+        expect(calls[0]!.stopSignal).toBeDefined()
         expect(calls[0]!.trust).toBe("trusted")
         expect(calls[0]!.files.map((file) => file.path)).toEqual(["src/list.ts"])
         // The local review model has no dollar cap; review.json's default stays.
@@ -1250,7 +1261,7 @@ describe("a review through connect", () => {
           }) as never
         const run = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
         expect(run.result?.state).toBe("failed")
-        expect(run.result?.summary).toContain(ConnectReviewPrompt.refusedMessage("loop"))
+        expect(run.result?.summary).toContain(ConnectReviewService.refusedMessage("loop"))
       }),
     instance,
   )
@@ -1308,7 +1319,7 @@ describe("loading", () => {
   it.effect("the adapter and the bridge load the review modules and the prompt loop only lazily", () =>
     Effect.promise(async () => {
       const root = path.join(import.meta.dir, "../../src/connect")
-      for (const file of ["adapters/vectorscope.ts", "review-prompt.ts", "adapters/index.ts"]) {
+      for (const file of ["adapters/vectorscope.ts", "review-service.ts", "adapters/index.ts"]) {
         const text = await fs.readFile(path.join(root, file), "utf8")
         // A value import of any of these would close the cycle registry → connect tool → hub → adapter → review run →
         // prompt loop → registry; types are erased, and `import()` runs when a review starts.
@@ -1388,7 +1399,18 @@ describe("the same review from the CLI and from connect", () => {
           deps,
         ).pipe(Effect.provideService(Git.Service, yield* Git.Service))
         expect(cli.exitCode).toBe(0)
-        const strip = ({ parentID: _p, knownPath: _k, onProgress: _o, ...rest }: Review.RunInput) => rest
+        const strip = ({
+          parentID: _p,
+          knownPath: _k,
+          onProgress: _o,
+          identity: _i,
+          instructionsFromContext: _c,
+          admittedReads: _r,
+          readDenies: _d,
+          readRoot: _root,
+          stopSignal: _signal,
+          ...rest
+        }: Review.RunInput) => rest
         expect(strip(viaConnect.input)).toEqual(strip(cliCalls[0]!))
         const { sessions: _a, ...connectOutcome } = viaConnect.outcome
         const { sessions: _b, ...cliOutcome } = cliOutcomes[0]!
@@ -1463,6 +1485,7 @@ const live = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectHub.node,
+      Config.node,
       SessionPrompt.node,
       Session.node,
       SpendGuard.node,
@@ -1501,6 +1524,20 @@ describe("in process", () => {
         const directory = test.directory
         const llm = yield* TestLLMServer
         const provider = testProviderConfig(llm.url)
+        const config = yield* Config.Service
+        const globalFile = path.join(Global.Path.config, "vector.json")
+        const original = yield* Effect.promise(() => fs.readFile(globalFile, "utf8").catch(() => undefined))
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(async () => {
+            if (original === undefined) await fs.rm(globalFile, { force: true })
+            else await fs.writeFile(globalFile, original)
+          }).pipe(Effect.andThen(config.invalidate())),
+        )
+        yield* write(Global.Path.config, {
+          "vector.json": JSON.stringify({ agent: { vectorscope: { model: "lmstudio/test-model" } } }),
+        })
+        yield* config.invalidate()
+
         yield* write(directory, {
           "vector.json": JSON.stringify({
             $schema: "https://vectordev.ai/config.json",

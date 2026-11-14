@@ -123,7 +123,7 @@ export interface LocalReviewOptions {
     parentID?: SessionID
     expectedHead: string
     settingsRef: string
-    stateless: true
+    stateless: boolean
     readDenies?: readonly string[]
     readRoot?: string
     admittedReads?: ReadAuthority

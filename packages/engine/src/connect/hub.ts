@@ -22,6 +22,7 @@ import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
+import { ConnectReviewService } from "./review-service"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { MCP } from "@/mcp"
@@ -747,7 +748,12 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       // (not one of the requester's children from before it, such as an earlier run's helpers) and not held by another
       // run going now. A prompt keeps the member's fixed rules: it may not swap the session's tools, re-arm its
       // budget or skip its reply, and runs only as one of the member's own agents.
-      const helperFor = (entry: Entry, ops: TaskPromptOps, member: string): ConnectAdapter.HelperHandle => {
+      const helperFor = (
+        entry: Entry,
+        ops: TaskPromptOps,
+        member: string,
+        service = false,
+      ): ConnectAdapter.HelperHandle => {
         const requester = entry.run.request.requester.sessionID ?? entry.directory?.sessionID
         const refuse = (sessionID: SessionID, why: string) =>
           Effect.die(new Error(`Connect's helper handle refused session ${sessionID}: ${why}`))
@@ -782,7 +788,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           if (input.tools !== undefined) return refuse(input.sessionID, "a prompt may not change the session's tools")
           if (input.budget !== undefined) return refuse(input.sessionID, "a prompt may not set the session's budget")
           if (input.noReply !== undefined) return refuse(input.sessionID, "a prompt may not skip its reply")
-          if (input.agent === undefined || !agents.has(input.agent))
+          if (
+            input.agent === undefined ||
+            (!agents.has(input.agent) && !(service && member === "vectorscope" && input.agent === "vectorscope"))
+          )
             return refuse(input.sessionID, `it may be prompted only as ${[...agents].join(" or ") || "no agent"}`)
           return Effect.void
         }
@@ -991,8 +1000,21 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const remainingUsd =
           spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0) - heldUsd) : undefined
         const ops = entry.call.promptOps
+        const yieldInstance = yield* InstanceState.context
+        const service =
+          request.action === "review" && adapter.id === "vectorscope" && ops
+            ? ConnectReviewService.qualify({
+                helper: helperFor(entry, ops, adapter.id, true),
+                active: () => entry.run.status === "running" && !entry.finishing,
+                readRoot:
+                  placed?.directory ??
+                  (yield* Effect.promise(async () => (await reviewRoot(request.directory, yieldInstance)).root)),
+                readDenies: entry.readDenies?.map((rule) => rule.pattern) ?? ConnectPolicy.readPatterns(rules),
+              })
+            : undefined
         const context: ConnectAdapter.HandoffContext = {
           runID: entry.run.id,
+          ...(service ? { reviewService: service } : {}),
           ...(requester.sessionID ? { sessionID: requester.sessionID } : {}),
           ...(entry.directory ? { reviewParentID: entry.directory.sessionID } : {}),
           requestID: request.requestID,

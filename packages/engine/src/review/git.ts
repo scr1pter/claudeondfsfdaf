@@ -111,6 +111,8 @@ function adapter(
         if (!placed(options.cwd) || options.env || options.stdin)
           throw new ReadOnlyGit.Unavailable("the review attempted unsupported Git authority")
         if (args.join("\0") === "rev-parse\0--show-toplevel") return result(0, Buffer.from(repository.directory + "\n"))
+        if (["rev-parse\0--git-dir", "rev-parse\0--absolute-git-dir"].includes(args.join("\0")))
+          return result(0, Buffer.from(admitted.gitDirectory + "\n"))
         if (args.join("\0") === "rev-parse\0--is-shallow-repository")
           return result(0, Buffer.from(String(repository.shallow) + "\n"))
         const operation = readOperation(args)

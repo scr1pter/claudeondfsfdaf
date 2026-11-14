@@ -11,6 +11,8 @@ import { ConnectFindings } from "@vectordevai/core/connect/findings"
 import { ConnectFrame } from "@vectordevai/core/connect/frame"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { reviewModels } from "@vectordevai/core/review/second-lab"
 import { parseReviewConfig, REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
 import { contextRefusal, MIN_CONTEXT } from "@vectordevai/core/review/plan"
 import type { ReviewConfig, ReviewOutcome } from "@vectordevai/core/review/types"
@@ -36,11 +38,12 @@ import type { Review } from "@/review/run"
 import type { SessionPrompt } from "@/session/prompt"
 import type { ConnectAdapter } from "../adapter"
 import { ConnectFix } from "../fix"
-import { ConnectReviewPrompt } from "../review-prompt"
+import { ConnectReviewService } from "../review-service"
+import type { ReviewService } from "@/review/service"
 import { ConnectGit } from "../git"
 
 // VectorScope as a member of connected tools: the Vector agent asks it for a review in this engine process, on the
-// user's own models, through VectorScope's own entry points (`executeLocalReview` and `Review.run` on main's copy).
+// user's own models, through the bound ReviewService invocation and its existing Review.run pipeline.
 // Connect re-implements no review pass, selection or anchoring. Before a review it checks, in order: that the changes
 // do not edit VectorScope's own settings (check 1), which models the review would use and whether any of them needs
 // `connect_model` (check 2; the hub has already applied the requester's read rules, check 3, before this adapter ran),
@@ -149,12 +152,16 @@ export interface Plan {
   readonly config: ReviewConfig
   readonly review: Checked
   readonly triage?: Checked
+  readonly judge?: Checked
+  readonly selected?: { readonly review: string; readonly triage?: string; readonly judge?: string }
 }
 
 /** What the reviewed changes touch, for check 1 and for comparing with an earlier review. */
 export interface Scope {
   /** The repository's top level, where `vector review` reads its settings. */
   readonly root: string
+  readonly head?: string
+  readonly base?: string
   /** The paths the target changes: what the review covers. */
   readonly changed: readonly string[]
   /** Every path that differs between the target's base and the working tree, the index or the target. */
@@ -199,7 +206,9 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
     const git = yield* Git.Service
     const instruction = yield* Instruction.Service
     const knowledge = yield* BrainKnowledge.Service
-    const env = deps.env ?? process.env
+    const env = Object.fromEntries(
+      Object.entries(deps.env ?? process.env).filter(([name]) => name === "MODEL" || /^REVIEW_[A-Z0-9_]+$/.test(name)),
+    )
     // Exactly the services the review and the model resolution use, captured when the hub's layer is built.
     const base = Context.make(Session.Service, yield* Session.Service).pipe(
       Context.add(Permission.Service, yield* Permission.Service),
@@ -215,7 +224,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
     // (one written by a model's shell, by `vector review`, or before this engine started) is not trusted: the review
     // then runs with `full`, so no stored outcome or earlier head that a model could have written picks its result or
     // its range (I2).
-    const states = new Map<string, string>()
+    const states = new Map<string, { fingerprint: string; authority: string }>()
 
     const resolver = Effect.fnUntraced(function* () {
       if (deps.resolveModel) return deps.resolveModel
@@ -258,25 +267,82 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
     })
 
     // The models a review of `root` would use, in VectorScope's own order, read from the settings in its working tree.
-    const plan = Effect.fnUntraced(function* (root: string, selectedGit?: Git.Interface) {
+    const plan = Effect.fnUntraced(function* (root: string, selectedGit?: Git.Interface, settingsRef?: string) {
       const selectedBase = selectedGit ? Context.add(base, Git.Service, selectedGit) : base
-      const json = yield* Effect.promise(() =>
-        readFile(path.join(root, REVIEW_CONFIG_PATH), "utf8").catch(() => undefined),
-      )
+      const json =
+        selectedGit && settingsRef
+          ? yield* selectedGit.show(root, settingsRef, REVIEW_CONFIG_PATH)
+          : yield* Effect.promise(() => readFile(path.join(root, REVIEW_CONFIG_PATH), "utf8").catch(() => undefined))
       const parsed = parseReviewConfig({ json, env, trigger: "local" })
       const resolve = yield* resolver()
       const resolveOne = (input: ReviewModel.ResolveInput) =>
-        resolve(input).pipe(
+        resolve({
+          ...input,
+          identity: "vectorscope",
+          ...(parsed.config.modelEvidence === "warn" ? { evidence: true } : {}),
+        }).pipe(
           Effect.provideContext(selectedBase),
           Effect.catch((error) => notReady(error.message)),
         )
       const reviewModel = yield* resolveOne({ trigger: "local", config: parsed.config.model, env })
-      const review = yield* check(reviewModel, "review", parsed.config.model !== undefined)
       const triageModel = parsed.config.triageModel
         ? yield* resolveOne({ trigger: "local", exact: parsed.config.triageModel, env })
         : undefined
-      const triage = triageModel ? yield* check(triageModel, "triage", true) : undefined
-      return { config: parsed.config, review, ...(triage ? { triage } : {}) } satisfies Plan
+      const judgeModel =
+        parsed.config.panel && parsed.config.judgeModel
+          ? yield* resolveOne({ trigger: "local", exact: parsed.config.judgeModel, env })
+          : undefined
+      const codium = reviewModel.providerID === ModelPlanStatus.PROVIDER_ID && !triageModel
+      const listed = codium ? ((yield* provider.list())[reviewModel.providerID]?.models ?? {}) : {}
+      const role = (name: "triage" | "confirm" | "panelJudge") => {
+        const model = Object.values(listed).find(
+          (item) => item.codium?.review?.includes(name) && !item.codium.locked && !item.codium.auto,
+        )
+        return model
+          ? { providerID: model.providerID, modelID: model.id, ...(model.codium?.lab ? { lab: model.codium.lab } : {}) }
+          : undefined
+      }
+      // Use the runner's shared pure choice policy for consent; never choose a different route here.
+      const picked = reviewModels<Pick<ResolvedModel, "providerID" | "modelID"> & { lab?: string }>({
+        model: reviewModel,
+        ...(triageModel ? { triage: triageModel } : {}),
+        ...(judgeModel ? { judge: judgeModel } : {}),
+        panel: parsed.config.panel,
+        ...(codium
+          ? { codium: { triage: role("triage"), confirm: role("confirm"), panelJudge: role("panelJudge") } }
+          : {}),
+        auto: reviewModel.providerID === ModelPlanStatus.PROVIDER_ID && reviewModel.modelID === ModelPlanStatus.AUTO_ID,
+      })
+      const known = [reviewModel, triageModel, judgeModel].filter((item) => item !== undefined)
+      const checked = (
+        model: Pick<ResolvedModel, "providerID" | "modelID">,
+        role: "review" | "triage",
+        fromRepository: boolean,
+      ) =>
+        Effect.gen(function* () {
+          const name = nameOf(model)
+          const resolved =
+            known.find((item) => nameOf(item) === name) ?? (yield* resolveOne({ trigger: "local", exact: name, env }))
+          return yield* check(resolved, role, fromRepository)
+        })
+      const review = yield* checked(picked.model, "review", parsed.config.model !== undefined)
+      const triage = picked.triage
+        ? yield* checked(picked.triage, "triage", parsed.config.triageModel !== undefined)
+        : undefined
+      const judge = picked.judge
+        ? yield* checked(picked.judge, "review", parsed.config.judgeModel !== undefined)
+        : undefined
+      return {
+        config: parsed.config,
+        review,
+        ...(triage ? { triage } : {}),
+        ...(judge ? { judge } : {}),
+        selected: {
+          review: nameOf(reviewModel),
+          ...(triageModel ? { triage: nameOf(triageModel) } : {}),
+          ...(judgeModel ? { judge: nameOf(judgeModel) } : {}),
+        },
+      } satisfies Plan
     })
 
     // A model that cannot run reads "off" when Vector Local keeps it off (the provider's own wording), else unavailable.
@@ -292,7 +358,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
     // The user's own review model: `agent.review.model`, else the configured default; undefined when there is none.
     const userModel = Effect.fnUntraced(function* (selectedGit?: Git.Interface) {
       const resolve = yield* resolver()
-      const exit = yield* resolve({ trigger: "local", env }).pipe(
+      const exit = yield* resolve({ trigger: "local", env, identity: "vectorscope" }).pipe(
         Effect.provideContext(selectedGit ? Context.add(base, Git.Service, selectedGit) : base),
         Effect.exit,
       )
@@ -332,20 +398,10 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
               return yield* refusal("input", "A task review must be placed by the connected-tools hub.")
             if (!context.sessionID && !context.reviewParentID)
               return yield* refusal("unavailable", "A VectorScope review through connect needs a session to run in.")
-            const lent = context.helper
-            if (!lent)
-              return yield* refusal(
-                "unavailable",
-                "Connect can run a VectorScope review only from a tool call that lends it this session's prompt calls.",
-              )
-            const helper = {
-              prompt: (input: SessionPrompt.PromptInput) =>
-                selected.check().pipe(
-                  Effect.orDie,
-                  Effect.flatMap(() => lent.prompt(input)),
-                ),
-              cancel: (sessionID: SessionID) => lent.cancel(sessionID),
-            }
+            const capability = context.reviewService
+            if (!capability)
+              return yield* refusal("unavailable", "Connect has no qualified VectorScope service for this run.")
+            const reads = yield* ConnectReviewService.scope(capability)
             const target = context.reviewTarget ?? request.target
             const say = (pass: string, message: string) => context.progress({ pass, message })
 
@@ -363,8 +419,14 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
             // Check 2: the models, the dollar cap, and `connect_model` when a model is priced, has no readable price, or is
             // the repository's choice and not the user's own review model.
             yield* say("model", "Checking the review model")
-            const planned = yield* plan(scope.root, git).pipe(Effect.catch((why) => refusal("unavailable", why.reason)))
-            const models = [planned.review, ...(planned.triage ? [planned.triage] : [])]
+            const planned = yield* plan(scope.root, git, scope.head).pipe(
+              Effect.catch((why) => refusal("unavailable", why.reason)),
+            )
+            const models = [
+              planned.review,
+              ...(planned.triage ? [planned.triage] : []),
+              ...(planned.judge ? [planned.judge] : []),
+            ]
             const cap = ConnectPolicy.effectiveCap({
               costKind: capKind(models),
               repository: planned.config.maxCostUsd,
@@ -384,20 +446,29 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
 
             // The review, through VectorScope's own entry point.
             const loaded = yield* Effect.promise(async () => {
-              const [cli, run, model, review] = await Promise.all([
-                import("@/cli/cmd/review"),
+              const [service, run, model, review] = await Promise.all([
+                import("@/review/service"),
                 import("@/review/run"),
                 import("@/review/model"),
                 import("@/review/context"),
               ])
               return {
-                executeLocalReview: cli.executeLocalReview,
+                execute: service.ReviewService.execute,
                 run: run.Review.run,
                 ReviewModel: model.ReviewModel,
                 ReviewContext: review.ReviewContext,
               }
             })
-            const prompts = yield* ConnectReviewPrompt.service(helper)
+            const prompts = yield* ConnectReviewService.service(capability, (input) =>
+              selected.check().pipe(
+                Effect.flatMap(() => {
+                  const name = input.model && `${input.model.providerID}/${input.model.modelID}`
+                  return name && models.some((model) => model.model === name)
+                    ? Effect.void
+                    : refusal("unavailable", "The review attempted a model that connect did not check and approve.")
+                }),
+              ),
+            )
             const reviewContext = Context.merge(selectedBase, prompts)
             const runReview = deps.runReview ?? loaded.run
             const resolve = yield* resolver()
@@ -433,7 +504,10 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
                 resolve(input).pipe(
                   Effect.provideContext(selectedBase),
                   Effect.flatMap((model) => {
-                    const expected = input.exact !== undefined ? planned.triage?.model : planned.review.model
+                    const expected =
+                      input.exact !== undefined
+                        ? [planned.selected.triage, planned.selected.judge].find((name) => name === input.exact)
+                        : planned.selected.review
                     if (nameOf(model) === expected) return Effect.succeed(model)
                     return Effect.fail(
                       new loaded.ReviewModel.ReviewModelError({
@@ -462,23 +536,53 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
             // A branch review reads VectorScope's state file only when connect saw VectorScope write it as it is now.
             const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
             const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
+            const authority = createHash("sha256")
+              .update(JSON.stringify({ root: reads.readRoot, denies: [...reads.readDenies].sort() }))
+              .digest("hex")
             const trusted =
-              statePath !== undefined && stateBefore !== undefined && states.get(statePath) === stateBefore
+              statePath !== undefined &&
+              stateBefore !== undefined &&
+              states.get(statePath)?.fingerprint === stateBefore &&
+              states.get(statePath)?.authority === authority
             // Every question is behind it: a background run's caller stops waiting here.
             if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
             yield* say("review", "Reviewing")
+            const placement = yield* loadedMetadata(scope.root)
+            yield* selected.check()
             const result = yield* loaded
-              .executeLocalReview(
-                reviewOptions({ request, maxCost: cap.value, full: context.fullReview || !trusted, env }),
+              .execute(
+                {
+                  version: 1,
+                  mode: "review",
+                  directory: request.directory,
+                  target: {
+                    kind: request.target.kind === "uncommitted" ? "working-tree" : request.target.kind,
+                    head: scope.head,
+                    ...(request.target.kind === "branch" ? { base: scope.base } : {}),
+                  },
+                  settingsRef: scope.head,
+                  parentID: context.reviewParentID ?? context.sessionID,
+                  ...reads,
+                  ...(cap.value === undefined ? {} : { maxCost: cap.value }),
+                  stopSignal: context.abort,
+                },
                 local,
+                placement,
+                {
+                  ...(request.security === undefined ? {} : { security: request.security }),
+                  maxComments: ConnectPolicy.MAX_COMMENTS,
+                  environment: env,
+                  ...(request.target.kind === "branch" ? { cache: { full: !!context.fullReview || !trusted } } : {}),
+                },
               )
               .pipe(Effect.provideService(Git.Service, git))
+
             if (statePath) {
               const stateAfter = yield* Effect.promise(() => fingerprint(statePath))
               states.delete(statePath)
               // Trusted from here: what VectorScope wrote in this run, or the trusted file it left as it was.
               if (stateAfter !== undefined && (stateAfter !== stateBefore || trusted)) {
-                states.set(statePath, stateAfter)
+                states.set(statePath, { fingerprint: stateAfter, authority })
                 for (const key of states.keys()) if (states.size > MAX_TRUSTED_STATES) states.delete(key)
               }
             }
@@ -562,6 +666,13 @@ function nameOf(model: Pick<ResolvedModel, "providerID" | "modelID">) {
   return `${model.providerID}/${model.modelID}`
 }
 
+const loadedMetadata = Effect.fnUntraced(function* (root: string) {
+  const { ReviewGit } = yield* Effect.promise(() => import("@/review/git"))
+  return yield* ReviewGit.metadata(root).pipe(
+    Effect.mapError((error) => new Connect.Refusal({ code: "unavailable", message: error.message })),
+  )
+})
+
 // How far code goes: this computer, a model server, then anywhere else.
 function reach(sendsTo: Connect.SendsTo) {
   if (sendsTo === "this-computer") return 0
@@ -570,9 +681,11 @@ function reach(sendsTo: Connect.SendsTo) {
 }
 
 /** Where the review sends the diff: the review model's destination, or the triage model's when that goes further. */
-export function widest(plan: Pick<Plan, "review" | "triage">): Connect.SendsTo {
-  const triage = plan.triage?.sendsTo
-  return triage && reach(triage) > reach(plan.review.sendsTo) ? triage : plan.review.sendsTo
+export function widest(plan: Pick<Plan, "review" | "triage" | "judge">): Connect.SendsTo {
+  return [plan.review, plan.triage, plan.judge]
+    .filter((item) => item !== undefined)
+    .map((item) => item.sendsTo)
+    .reduce((widest, next) => (reach(next) > reach(widest) ? next : widest))
 }
 
 // The cost kind the dollar cap is worked out for: local only when every model is local.
@@ -646,9 +759,9 @@ export interface Spent {
  * model ran now: no sessions, no cost, and no `sendsTo`, since the diff went nowhere this time (section 3.2).
  */
 export function spentOf(input: {
-  readonly local: LocalReviewResult
+  readonly local: LocalReviewResult & { verdict?: ReviewService.Result["verdict"] }
   readonly printed: { readonly cached: boolean }
-  readonly plan: Pick<Plan, "review" | "triage">
+  readonly plan: Pick<Plan, "review" | "triage" | "judge">
 }): Spent {
   const outcome = input.local.outcome
   if (!outcome || input.printed.cached) return { sessions: [] }
@@ -668,9 +781,9 @@ export const CACHED_NOTE = "Connect sent no code this time: these findings are f
 export function resultOf(input: {
   readonly request: Connect.ReviewRequest
   readonly target?: Connect.Target
-  readonly local: LocalReviewResult
+  readonly local: LocalReviewResult & { verdict?: ReviewService.Result["verdict"] }
   readonly printed: { readonly cached: boolean }
-  readonly plan: Pick<Plan, "review" | "triage">
+  readonly plan: Pick<Plan, "review" | "triage" | "judge">
   readonly scope: Pick<Scope, "changed">
   readonly previous?: Connect.Run
 }): Connect.Result {
@@ -756,10 +869,17 @@ export function resultOf(input: {
     } else notes.push(compared.refusal.message)
   }
   // The verdict sees every finding before the cut at the schema's limit.
-  const verdict = ConnectFindings.verdict({ outcome, findings })
+  const verdict: Connect.Verdict = local.verdict
+    ? local.verdict.verdict === "clean-complete"
+      ? "clean"
+      : local.verdict.verdict === "policy-skip"
+        ? "not-reviewed"
+        : local.verdict.verdict
+    : ConnectFindings.verdict({ outcome, findings })
   const finished = ConnectFindings.finish(findings)
   notes.push(...finished.notes)
   const partial =
+    local.verdict?.verdict === "incomplete" ||
     outcome.partial !== undefined ||
     outcome.specialists.some(
       (pass) => pass.status === "failed" || pass.status === "timeout" || pass.status === "stopped",
@@ -859,6 +979,8 @@ export const changes = Effect.fnUntraced(function* (git: Git.Interface, director
   const drift = yield* drifted(git, root, from)
   return {
     root,
+    head,
+    base: from,
     changed: [...new Set(changed)],
     settings: [...new Set([...worktree, ...index, ...untracked, ...ignored, ...committed, ...drift])],
     links,
