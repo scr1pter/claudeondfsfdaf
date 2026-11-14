@@ -1279,7 +1279,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$VECTOR_PERFORMANCE_TRACE_DIR"
-          node -e 'require("node:fs").writeFileSync(process.env.VECTOR_PERFORMANCE_TRACE_DIR + "/source.json", JSON.stringify({commit: process.env.UI_SOURCE_SHA, run: process.env.VECTOR_PERFORMANCE_RUN_ID, node: process.version, fixture: "mockStressTimeline", providerRequests: "none; navigation-only fixture"}, null, 2))'
+          node -e 'const fs = require("node:fs"); const reference = "../../docs/vector/build/benchmark-source.json"; fs.writeFileSync(process.env.VECTOR_PERFORMANCE_TRACE_DIR + "/source.json", JSON.stringify({historicalReference: fs.existsSync(reference) ? JSON.parse(fs.readFileSync(reference, "utf8")) : null, commit: process.env.UI_SOURCE_SHA, run: process.env.VECTOR_PERFORMANCE_RUN_ID, node: process.version, fixture: "mockStressTimeline", providerRequests: "none; navigation-only fixture"}, null, 2))'
           # The config builds the production app, then serves it with Vite preview.
           # The existing fixture mocks the engine and providers; no keys or live inference are used.
           bunx playwright test --config e2e/performance/playwright.config.ts timeline/first-navigation-benchmark.spec.ts --project chromium --workers 1 --repeat-each 3 2>&1 | tee "$VECTOR_PERFORMANCE_TRACE_DIR/benchmark.log"

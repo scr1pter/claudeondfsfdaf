@@ -105,6 +105,14 @@ The no-content merges for `hands-diagnostics` and `codium-legal` retain original
 The former is backed by the explicit supersession map; the latter follows the owner's archive-only decision and an
 exact gzip round-trip/checksum check. Neither merge activates the old helper or draft policies.
 
+The owner subsequently approved merging historical `benchmark-before` at
+`3abfbd1c3555c8efdc4e7a26b1ac178e3488c9d6` into active code. Its mock task/workflow/config support was already present;
+the current superset, including missing-capability 404 responses and nested computer capabilities, is preserved unchanged.
+The original `benchmark-source.json` is included verbatim. The active metric recorder includes it as
+`historicalReference`, distinct from the actual checked-out `commit`; an older pinned source without that file records
+null. Current strict workflow selectors are retained, including the historical production-only exclusion. This merge
+does not relabel current metrics as a pre-implementation measurement or change performance thresholds/workloads.
+
 ## Branch cleanup
 
 The raw `evidence/v2-repository-audit-2026-11-14.json` and failed-job snapshot preserve the earlier 79-branch observation.
