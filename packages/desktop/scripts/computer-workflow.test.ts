@@ -123,6 +123,7 @@ const targets = [
   "linux",
   "windows",
   "windows-units",
+  "macos-measure",
   "macos-signing",
   "macos-overlay",
   "windows-overlay",
@@ -142,6 +143,7 @@ const targetJobs = {
   linux: "computer-helper",
   windows: "computer-helper",
   "windows-units": "computer-helper-windows-units",
+  "macos-measure": "computer-helper-macos-measure",
   "macos-signing": "computer-helper-macos-signing",
   "macos-overlay": "computer-helper-macos-overlay",
   "windows-overlay": "computer-helper-windows-overlay",
@@ -283,6 +285,46 @@ test("the normal test workflow supplies only the native lane's read permissions"
   expect(main.source).not.toContain("pull_request_target:")
 })
 
+test("Mac measurement is a separate grant-free manual caller with no secret or normal-CI authority", () => {
+  const current = record(record(main.document.jobs)["computer-helper-macos-measure"])
+  expect(Object.keys(current).toSorted()).toEqual(["if", "needs", "permissions", "uses", "with"])
+  expect(current.needs).toBe("validate-dispatch")
+  expect(current.uses).toBe("./.github/workflows/computer-helper.yml")
+  expect(current.permissions).toEqual({ contents: "read", actions: "read" })
+  expect(current.secrets).toBeUndefined()
+  expect(current["continue-on-error"]).toBeUndefined()
+  const inputs = record(current.with)
+  expect(inputs).toEqual({
+    "helper-channel": "prod",
+    "artifact-suffix": "mac-measure-${{ github.sha }}",
+    "reuse-artifacts": false,
+    "full-desktop-e2e": false,
+    "isolated-desktop": false,
+    "privileged-required": false,
+    "windows-only": false,
+    "linux-only": false,
+  })
+  const mode = { computer_helper: true, computer_helper_target: "macos-measure" }
+  expect(mainExpression(String(current.if), mode)).toBe(true)
+  for (const event of ["pull_request", "push"]) expect(mainExpression(String(current.if), mode, event)).toBe(false)
+  for (const flag of booleanSelectors.filter((flag) => flag !== "computer_helper"))
+    expect(mainExpression(String(current.if), { ...mode, [flag]: true }), flag).toBe(false)
+  for (const incomplete of [{}, { computer_helper_target: "macos-measure" }, { ...mode, computer_helper: false }])
+    expect(mainExpression(String(current.if), incomplete)).toBe(false)
+  const normal = record(record(main.document.jobs)["computer-helper"])
+  expect(mainExpression(String(normal.if), mode)).toBe(false)
+  expect(record(normal.with)["isolated-desktop"]).toBe(true)
+  const concurrency = record(main.document.concurrency)
+  for (const target of ["all", "windows", "windows-units"])
+    expect(group(concurrency.group, mode)).not.toBe(
+      group(concurrency.group, { computer_helper: true, computer_helper_target: target }),
+    )
+  const child = record(helper.document.concurrency)
+  expect(helperGroup(child.group, inputs)).not.toBe(
+    helperGroup(child.group, { ...record(normal.with), "artifact-suffix": "pr-fixture-sha" }),
+  )
+})
+
 test("dispatch selectors stay within GitHub's input limit and every expensive job waits for validation", () => {
   const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
   expect(Object.keys(inputs).toSorted()).toEqual(
@@ -313,7 +355,11 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
   expect(current[0]!.uses).toBeUndefined()
   expect(current[0]!["continue-on-error"]).toBeUndefined()
   expect(Object.keys(record(current[0]!.env)).toSorted()).toEqual(
-    [...booleanSelectors.map((name) => name.toUpperCase()), "COMPUTER_HELPER_TARGET", "PRODUCTION_SOURCE_SHA"].toSorted(),
+    [
+      ...booleanSelectors.map((name) => name.toUpperCase()),
+      "COMPUTER_HELPER_TARGET",
+      "PRODUCTION_SOURCE_SHA",
+    ].toSorted(),
   )
   for (const [name, value] of Object.entries(all)) {
     if (name === "validate-dispatch") continue
