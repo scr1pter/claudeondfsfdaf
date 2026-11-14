@@ -484,8 +484,6 @@ Options:
 exports[`vector CLI help-text snapshots every documented command emits stable help text: vector connected --help 1`] = `
 "vector connected <action> [runID]
 
-list connected tools, inspect review runs, start a review or cancel it on a running server
-
 Positionals:
   action                           [string] [required] [choices: "list", "runs", "review", "cancel"]
   runID   review run to cancel                                                              [string]
