@@ -461,3 +461,128 @@ Python native entry. The table, the findings (including the Windows taskkill fol
 for the review-fixes lane and `pty/process.ts`'s `ps` for the Hands lane) and the search
 model are in [`native-qualify-notes.md`](native-qualify-notes.md#nq-4-15-november-2026),
 NQ-4.
+
+## Addendum, 15 November 2026: lane-end status at the native-qualify head (NQ-8)
+
+This is a dated addendum, and nothing above it was edited. The citations are at the
+`native-qualify` lane head `ce5e5605` and use repository-relative paths.
+
+`git diff 0ee486e3 ce5e5605` is empty for every production file cited here:
+
+- `packages/core/src/owned-process.ts`
+- `packages/core/src/cross-spawn-spawner.ts`
+- `packages/core/src/process-isolation.ts`
+- `packages/core/src/process-isolation/build.ts`
+- `packages/engine/src/cli/cmd/github.sandbox.ts`
+- `packages/engine/src/cli/cmd/github.isolation-build.ts`
+- `packages/engine/src/task/shells.ts`
+- `packages/engine/src/tool/shell/windows-process.ts`
+- `packages/engine/src/effect/runtime-flags.ts`
+- `packages/engine/src/tool/shell.ts`
+
+The native evidence is in
+[`native-isolation-status.md`](native-isolation-status.md#native-qualification-lane-end-15-november-2026),
+and the package log and decisions are in
+[`native-qualify-notes.md`](native-qualify-notes.md#nq-8-15-november-2026), NQ-8.
+
+**C9:** not reachable at `0ee486e3` (the NQ-2 addendum above), and unchanged at
+`ce5e5605`.
+
+- New since NQ-2: run 43697711119 (job `132761821581`) shows that Bun `-e 0` aborts on
+  the hosted image under the engine sandbox's empty read-only `/proc` segment, and starts
+  under its own PID namespace procfs.
+- If the `/proc` decision adopts that procfs, `ps` in `groupEmpty` would see only the
+  engine's PID namespace (`packages/core/src/owned-process.ts:74-96`, `/bin/ps` at
+  `:80`). C9 must then be checked again.
+- **SPAWN-2** has the same status.
+- The PR #33 follow-up list on `origin/review-fixes` (`1433d105`,
+  `docs/vector/build/v2-notes/v2-complete-plan.md` §4.5) still tracks SPAWN-2 as
+  "Remains", and says `/bin/ps` fails under the hosted sandbox's empty `/proc`. That
+  contradicts the NQ-2 addendum. It is a lead item, and that file is not edited here.
+
+**§6 Q3:** NQ-2's code-reading answer stands. Background shells are reachable in a hosted
+legacy `@vector` run on Linux:
+
+- `backgroundSubagents` is on by default (`packages/engine/src/effect/runtime-flags.ts:35`);
+- `isolationRefusal` refuses on Windows only (`packages/engine/src/task/shells.ts:96-97`,
+  called in start admission at `:464`);
+- a durable lease is still required (`shells.ts:469`);
+- the shell tool takes `ShellJobs` when the build provides it
+  (`packages/engine/src/tool/shell.ts:1905`).
+
+Whether to offer them is the owner's product decision. Until it is made, uncertain cleanup
+fails closed.
+
+**S4-2: reframed.** FLOOR is false, so `decide` returns the plain command
+(`packages/core/src/process-isolation.ts:26`, `:326`).
+
+- Owned cleanup of the plain group under `required()` is covered by
+  `packages/engine/test/task/shell-required-isolation-posix.test.ts:187`. That test has
+  NQ-2's local passes only: `test.yml` has no run on `native-qualify`.
+- Two more POSIX S4-2 tests exist only on `origin/review-fixes`, in `fa5a5639`, not merged
+  here:
+  - a floor-on case in `packages/core/test/process/owned-process.test.ts`
+    (`ProcessIsolation.decide` with the floor on, a bwrap leader and a `setsid` canary);
+  - a 136-line `packages/engine/test/task/shell-required-isolation-posix.test.ts` at the
+    same path as NQ-2's 286-line file.
+  This addendum makes no CI claim for either test.
+- The `setsid` escape from the plain group is pre-existing
+  (`packages/engine/src/task/shells.ts:31`).
+
+**S4-3:** exists, at `packages/engine/test/task/shell-required-isolation.test.ts:50`
+(the refusal is asserted at `:43` and the marker at `:46`). No claim about a hosted result
+is made here.
+
+**S4-5 and SPAWN-3:** not on `origin/release-finish` `cf2373c4`, so both stay open in the
+review-fixes lane.
+
+- The candidate commits are on `origin/review-fixes` `1433d105`, not merged:
+  - `8562dd7a`: the `WindowsProcess.start` guard, at
+    `packages/engine/src/tool/shell/windows-process.ts:154-156` there;
+  - `d6a54241` and `c8b97625`: S4-5, at
+    `packages/core/test/effect/cross-spawn-spawner.test.ts:627` there.
+- No CI claim is made for them.
+- C10's canceller exists (`packages/core/src/cross-spawn-spawner.ts:508`). By `c8b97625`'s
+  pending in-place note, S4-5 is met by `acquireRelease`'s release, and no test reaches the
+  canceller through `spawnCommand`.
+
+**SPAWN-1:**
+
+- The POSIX half is covered by NQ-2's test, as above.
+- The native half is open:
+  - there is no `owned` case (`CASES` at
+    `packages/engine/test/fixture/native-shell-payload.ts:17-28`);
+  - the refusal at `packages/core/src/cross-spawn-spawner.ts:411` is untested on CI.
+
+**S10 tests:**
+
+- **S10-1:** open. Under the refusal no owned native command exists, and step 16 of
+  43697711119 ran no case (`case` is null).
+- **S10-2:** the refuse option applies, but it is open because no scenario exists.
+  - By code reading, the refusal fires inside the job's `run` (`shells.ts:630`) after
+    `background.start` has written the row (`:695`).
+  - So the scenario must expect a row that ends with cleanup `"confirmed"`.
+  - By code reading, `ShellJobs.start` itself fails with the refusal. It awaits `ready`
+    (`shells.ts:762`). `ready` fails with the spawn error, which is wrapped as "Vector
+    could not start the command: ..." (`:632`), re-raised by `run` (`:682`) and passed to
+    `ready` (`:690`). `start` then re-raises it as a defect (`:766`). Its `onError`
+    cancels the row (`:765`), and `cleanup` releases the slot (`:527-530`, the release at
+    `:529`). The scenario must assert all three, as well as cleanup `"confirmed"`.
+- **S10-3:** open; it was never reached.
+- **S10-4:** open until `test.yml` runs after the merge. Its parts:
+  - S4-2 as above, and S4-3 exists;
+  - S6-2 is covered in part by `packages/engine/test/task/shells.test.ts:369`, whose first
+    recheck sees no job row (`:389`). Its §5 spawner-layer form (a recorded
+    `["recheck", "spawn"]` with ownership set) is not present;
+  - legacy isolation cannot be exercised while FLOOR is false, apart from the unmerged
+    `fa5a5639` floor-on `decide` case above.
+
+**§6 Q2:** delegate versus refuse is still the native lane's or the owner's call.
+
+- Refuse is in force (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at
+  `:411`).
+- `packages/core/src/owned-process.ts` has no `delegate`.
+- Owned groups use `OwnedProcess.track` (`cross-spawn-spawner.ts:456`).
+
+Both native build switches and FLOOR stay false; no production activation is authorized
+by this addendum.

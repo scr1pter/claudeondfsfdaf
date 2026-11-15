@@ -126,8 +126,8 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-4 | Inventory direct process spawn sites and their isolation stance | None (typecheck; test.yml at the lane end) | Committed (see below; D56); passes locally; the engine shards of `test.yml` run it at the lane end |
 | NQ-5 | Mask the runner home instead of its unreachable temporary leaf | Once, `{"diagnostic_cell": true}` | Committed (see below; D57-D74); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log by a later package (D45) |
 | NQ-6 | Native baseline cell follow-up A | Once, `{"diagnostic_cell": true}` | Committed (see below; D75-D82); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log by a later package (D45) |
-| NQ-7 | Native baseline follow-up B and the full matrix | Exactly one: the diagnostic cell, or `{"diagnostic_cell": false}` (eight cells) only if the diagnostic cell is green with the `owned` refusal case. Any full-matrix spend beyond that one bounded dispatch is owner-gated. | Committed (see below; D83-D92); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log by NQ-8 from the commit report (D45). Nothing is qualified: the diagnostic cell is still red |
-| NQ-8 | Close the lane's native qualification and spawn-review records | None (typecheck) | Planned |
+| NQ-7 | Native baseline follow-up B and the full matrix | Exactly one: the diagnostic cell, or `{"diagnostic_cell": false}` (eight cells) only if the diagnostic cell is green with the `owned` refusal case. Any full-matrix spend beyond that one bounded dispatch is owner-gated. | Committed at `ce5e5605` (see below; D83-D92); dispatch 43697711119 is recorded in the dispatch log by NQ-8 (D93). Nothing is qualified: step 16 is still red |
+| NQ-8 | Close the lane's native qualification and spawn-review records | None (typecheck) | Committed by this package's commit step (see below; D93-D105). This is docs only, and a commit cannot carry its own SHA (D14). The commit report carries the SHA and the automatic guard-unit and typecheck run IDs |
 
 ## Dispatch log
 
@@ -139,7 +139,8 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-4 | None: not a native package | | `b861736d4c130dde51506500c951e40da9b452e1` | | | Only the runner's automatic dispatches followed the push: guard-unit [43680012678](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43680012678) and typecheck [43680015135](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43680015135), both `workflow_dispatch`, attempt 1, completed, success, at the head above (D70). |
 | NQ-5 | [43685383291](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685383291) (`workflow_dispatch`, run 15, attempt 1, failure) | `132724666982` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `4eb7e06c4868a9b6dc2ebd8c66cfe86ef2acde67` | `{"diagnostic_cell": true}` (the run has this single job) | None: the host step printed only its generic "Native Shell host fixture refused" line, because the host witness had no closed failure vocabulary (NQ-6 adds one) | Gate: guard-unit [43685344362](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685344362) (job `132724554817`) and typecheck [43685347436](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685347436) both passed at the same head. Steps 1-12 passed: control policy (4 pass, 0 fail, 58 `expect()` calls), pure Python (`Ran 45 tests in 0.233s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" passed (06:26:42 to 06:27:28Z), the first hosted native prepare that passed. Step 14 (seed) and step 15 (verify) passed. Step 16 "Actual ShellTool and command lifecycle witness before any UID sweep" failed (exit 125) about 1.03 s after its group header (06:27:29.72 to 06:27:30.75Z). Step 17 "Always finish the exact owned native operation; missing state is refused" reports `success` and printed nothing; step 18's argv shows `steps.finish.outcome` `success`. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'success' 'failure' 'success'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded 4 of the 5 paths, without the absent host report `/home/runner/work/_temp/native-shell-bun-own-key-baseline.json` (artifact `14150081960`, 3649 bytes, zip SHA256 `aee95e23ab6720213477364b3c8c6b14631c85e36bade52f1d1da4c3dd7f875d`). |
 | NQ-6 | [43690568146](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43690568146) (`workflow_dispatch`, run 16, attempt 1, failure) | `132740150684` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `bd840ff6116f4bd71614710e3e0ee774e985fca0` | `{"diagnostic_cell": true}` (the run has this single job) | `VECTOR_NATIVE_SHELL_FAILURE {"v":1,"host":"host-close","case":null,"operation":null,"observer":null,"driver":null,"run":null,"driverExit":134,"engine":null,"engineCase":null,"control":null}` | Gate: guard-unit [43690394342](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43690394342) and typecheck [43690397017](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43690397017), both `workflow_dispatch`, attempt 1, completed, success, at the same head. Steps 1-15 passed: setup-node `24.15.0`, setup-bun `1.3.14+0d9b296af`, bubblewrap `0.9.0-1ubuntu0.3`; control policy (9 pass, 0 fail, 570 `expect()` calls), pure Python (`Ran 45 tests in 0.210s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above); step 13 "Actual native prepare without SUDO mode or diagnostic profile" passed (07:35:42 to 07:36:07Z); step 14 (seed) and step 15 (verify) passed. Step 16 "Actual ShellTool and command lifecycle witness before any UID sweep" printed the line in the label column at 07:36:08.70Z, about 0.79 s after its group header (07:36:07.91Z), then "Native Shell host fixture refused", and failed (exit 125). Step 17 "Always finish the exact owned native operation; missing state is refused" reports `success` and printed nothing. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'success' 'failure' 'success'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded 4 files, without the absent host report (artifact `14151748079`, 3644 bytes, zip SHA256 `d1c73067b116deec43cb9ab28ffde8c62f66facd6231b072cad4613cfb643bfc`). |
-| NQ-7 | Pending: dispatched by the NQ-7 commit step after the push and the guard-unit and typecheck gate; recorded by NQ-8 from the commit report (D45) | | | `{"diagnostic_cell": true}` | | The commit step allows no follow-up docs commit, so its report carries the run ID, job ID and head SHA. |
+| NQ-7 | [43697711119](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43697711119) (`workflow_dispatch`, run 17, attempt 1, failure) | `132761821581` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `ce5e56054a57a92279341593255ed4f4fd98f902` | `{"diagnostic_cell": true}` (the run has this single job) | `VECTOR_NATIVE_SHELL_FAILURE {"v":1,"host":"host-close","case":null,"operation":null,"observer":null,"driver":null,"run":null,"driverExit":134,"probe":"probe-empty-abort-own-zero","probeNode":"probe-node-zero","engine":null,"engineCase":null,"control":null}` | Gate: guard-unit [43697541691](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43697541691) (job `132761304777`, `Ran 45 tests in 0.221s` ... `OK`) and typecheck [43697544910](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43697544910), both `workflow_dispatch`, attempt 1, completed, success, at the same head. Runner image `ubuntu-24.04` 20261111.127.1 (Ubuntu 24.04.5 LTS), runner 2.338.2. Steps 1-15 passed: setup-node `24.15.0`, setup-bun `1.3.14+0d9b296af`, bubblewrap `0.9.0-1ubuntu0.3`, apparmor-utils `4.0.1really4.0.1-0ubuntu0.24.04.9`; control policy (10 pass, 0 fail, 764 `expect()` calls), pure Python (`Ran 45 tests in 0.226s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above); step 13 "Actual native prepare without SUDO mode or diagnostic profile" passed (09:08:41 to 09:09:19Z); step 14 (seed) and step 15 (verify) passed. Step 16 "Actual ShellTool and command lifecycle witness before any UID sweep" printed the line in the label column at 09:09:21.47Z, about 1.1 s after its group header (09:09:20.37Z), then "Native Shell host fixture refused", and failed (exit 125). Step 17 "Always finish the exact owned native operation; missing state is refused" reports `success` and printed nothing. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'success' 'failure' 'success'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded 4 files, without the absent host report (artifact `14155032027`, 3650 bytes, zip SHA256 `7d72c0fe115a281413f4be4ea3915b0f1f4ed8f33fca1b4392eaf0e2a862a456`). |
+| NQ-8 | None: docs only | | | | | Only the runner's automatic `native-guard-unit.yml` and `typecheck.yml` dispatches follow the push; the commit report carries their run IDs. |
 
 Before NQ-1, `list_workflow_runs` for `native-shell.yml` on `native-qualify` returned
 `total_count` 0, and `origin/native-qualify` did not exist.
@@ -182,6 +183,20 @@ is the newest, created 07:34:44Z, completed 07:36:12Z, no run in progress), then
 conclusions in the row), `get_workflow_run` for both gate runs (both completed, success, at
 `bd840ff6`) and 120-line and 400-line job log tails, with the same facts. No artifact was
 downloaded.
+
+NQ-8 filled the NQ-7 row on 15 November 2026 (D93). The plan step read
+`list_workflow_runs` for `native-shell.yml` on `native-qualify` (`total_count` 5, newest
+43697711119) while the run was still in progress at step 13, and re-read it after the code
+reading: completed, conclusion `failure`, updated 09:09:25Z. The implement step re-read
+`list_workflow_runs` (still `total_count` 5, newest 43697711119, created 09:07:32Z,
+completed), `list_workflow_jobs` (one job, `132761821581`, completed 09:09:25Z, the step
+conclusions in the row), the 400-line job log tail and the full 437-line log,
+`get_workflow_run` for both gate runs (both completed, success, at `ce5e5605`),
+`list_workflow_jobs` for guard-unit run 43697541691 and its job log tail, and
+`list_workflow_runs` for `native-guard-unit.yml` and `typecheck.yml` on `native-qualify`
+(`total_count` 7 each; the newest of each is the gate run above). `list_workflow_runs` for
+`test.yml` on `native-qualify` returned `total_count` 0, and `list_pull_requests` with head
+`native-qualify` returned no pull request. No artifact was downloaded.
 
 ## NQ-1, 15 November 2026
 
@@ -2363,3 +2378,383 @@ From the worktree, one Bun workload at a time through the lock, each test file f
   - the commit title (D87), with the proposed
     `test(isolation): probe the engine runtime under the empty proc`. If the mandated
     title stays, the body's first line says that nothing is qualified.
+
+## NQ-8, 15 November 2026
+
+All citations are at the lane head `ce5e5605`
+(`ce5e56054a57a92279341593255ed4f4fd98f902`), with repository-relative paths. This package
+changes four documents and nothing else. No Shell lifecycle cell has passed. The only gate
+it records as proven is step 12 of run 43697711119, for one cell at one head.
+
+### Precondition and what the run shows
+
+- The newest completed `native-shell.yml` run on `native-qualify` is 43697711119, the
+  NQ-7 dispatch: job `132761821581`, head `ce5e5605`. It is now in the dispatch log, and
+  no run is in progress.
+- Hosted evidence (API and log):
+  - steps 1-15 passed. That includes prepare, for the third time on the hosted runner,
+    then the seed and the byte verification;
+  - step 12 printed both preflight lines with `readerSHA256` `c8283da6...` and
+    `sourceRevision` `ce5e5605`;
+  - step 16 printed `host-close`, `driverExit` 134, `probe` `probe-empty-abort-own-zero`
+    and `probeNode` `probe-node-zero`, with null in every other field. It then printed
+    the generic line, about 1.1 s after its group header;
+  - step 17 (finish) reports `success`, which proves nothing about the witness;
+  - step 18 refused as designed, and step 19 uploaded 4 files.
+- The gate runs at `ce5e5605` passed: guard-unit 43697541691 (job `132761304777`) and
+  typecheck 43697544910.
+
+### Interpretation
+
+NQ-7 registered these two rows before the run ("Expected hosted outcome for NQ-8 to
+read"):
+
+- `probe-empty-abort-own-zero`: "Confirms on the hosted image: the runtime aborts under the
+  empty read-only `/proc` and starts with its own procfs". The runtime is Bun, at the
+  manifest's `runtimePath` (`packages/engine/test/fixture/native-shell-host.ts:405`).
+- `probe-node-zero`: "Node 24.15.0 starts under the empty `/proc`, so the four Node cells
+  do not share a startup abort". This is read for `-e 0` only. No Node cell was
+  dispatched, so it says nothing about their step 16 and qualifies no Node cell (D100).
+
+Scope limits:
+
+- Both results are for `-e 0` under the probe argv
+  (`packages/engine/test/fixture/native-shell-payload.ts:173-212`).
+- That argv differs from the production engine start in the five ways NQ-7 listed: it has
+  no writable binds, it uses `--chdir /`, it passes `PATH=/usr/bin:/bin`, it runs `-e 0`
+  instead of the engine bundle, and it has no proof-FD wrapper.
+- The probe makes the `/proc` cause consistent with step 16's `driverExit` 134. Saying
+  that this is what aborted step 16 is still inference. It stays inference until a run
+  with the `/proc` decision applied passes.
+- The engine `/proc` blocker now has CI evidence for `-e 0`. The decision still belongs to
+  the lead or the native lane, and to the owner where it touches FLOOR.
+
+Inference only, unchanged from NQ-7:
+
+- The shipped `vector` is Bun-compiled (`packages/engine/script/build.ts:162`, `:217`).
+- The held-off FLOOR uses the same `engineArguments`
+  (`packages/core/src/process-isolation.ts:215-245`, with `/proc` at `:228-231`).
+
+Derived witness, for NQ-5's obligation 3 (Root reads both hosted seeds before the
+privilege drop):
+
+- The host stage reads `host-close` only if `main()` reached `native-shell-host.ts:945`
+  with the witness unfrozen. `at()` (`:325-327`) stops updating the stage only after
+  `fail()` sets `witness.frozen` (`:878`).
+- `main()` runs linearly from `at("host-controls")` (`:432`) through Root's `controls`
+  operation (`:433`) and its count checks (`:434-443`) to `:945`. So none of them threw.
+- That operation reads both hosted seeds as Root before the drop (`:157-162`), then reads
+  the other canaries as the agent (`:163-170`).
+- NQ-6's run 43690568146 at `bd840ff6` also reached `host-close`, with the same controls
+  code: the observer's `controls` branch and `main()`'s `:432-447` region are
+  byte-identical at `bd840ff6` and `ce5e5605`. It was therefore the first witness, and
+  43697711119 repeats it (D94).
+- Obligations 1 and 2 stay open. They are the `inspect` case's checks at
+  `native-shell-payload.ts:701-719` (the runner-home canaries are `ENOENT`) and `:731-743`
+  (`/home/runner/work` gives `EROFS`), and no run reached a case.
+
+Prepare passed at `ce5e5605`, which shows the positive path only:
+
+- `supported_mask_sources`: `packages/core/src/process-isolation/linux/entry.py:1401`,
+  called at `:1722`;
+- `validate_masks`: `:1600`, called at `:1793` and `:1830`;
+- `validate_spec` at publish: `:1833`.
+
+Refusals of these checks have only unit evidence. That is the pure Python fixture, in
+guard-unit 43697541691 (`Ran 45 tests in 0.221s` ... `OK`) and step 8, plus
+`packages/engine/test/fixture/native-shell-ci/policy.test.ts:100-101` (step 7) for
+`assertUnmaskedRuntime`.
+
+### What landed
+
+- `docs/vector/build/native-isolation-status.md`:
+  - a new paragraph in "Remaining qualification", placed between its two existing
+    paragraphs. No existing sentence changed, and "No production activation is authorized
+    by this document." stays last in that section (D96);
+  - the final dated section "Native qualification lane end, 15 November 2026".
+- `docs/vector/build/v2-spawn-review.md`: the dated addendum "lane-end status at the
+  native-qualify head (NQ-8)". It is appended, and nothing above it was edited.
+- `docs/vector/build/process-ownership-followup.md`: a short dated section, appended (D102).
+- This file:
+  - the NQ-7 and NQ-8 package-table cells;
+  - the NQ-7 dispatch-log row and a new NQ-8 row;
+  - the NQ-8 provenance paragraph;
+  - this section.
+- No code, test, workflow, flag, mount or configuration changes, and there is no native
+  dispatch (D101).
+
+### Final package table
+
+| Package | Commit | guard-unit | typecheck | Native run / job | Closed result |
+| --- | --- | --- | --- | --- | --- |
+| NQ-1 | `597dbcc922b44a0e53e0c311cbe416b26cdf6252` | 43660083062 | 43660085781 | 43660129312 / `132647364562` | `prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created` |
+| NQ-2 | `f96e24562a8e9422fbb61bfcba6f0a782bf638e1` | 43668864838 | 43668867585 | none | — |
+| NQ-3 | `f05f991616584eb0542f9ac1fead49e730ba1027` | 43675734735 (job `132695351609`) | 43675737341 | 43675930370 / `132695971881` | `prepare-mask-host-temp-keeper-search` |
+| NQ-4 | `b861736d4c130dde51506500c951e40da9b452e1` | 43680012678 | 43680015135 | none | — |
+| NQ-5 | `4eb7e06c4868a9b6dc2ebd8c66cfe86ef2acde67` | 43685344362 (job `132724554817`) | 43685347436 | 43685383291 / `132724666982` | no label; prepare passed for the first time, and step 16 printed only the generic line |
+| NQ-6 | `bd840ff6116f4bd71614710e3e0ee774e985fca0` | 43690394342 | 43690397017 | 43690568146 / `132740150684` | `host-close`, `driverExit` 134 |
+| NQ-7 | `ce5e56054a57a92279341593255ed4f4fd98f902` | 43697541691 (job `132761304777`) | 43697544910 | 43697711119 / `132761821581` | `host-close`, `driverExit` 134, `probe-empty-abort-own-zero`, `probe-node-zero` |
+| NQ-8 | this commit | commit report | commit report | none | — |
+
+Every guard-unit and typecheck run above is `workflow_dispatch`, attempt 1, completed,
+success, at its package's head, as read from `list_workflow_runs` for both workflows on
+`native-qualify` (`total_count` 7 each).
+
+### Lane-end status
+
+**Proven** by one run at one head (43697711119, job `132761821581`, `ce5e5605`), for the
+bun/own-key diagnostic cell on `ubuntu-24.04` 20261111.127.1 only:
+
+- Step 12, as `packages/engine/test/fixture/native-shell-ci/preflight.ts:6-36` defines it:
+  the same-host installed Python metadata observer and the stock dpkg package profile
+  (`packages/core/src/directory-identity.ts:531-538`), under both copied runtimes.
+- The reader is the one at SHA-256 `c8283da6...` in this tree.
+- The result is per SHA and repeats every earlier lane dispatch and pre-lane run
+  43566766483. It is not a first result (D95).
+
+**Passed, not a gate:** prepare, the seed and the byte verification on that cell.
+
+**Open:**
+
+- prepare and the baseline Shell lifecycle on one bun/own-key diagnostic cell (step 16 is
+  red; the suspected blocker, inferred from the `-e 0` probe of run 43697711119, is the
+  engine sandbox `/proc` decision);
+- the complete eight-cell matrix (four baseline cells and the four fresh Engine-death
+  cells), with owned cleanup on every path (never dispatched);
+- the native `owned` refusal case (it does not exist);
+- witness obligations 1 and 2, D34 and D4;
+- a hosted `test.yml` run of the lane's Bun tests;
+- the reader integration clause of "Remaining qualification" (not verified here);
+- a reviewed reader re-pin before any post-merge native dispatch (D95).
+
+**Always open:**
+
+- the full Engine bootstrap;
+- preconstruction alias/canary cases;
+- native profile/LSM compatibility beyond this image;
+- installed runtime provenance outside CI;
+- root installation on real hosts;
+- the production floor.
+
+No production activation is authorized. `FLOOR`, `LinuxIsolationBuild.enabled`/`entrySHA`
+and `GithubIsolationBuild.enabled` are unchanged (`packages/core/src/process-isolation.ts:26`,
+`packages/core/src/process-isolation/build.ts:2-3`,
+`packages/engine/src/cli/cmd/github.isolation-build.ts:2`). Native plus `OwnedProcess`
+stays refused (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at `:411`).
+
+### Open items for the owner and the lead
+
+1. The engine sandbox `/proc` treatment (lead or native lane; owner where it touches
+   FLOOR).
+   - The candidate is `--unshare-pid --proc /proc --remount-ro /proc` in place of
+     `--tmpfs /proc --remount-ro /proc`.
+   - The trade-offs are the ones NQ-7 listed: the empty-`/proc` assertions, pid mapping
+     in the host's `register`, a new engine-death teardown proof, the procfs disclosure
+     delta without `--unshare-net`, and C9's `ps` scope.
+2. Spawn review §6 Q2, delegate versus refuse. Refuse is in force.
+3. Spawn review §6 Q3: whether hosted `@vector` offers background shells at all. Until
+   that is decided, cleanup fails closed.
+4. Enabling FLOOR. By inference it meets the same `/proc`.
+5. Production activation (`enabled`/`entrySHA`/`FLOOR` or any switch): not authorized.
+6. Any native spend beyond the bounded dispatches, including a fresh diagnostic dispatch
+   after `main` or #33 is merged in. Evidence is per head SHA.
+   - That dispatch first needs a reviewed reader re-pin. `origin/release-finish` `cf2373c4`
+     changes `packages/core/src/directory-identity.ts` (`7b43deb5`, `73f6de55`) to
+     SHA-256 `b132565e23b8ed5d46ab9604895892795ccb350ef3a5f07f837766a6a98ce318`.
+   - `packages/engine/test/fixture/native-shell-ci/build.ts:57` requires it to equal
+     `READER_SHA` (`native-shell-ci/common.ts:11`, `c8283da6...`).
+   - Without the re-pin, the compile step refuses before the preflight (D95).
+7. Root installation of the adapter or the `vector-sandbox-v1` profile outside hosted CI.
+8. The PR and merge of `native-qualify` (the lead), with two predicted conflicts against
+   `origin/review-fixes` (D99):
+   - the `native-shell.yml` job `if` line (NQ-1 `597dbcc9` against `48b76a5b`);
+   - an add/add conflict on `packages/engine/test/task/shell-required-isolation-posix.test.ts`
+     (NQ-2 `f96e2456` against `fa5a5639`), to be resolved by merge keeping both tests'
+     scenarios.
+9. D83 (the rule-breaching NQ-7 plan experiments; their inert files remain in
+   `/tmp/vector-v2/native/nq7`, not run or reused) and the NQ-7 commit title (D87).
+10. S4-5 and SPAWN-3 landing from `review-fixes` (`d6a54241`, `c8b97625`, `8562dd7a`).
+11. The SPAWN-2 tracking contradiction.
+    - `origin/review-fixes` `1433d105` (`docs/vector/build/v2-notes/v2-complete-plan.md`
+      §4.5) lists SPAWN-2 as "Remains" because `/bin/ps` would fail under the hosted
+      sandbox's empty `/proc`.
+    - NQ-2's C9 addendum shows that no shipped or CI build reaches it.
+    - The lead reconciles the two; that file is not edited here.
+
+### Evidence (local)
+
+From the worktree, read-only except for the four documents:
+
+- `git diff --check` is clean.
+- `git diff 0ee486e3 ce5e5605` is empty for these ten files: `owned-process.ts`,
+  `cross-spawn-spawner.ts`, `process-isolation.ts` and `process-isolation/build.ts` under
+  `packages/core/src`, and `cli/cmd/github.sandbox.ts`, `cli/cmd/github.isolation-build.ts`,
+  `task/shells.ts`, `tool/shell/windows-process.ts`, `effect/runtime-flags.ts` and
+  `tool/shell.ts` under `packages/engine/src`.
+- Hashes:
+  - `sha256sum packages/core/src/directory-identity.ts` at HEAD: `c8283da6...`;
+  - the same file at `origin/release-finish` `cf2373c4`: `b132565e...`;
+  - `packages/web/public/models/api.json` at `cf2373c4` still matches `CATALOG_SHA`
+    (`784309...`), so the reader is the only build pin that moves;
+  - `git diff 0ee486e3 origin/release-finish -- packages/engine/test/fixture/native-shell-ci/`
+    is empty.
+- Merge predictions:
+  - `git merge-tree --write-tree HEAD origin/review-fixes` reports exactly two conflicts:
+    `.github/workflows/native-shell.yml` (content) and
+    `packages/engine/test/task/shell-required-isolation-posix.test.ts` (add/add);
+  - `git merge-tree --write-tree HEAD origin/release-finish` reports none;
+  - a file-level `git merge-file` of this package's `v2-spawn-review.md` against
+    `origin/review-fixes` (base `0ee486e3`) is clean;
+  - `release-finish` and `review-fixes` leave the other three lane documents unchanged.
+- Every `file:line` cited by this package was re-read at HEAD with `grep -n` or `awk`
+  before writing.
+- Grep checks on the added lines:
+  - no e-mail address and no mention of the upstream project the code was forked from;
+  - every hit for "qualified", "qualification" and "activat" was reviewed. Each one is a
+    negation, an open gate, a quotation of an existing gate, or the step-12 result above;
+  - the three new anchors match their headings' slugs:
+    `nq-8-15-november-2026`, `native-qualification-lane-end-15-november-2026` and
+    `addendum-15-november-2026-lane-end-status-at-the-native-qualify-head-nq-8`.
+- No package source or test changed, so no test file and no package typecheck applies in
+  this implement step (D101). The full typecheck before the push belongs to the commit
+  step. Nothing in `/tmp/vector-v2/native/nq7` was run or reused. The scratch folder is
+  `/tmp/vector-v2/native/nq8`, which holds only the `merge-file` inputs and output and the
+  added-lines extract used for the grep checks.
+
+### Deferred verification
+
+- `test.yml` has no run on `native-qualify`. The branch's PR gives the first hosted run of:
+  - `packages/engine/test/task/shell-required-isolation-posix.test.ts`;
+  - `packages/engine/test/spawn-inventory.test.ts`;
+  - `packages/engine/test/cli/github.isolation.test.ts`;
+  - `packages/core/test/process-isolation-linux.test.ts`.
+  `native-shell-ci/policy.test.ts` has hosted evidence only from the native job's step 7.
+- The Node, Codium and Engine-death cells were never dispatched.
+- The `owned` case does not exist (`CASES` at `native-shell-payload.ts:17-28`).
+
+### Deviations and decisions
+
+- D93. The NQ-7 dispatch-log row is filled from the API, as the provenance paragraph
+  records. The plan step read the run while it was in progress and re-read it once it had
+  completed. The implement step re-read everything, with the same facts. Only API and log
+  facts are in the row; this section interprets them.
+- D94. A correction, not a rewrite. The statements that all three NQ-5 witness
+  obligations stay open are superseded for obligation 3 by the stage-order reading above.
+  Those statements are in the NQ-6 "Precondition" and "Deferred" lists, and in the NQ-7
+  "Deferred" and "Status at the NQ-7 commit" lists. The first witness was NQ-6's own run
+  43690568146, and 43697711119 repeats it.
+  - The status document's "Host witness diagnostics" section is corrected the same way,
+    by its lane-end section and not in place.
+  - Obligations 1 and 2 stay open.
+- D95. The one closed gate, step 12, holds at `ce5e5605` and for these reader bytes only.
+  - It does not carry over a merge that changes `packages/core/src/directory-identity.ts`.
+    `origin/release-finish` `cf2373c4` does change it (`7b43deb5`, `73f6de55`), and
+    `native-shell-ci/build.ts:57` then refuses the compile step until the reader is
+    re-reviewed and `READER_SHA` (`common.ts:11`) is re-pinned. That is a lead item.
+  - The "stock Ubuntu reader fix ... `build-scope`/`build-scope-witness` ... exact reviewed
+    implementation" clause of "Remaining qualification" is not marked satisfied. This lane
+    has not verified it.
+  - "Profile" in step 12 means the stock dpkg package profile, so the AppArmor/LSM item
+    stays in the always-open list.
+- D96. "Remaining qualification" is updated in place by one new paragraph, as the brief
+  requires; the critique made this mandatory, not optional.
+  - The paragraph sits between the section's two existing paragraphs, so no existing
+    sentence changes and "No production activation is authorized by this document." stays
+    last in the section.
+  - It says what changed for the first gate (step 12 on the diagnostic cell only), and
+    that every other gate stays open. The lane-end section carries the full list.
+- D97. A deviation from the brief's S4-2 wording. The brief says owned cleanup is
+  "proven" on the plain group by NQ-2. The addendum says "covered" by NQ-2's test,
+  because that test has local passes only: `test.yml` has no run on `native-qualify`.
+- D98. S4-5 and SPAWN-3 are absent from `origin/release-finish` `cf2373c4`.
+  - They exist only as unmerged `origin/review-fixes` commits: `8562dd7a` (the guard at
+    `windows-process.ts:154-156` there), and `d6a54241` and `c8b97625`
+    (`cross-spawn-spawner.test.ts:627` there).
+  - They are marked open in the review-fixes lane, with no CI claim.
+  - The same goes for that lane's two S4-2/SPAWN-1 POSIX tests in `fa5a5639`: a floor-on
+    case in `packages/core/test/process/owned-process.test.ts` and a 136-line
+    `packages/engine/test/task/shell-required-isolation-posix.test.ts`.
+- D99. Merge notes for the lead, from `git merge-tree` and `git merge-file`:
+  - `.github/workflows/native-shell.yml:33`: NQ-1 `597dbcc9` added `refs/heads/native-qualify`
+    to the job `if` allowlist. `review-fixes` `48b76a5b` removes that `if`, adds a comment
+    that only a run on `main` is the qualification of record, and drops the push trigger.
+    The two edits conflict on the same line, and the resolution is the lead's.
+  - `packages/engine/test/task/shell-required-isolation-posix.test.ts` is an add/add
+    conflict: `f96e2456` has 286 lines and `fa5a5639` has 136, and the path is absent at
+    `0ee486e3`. Resolve it by merge, keeping both tests' scenarios.
+  - `review-fixes` also edits `v2-spawn-review.md` in place (the C10 note and the S4-5 row,
+    `c8b97625`). That does not overlap this package's appended addendum: the file-level
+    merge is clean.
+- D100. The probe's scope limits are recorded with every reading of its result.
+  `probe-node-zero` qualifies no Node cell, and its pre-registered row's "the four Node
+  cells do not share a startup abort" is read for `-e 0` only.
+- D101. No native or other dispatch is made. CI for this package is the runner's
+  automatic `typecheck.yml` and guard-unit runs at the pushed SHA, which the commit report
+  records. The brief names no tests. No package file changed, so no test or package
+  typecheck runs here; the full typecheck before the push is the commit step's.
+- D102. The `process-ownership-followup.md` section deferred by D90 lands here. It repeats
+  the deadlines with citations, and it changes no guarantee.
+- D103. Commit title: the commit step's mandated `docs(vector): record native qualification
+  evidence and spawn follow-ups`, in place of the implement step's proposed
+  `docs(vector): record the native-qualify lane end and spawn-review status`. The body's
+  first line says that no native Shell lifecycle cell passed, and that only the step-12
+  provenance gate is proven at `ce5e5605`.
+- D104. Critique dispositions. Every point was accepted:
+  - `fa5a5639` is named in the S4-2 and SPAWN-1 lines, in D98 and D99 and in open item 8;
+  - the reader re-pin consequence is stated with `build.ts:57` and `common.ts:11` (D95,
+    open item 6, and the status document);
+  - admission, `validate_masks` and `validate_spec` are "positive path only". Refusal
+    coverage is cited as unit evidence, and the publish line is `entry.py:1833`;
+  - the native plus owned refusal is cited as `cross-spawn-spawner.ts:405-411`, with the
+    throw at `:411`;
+  - the "Remaining qualification" paragraph is mandatory, placed so that no existing
+    sentence changes (D96);
+  - the step-12 closure names the stock dpkg package profile, is marked per SHA, and
+    mentions `48b76a5b`'s "qualification of record" comment;
+  - 43690568146 is the first witness of obligation 3, the derivation is "linear and
+    unfrozen through `:945`", and D94 appends the corrections;
+  - 43660129312 confirms the hypothesis at construction and 43675930370 at admission;
+  - all four documents use repository-relative paths, and the byte-identity claim was
+    re-run with full paths;
+  - the C10 canceller is cited with `c8b97625`'s pending note, and the SPAWN-2 tracking
+    contradiction is open item 11;
+  - the explicit inference sentence about step 16's abort is added.
+
+  Line corrections against the plan, from re-reading at HEAD:
+  - the SPAWN-3 guard is `windows-process.ts:154-156` on `review-fixes`, where the throw is
+    `:156`;
+  - step 12's definition is `preflight.ts:6-36`;
+  - the probe argv is `native-shell-payload.ts:173-212`;
+  - the stock profile binding is `directory-identity.ts:531-538`;
+  - the observer's pre-drop seed read is `native-shell-host.ts:157-162`.
+- D105. Review fixes, round one. All eight findings were non-blocking and all were
+  accepted; nothing was declined.
+  - `native-isolation-status.md`, "Remaining qualification": the new paragraph now names
+    the proven part directly ("the installed Python metadata observer and stock dpkg
+    package-profile part of the first gate"), so the narrowing of "profile" is in the gate
+    sentence itself.
+  - The same document's lane-end section says the 14 November hypothesis is "confirmed in
+    part": the two runs show only that the keeper cannot search some runner-owned ancestor
+    of the hosted temporary root, and D34 stays the explicit limit. This supersedes D104's
+    "confirms the hypothesis at construction ... and at admission" wording.
+  - In both the status document's and this file's Open lists, step 16 is "red", and the
+    `/proc` decision is its suspected blocker, an inference from the `-e 0` probe of run
+    43697711119. The matrix item reads "the complete eight-cell matrix (four baseline cells
+    and the four fresh Engine-death cells)", matching `.github/workflows/native-shell.yml:39-41`
+    (two runtimes, two modes, two families).
+  - The NQ-8 package-table cell reads "Committed by this package's commit step", which
+    stays true whatever SHA the commit gets (D14).
+  - `v2-spawn-review.md`: the §6 Q3 line cites the `isolationRefusal` definition at
+    `packages/engine/src/task/shells.ts:96-97`, with its call site at `:464`.
+  - The S10-2 status adds what `ShellJobs.start` itself does, by code reading: it awaits
+    `ready` (`shells.ts:762`), which fails with the wrapped spawn error (`:632`, `:682`,
+    `:690`); it re-raises that as a defect (`:766`); its `onError` cancels the row
+    (`:765`); and `cleanup` releases the slot (`:527-530`). The finding cited the release
+    as `:525-528`; re-reading at HEAD puts `release(conversationID, id)` at `:529`.
+  - The addendum and the new `process-ownership-followup.md` section each end with
+    "Both native build switches and FLOOR stay false; no production activation is
+    authorized by this addendum" (in the follow-up document, "by this section", since it
+    is a section, not an addendum).
+  - Every new `file:line` was re-read at HEAD with `grep -n` and `sed -n`. `git diff
+    --check` is clean. No code, test or workflow changed, so no test or package typecheck
+    applies.
