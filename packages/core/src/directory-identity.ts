@@ -411,6 +411,9 @@ export function packageImage(list: string, sums: string, member: string, image: 
   requireValue(digests.get(member.slice(1)) === createHash("md5").update(image).digest("hex"))
 }
 
+// A Check belongs to one read, lease or launch and is never reused after it fails. Proofs run concurrently, so siblings
+// may still be in flight when the first one rejects; they cannot change a verdict, and every caller makes check() fail
+// once it has refused, so leftover steps stop at their next check instead of finishing the walk.
 type Check = (() => void) & { readonly directories: Set<string> }
 const step = async <A>(check: Check, operation: () => Promise<A>): Promise<A> => {
   check()
@@ -657,10 +660,14 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
     check()
     return Object.freeze({
       validate: async (expires: number, launchSignal?: AbortSignal) => {
+        // Promise.all rejects on the first failed proof while its siblings are still in flight. Once this launch is
+        // refused, `failed` makes every leftover step fail at its next check instead of finishing the walk.
+        let failed = false
         const check: Check = Object.assign(
           () =>
             requireValue(
-              !closed &&
+              !failed &&
+                !closed &&
                 !signal?.aborted &&
                 !launchSignal?.aborted &&
                 Number.isFinite(expires) &&
@@ -707,6 +714,7 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
           check()
           return true
         } catch {
+          failed = true
           return false
         }
       },
@@ -716,6 +724,8 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
       },
     })
   } catch {
+    // No lease escapes this path, so closing stops the concurrent runtime() proofs still in flight at their next check.
+    closed = true
     return
   }
 }
