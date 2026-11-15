@@ -1675,13 +1675,96 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
     with any other population. The owner's hand labels stay on the owner's
     machine and are never committed; keeping them past their expiry is the
     owner's decision (Q30, Q43), and nothing here is built for it.
+- **Outcome strata (VS-46d items 5 to 11).** A schema-2 ledger in the full
+  decision gets seven more sections after "Fix-edited lines per kLOC". They
+  follow the same 200-finding volume rule, so a gradient-only report adds
+  none. A schema-1 ledger prints each heading with the unavailable line,
+  whatever the decision, even where v1 fields could fill a section, as the
+  spec's compatibility paragraph asks.
+  - "Verdict against outcome" (item 5): revert and filtered follow-up-fix
+    rates within 90 days for "reviewed, nothing posted, complete" against
+    "reviewed with findings", over the human-stratum matured PRs with a band.
+    The verdict is a proxy, labelled as one in the text and in every column
+    that names a group: clean means the sticky state was found with a
+    completed review, no ledger finding is on the PR in any stratum or
+    outcome, the state was not pruned (a pruned state may have lost summary
+    findings, so it reads incomplete), and `unreviewedFiles` is 0 (a missing
+    count is not clean). The
+    exact `clean-complete` value replaces it only after SF-39 records
+    `reviewVerdict` in `ReviewState` and a later ledger field reads it (a
+    /3). Unreviewed and incomplete PRs are left out and counted; agent PRs
+    are left out and counted because same-agent iteration confounds the label
+    (item 9 reports them); agent-signal PRs only exclude. Rows go within each
+    band and within each size tercile (cuts at the ceil(n/3)-th and
+    ceil(2n/3)-th smallest added plus deleted lines over every matured PR with
+    a band, so ties share a tercile and can leave one empty); the two are
+    separate stratifications, not a grid. A difference (clean less findings,
+    Newcombe's 95% interval) shows only when each group has 50 PRs and 10
+    expected positives at the row's pooled rate; otherwise it reads
+    underpowered. The last row pools every compared PR, is labelled
+    "confounded by size", and shows its difference only when a stratified row
+    of its table does. There is no depth stratum until VS-46 item 7.
+  - "Dismissal reasons by severity" (item 6): schema 2 keeps each
+    dismissal's role, not its reason, so the reasons read unavailable, and
+    the section points to the Resolution table's per-severity
+    dismissed-writer, dismissed-author and dismissed-unattributed counts.
+    VS-35b's classifier (`dismissalWhy`) needs reply text the ledger does not
+    keep, and has no caller until an owner-repository precision sample of at
+    least 0.9 qualifies it.
+  - "Addressed rate" (item 7): confirmed fixes over settled human-stratum
+    findings, every severity together, with its definition and population,
+    cycle time and the human-comment volume (`humanComments`) on those PRs.
+    The text says it is comparable only within this population and
+    definition, as a paired or A/B comparison, and not with any vendor's or
+    other population's rate (D12).
+  - "Human review by band" (item 8): `humanReview` over every PR with a band
+    that no read cut short, matured or not, every stratum (P3-2, Q28).
+  - "Agent-authored split" (item 9): agent PRs from the owner's trusted
+    record against human PRs, within item 5's terciles, on reverts, the
+    filtered label, and the filtered label with same-agent follow-ups
+    removed (an agent PR whose only remaining fixes have no `sameAgent` flag
+    is left out and counted). Agent-signal PRs enter neither group. It gives
+    the same-agent share of fix entries on agent PRs for both labels, with
+    unknown flags left out and counted, marked SZZ-based and unaudited
+    because the audit samples PRs, not fix entries. Evidence for Q41, which
+    is the owner's; nothing is decided.
+  - "Recurrence" (item 10), descriptive only: the share of matured fix
+    entries with an earlier fix commit, other than their own, in the same
+    file, or the same file and function (a funcname on both sides), dated
+    from 365 days before the merge day to the day before it. Fix commits keep
+    only their day, so one on the merge day is left out. Filtered entries use
+    their own location, unfiltered ones every location of their fix commit.
+    The scan keeps fix commits only after the ledger's first merge, so the
+    lookback is truncated for PRs merged within 365 days of it: full-lookback
+    columns count the rest, and capped fix commits are counted. It gates
+    nothing; L6 waits on the Q9 ablation.
+  - "Latent forecasts" (item 11): precision of VS-42 pre-existing drops at
+    90 days, from local eval artifacts only. `latentForecast` scores drops
+    already joined to later fixes: one fingerprint counts once at its
+    earliest drop, a drop matures 90 days after it was recorded, a fix more
+    than 0 and at most 90 days later is a hit, and the kill criterion
+    (precision under 10% on at least 100 matured drops) is reported as met or
+    not, the decision being the owner's. `latentDrops` reads an artifact's
+    `drops` (path, base span, class as a finding category, base SHA,
+    fingerprint and a per-drop `at`, a UTC instant as `toISOString` writes
+    it), a provisional shape that R5's producer owns. `latentForecast`
+    checks every outcome first (the drop as `latentDrops` reads it, and
+    `fixedDays` a finite number of days at or above 0) and refuses them all
+    on one malformed outcome. No package joins drops to later fixes yet, so
+    `open` reads no eval artifact, passes none, and the section prints "no
+    drops read: open reads no eval artifact and no join is built"; "no drops
+    recorded" is only for outcomes given and holding none.
+  - Shares over fix entries and drops carry no interval, because those units
+    cluster within PRs, fix commits and reviews.
 - **Deferred.** Proxy validation (VS-46b), history risk areas and the depth
   assignment (runner wiring and Q30), and the re-review share of spend (the
-  state keeps only a PR's total). VS-46d's remaining report sections, item 5
-  (verdict against outcome) included, are SF-05b's.
-  Depth rows wait on VS-46 item 7. Schema 2 does not carry per-file fix data
-  for Effort@20% or a per-finding dismissal reason, so those read unavailable
-  on it; adding either is a /3. Run on a real repository only after Q30.
+  state keeps only a PR's total). Depth rows and the depth stratum wait on
+  VS-46 item 7. Schema 2 does not carry per-file fix data for Effort@20% or
+  a per-finding dismissal reason, so those read unavailable on it; adding
+  either is a /3. The exact verdict needs SF-39 and a ledger field (/3). The
+  latent join (following a drop's base lines through later history, and
+  where its result is kept) has no owner yet, and R5 records no drops yet.
+  Run on a real repository only after Q30.
 
 The tests use a fake GitHub client and git repositories they build, and
 spawn no `gh`:

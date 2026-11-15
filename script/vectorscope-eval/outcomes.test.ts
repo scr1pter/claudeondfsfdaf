@@ -21,8 +21,9 @@ import {
   SUMMARY_MARKER,
   type FindingMarker,
 } from "../../packages/core/src/review/state"
-import { DEFAULT_CONFIDENCE, proportion, wilson } from "../../packages/core/src/review/eval"
+import { DEFAULT_CONFIDENCE, independentDifference, proportion, wilson } from "../../packages/core/src/review/eval"
 import { RISK_CUTPOINTS, riskOf, type RiskBand, type RiskFeatures } from "../../packages/core/src/review/risk"
+import { DISMISSAL_WHY } from "../../packages/core/src/review/team"
 import type { PriorFinding, ReviewState } from "../../packages/core/src/review/types"
 import { UNTRUSTED_GIT, untrustedGitEnv } from "./dataset"
 import {
@@ -46,6 +47,10 @@ import {
   deletedLineKind,
   hashLogin,
   hashName,
+  LATENT_KILL_PRECISION,
+  LATENT_MIN_DROPS,
+  latentDrops,
+  latentForecast,
   LEDGER_DAYS,
   LEDGER_SCHEMA,
   LEDGER_SCHEMA_V1,
@@ -61,12 +66,18 @@ import {
   MAX_FILTERED_BLAME_LINES,
   MAX_FIX_LOCATIONS,
   MAX_LABELS_BYTES,
+  MAX_LATENT_DROPS,
   MAX_LEDGER_PULLS,
+  MIN_PULLS,
   MIN_VOLUME,
+  NO_DISMISSAL_REASON,
+  NO_DROPS,
+  NO_DROPS_READ,
   NOT_FIX_LABEL,
   OUTCOMES,
   outcomeReport,
   READ_ONLY_GIT,
+  RECURRENCE_DAYS,
   renderOutcomes,
   REPORT_FILE,
   revertsOf,
@@ -83,15 +94,20 @@ import {
   type AuditEntry,
   type AuditLabels,
   type AuditSample,
+  type CohortRow,
   type GitHubRead,
+  type LatentDrop,
+  type LatentOutcome,
   type LedgerFinding,
   type LedgerFix,
+  type LedgerFixCommit,
   type LedgerPull,
   type LedgerPullV1,
   type MeasurementRule,
   type Outcome,
   type OutcomeLedger,
   type OutcomeLedgerV1,
+  type PullStratum,
 } from "./outcomes"
 import { REPO_ROOT } from "./paths"
 import { OUTCOME_LEDGER_FILE, PUBLIC_KEY_ENV, seal, unseal, type Sealed } from "./seal"
@@ -1502,6 +1518,7 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
       "## Risk band against post-merge outcomes",
       ...MEASUREMENT_HEADINGS.slice(2),
       ...LABEL_HEADINGS,
+      ...COHORT_HEADINGS,
       "## Problems",
     ])
     // The same ledger read as schema 1: every v1 section as before, and each VS-46c and VS-46d section unavailable.
@@ -1509,7 +1526,7 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
     expect(sectionDigests(v1Only(legacy))).toEqual(V1_DIGESTS.full)
     expect(v1Only(legacy)).toBe(v1Only(text))
     expect(legacy).toContain(
-      `${[...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS].map((heading) => `\n${heading}\n\n${V1_UNAVAILABLE}\n`).join("")}\n## Problems\n`,
+      `${[...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS, ...COHORT_HEADINGS].map((heading) => `\n${heading}\n\n${V1_UNAVAILABLE}\n`).join("")}\n## Problems\n`,
     )
     expect(legacy).not.toContain("## Schema 2 sections")
   })
@@ -2037,7 +2054,7 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
     expect(current.stdout).not.toContain("read-only")
     const report = readFileSync(join(root, "legacy-opened", REPORT_FILE), "utf8")
     expect(v1Only(report)).toBe(readFileSync(join(root, "current-opened", REPORT_FILE), "utf8"))
-    for (const heading of [...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS])
+    for (const heading of [...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS, ...COHORT_HEADINGS])
       expect(report).toContain(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
     expect(report).not.toContain("## Schema 2 sections")
     // Written back as it was read: still schema 1, never upgraded.
@@ -2155,7 +2172,7 @@ describe("the measurement rule (VS-46c)", () => {
       "## Severity gradient",
       "## Risk band against post-merge outcomes",
     ]
-    const after = [...MEASUREMENT_HEADINGS.slice(2), ...LABEL_HEADINGS, "## Problems"]
+    const after = [...MEASUREMENT_HEADINGS.slice(2), ...LABEL_HEADINGS, ...COHORT_HEADINGS, "## Problems"]
     expect([...order, ...after].map((heading) => problem.indexOf(`\n${heading}\n`))).toEqual(
       [...order, ...after].map((heading) => problem.indexOf(`\n${heading}\n`)).toSorted((a, b) => a - b),
     )
@@ -2543,7 +2560,12 @@ describe("the measurement rule (VS-46c)", () => {
     for (const text of texts) {
       expect(text).not.toContain("never enable")
       expect(text).not.toContain("history risk areas for it")
-      for (const heading of ["## Risk band against post-merge outcomes", ...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS])
+      for (const heading of [
+        "## Risk band against post-merge outcomes",
+        ...MEASUREMENT_HEADINGS,
+        ...LABEL_HEADINGS,
+        ...COHORT_HEADINGS,
+      ])
         expect(section(text, heading)).not.toMatch(/\bnever\b/i)
     }
     expect(texts[0]).toContain("\n## Risk band against post-merge outcomes\n")
@@ -2600,9 +2622,13 @@ describe("the measurement rule (VS-46c)", () => {
       "## Risk band against post-merge outcomes",
       ...MEASUREMENT_HEADINGS,
       ...LABEL_HEADINGS,
+      ...COHORT_HEADINGS,
     ])
       expect(report).toContain(`\n${heading}\n`)
     expect(report).toContain("Verdict: beats-size")
+    // `open` reads no eval artifact, so the section says no drops were read, not that none were recorded.
+    expect(section(report, "## Latent forecasts")).toContain(`Status: ${NO_DROPS_READ}.`)
+    expect(report).not.toContain(NO_DROPS + ".")
     expect(readFileSync(sealedFile).equals(sealedBytes)).toBe(true)
     expect(readdirSync(root).toSorted()).toEqual([...listing, "measure-opened"].toSorted())
     // A ledger SF-03's collection sealed, with no rule, opens the same way under the config's rule.
@@ -3310,6 +3336,668 @@ describe("the label audit and label quality (VS-46d, SF-05a)", () => {
   })
 })
 
+// VS-46d items 5 to 11 (addendum B §1.9; SF-05b) over synthetic schema-2 histories. Every drop artifact and latent
+// outcome here is a fixture: no package joins drops to fixes yet.
+describe("outcome strata, dismissals, agent split and latent scoring (VS-46d, SF-05b)", () => {
+  const cohorts = (ledger: OutcomeLedger, latent?: readonly LatentOutcome[]) =>
+    outcomeReport(ledger, undefined, latent).cohorts!
+  const table = (text: string, title: string) => {
+    const lines = text.split("\n")
+    const start = lines.indexOf(`${title}:`)
+    const end = lines.findIndex((line, index) => index > start + 2 && !line.startsWith("|"))
+    return lines.slice(start + 2, end === -1 ? undefined : end)
+  }
+  const counts = (row: CohortRow) => [
+    row.stratum,
+    row.a.pulls,
+    row.a.positives,
+    row.b.pulls,
+    row.b.positives,
+    row.status,
+  ]
+  const differenceOf = (row: CohortRow) =>
+    independentDifference(
+      { count: row.a.positives, total: row.a.pulls },
+      { count: row.b.positives, total: row.b.pulls },
+    )
+
+  // Within each band the clean and findings groups revert at the same rate (10% low, 40% high), while clean PRs sit
+  // mostly in the low band, so the unstratified difference is negative. Band low holds 10- and 30-line PRs, and the
+  // tercile of 30-line PRs holds low and high PRs. The medium band and the middle tercile are underpowered.
+  const STRATA_GROUPS: CohortGroup[] = [
+    { band: "low", lines: 10, count: 150, reverted: 15 },
+    { band: "low", lines: 30, count: 100, reverted: 10, posted: true },
+    { band: "high", lines: 30, count: 50, reverted: 20 },
+    { band: "high", lines: 1000, count: 150, reverted: 60, posted: true },
+    { band: "medium", lines: 200, count: 20, reverted: 2 },
+    { band: "medium", lines: 200, count: 20, reverted: 2, posted: true },
+  ]
+
+  test("verdict against outcome within each band and size tercile, the raw difference labelled confounded by size", () => {
+    const ledger = cohortLedger(STRATA_GROUPS)
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const found = cohorts(ledger)
+    // 490 PRs: 150 of 10 lines, 150 of 30, 40 of 200 and 150 of 1,000. The cuts are the 164th and the 327th smallest.
+    expect(found.size).toEqual({ cut: [30, 200], pulls: { small: 300, middle: 40, large: 150 } })
+    const revert = found.verdict.labels.revert
+    expect(revert.bands.map(counts)).toEqual([
+      ["low", 150, 15, 100, 10, "shown"],
+      ["medium", 20, 2, 20, 2, "underpowered"],
+      ["high", 50, 20, 150, 60, "shown"],
+    ])
+    expect(revert.terciles.map(counts)).toEqual([
+      ["small", 200, 35, 100, 10, "shown"],
+      ["middle", 20, 2, 20, 2, "underpowered"],
+      ["large", 0, 0, 150, 60, "empty"],
+    ])
+    expect(counts(revert.raw)).toEqual(["all", 220, 37, 270, 72, "shown"])
+    // Equal rates within each band, a tercile that mixes bands, and a raw difference that measures where clean PRs sit.
+    expect(revert.bands[0].difference!.difference).toBe(0)
+    expect(revert.bands[2].difference!.difference).toBe(0)
+    expect(revert.bands[0].difference).toEqual(differenceOf(revert.bands[0]))
+    expect(revert.terciles[0].difference).toEqual(differenceOf(revert.terciles[0]))
+    expect(revert.raw.difference).toEqual(differenceOf(revert.raw))
+    expect(revert.raw.difference!.difference).toBeLessThan(-0.09)
+    // Expected positives at each row's pooled rate: 25 of 250 in the low band, 80 of 200 in the high.
+    expect(revert.bands[0].expected).toEqual({ a: 15, b: 10 })
+    expect(revert.bands[2].expected).toEqual({ a: 20, b: 60 })
+    expect(revert.bands[1].difference).toBeNull()
+    // No PR of these groups was fixed, so the filtered label expects no positive anywhere.
+    expect(found.verdict.labels.filtered.raw.status).toBe("underpowered")
+
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Verdict against outcome")
+    const label = "all PRs, unstratified: confounded by size"
+    expect(text.split(label).length - 1).toBe(2)
+    for (const title of [
+      "Revert within 90 days",
+      "Filtered follow-up fix within 90 days (SZZ-based, size-biased, unaudited)",
+    ]) {
+      const rows = table(text, title)
+      expect(rows.length).toBe(9)
+      expect(rows.at(-1)!.startsWith(`| ${label} |`)).toBe(true)
+    }
+    const rows = table(text, "Revert within 90 days")
+    expect(rows[2]).toContain("| band low | 15/150 10.0% [")
+    expect(rows[2]).toContain("| 15.0 / 10.0 | 0.0 [")
+    expect(rows[3]).toMatch(
+      /^\| band medium \| 2\/20 \[[^\]]+\] \| 2\/20 \[[^\]]+\] \| 2\.0 \/ 2\.0 \| underpowered \(not yet\) \| 48\.0 \/ 48\.0 \|$/,
+    )
+    expect(rows[7].startsWith("| tercile large | 0/0 | 60/150 40.0% [")).toBe(true)
+    expect(rows[7].endsWith("| 0.0 / 60.0 | n/a | 48.0 / 48.0 |")).toBe(true)
+    expect(rows[8]).toContain(`| ${label} | 37/220 16.8% [`)
+    expect(text).toContain(
+      "- Size terciles, by added plus deleted lines over every matured PR with a band, every stratum: small up to 30 lines (300 PRs), middle up to 200 (40), large above 200 (150).",
+    )
+    expect(text).toContain("so a raw difference measures size")
+    expect(text).toContain("its difference is shown only when a stratified row of the same table shows one")
+    expect(text).toContain("No depth assignment is recorded (VS-46 item 7), so there is no depth stratum.")
+  })
+
+  test("the raw difference is shown only beside a stratified one; each needs 50 PRs and 10 expected positives per group", () => {
+    // Low: 60 PRs a group, 3 reverts each, so 3 expected: underpowered on expected positives. High: 16 of 40 clean
+    // against 24 of 60, so 16 and 24 expected but 40 clean PRs: underpowered on PRs. Unstratified, both floors are met.
+    const ledger = cohortLedger([
+      { band: "low", lines: 10, count: 60, reverted: 3 },
+      { band: "low", lines: 10, count: 60, reverted: 3, posted: true },
+      { band: "high", lines: 1000, count: 40, reverted: 16 },
+      { band: "high", lines: 1000, count: 60, reverted: 24, posted: true },
+    ])
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const revert = cohorts(ledger).verdict.labels.revert
+    expect(revert.bands.map(counts)).toEqual([
+      ["low", 60, 3, 60, 3, "underpowered"],
+      ["medium", 0, 0, 0, 0, "empty"],
+      ["high", 40, 16, 60, 24, "underpowered"],
+    ])
+    expect(revert.bands[0].expected).toEqual({ a: 3, b: 3 })
+    expect(revert.bands[2].expected).toEqual({ a: 16, b: 24 })
+    expect(revert.terciles.map((row) => row.status)).toEqual(["underpowered", "underpowered", "empty"])
+    expect(revert.raw).toMatchObject({ status: "unpaired", difference: null })
+    expect(Math.min(revert.raw.a.pulls, revert.raw.b.pulls)).toBeGreaterThanOrEqual(MIN_PULLS)
+    expect(Math.min(revert.raw.expected.a, revert.raw.expected.b)).toBeGreaterThanOrEqual(MIN_EXPECTED)
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Verdict against outcome")
+    expect(table(text, "Revert within 90 days").at(-1)).toContain(
+      "| 20.9 / 25.1 | n/a: no stratified difference to set it beside |",
+    )
+
+    // Heavy ties: 60 PRs of 0 lines and 30 of 10 put both cuts at 0, so the middle tercile is empty.
+    const tied = cohortLedger([
+      { band: "low", lines: 0, count: 60 },
+      { band: "low", lines: 10, count: 30, posted: true },
+    ])
+    const sized = cohorts(tied)
+    expect(sized.size).toEqual({ cut: [0, 0], pulls: { small: 60, middle: 0, large: 30 } })
+    expect(sized.verdict.labels.revert.terciles[1].status).toBe("empty")
+    expect(sized.agent.labels.revert[1].status).toBe("empty")
+    const tiedText = section(renderOutcomes(outcomeReport(tied)), "## Verdict against outcome")
+    expect(table(tiedText, "Revert within 90 days")[6]).toBe("| tercile middle | 0/0 | 0/0 | 0.0 / 0.0 | n/a | n/a |")
+    expect(tiedText).toContain("small up to 0 lines (60 PRs), middle up to 0 (0), large above 0 (30)")
+    // The cuts are the ceil(n/3)-th and the ceil(2n/3)-th smallest: 2 and 4 of six PRs of 1 to 6 lines.
+    const ranks = cohorts(cohortLedger(repeat(6, (index) => ({ band: "low" as const, lines: index + 1, count: 1 }))))
+    expect(ranks.size).toEqual({ cut: [2, 4], pulls: { small: 2, middle: 2, large: 2 } })
+  })
+
+  test("the stratum is a proxy, labelled as one, over reviewed human PRs; the rest are left out and counted", () => {
+    const ledger = cohortLedger([
+      ...STRATA_GROUPS,
+      { band: "low", lines: 10, count: 1, reviewed: false },
+      { band: "low", lines: 10, count: 1, reviews: 0 },
+      { band: "low", lines: 10, count: 1, unreviewed: 2 },
+      { band: "high", lines: 1000, count: 1, filteredIncomplete: true },
+      // Agent and agent-signal PRs, every one reverted: they would move the low band's clean rate if they entered.
+      { band: "low", lines: 10, count: 5, reverted: 5, stratum: "agent" },
+      { band: "low", lines: 10, count: 3, reverted: 3, stratum: "agent-signal" },
+    ])
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const verdict = cohorts(ledger).verdict
+    expect(verdict.proxy).toBe(true)
+    expect(verdict.groups).toEqual({ clean: 221, findings: 270, incomplete: 1, unreviewed: 2 })
+    expect(verdict.excluded).toEqual({ agent: 5, "agent-signal": 3 })
+    expect(verdict.filteredIncomplete).toBe(1)
+    // No agent or agent-signal PR enters either group, and the marked PR is clean on reverts but leaves the filtered rows.
+    expect(counts(verdict.labels.revert.bands[0])).toEqual(["low", 150, 15, 100, 10, "shown"])
+    expect(verdict.labels.filtered.bands[0].a.pulls).toBe(135)
+    expect(counts(verdict.labels.revert.bands[2])).toEqual(["high", 51, 20, 150, 60, "shown"])
+    expect(verdict.labels.filtered.bands[2].a.pulls).toBe(30)
+    expect(counts(verdict.labels.revert.raw)).toEqual(["all", 221, 37, 270, 72, "shown"])
+    // A reviewed PR with no unreviewed count is not clean: the proxy fails closed.
+    const clean = ledger.pulls.find((pull) => pull.number === 10_000)!
+    const { unreviewedFiles: _unreviewed, ...counted } = clean
+    const missing = cohorts({ ...ledger, pulls: ledger.pulls.map((pull) => (pull === clean ? counted : pull)) })
+    expect(missing.verdict.groups).toEqual({ clean: 220, findings: 270, incomplete: 2, unreviewed: 2 })
+    // A pruned state may have lost summary findings, so a PR with none in the ledger is incomplete, not clean; one with
+    // a finding in the ledger stays with findings.
+    const posted = ledger.pulls.find((pull) => pull.number === 11_000)!
+    expect(posted.unreviewedFiles).toBe(0)
+    const pruned = cohorts({
+      ...ledger,
+      pulls: ledger.pulls.map((pull) => (pull === clean || pull === posted ? { ...pull, statePruned: true } : pull)),
+    })
+    expect(pruned.verdict.groups).toEqual({ clean: 220, findings: 270, incomplete: 2, unreviewed: 2 })
+
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Verdict against outcome")
+    expect(text).toContain("The verdict here is a proxy, labelled as one, because ReviewState records no verdict yet.")
+    expect(text).toContain(
+      "The exact clean-complete value from VS-32a's reviewVerdict replaces it only once SF-39 records the verdict in ReviewState and a later ledger collection field reads it, which is a /3.",
+    )
+    expect(text).toContain("a failed last run that left no file unreviewed reads as complete")
+    expect(text).toContain(
+      "its state was not pruned, and its last run left no file unreviewed; it is with findings (proxy) when",
+    )
+    expect(text).toContain(
+      "A pruned state (at its finding cap or near its size limit) may have lost summary findings, so it reads incomplete.",
+    )
+    expect(text).toContain(
+      "- Compared: the human-stratum matured PRs with a band that no read cut short, 221 clean (proxy) and 270 with findings (proxy). Left out: 2 unreviewed (no sticky state, or no completed review) and 1 incomplete (files left unreviewed, no count, or a pruned state); 5 agent-stratum PRs, which the agent-authored split reports on their own, because same-agent iteration confounds the follow-up-fix label; and 3 agent-signal PRs, whose markers are untrusted, so they only exclude. The filtered rows also leave out the PRs reverted within 90 days and 1 marked filteredIncomplete.",
+    )
+    const headers = text.split("\n").filter((line) => line.startsWith("| Stratum |"))
+    expect(headers.length).toBe(2)
+    for (const header of headers) {
+      expect(header).toContain("| Clean, nothing posted (proxy) | With findings (proxy) |")
+      // Every mention of either group carries the proxy label.
+      expect(header.match(/\b(?:Clean|clean)\b(?!, nothing posted \(proxy\)| \(proxy\))/g)).toBeNull()
+      expect(header.match(/\b[Ww]ith findings\b(?! \(proxy\))/g)).toBeNull()
+    }
+  })
+
+  test("the filtered rows read audited only when SF-05a's audit is", () => {
+    const ledger = measured(BEATS)
+    const sample = auditSample(ledger, KEY)
+    const answers = new Map(sample.entries.map((entry) => [entry.id, entry.label === "positive"]))
+    const audited = renderOutcomes(outcomeReport(ledger, { sample, labels: answers }))
+    expect(outcomeReport(ledger, { sample, labels: answers }).labelQuality!.audit.audited).toBe(true)
+    // The same-agent share counts fix entries, which the audit does not sample, so it reads unaudited either way.
+    const share = "SZZ-based and unaudited: the audit samples PRs, not fix entries."
+    for (const heading of ["## Verdict against outcome", "## Agent-authored split"]) {
+      const shared = heading === "## Agent-authored split" ? 1 : 0
+      expect(section(audited, heading)).toContain("(SZZ-based, size-biased, audited):")
+      expect(section(audited, heading).split("unaudited").length - 1).toBe(shared)
+      expect(section(audited, heading).split(share).length - 1).toBe(shared)
+      expect(section(renderOutcomes(outcomeReport(ledger)), heading)).toContain("(SZZ-based, size-biased, unaudited):")
+    }
+  })
+
+  test("dismissal reasons by severity read unavailable, with VS-35b's gate, and point to the Resolution table", () => {
+    const report = outcomeReport(measured(BEATS))
+    expect(report.cohorts!.dismissals).toEqual({ reason: NO_DISMISSAL_REASON })
+    const text = section(renderOutcomes(report), "## Dismissal reasons by severity")
+    expect(text).toContain(
+      `\nReasons: ${NO_DISMISSAL_REASON}. VS-35b's classes (${DISMISSAL_WHY.join(", ")}) come from`,
+    )
+    expect(text).toContain("has no caller until an owner-repository precision sample of at least 0.9 qualifies it")
+    expect(text).toContain("dismissed-unattributed counts in the Resolution table above")
+    // No count of its own: the role counts are the Resolution table's, and no reason is counted.
+    expect(text.split("\n").filter((line) => line.startsWith("|"))).toEqual([])
+    expect(renderOutcomes(report)).toContain("\n## Resolution\n")
+  })
+
+  test("the addressed rate states its definition and population, with cycle time, comment volume and D12", () => {
+    const base = measured([])
+    const ledger = {
+      ...base,
+      pulls: [
+        ...base.pulls,
+        pullOf(3, 100, { cycleHours: 10, humanComments: 5 }),
+        pullOf(4, 100, { reviewed: false, cycleHours: 20 }),
+        pullOf(5, 100, { truncated: true }),
+      ],
+      findings: [
+        ...base.findings,
+        ...repeat(30, () => finding(3, "fixed-confirmed-by-thread")),
+        finding(4, "acknowledged"),
+        // Not settled, not human, or on a truncated PR: none counts.
+        ...repeat(5, () => finding(3, "fixed-self-resolved")),
+        ...repeat(3, () => finding(3, "fixed-confirmed-by-thread", { stratum: "agent" })),
+        ...repeat(4, () => finding(5, "fixed-confirmed-by-thread")),
+      ],
+    }
+    const addressed = cohorts(ledger).addressed
+    expect(addressed.rate).toEqual(proportion(30, 231))
+    expect(addressed.pulls).toBe(3)
+    expect(addressed.comments).toMatchObject({ total: 6, p50: 3, missing: 1 })
+    expect(addressed.comments.p90).toBeCloseTo(4.6, 9)
+    expect(addressed.cycle!.p50).toBe(20)
+    expect(addressed.cycle!.p90).toBeCloseTo(42.4, 9)
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Addressed rate")
+    expect(text).toContain(
+      "Definition: a finding is addressed when it was marked fixed and its thread was resolved by a person who is neither a bot nor the PR author (fixed-confirmed-by-thread).",
+    )
+    expect(text).toContain(
+      "Population: the 231 settled human-stratum findings on 3 PRs that no read cut short, merged in the window, matured or not",
+    )
+    expect(text).toContain("- Addressed: 30/231 13.0% [")
+    expect(text).toContain("(cycle p50 / p90 20.0 / 42.4 h).")
+    expect(text).toContain("on those PRs: 6 comments by people other than the PR author and the bots")
+    expect(text).toContain("per PR, p50 / p90 3.0 / 4.6; 1 of the PRs carry no count (not reviewed).")
+    expect(text).toContain(
+      "Internal (D12): this rate is comparable only within this population under this definition, as a paired or A/B comparison on this repository. It is not comparable with any vendor's addressed, acceptance or resolution rate, or with any other population's.",
+    )
+  })
+
+  test("human review by band covers every banded PR that no read cut short, matured or not", () => {
+    const grouped = cohortLedger([
+      { band: "low", lines: 10, count: 40, humanReview: false },
+      { band: "low", lines: 10, count: 20 },
+      { band: "high", lines: 1000, count: 30 },
+    ])
+    const ledger = {
+      ...grouped,
+      pulls: [
+        ...grouped.pulls,
+        pullOf(5, 10, { band: "low" }),
+        pullOf(6, 200, { band: "high", humanReview: false, truncated: true }),
+      ],
+    }
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const rows = cohorts(ledger).humanReview
+    expect(rows.low).toMatchObject({ pulls: 61, rate: proportion(21, 61) })
+    expect(rows.medium).toMatchObject({ pulls: 0, rate: proportion(0, 0) })
+    expect(rows.high).toMatchObject({ pulls: 30, rate: { ...proportion(30, 30), value: null } })
+    expect(rows.all).toMatchObject({ pulls: 91, rate: proportion(51, 91) })
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Human review by band")
+    expect(text).toContain("| low | 61 | 21/61 34.4% [")
+    expect(text).toContain("| medium | 0 | 0/0 | n/a |")
+    expect(text).toContain("| all | 91 | 51/91 56.0% [")
+    expect(text).toContain("cheap proxy for whether repository rules change scrutiny (P3-2), and evidence for Q28")
+  })
+
+  // Agent groups by trusted record, a human group of each size, and an agent-signal group. 10 and 1,000 lines: the cuts
+  // are 10 and 1,000, so the small tercile holds the 10-line PRs and the middle the 1,000-line ones.
+  const AGENT_GROUPS: CohortGroup[] = [
+    { band: "low", lines: 10, count: 10, fixed: 4, stratum: "agent", sameAgent: true },
+    { band: "high", lines: 1000, count: 10, fixed: 3, stratum: "agent", sameAgent: false },
+    { band: "low", lines: 10, count: 10, fixed: 2, stratum: "agent" },
+    { band: "low", lines: 10, count: 15, fixed: 3 },
+    { band: "high", lines: 1000, count: 15, fixed: 3 },
+    { band: "low", lines: 10, count: 5, fixed: 5, stratum: "agent-signal" },
+  ]
+
+  test("the agent-authored split within terciles, from the trusted record; agent signals only exclude", () => {
+    const ledger = cohortLedger(AGENT_GROUPS)
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const agent = cohorts(ledger).agent
+    expect(cohorts(ledger).size).toEqual({ cut: [10, 1000], pulls: { small: 40, middle: 25, large: 0 } })
+    expect(agent.excluded).toBe(5)
+    expect(agent.labels.filtered.map(counts)).toEqual([
+      ["small", 20, 6, 15, 3, "underpowered"],
+      ["middle", 10, 3, 15, 3, "underpowered"],
+      ["large", 0, 0, 0, 0, "empty"],
+    ])
+    expect(agent.labels.revert.map(counts)).toEqual([
+      ["small", 20, 0, 15, 0, "underpowered"],
+      ["middle", 10, 0, 15, 0, "underpowered"],
+      ["large", 0, 0, 0, 0, "empty"],
+    ])
+    // Same-agent follow-ups removed: the same agent's fixes make no positive, another's do, and the two PRs only unknown
+    // fixes could make positive are left out.
+    expect(agent.labels.filteredOther.map(counts)).toEqual([
+      ["small", 18, 0, 15, 3, "underpowered"],
+      ["middle", 10, 3, 15, 3, "underpowered"],
+      ["large", 0, 0, 0, 0, "empty"],
+    ])
+    expect(agent.unknown).toBe(2)
+    // 4 same-agent fixes, 3 another's and 2 unknown, on both labels.
+    expect(agent.sameAgent).toEqual({
+      filtered: { share: { count: 4, total: 7, value: null, interval: null }, unknown: 2 },
+      unfiltered: { share: { count: 4, total: 7, value: null, interval: null }, unknown: 2 },
+    })
+
+    // An untrusted signal only excludes: a human PR turned agent-signal leaves the human group, and the agent group is
+    // as it was.
+    const signal = cohorts({
+      ...ledger,
+      pulls: ledger.pulls.map((pull) =>
+        pull.number === 13_000 ? { ...pull, stratum: "agent-signal" as const } : pull,
+      ),
+    }).agent
+    expect(signal.excluded).toBe(6)
+    expect(signal.labels.filtered.map(counts)[0]).toEqual(["small", 20, 6, 14, 3, "underpowered"])
+    expect(signal.labels.filtered.map((row) => row.a)).toEqual(agent.labels.filtered.map((row) => row.a))
+    // An agent-signal PR's own outcomes change no row.
+    const quiet = cohorts({
+      ...ledger,
+      pulls: ledger.pulls.map((pull) =>
+        pull.stratum === "agent-signal" ? { ...pull, fixes: [], fixesFiltered: [], revertedDays: 5 } : pull,
+      ),
+    }).agent
+    expect(quiet).toEqual(agent)
+
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Agent-authored split")
+    expect(text).toContain("Untrusted markers only exclude: the 5 agent-signal PRs enter neither group.")
+    expect(text).toContain("There is no unstratified row.")
+    expect(text).toContain("and 2 agent PRs are left out")
+    expect(text).toContain(
+      "filtered label 4/7, with 2 unknown and left out; unfiltered label 4/7, with 2 unknown and left out. No interval: fix entries cluster within PRs and fix commits. SZZ-based and unaudited: the audit samples PRs, not fix entries.",
+    )
+    expect(text).toContain(
+      "\nFiltered follow-up fix within 90 days, same-agent follow-ups removed (SZZ-based, size-biased, unaudited):\n",
+    )
+    expect(text).toContain("This is evidence for Q41, which is the owner's; this report decides nothing.")
+    expect(text).not.toContain("confounded by size")
+  })
+
+  test("recurrence is descriptive, with a strict merge day, the PR's own fix left out and the lookback truncation", () => {
+    const hash = (digit: string) => digit.repeat(16)
+    const [P, Q, R, S, T, U, W, X, Y, K, Z, F] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "f"].map(hash)
+    const commit = (days: number, locations: LedgerFixCommit["locations"], capped = false): LedgerFixCommit => ({
+      date: day(days),
+      kind: "label",
+      deleted: { code: 1, blank: 0, comment: 0 },
+      locations,
+      ...(capped ? { capped: true as const } : {}),
+    })
+    const fixCommits = [
+      commit(195, [{ path: P, fn: F }]), // 0: A's own fix
+      commit(300, [{ path: P, fn: F }]), // 1: an earlier fix in P's function F
+      commit(250, [{ path: Q }], true), // 2: capped
+      commit(200, [{ path: R }]), // 3: on the merge day
+      commit(566, [{ path: S }]), // 4: 366 days before the merge
+      commit(565, [{ path: T }]), // 5: 365 days before
+      commit(300, [{ path: U, fn: F }]), // 6: F in another file
+      commit(300, [{ path: Y }]), // 7: Y, no funcname
+      commit(250, [{ path: W }]), // 8: C's own fix, dated as if before its merge
+      commit(190, []), // 9: the other PRs' own fix
+      commit(190, [{ path: K }, { path: P, fn: F }]), // 10: I's own fix, editing K and P's F
+    ]
+    const pr = (number: number, daysAgo: number, filtered: { commit: number; path: string; fn?: string }, own = 9) =>
+      pullOf(number, daysAgo, {
+        band: "low",
+        fixes: [
+          {
+            days: 5,
+            lines: 1,
+            kind: "label",
+            commit: own,
+            deleted: { code: 1, blank: 0, comment: 0, whitespace: 0, moved: 0 },
+          },
+        ],
+        fixesFiltered: [
+          {
+            days: 5,
+            lines: 1,
+            kind: "label",
+            commit: filtered.commit,
+            location: { path: filtered.path, ...(filtered.fn ? { fn: filtered.fn } : {}) },
+          },
+        ],
+      })
+    const base = measured([])
+    const ledger: OutcomeLedger = {
+      ...base,
+      pulls: [
+        ...base.pulls,
+        pr(20, 200, { commit: 0, path: P, fn: F }, 0), // A: file and function
+        pr(21, 200, { commit: 8, path: W }, 8), // C: only its own fix touched W
+        pr(22, 200, { commit: 9, path: R }), // D: R's fix is on the merge day
+        pr(23, 200, { commit: 9, path: S }), // E: S's fix is 366 days before
+        pr(24, 200, { commit: 9, path: T }), // E2: T's fix is 365 days before
+        pr(25, 200, { commit: 9, path: X, fn: F }), // F: F exists only in another file
+        pr(26, 200, { commit: 9, path: Y }), // G: a file match, with no funcname on either side
+        pr(27, 600, { commit: 9, path: Z }), // H: the first merge
+        pr(28, 200, { commit: 10, path: K }, 10), // I: its own fix commit also edits P's F
+      ],
+      fixCommits,
+    }
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const recurrence = cohorts(ledger).recurrence
+    const shares = (side: { fixes: number; file: { count: number }; fn: { count: number } }) => [
+      side.fixes,
+      side.file.count,
+      side.fn.count,
+    ]
+    // Filtered, at each entry's own location: A, E2 and G match a file, and A alone a function.
+    expect(shares(recurrence.labels.filtered)).toEqual([9, 3, 1])
+    // Unfiltered, at every location of its fix commit: A and I, both in P's F.
+    expect(shares(recurrence.labels.unfiltered)).toEqual([9, 2, 2])
+    // H's lookback starts before the first merge (its own), so the full columns leave it out.
+    expect(recurrence.first).toBe(day(600))
+    expect(shares(recurrence.labels.filtered.full)).toEqual([8, 3, 1])
+    expect(shares(recurrence.labels.unfiltered.full)).toEqual([8, 2, 2])
+    expect(recurrence.capped).toBe(1)
+    expect(recurrence.labels.filtered.file).toEqual({ count: 3, total: 9, value: null, interval: null })
+    expect(RECURRENCE_DAYS).toBe(365)
+
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Recurrence")
+    expect(text).toContain("VS-46d item 10, descriptive only:")
+    expect(text).toContain("so it gates nothing; L6 waits on the Q9 ablation alone.")
+    expect(text).toContain(`the scan keeps fix commits only after the window's first merge (${day(600)})`)
+    expect(text).toContain("- 1 fix commits had more than 32 locations and keep only their first 32")
+    expect(text).toContain("| filtered | 9 | 3/9 | 1/9 | 8 | 3/8 | 1/8 |")
+    expect(text).toContain("| unfiltered | 9 | 2/9 | 2/9 | 8 | 2/8 | 2/8 |")
+    expect(text).toContain("No interval: fix entries cluster within PRs and fix commits.")
+  })
+
+  // A local eval artifact's drops: 100 recorded 120 days before NOW and 5 recorded 30 days before, alternating bug and
+  // security, with fields the reader ignores.
+  const dropAt = (days: number) => new Date(NOW - days * DAY).toISOString()
+  const fixtureDrop = (index: number, days: number): LatentDrop => ({
+    path: `src/file-${index}.ts`,
+    base: { sha: "a".repeat(40), start: 3, end: 7 },
+    class: index % 2 ? "security" : "bug",
+    fingerprint: index.toString(16).padStart(12, "0"),
+    at: dropAt(days),
+  })
+  const ARTIFACT = {
+    startedAt: dropAt(120),
+    variant: "engine:baseline",
+    drops: [...repeat(100, (index) => fixtureDrop(index, 120)), ...repeat(5, (index) => fixtureDrop(100 + index, 30))],
+  }
+  // An artifact's drops, or the test fails with the reader's reason.
+  const dropsOf = (artifact: unknown) => {
+    const drops = latentDrops(artifact)
+    if (typeof drops === "string") throw new Error(drops)
+    return drops
+  }
+  // The fixture's join: each drop with the days to its first fix, as the unbuilt join would give them.
+  const joined = (drops: readonly LatentDrop[], days: (index: number) => number | undefined): LatentOutcome[] =>
+    drops.map((drop, index) => {
+      const fixed = days(index)
+      return fixed === undefined ? { drop } : { drop, fixedDays: fixed }
+    })
+
+  test("latent scoring on a fixture artifact, and its kill rule", () => {
+    const drops = dropsOf({ ...ARTIFACT, drops: ARTIFACT.drops.map((drop) => ({ ...drop, note: "ignored" })) })
+    expect(drops).toEqual(ARTIFACT.drops)
+    expect(latentDrops({ startedAt: dropAt(1) })).toEqual([])
+    const valid = ARTIFACT.drops[0]
+    for (const [artifact, reason] of [
+      [null, "the artifact is not an object"],
+      [[valid], "the artifact is not an object"],
+      ["drops", "the artifact is not an object"],
+      [{ drops: "x" }, "the artifact holds a malformed drop"],
+      [{ drops: repeat(MAX_LATENT_DROPS + 1, () => valid) }, `the artifact holds more than ${MAX_LATENT_DROPS} drops`],
+      [{ drops: [{ ...valid, base: { ...valid.base, sha: "a".repeat(39) } }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, base: { ...valid.base, end: 2 } }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, base: { ...valid.base, start: 0 } }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, class: "pre-existing" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, class: "bug|injected" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, fingerprint: "xyz" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, at: "yesterday" }] }, "the artifact holds a malformed drop"],
+      // Date.parse reads these, but not by the ECMAScript format: `at` is a UTC instant as toISOString writes it.
+      [{ drops: [{ ...valid, at: "Nov 15 2026" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, at: "2026-11-15" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, at: "2026-11-15T10:00:00+02:00" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, at: "2026-13-15T10:00:00Z" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, path: "" }] }, "the artifact holds a malformed drop"],
+      [{ drops: [{ ...valid, path: "p".repeat(4097) }] }, "the artifact holds a malformed drop"],
+    ] as const)
+      expect(latentDrops(artifact)).toBe(reason)
+    expect(latentDrops({ drops: repeat(MAX_LATENT_DROPS, () => valid) })).toHaveLength(MAX_LATENT_DROPS)
+    expect(dropsOf({ drops: [{ ...valid, at: "2026-11-15T10:00:00Z" }] })[0].at).toBe("2026-11-15T10:00:00Z")
+
+    // 9 of the 100 matured drops fixed within 90 days, and every unmatured one: precision 9%, the criterion met.
+    expect([LATENT_KILL_PRECISION, LATENT_MIN_DROPS]).toEqual([0.1, 100])
+    const nine = joined(drops, (index) => (index < 9 || index >= 100 ? 10 : undefined))
+    const met = latentForecast(nine, NOW)
+    expect(met).toEqual({
+      status: "kill-met",
+      drops: 105,
+      repeated: 0,
+      matured: 100,
+      precision: { count: 9, total: 100, value: 0.09, interval: null },
+      byClass: [
+        { class: "bug", matured: 50, fixed: 5 },
+        { class: "security", matured: 50, fixed: 4 },
+      ],
+    })
+    // 10 fixed is precision 10%, not under it. A fix after 91 days or on the drop's own day is no hit; one at 90 is.
+    const ten = latentForecast(
+      joined(drops, (index) => (index < 9 ? 10 : index === 9 ? 90 : index === 10 ? 91 : index === 11 ? 0 : undefined)),
+      NOW,
+    )
+    expect(ten).toMatchObject({ status: "kill-not-met", matured: 100, precision: { count: 10, total: 100 } })
+    // 99 matured drops are too few, whatever they show.
+    expect(
+      latentForecast(
+        joined(drops.slice(1), () => undefined),
+        NOW,
+      ),
+    ).toMatchObject({
+      status: "too-few",
+      matured: 99,
+      precision: { count: 0, total: 99, value: null },
+    })
+    expect(latentForecast([], NOW).status).toBe("no-drops")
+    expect(latentForecast(undefined, NOW)).toEqual({
+      status: "not-read",
+      drops: 0,
+      repeated: 0,
+      matured: 0,
+      precision: { count: 0, total: 0, value: null, interval: null },
+      byClass: [],
+    })
+    // Every outcome is checked before any is scored: one malformed outcome refuses them all.
+    for (const bad of [
+      { drop: drops[0], fixedDays: Number.NaN },
+      { drop: drops[0], fixedDays: -1 },
+      { drop: drops[0], fixedDays: Number.POSITIVE_INFINITY },
+      { drop: { ...drops[0], at: "Nov 15 2026" }, fixedDays: 10 },
+      { drop: { ...drops[0], base: { ...drops[0].base, end: 1 } } },
+    ])
+      expect(latentForecast([...nine, bad], NOW)).toEqual({ ...latentForecast(undefined, NOW), status: "refused" })
+    expect(latentForecast([...nine.slice(1), { drop: drops[0], fixedDays: 0.5 }], NOW).precision.count).toBe(9)
+    expect(latentForecast([...nine.slice(1), { drop: drops[0], fixedDays: undefined }], NOW).precision.count).toBe(8)
+    // A drop matures 90 days after it was recorded.
+    expect(latentForecast(nine, NOW - 31 * DAY).matured).toBe(0)
+    expect(latentForecast(nine, NOW + 60 * DAY).matured).toBe(105)
+    // One defect dropped on several reviews counts once, at its earliest drop: a later repeat of a fixed drop adds
+    // nothing, and an earlier, fixed repeat of an unfixed one makes it fixed.
+    const later = { drop: { ...drops[0], at: dropAt(100) } }
+    expect(latentForecast([...nine, later], NOW)).toEqual({ ...met, repeated: 1 })
+    const earlier = { drop: { ...drops[50], at: dropAt(130) }, fixedDays: 20 }
+    expect(latentForecast([...nine, earlier], NOW)).toMatchObject({
+      status: "kill-not-met",
+      drops: 105,
+      repeated: 1,
+      matured: 100,
+      precision: { count: 10 },
+    })
+    // On a tie, the first in input order.
+    expect(latentForecast([...nine, { drop: drops[50], fixedDays: 5 }], NOW).precision.count).toBe(9)
+
+    // Through the report: outcomeReport takes the joined drops, and open passes none.
+    const ledger = measured([])
+    const text = section(renderOutcomes(outcomeReport(ledger, undefined, nine)), "## Latent forecasts")
+    expect(text).toContain(
+      "Status: kill criterion met (precision under 10% on at least 100 matured drops); the decision is the owner's.",
+    )
+    expect(text).toContain(
+      "- Drops: 105 distinct (0 further drops of a fingerprint already counted), 100 matured; fixed within 90 days 9/100 9.0%.",
+    )
+    expect(text).toContain("| bug | 50 | 5 |\n| security | 50 | 4 |")
+    expect(text).toContain("It reads only local eval artifacts, and no GitHub state or markers, which are public.")
+    expect(text).toContain("on one repository the stream may not reach 100 matured drops")
+    // With no outcomes given, as open gives none, the report says none were read; given and empty, none recorded.
+    const unread = section(renderOutcomes(outcomeReport(ledger)), "## Latent forecasts")
+    expect(unread).toContain("\nStatus: no drops read: open reads no eval artifact and no join is built.\n")
+    expect(unread).not.toContain(NO_DROPS + ".")
+    expect(unread).not.toContain("- Drops:")
+    expect(outcomeReport(ledger).cohorts!.latent).toMatchObject({ status: "not-read", drops: 0, matured: 0 })
+    const none = section(renderOutcomes(outcomeReport(ledger, undefined, [])), "## Latent forecasts")
+    expect(none).toContain(`\nStatus: ${NO_DROPS}.\n`)
+    expect(none).not.toContain("- Drops:")
+    expect(outcomeReport(ledger, undefined, []).cohorts!.latent).toMatchObject({ status: "no-drops", drops: 0 })
+    const refused = section(
+      renderOutcomes(outcomeReport(ledger, undefined, [...nine, { drop: drops[0], fixedDays: -1 }])),
+      "## Latent forecasts",
+    )
+    expect(refused).toContain(
+      "\nStatus: refused: a latent outcome is malformed (a drop latentDrops would refuse, or a fixedDays that is not a finite number of days at or above 0), so none is scored.\n",
+    )
+    expect(refused).not.toContain("- Drops:")
+  })
+
+  test("a /1 ledger shows every SF-05b section as unavailable, in both decisions, and a gradient-only /2 report none", () => {
+    const current = cohortLedger(STRATA_GROUPS)
+    const outcomes = joined(dropsOf(ARTIFACT), () => 10)
+    const legacy = outcomeReport(v1Of(current), undefined, outcomes)
+    expect(legacy.cohorts).toBeUndefined()
+    const gradient = outcomeReport(v1Of({ ...current, findings: [] }), undefined, outcomes)
+    expect(gradient.volume.decision).toBe("gradient-only")
+    for (const text of [renderOutcomes(legacy), renderOutcomes(gradient)])
+      for (const heading of COHORT_HEADINGS) expect(section(text, heading)).toBe(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
+    expect(v1Only(renderOutcomes(legacy))).toBe(v1Only(renderOutcomes(outcomeReport(current))))
+    // A /2 ledger in the gradient-only decision adds no section, latent drops or not.
+    const plain = outcomeReport({ ...current, findings: [] }, undefined, outcomes)
+    expect(plain.cohorts).toBeUndefined()
+    const text = renderOutcomes(plain)
+    expect(v1Only(text)).toBe(text)
+  })
+
+  test("the report writes nothing: frozen inputs give the same report as their copies", () => {
+    const ledger = cohortLedger([...STRATA_GROUPS, ...AGENT_GROUPS.slice(0, 3)])
+    const outcomes = joined(dropsOf(ARTIFACT), (index) => (index < 9 ? 10 : undefined))
+    const copies = { ledger: structuredClone(ledger), outcomes: structuredClone(outcomes) }
+    deepFreeze(ledger)
+    deepFreeze(outcomes)
+    const report = outcomeReport(ledger, undefined, outcomes)
+    expect(report).toEqual(outcomeReport(copies.ledger, undefined, copies.outcomes))
+    expect(renderOutcomes(report)).toBe(renderOutcomes(outcomeReport(copies.ledger, undefined, copies.outcomes)))
+    expect(ledger).toEqual(copies.ledger)
+    expect(outcomes).toEqual(copies.outcomes)
+  })
+})
+
 // The 97.5% Wilson intervals of 40/50 and 5/50 composed into recall over 100 positives and 300 negatives, printed from
 // core wilson when SF-05a was built.
 const RECALL_INTERVAL = [0.47999287872607554, 0.885109284327646] as const
@@ -3396,12 +4084,27 @@ const LABEL_HEADINGS = [
   "## Fix-edited lines per kLOC",
 ]
 
+// VS-46d items 5 to 11's sections (SF-05b), in their order after SF-05a's: a /2 report in the full decision prints them,
+// a /1 report prints each as V1_UNAVAILABLE.
+const COHORT_HEADINGS = [
+  "## Verdict against outcome",
+  "## Dismissal reasons by severity",
+  "## Addressed rate",
+  "## Human review by band",
+  "## Agent-authored split",
+  "## Recurrence",
+  "## Latent forecasts",
+]
+
 // A report without its schema-2 sections.
 function v1Only(text: string) {
   return text
     .split(/(?=\n## )/)
     .filter(
-      (part) => ![...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS].some((heading) => part.startsWith(`\n${heading}\n`)),
+      (part) =>
+        ![...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS, ...COHORT_HEADINGS].some((heading) =>
+          part.startsWith(`\n${heading}\n`),
+        ),
     )
     .join("")
 }
@@ -3554,6 +4257,68 @@ function measured(groups: readonly Group[], rule: MeasurementRule = MEASUREMENT_
 // Whether the PR at `index` of `count` is one of `k` spread evenly through them: the first n hold floor(n k / count).
 function evenly(index: number, count: number, k: number) {
   return Math.floor(((index + 1) * k) / count) > Math.floor((index * k) / count)
+}
+
+// A group for cohortLedger: measured()'s group, with the fields VS-46d items 5 to 9 read. `posted` gives each PR one
+// acknowledged finding of its stratum; `sameAgent` goes on every fix entry of an agent group, and without it each agent
+// PR with a fix is marked sameAgentIncomplete, as collection marks one.
+interface CohortGroup extends Group {
+  posted?: boolean
+  stratum?: PullStratum
+  reviewed?: boolean
+  reviews?: number
+  unreviewed?: number
+  humanReview?: boolean
+  filteredIncomplete?: boolean
+  sameAgent?: boolean
+}
+
+// measured()'s ledger with each group's fields on its PRs, as collection records them, so ledgerProblem passes it.
+function cohortLedger(groups: readonly CohortGroup[]): OutcomeLedger {
+  const ledger = measured(groups)
+  const groupOf = (pull: LedgerPull) =>
+    pull.number >= 10_000 ? groups[Math.floor((pull.number - 10_000) / 1000)] : undefined
+  const pulls = ledger.pulls.map((pull): LedgerPull => {
+    const group = groupOf(pull)
+    if (!group) return pull
+    const { unreviewedFiles: _unreviewed, humanComments: _comments, ...rest } = pull
+    const stratum = group.stratum ?? "human"
+    const reviewed = group.reviewed ?? true
+    const flag = stratum === "agent" && group.sameAgent !== undefined ? { sameAgent: group.sameAgent } : {}
+    return {
+      ...rest,
+      stratum,
+      reviewed,
+      humanReview: group.humanReview ?? true,
+      reviews: group.reviews ?? 1,
+      ...(reviewed ? { unreviewedFiles: group.unreviewed ?? 0, humanComments: 1 } : {}),
+      fixes: (pull.fixes ?? []).map((fix) => ({ ...fix, ...flag })),
+      fixesFiltered: (pull.fixesFiltered ?? []).map((fix) => ({ ...fix, ...flag })),
+      ...(group.filteredIncomplete ? { filteredIncomplete: true as const } : {}),
+      ...(stratum === "agent" && group.sameAgent === undefined && (pull.fixes ?? []).length
+        ? { sameAgentIncomplete: true as const }
+        : {}),
+    }
+  })
+  return {
+    ...ledger,
+    pulls,
+    findings: [
+      ...ledger.findings,
+      ...pulls.flatMap((pull) =>
+        groupOf(pull)?.posted ? [finding(pull.number, "acknowledged", { stratum: pull.stratum })] : [],
+      ),
+    ],
+  }
+}
+
+// Freezes a value and everything it holds, so any write to it throws (the test file is a module, so strict mode).
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    Object.values(value).forEach(deepFreeze)
+    Object.freeze(value)
+  }
+  return value
 }
 
 function withoutScore(pull: LedgerPull): LedgerPull {

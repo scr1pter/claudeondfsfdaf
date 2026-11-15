@@ -18489,3 +18489,653 @@ README and this log.
   (VS-46d items 1 to 4's report half is built in source; items 5 to 11 are
   SF-05b's) and `vectorscope-continuation.md`, and append the correcting
   entry for the stale `:16000` sentence. SF-05a touches neither file.
+
+## 2026-11-15 · VS-46d Outcome strata, dismissals, agent split and latent scoring report (SF-05b)
+
+Addendum B §1.9 (VS-46d) design items 5 to 11, the report half that SF-05a
+left, built on `scope-finish` at `14a4b60f` (SF-05a) as lane package SF-05b.
+It implements the SF-05b plan as corrected by its critique; where a critique
+point was taken in another form, the reason is under "Critique points". It
+is script-only: `script/vectorscope-eval/outcomes.ts`, its test file, the
+eval README and this log.
+
+- **Status.** Left uncommitted in the `scope-finish` working tree, as the
+  package task asks; the commit gate commits it as
+  `feat(review): report outcome verdict strata and agent splits`. Six
+  decisions are the lead's and
+  stay open, each built so either answer stays possible, with the fallback
+  under its decision: (a) item 5's placement here; (f) item 5 over the human
+  stratum only; (g) the dismissal reasons, which depart from the brief's
+  "through dismissalWhy"; (m) the latent join, which has no owner; (n) the
+  volume rule; and (o) the /1 behaviour. Two SF-03 decisions still pending
+  (j and g) decide whether items 5, 7 and 10 keep their fields. Review round
+  one's seven findings are answered under "Review findings": six fixed in
+  code, and (g)'s restated for the lead with no code change.
+
+- **Scope.** Addendum B §1.9 :206-227: items 5 to 11 at :216-222, the
+  compatibility paragraph at :223 and the tests at :224; R5 at §2.1 :281,
+  and L6 (:294) and L9 (:297), which this report only informs. Citations at
+  `14a4b60f` (`outcomes.ts` `ab577c4d2a5f…`): the core eval import `:17-25`,
+  the team import `:50`, `MATURITY_DAYS` `:103`, `MIN_PULLS` `:108`,
+  `MIN_EXPECTED` `:116`, `LedgerFixCommit` `:311`, `LedgerLocation` `:320`,
+  `LedgerFix` `:342`, `LedgerFilteredFix` `:350`, `LedgerPullV1` `:356`,
+  `LedgerPull` `:378`, `LedgerFinding` `:396`, `OutcomeReport` `:2261` (the
+  "SF-05b adds its own" comment `:2311`), `outcomeReport` `:2465` (the v2
+  populations `:2490`, the v2 spread `:2629`), `filteredFixed` `:2703`,
+  `expectedOf` `:2722`, `Ranked` `:2727`, `labelPopulations` `:2817`,
+  `labelQualityOf` `:3059`, `cell` `:3252`, `renderOutcomes` `:3264`,
+  `LABEL_SECTIONS` `:3372`, `labelLines` `:3508`, `openCommand` `:3774` and
+  `parseDismissalMarker`'s call at collection `:1294`.
+  In core: team.ts `DISMISSAL_WHY` `:36` and `dismissalWhy` `:45` (the
+  comment at `:38-39` says no caller uses it until the owner-repository
+  precision check qualifies it), eval.ts `wilson` `:875`,
+  `independentDifference` `:932` and `proportion` `:1122`, eval-report.ts
+  `spread` `:881`, and state.ts `parseDismissalMarker` `:371` (team.ts
+  `DismissalMarker` `:75` carries `why`). In the final file, after review
+  round one: the new constants `:156-176`, the drop and latent-outcome
+  decoders `:2199-2220`, `OutcomeReport.cohorts` `:2353`, the new types
+  `:2502-2616`, `outcomeReport` `:2630` (the cohorts spread `:2799`),
+  `cohortsOf` `:3386`, `tercilesOf` `:3414`, `compared` `:3428`,
+  `verdictStrataOf` `:3469`, `verdictProxy` `:3517` (the pruned-state check
+  `:3520`), `addressedOf` `:3526`, `humanReviewOf` `:3554`, `agentSplitOf`
+  `:3574`, `recurrenceOf` `:3621`, `latentDrops` `:3711`, `latentForecast`
+  `:3734`, `inLabelWindow` `:3775`, `bare` `:3781`, `renderOutcomes`
+  `:3834`, `COHORT_SECTIONS` `:3958`, `cohortLines` `:4175` (the latent
+  statuses `:4222`, item 5's text `:4235`, the same-agent share line
+  `:4274`) and `openCommand` `:4517` (unchanged; its `outcomeReport` call
+  `:4578` passes no latent outcomes).
+
+- **Test first.** At `14a4b60f`, with the source unedited,
+  `outcomes.test.ts` gave 74 pass, 0 fail (1,616 expect calls), as SF-05a
+  recorded. The new source alone, against the unedited tests, gave 71 pass
+  and 3 fail (1,580 expect calls): T1, the /1 collection case and SF-04's /1
+  case, each only because a /1 report now lists seven more unavailable
+  headings that the unedited `v1Only` did not filter.
+
+- **What landed.**
+  - New exports: `TERCILES` and `Tercile`, `VERDICT_PROXIES` and
+    `VerdictProxy`, `RECURRENCE_DAYS` (365), `LATENT_KILL_PRECISION` (0.1),
+    `LATENT_MIN_DROPS` (100), `MAX_LATENT_DROPS` (10,000), `NO_DROPS` ("no
+    drops recorded"), `NO_DROPS_READ` ("no drops read: open reads no eval
+    artifact and no join is built", review round one), `NO_DISMISSAL_REASON`
+    ("unavailable: schema 2 records no dismissal reason"), the functions
+    `latentDrops` and `latentForecast`,
+    and the types `CohortSide`, `CohortRow`, `VerdictLabel`, `VerdictStrata`,
+    `AddressedRate`, `HumanReviewRow`, `AgentSplit`, `RecurrenceSide`,
+    `Recurrence`, `LatentDrop`, `LatentOutcome`, `LatentForecast` and
+    `Cohorts`.
+  - `OutcomeReport.cohorts`, on a /2 ledger in the full decision only, as
+    `measurement` and `labelQuality`.
+    `outcomeReport(ledger, audit?, latent?)` takes drops already joined to
+    later fixes; `open` passes none, so its call is unchanged. (Round one
+    removed the `= []` default, so that "none given" and "given, holding
+    none" read differently.)
+  - Seven sections after "## Fix-edited lines per kLOC": "## Verdict against
+    outcome", "## Dismissal reasons by severity", "## Addressed rate", "##
+    Human review by band", "## Agent-authored split", "## Recurrence" and
+    "## Latent forecasts". A /1 report prints each with `V1_UNAVAILABLE`
+    after SF-05a's four, whatever the decision.
+  - Imports: `independentDifference` from core eval and `DISMISSAL_WHY` from
+    core team, both modules already imported.
+  - Tests: twelve new cases in a new describe, "outcome strata, dismissals,
+    agent split and latent scoring (VS-46d, SF-05b)"; heading lists extended
+    in T1, the /1 collection case, SF-04's base-rates, old-sentence and dry-run
+    cases, and `v1Only`; the helpers `COHORT_HEADINGS`, `CohortGroup`,
+    `cohortLedger` and `deepFreeze`.
+  - README "Outcome ledger": a new "Outcome strata (VS-46d items 5 to 11)"
+    bullet, and "Deferred" rewritten.
+
+- **How it works.**
+  - _Populations._ Every section but items 7 and 8 reads SF-05a's
+    `labelPopulations`: `ranked` (matured PRs with a band that no read cut
+    short) for reverts, `kept` (not reverted within 90 days) for the
+    unfiltered label and `complete` (not marked `filteredIncomplete` either)
+    for the filtered one.
+  - _Terciles._ `tercilesOf` cuts `ranked`, every stratum, at the
+    ceil(n/3)-th and ceil(2n/3)-th smallest added plus deleted lines; a PR at
+    or below the first cut is small, at or below the second middle, and
+    large above. Items 5 and 9 share the cut, and `Cohorts.size` keeps it
+    with each tercile's count.
+  - _Comparison._ `compared` takes two groups of one stratum on one label:
+    each side's PRs, positives and `cell(…, 50)` rate, each side's expected
+    positives at the two groups' pooled rate in that row, and a status:
+    "empty" when a group has no PR, "underpowered" when a group has fewer
+    than 50 PRs or 10 expected positives, and "shown" otherwise, with core
+    `independentDifference` (a less b, Newcombe's 95% interval).
+  - _Item 5._ `verdictProxy`: "unreviewed" when the PR is not reviewed or has
+    no completed review; "findings" when any finding on a PR no read cut
+    short names it, in any stratum or outcome; then "incomplete" when
+    `statePruned` is set (round one: a pruned state may have lost summary
+    findings); "clean" when `unreviewedFiles === 0`; "incomplete" otherwise,
+    a missing count included. Clean and findings human-stratum PRs are
+    compared on reverts (`ranked`) and the filtered label (`complete`), in
+    each band, each tercile and unstratified. The unstratified row turns
+    "unpaired", with no difference, when it would be shown but no stratified
+    row of its label is. The report counts each proxy group, the agent and
+    agent-signal PRs left out, and the compared PRs marked
+    `filteredIncomplete`.
+  - _Item 6._ `{ reason: NO_DISMISSAL_REASON }`; the section points to the
+    Resolution table's per-severity dismissed-writer, dismissed-author and
+    dismissed-unattributed counts and names VS-35b's classes and gate.
+  - _Item 7._ Confirmed fixes over settled human-stratum findings on PRs no
+    read cut short, every severity; their PRs' `humanComments` summed, with
+    p50 and p90 by core `spread`, and the PRs without a count; cycle time
+    over those PRs.
+  - _Item 8._ `humanReview` over every non-truncated PR with a band, matured
+    or not, every stratum, by band and over all, `cell(…, 50)`; the record
+    is built from `RISK_BANDS` (round one).
+  - _Item 9._ Agent against human within each tercile on reverts, the
+    filtered label, and `filteredOther`, where an agent PR is positive only
+    through a filtered fix within 90 days with `sameAgent === false`, and is
+    left out (and counted) when it has no such fix but has one with no flag.
+    Agent-signal PRs are counted and enter neither group. The same-agent
+    share counts fix entries within 90 days on agent PRs, `complete` for the
+    filtered label and `kept` for the unfiltered one, true over known, with
+    the unknown entries counted.
+  - _Item 10._ Fix commits' locations are indexed by path and by path plus
+    funcname (funcname present). A fix entry within 90 days matches when an
+    earlier fix commit other than its own (by index) has a matching location
+    dated from day(merge − 365 days) up to, not including, day(merge). A
+    filtered entry is placed at its own `location`; an unfiltered one at
+    every location of `fixCommits[entry.commit]`. The full-lookback columns
+    keep entries whose lookback day is after the ledger's first merge day;
+    capped fix commits are counted.
+  - _Item 11._ `latentDrops(artifact)` reads an artifact's `drops` (path of 1
+    to 4,096 characters; base `{sha, start, end}` with a 40- or 64-hex SHA
+    and 1 ≤ start ≤ end; class one of core `CATEGORIES`; a 12-hex
+    fingerprint; an `at` that is a UTC instant in the ECMAScript date-time
+    string format, `YYYY-MM-DDTHH:mm:ss[.sss]Z` as `toISOString` writes it,
+    and that `Date.parse` reads as finite), ignores every other field, gives
+    `[]` for an artifact with no `drops`, and returns a reason for a
+    non-object, more than 10,000 drops or a malformed drop.
+    `latentForecast(outcomes, observedUntil)` reads "not-read" when
+    `outcomes` is `undefined` (none given, as `open` gives none). Otherwise
+    it first decodes every outcome (the drop as `latentDrops` reads it, and
+    an optional `fixedDays` that is finite and at or above 0, the ledger's
+    `Amount`, as a fix entry's `days` is), and one malformed outcome refuses
+    them all ("refused", nothing scored). It then keeps the earliest drop of
+    each fingerprint (ties in input order), counts a drop matured 90 days
+    after its `at`, a hit when 0 < `fixedDays` ≤ 90, and reports "no-drops",
+    "too-few" (under 100 matured), "kill-met" (precision under 0.1) or
+    "kill-not-met", with precision `bare(…, 100)` and matured and fixed
+    counts by class.
+  - _Rendering._ `cohortLines` follows `labelLines`. A shown difference reads
+    signed points with its interval; otherwise "underpowered (not yet)", "n/a"
+    for an empty group, or "n/a: no stratified difference to set it beside".
+    The filtered tables carry "(SZZ-based, size-biased, unaudited)", or
+    "audited" only when `labelQuality.audit.audited` is true. The same-agent
+    share line and the recurrence section say "unaudited: the audit samples
+    PRs, not fix entries" whatever the audit, since both count fix entries.
+    The latent status reads `NO_DROPS_READ` for "not-read", `NO_DROPS` only
+    for "no-drops", and a refusal sentence for "refused".
+
+- **Decisions.**
+  - (a) _Item 5 is built here (lead to confirm)._ SF-05a's brief said
+    "design items 1-5 (labels half)" and SF-05b's header says "design items
+    6-11", but SF-05b's section list opens with item 5's verdict against
+    outcome within each band and size tercile. The section list settles it
+    here, as SF-05a's decision (r) read it.
+  - (b) _The proxy._ As above, with a missing `unreviewedFiles` read as not
+    clean (critique 10), as SF-03's hand-off writes it (`=== 0`), and a
+    pruned state read as incomplete unless a ledger finding already makes
+    the PR "with findings" (review round one, finding 6). If the lead
+    drops `unreviewedFiles` (SF-03 decision (j)), item 5 reads unavailable on
+    /2; if `humanComments` goes, item 7's volume line does.
+  - (c) _Value-based terciles over `ranked`, shared by items 5 and 9._ PRs of
+    one size share a tercile, so ties (many 0-line PRs whose reviewed files
+    are all skipped) can leave one short or empty; the cuts and counts are
+    printed, and an empty row reads "n/a". Band rows and tercile rows are two
+    stratifications, not a grid. Fallback: a band-by-tercile grid, which at
+    one repository's volume would leave nearly every cell underpowered.
+  - (d) _Per-row Newcombe differences, gated on 50 PRs and 10 expected
+    positives per group._ No pooled Mantel-Haenszel estimate. Reverts and
+    the filtered label only; the unfiltered label stays in VS-46c's and
+    SF-05a's sections.
+  - (e) _The unstratified row (critique 1)._ Its difference shows only beside
+    a shown stratified difference of the same table; it is always the last
+    row, labelled "all PRs, unstratified: confounded by size".
+  - (f) _Item 5 over the human stratum only (critique 3; lead to confirm)._
+    Agent PRs are left out and counted, because same-agent iteration
+    confounds the follow-up-fix label (P3-11) and item 9 reports them on
+    their own; agent-signal PRs are untrusted and only exclude. Fallback:
+    pool every stratum as VS-46c's measurement does, and say so in the text.
+  - (g) _Dismissal reasons read unavailable (critique 4; lead decision)._ The
+    brief says "through dismissalWhy". The ledger keeps no reply text, so
+    the classifier has nothing to read, and calling it at collection would
+    make it the classifier's first caller, which waits on VS-35b's owner
+    precision sample (at least 0.9). The planned per-severity role table
+    would repeat the Resolution table (`resolution.bySeverity`), so the
+    section points to it instead. Alternative (critique 5): a /3 field, an
+    optional `why` on dismissed findings, from a well-formed marker's `why`
+    and from `dismissalWhy` only after the owner sample, or a lead and owner
+    call that knowingly amends README :1683-1684 ("adding either is a /3")
+    and SF-03's hand-off. It is not a free /2 addition: one sealed schema
+    name has one meaning. Stated plainly for the lead (review round one,
+    finding 2): collection already parses each finding's `vector-dismissal`
+    marker (`parseDismissalMarker`, final `outcomes.ts:1316`; state.ts
+    `:371`), and the parsed `DismissalMarker` carries `why` (team.ts `:77`)
+    beside the `by` that sets the role. Only the ledger field is missing. A
+    /3 `why` field copied from a well-formed marker needs no `dismissalWhy`
+    call and so does not wait on VS-35b's precision sample; it would hold
+    whatever the marker's writer chose. No review job writes the marker yet
+    (core holds only its parser; `dataset.ts` builds synthetic ones for
+    VS-22c's adversarial eval cases), so on a real repository such a field
+    would stay empty until a writer does. /2 is sealed and this package
+    changes no collection, so it stays a lead call.
+  - (h) _The addressed rate is the gradient's confirmed-fix share, every
+    severity together,_ over every merge in the window, matured or not.
+  - (i) _Human review by band covers every banded PR,_ matured or not, every
+    stratum.
+  - (j) _The agent split has no unstratified row._ Unknown `sameAgent` flags
+    are left out and counted, on the share and in `filteredOther`.
+  - (k) _Recurrence (critique 8)._ File and function matches, a function
+    match needing a funcname on both sides; the merge day left out, because
+    fix commits keep only their day; the entry's own fix commit left out by
+    its index, as SF-03's hand-off asks; both labels, with their location
+    definitions stated; and a full-lookback split, since `fixHits` keeps fix
+    commits only after the first merge. If the lead drops `fixCommits` (SF-03
+    decision (g)), the section reads unavailable on /2.
+  - (l) _No interval on clustered units (critique 7)._ The same-agent share,
+    the recurrence shares and latent precision go through `bare`: count,
+    total, and a value from the floor, but no interval, because fix entries
+    cluster within PRs and fix commits, and drops within reviews; the text
+    says so. Item 5's and 9's PR rates keep Wilson intervals, as every PR
+    rate in the report does.
+  - (m) _Latent scoring (critique 2; the join is an unowned remainder)._
+    `latentForecast`, its kill rule, the constants and the "no drops
+    recorded" path are built and tested. `latentDrops` is a provisional
+    reader of R5's record, which SF-21 produces and owns: `at` is taken per
+    drop (the engine's review artifacts carry no artifact-level `startedAt`),
+    the class is a finding category, so no artifact text reaches the class
+    table, and the fingerprint is core `fingerprint`'s 12 hex. The plan's
+    `latentOutcomes` join is not built, not even as a sketch: following a
+    drop's base lines through later history is the machinery the spec lists
+    as new, it would run on no data, and SF-21's brief covers only recording
+    the drops. That join, and where its result is kept (a ledger field, so a
+    /3, or another local file), is recorded for the lead to place. Day
+    granularity (fix commits keep a day, drops a time) belongs to that join.
+    The status reads "kill criterion met (precision under 10% on at least 100
+    matured drops); the decision is the owner's" (critique 14), and the
+    90-day hit window is checked once, in the scorer. Review round one
+    (finding 1) took the code option: with no outcomes given, as `open`
+    gives none, the section reads `NO_DROPS_READ` ("no drops read: open
+    reads no eval artifact and no join is built"), and "no drops recorded"
+    only when outcomes were given and hold none, so the line cannot turn
+    false once SF-21 records drops. Wiring an artifact into `open` remains
+    part of this open decision; the hand-offs below say what it takes.
+  - (n) _The volume rule follows SF-05a decision (i) (lead decision)._ A
+    gradient-only /2 report adds nothing, so T1's pinned bytes and the
+    header line stay true. Fallback: SF-05a's.
+  - (o) _/1 ledgers (lead decision)._ Every new section reads unavailable,
+    those v1 fields could fill (items 6 to 8) included, per the
+    compatibility paragraph's "these sections marked unavailable". Fallback:
+    compute items 6 to 8 on /1.
+  - (p) _Wording (critique 9)._ No new section says "never": the spec's item
+    11 sentences read "reads … no GitHub state or markers" and "may not
+    reach 100 matured drops". The old-sentence case checks all seven.
+
+- **Critique points.** Fourteen, all taken; three in another form.
+  1. _The raw gate (major)._ Taken (decision (e)): the unpaired case and its
+     mutation.
+  2. _The latent join (major)._ Taken (decision (m)): `latentOutcomes` is
+     dropped rather than labelled a sketch, the reader is provisional with
+     per-drop `at`, and the join is an unowned remainder for the lead, not
+     an SF-21 hand-off.
+  3. _Item 5's strata (major)._ Taken (decision (f)): the proxy case shows
+     every-reverted agent and agent-signal groups entering neither group.
+  4. _Item 6 repeats Resolution (minor)._ Taken: no table; the departure is
+     in the status line (decision (g)).
+  5. _Decision (e)'s alternative (minor)._ Taken: restated as a /3 or a
+     knowing amendment (decision (g)).
+  6. _A difference with both rates hidden (minor)._ Taken as the stricter
+     option: 50 PRs per group as well as 10 expected positives; the high
+     band of the unpaired case (16 and 24 expected, 40 clean PRs) reads
+     underpowered.
+  7. _Intervals over clustered units (minor)._ Taken (decision (l)).
+  8. _A missing funcname matching (minor)._ Taken: PR G of the recurrence
+     case, and its mutation.
+  9. _"never" in item 11 (minor)._ Taken (decision (p)).
+  10. _A missing `unreviewedFiles` read as complete (minor)._ Taken: a
+      reviewed PR whose count is removed reads incomplete, and its mutation.
+  11. _Ties (minor)._ Taken: the heavy-tie fixture (cuts 0 and 0, an empty
+      middle row reading "n/a"), plus a rank check (six PRs of 1 to 6 lines,
+      cuts 2 and 4).
+  12. _The SF-39 hand-off (minor)._ Taken: the section, the README and the
+      hand-offs say SF-39 plus a later ledger field (a /3).
+  13. _Bookkeeping (minor)._ Taken in another form: decision (a) quotes both
+      briefs. The push steps are the commit gate's, listed under "CI owed",
+      because this package is left uncommitted.
+  14. _Latent edge cases (minor)._ Taken in another form: with the join not
+      built, day granularity moves to the join's note, the single 90-day
+      check is the scorer's, and the status wording is the critique's.
+
+- **Plan corrections.**
+  - The planned dismissal table (`bySeverity` by role) is dropped (critique
+    4), and with it the plan's "bulk or truncated dismissals counted"
+    mutation; case 3 checks the reason line, the pointer and that the
+    section holds no table.
+  - `latentOutcomes` is dropped; `LatentOutcome` is `{drop, fixedDays?}`.
+    `latentDrops` reads a per-drop `at`, not `startedAt`; its class is a
+    core category, not a free pattern; its fingerprint is 12 hex, not 1 to
+    128 characters; and an artifact with no `drops` gives `[]` (written
+    before R5) rather than a refusal.
+  - `LatentForecast` statuses are "kill-met" and "kill-not-met", and it
+    counts `repeated` drops.
+  - `Cohorts.size` holds the shared cut and tercile counts once, instead of
+    a cut in both `VerdictStrata` and `AgentSplit`; `VerdictStrata` adds
+    `excluded`; `CohortRow` adds `status`; `Recurrence.first` replaces
+    `lookback.first`, and each `RecurrenceSide` carries its cycle time;
+    `AddressedRate.comments` drops its `pulls`, which equals the rate's.
+  - The tests are twelve cases, not eleven: the plan's case 1 is split (the
+    strata, then the gates with ties), and the audited-mark case is new.
+    SF-05a's /1 case is left as it was: the new /1 case asserts the seven
+    headings in both decisions.
+  - `outcomeReport`'s third parameter defaulted to `[]`; review round one
+    removed the default (finding 1), so it is optional and `undefined`
+    means none given.
+
+- **Review findings.** Round one: seven findings, none blocking. Six fixed
+  in code; the second is answered in decision (g) with no code change, as
+  it asked.
+  1. _The latent status would turn false once drops are recorded
+     (`outcomes.ts:171`)._ Fixed: `outcomeReport`'s third parameter has no
+     default; `latentForecast(undefined, …)` reads "not-read", rendered as
+     `NO_DROPS_READ`; "no drops recorded" is only for outcomes given and
+     holding none (decision (m), still open for the lead). The dry-run case
+     and the latent case assert both, and the hand-offs say what wiring an
+     artifact into `open` takes.
+  2. _Item 6 departs from "through dismissalWhy" though collection already
+     reads the marker's `why` (`outcomes.ts:3394`)._ No code change, as the
+     finding asked: /2 is sealed and the brief forbids collection changes.
+     Decision (g) now states that the marker's `why` is already parsed at
+     collection and only the ledger field is missing, so a /3 `why` field
+     needs no `dismissalWhy` call, and that no writer emits the marker yet.
+  3. _The same-agent share line carries no audit mark
+     (`outcomes.ts:4249`)._ Fixed with the recurrence section's sentence,
+     "SZZ-based and unaudited: the audit samples PRs, not fix entries",
+     rather than the tables' `mark`: the share counts fix entries, which the
+     audit does not sample, so it stays unaudited even when SF-05a's audit
+     makes the filtered rows read audited. The audited-mark case now counts
+     exactly one "unaudited" in the audited agent section, on that line.
+  4. _`LatentDrop.at` accepts any `Date.parse` string
+     (`outcomes.ts:2210`)._ Fixed: `at` must match
+     `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$` as well as
+     parse as finite, the ECMAScript date-time string format in UTC, the one
+     `Date.parse` is specified to read, so sorting and maturing by it is
+     defined. Four refusals added ("Nov 15 2026", a date-only value, an
+     offset and month 13) and one acceptance with no milliseconds. The
+     entry, the decoder comment and the README now say "a UTC instant as
+     `toISOString` writes it" instead of "an ISO `at`".
+  5. _`humanReviewOf` writes its band rows by hand
+     (`outcomes.ts:3554`)._ Fixed: the record comes from `RISK_BANDS` plus
+     "all", with the Record cast `tally` and `bandsOf` use; the tuples are
+     `as const`, so the cast is from a typed record, not from `any`.
+  6. _A pruned state can read clean (`outcomes.ts:3509`)._ Fixed:
+     `verdictProxy` returns "incomplete" for `statePruned` after the
+     findings check and before the `unreviewedFiles` check, so a pruned PR
+     with a ledger finding stays "with findings". Item 5's text, its
+     "Compared" line ("files left unreviewed, no count, or a pruned state")
+     and the README say so, and the proxy case prunes a clean PR (it moves
+     to incomplete) and a posted one (it stays with findings).
+  7. _Latent outcomes are scored unvalidated (`outcomes.ts:3722`)._ Fixed
+     by decoding them through a Schema beside `decodeLatentDrops`
+     (`LatentDropEntry` is now shared, and `fixedDays` is an optional
+     `Amount`: finite and at or above 0, fractions allowed, as the ledger's
+     fix `days`; an explicit `undefined` reads as no fix). One malformed
+     outcome refuses the whole set ("refused", nothing scored), as one
+     malformed drop refuses an artifact in `latentDrops`, rather than being
+     left out and counted: a producer fault should not move the precision.
+     The latent case refuses NaN, −1 and infinite `fixedDays`, a non-ISO
+     `at` and an end before its start, and scores a fractional `fixedDays`.
+     The hand-offs say the join's producer must emit outcomes that pass.
+
+- **Responses to hand-offs.**
+  - SF-03: item 5's proxy from `reviewed`, `unreviewedFiles === 0` and no
+    findings, labelled a proxy; item 7's volume from `humanComments`; the
+    same-agent share on both labels, leaving out entries with no `sameAgent`
+    (on PRs marked `sameAgentIncomplete`) and saying how many; recurrence
+    from `fixCommits` locations for both labels, the entry's own fix commit
+    left out exactly by its `commit` index, with the truncated lookback
+    stated and split out; Effort@20% and dismissal reasons unavailable.
+  - SF-04: the headings follow "## Depth and reach" and SF-05a's, and have a
+    list of their own (`COHORT_SECTIONS`) for /1. T1 re-pins nothing.
+  - SF-05a: the populations come through `labelPopulations`; the compared
+    PRs marked `filteredIncomplete` are counted; the filtered rows read
+    "audited" only when `labelQuality.audit.audited` is true (the
+    audited-mark case).
+
+- **Default and parity proof.**
+  - T1: the three collected histories' `v1Of` ledger digests, call counts
+    (32, 36, 32), section digests and `BAND_TABLE` are unchanged, and
+    `v1Only(text) === text` still holds for their gradient-only reports.
+    `fullSynthetic`'s v1 section digests are unchanged; its heading order
+    gains only the seven headings after SF-05a's four, and its /1 report
+    seven more unavailable headings.
+  - A gradient-only /2 report gets no `cohorts` and no section, latent
+    outcomes or not (the /1 case asserts it on the strata ledger).
+  - VS-46c's and SF-05a's sections are unchanged: their cases pass with only
+    heading lists edited.
+  - `open`, `USAGE`, collection, the ledger decoders and `openCommand`'s
+    stdout are unchanged; `open` passes no latent outcomes.
+  - The report writes nothing: deep-frozen ledger and latent inputs give the
+    same report and text as their clones and stay equal to them.
+  - The import graph is unchanged (its case passes): both new imports come
+    from core modules already imported.
+  - `git diff --stat`: only the three script files and this log.
+  - No runner, core, engine, app, digest, provider or session file changed.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` stays `aef0d5c84ed90782` and
+  `REVIEW_PIPELINE_REVISION` stays 4 (old `aef0d5c84ed90782`, new
+  `aef0d5c84ed90782`): no pinned file changed, and `REVIEW_PIPELINE_FILES`
+  lists no `script/` file.
+- **Replay variant.** None. `VARIANTS` is untouched: 18 entries, 33 pending
+  halves and 3 wired, counted by importing `replay.ts`.
+- **Desktop half.** Not applicable: the ledger and its report are an
+  owner-machine script, and the desktop keeps no outcome ledger.
+
+- **Tests actually run.** Each file alone from `packages/script`, through
+  `vector-serial`, with `--timeout 30000` and
+  `TMPDIR=/tmp/vector-v2/scope/sf05b/tmp`.
+  - At `14a4b60f`: `outcomes.test.ts` 74 pass, 0 fail (1,616 expect calls).
+  - The new source against the unedited tests: 71 pass, 3 fail (1,580
+    expect calls), as under "Test first".
+  - Before review: `outcomes.test.ts` 86 pass, 0 fail (1,882 expect calls).
+  - Final tree, after review round one: `outcomes.test.ts` 86 pass, 0 fail
+    (1,908 expect calls), run once with `GITHUB_ACTIONS=false` and once
+    with `GITHUB_ACTIONS=true`. That is the 74 existing cases (T1, the /1
+    collection case and SF-04's base-rates, old-sentence and dry-run cases
+    gained heading assertions; the dry-run case also asserts
+    "Status: no drops read: open reads no eval artifact and no join is
+    built." and no "no drops recorded.") and twelve new ones:
+    1. verdict against outcome within each band and size tercile, the raw
+       difference labelled confounded by size (equal rates within each band,
+       a tercile that mixes bands, a raw difference of −9.8 points, an
+       underpowered band and an empty tercile, the label once per table in
+       the last row, and the differences equal to core
+       `independentDifference` on the rows' counts);
+    2. the raw difference is shown only beside a stratified one, each
+       needing 50 PRs and 10 expected positives per group (a band
+       underpowered on expected positives, one on PRs, an unpaired raw row,
+       the heavy-tie cuts at 0 and 0 with an empty middle row, and the rank
+       check);
+    3. the filtered rows read audited only when SF-05a's audit is, and the
+       same-agent share line stays unaudited either way;
+    4. the stratum is a proxy, labelled as one, over reviewed human PRs, the
+       rest left out and counted (unreviewed, no completed review, files left
+       unreviewed, a marked PR, agent and agent-signal PRs, a missing count
+       read as incomplete, and a pruned state read as incomplete unless the
+       PR has a ledger finding);
+    5. dismissal reasons read unavailable, with VS-35b's gate, pointing to
+       the Resolution table;
+    6. the addressed rate's definition, population, cycle time, comment
+       volume and D12 text;
+    7. human review by band over every banded PR that no read cut short,
+       matured or not;
+    8. the agent-authored split within terciles from the trusted record,
+       agent signals only excluding (a human PR turned agent-signal, an
+       agent-signal PR's outcomes changed), the same-agent share with its
+       unaudited sentence, and `filteredOther`;
+    9. recurrence: a file and a function match, the PR's own fix commit, the
+       merge day, 366 and 365 days, a funcname in another file, a file match
+       with no funcname, the full-lookback split, the capped count and the
+       unfiltered label's commit locations;
+    10. latent scoring on a fixture artifact and its kill rule (the reader
+        and its eighteen refusals, four of them non-ISO `at` values, and an
+        `at` with no milliseconds read; 9 and 10 of 100 matured drops, 99
+        matured, maturity, a 90-, 91- and 0-day fix, de-duplication by
+        fingerprint with an earlier and a later repeat and a tie; "not-read"
+        with no outcomes; five malformed outcomes each refusing the set, a
+        fractional `fixedDays` scored and an explicit `undefined` read as no
+        fix; and the rendered section with drops, with none given, with an
+        empty list and refused);
+    11. a /1 ledger shows every SF-05b section as unavailable in both
+        decisions, and a gradient-only /2 report shows none;
+    12. the report writes nothing: frozen inputs give the same report as
+        their copies.
+  - `ci.test.ts` 39 pass, 0 fail (507 expect calls), as a regression check.
+  - `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, and `bun typecheck` in `packages/script`: clean. No
+    package source changed, so no other package typecheck is owed. The full
+    TURBO typecheck is the commit gate's, before the push.
+  - `prettier --check` is clean on the three script files; this entry was
+    checked through `--stdin-filepath`.
+  - `oxlint` on `outcomes.ts` and its test: before review 25 warnings, 0
+    errors, the count SF-05a left, and none on a line this package added.
+    (A first run gave 28: three casts to `LatentDrop[]` in the new tests,
+    replaced by a typed fixture and a `dropsOf` helper.) After round one 26
+    warnings, 0 errors: the one new warning is no-unsafe-type-assertion on
+    `humanReviewOf`'s Record cast (`:3564`), which finding 5 asked for and
+    which `tally` (`:3828`) and `bandsOf` (`:2809`) already trip.
+  - Round one also: `ci.test.ts` 39 pass, 0 fail (507 expect calls); the
+    eval tsconfig through `bun tsgo` from `packages/engine` and
+    `bun typecheck` in `packages/script`, both clean; `prettier --check`
+    clean on the three script files and this entry.
+  - Mutations of `outcomes.ts` (`b48f6d162eed…`), 47, each applied by an
+    exact edit, run with `-t SF-05b` (or, for the two /1 and gradient-only
+    mutations, also against T1, the /1 cases, the dry run and the
+    old-sentence case), restored, and the file's SHA-256 checked after every
+    restore and after the sweep. All 47 caught; the number is the failing
+    cases:
+    - terciles over all PRs: 2; the cuts one rank late: 1; the raw row
+      unlabelled: 1; a difference under 10 expected positives: 2; under 50
+      PRs: 1; the raw difference with no stratified one: 1;
+    - incomplete read as clean: 1; a missing unreviewed count read as clean:
+      1; no completed review read as reviewed: 1; the proxy label dropped
+      from the headers: 1; the filtered rows from `kept`: 1; agent PRs in
+      item 5: 1; every stratum in item 5: 1; the proxy groups over every
+      stratum: 1;
+    - the reason line changed: 1; the addressed rate over all findings: 1;
+      human review over matured PRs only: 1; its all row over unbanded PRs:
+      1;
+    - agent-signal in the agent group: 1; in the human group: 1; an unknown
+      flag read as another agent's: 1; an unknown flag counted as false in
+      the share: 1; unknown agent PRs kept in `filteredOther`: 1;
+    - the own fix commit counted: 1; the merge day counted: 1; 366 days
+      counted: 1; a funcname matched without its file: 1; a missing funcname
+      matched: 1; the full lookback not split: 1; capped not counted: 1;
+    - the kill criterion at or under 10%: 1; at 99 matured drops: 1;
+      unmatured drops counted: 1; a 91-day fix counted: 1; a same-day fix
+      counted: 1; no de-duplication: 1; the latest repeat kept: 1; any class
+      read: 1; a short SHA read: 1; an end before its start read: 1; the
+      drop bound off by one: 1; an artifact with no drops refused: 1; latent
+      outcomes ignored: 1;
+    - the filtered mark fixed at audited: 3; at unaudited: 1;
+    - `COHORT_SECTIONS` dropped from the /1 list: 3 (T1 among them);
+      cohorts in the gradient-only decision: 4 (T1 among them).
+  - Round-one mutations of the final `outcomes.ts` (`0cf584c019d1…`), 12,
+    by the same sweep (`-t SF-05b`; the not-read wording also against the
+    dry run), the SHA-256 checked after every restore and after the sweep.
+    All 12 caught: a pruned state read as clean: 1; a pruned state with a
+    finding read incomplete: 1; the pruned wording dropped from the
+    Compared line: 1; any `Date.parse` string read as `at`: 1; an offset
+    read as `at`: 1; latent outcomes not checked: 1; `fixedDays` unchecked:
+    1; an explicit `undefined` `fixedDays` refused: 1; no outcomes read as
+    none recorded: 1; the not-read status worded "no drops recorded": 2
+    (the dry run among them); the share line's audit sentence dropped: 2;
+    human review dropping a band: 12 (its rendering throws).
+  - The manual dry run: `/tmp/vector-v2/scope/sf05b/dry-run.ts` (scratch,
+    not committed) sealed a synthetic full-decision /2 ledger that passes
+    `ledgerProblem` (602 PRs: 600 banded PRs merged 200 days earlier, every
+    other one with a finding, every eighth fixed, every 25th reverted, 20
+    agent and 15 agent-signal PRs, one PR merged 600 days earlier; 500
+    findings; three fix commits) to a throwaway 3072-bit key it generated.
+    `bun script/vectorscope-eval/outcomes.ts open` exited 0 and wrote only
+    `outcomes-report.md`, 0600, and the sealed file's SHA-256 was unchanged.
+    Its headings, in order: Outcome base rates, Minimum detectable effect,
+    Severity gradient, Split out, Resolution, Risk band against post-merge
+    outcomes, Capture against size, Measurement verdict, Depth and reach,
+    Label audit, Untraceable fixes, Filter reattribution, Fix-edited lines
+    per kLOC, Verdict against outcome, Dismissal reasons by severity,
+    Addressed rate, Human review by band, Agent-authored split, Recurrence,
+    Latent forecasts. The filtered verdict table showed differences in the
+    medium and high bands and the middle and large terciles, so its
+    unstratified row showed one; the revert table had none, and its
+    unstratified row read "n/a: no stratified difference to set it beside".
+    Recurrence matched 36 of 72 fix entries in file and function, all with
+    a full lookback; the latent section then read "Status: no drops
+    recorded.", which round one corrected (finding 1). The throwaway key
+    and every output were deleted afterwards. Re-run after review round one
+    with the same script, a new throwaway key and a new scratch directory:
+    `open` exited 0, wrote only `outcomes-report.md` (0600), the sealed
+    file's SHA-256 was unchanged, the twenty headings were in the same
+    order, the Compared line named "or a pruned state", the same-agent share
+    line ended "SZZ-based and unaudited: the audit samples PRs, not fix
+    entries.", and the latent section read "Status: no drops read: open
+    reads no eval artifact and no join is built.". The key and every output
+    were deleted afterwards.
+  - Commit gate, before the commit: `outcomes.test.ts` 86 pass, 0 fail
+    (1,908 expect calls); `bun typecheck` in `packages/script` and the eval
+    tsconfig through `bun tsgo` from `packages/engine`, both clean; the full
+    TURBO typecheck (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`,
+    `--concurrency=2`), 27 of 27 tasks successful. The gate commits the four
+    paths with the title above as Vector <bot@vectordev.ai> with the two
+    trailers, fetches `origin/scope-finish` and merges any new commits, and
+    pushes fast-forward.
+  - CI: the gate dispatches `typecheck.yml` and the lane's standing set,
+    `scope-directory-identity.yml`, `review-memory-fence.yml`,
+    `scope-app-validation.yml` and `vector-at-mention.yml`. Only
+    `typecheck.yml` is owed: no core or engine review file, app file,
+    `run.ts`, `model.ts`, `session/llm.ts` or HttpApi changed, so the other
+    four are regression runs only, and `review-http-regression.yml` is not
+    owed. `test.yml`, the only workflow that runs `outcomes.test.ts` (on its
+    Linux leg), is batched with the next runtime package. The run IDs exist
+    only after the push, so they are in the gate's report, not here.
+
+- **Not claimed.** No run on a real repository (Q30, Q43). No drop artifact
+  exists: every artifact and latent outcome in the tests is a fixture. No
+  paid run, no model, GitHub or git call in new code, no `cat-file`. No
+  quality or comparative claim (D12): the synthetic rates show only that
+  each path is reachable, and the addressed rate's text forbids comparison
+  outside its population. No default, key, variant or pin change. No
+  classifier activation: `dismissalWhy` keeps no caller. Q41 and L9 are the
+  owner's. `vectorscope-remaining.md:4-6` authorizes reversible software
+  only.
+
+- **Hand-offs.**
+  - SF-21 (R5): `latentDrops` pins a provisional reader of the drop record,
+    `drops: [{path, base: {sha, start, end}, class, fingerprint, at}]`, with
+    `at` per drop as a UTC instant in `toISOString`'s form
+    (`YYYY-MM-DDTHH:mm:ss[.sss]Z`), the class a core finding category and
+    the fingerprint core `fingerprint`'s 12 hex. SF-21 owns the shape and
+    may change the reader and its case in its own entry. Recording drops
+    alone changes no report line: `open` reads no artifact, and the section
+    reads `NO_DROPS_READ` until `open` passes joined outcomes.
+  - Unowned, for the lead to place: the latent join (blaming or following
+    each drop's base span from its base SHA through later base-branch
+    history to the first fix that edits it, at day or commit granularity,
+    and where that result is kept), which is what makes `latentForecast` run
+    on real drops. Whoever builds it wires `open` to read the local
+    artifacts through `latentDrops`, join them, and pass the result as
+    `outcomeReport`'s third argument; the status then leaves "not-read" by
+    itself, and "no drops recorded" becomes true only for an artifact read
+    with none. The join's producer must emit outcomes that pass
+    `latentForecast`'s check (each drop as `latentDrops` reads it, and
+    `fixedDays` absent, `undefined`, or a finite number of days at or above
+    0), or the section reads refused.
+  - SF-39, and then a /3 ledger field: the exact `clean-complete` verdict
+    replaces item 5's proxy only when both exist.
+  - The lane's final package: refresh `vectorscope-remaining.md:91` (VS-46d's
+    report half, items 1 to 11, is built in source; the latent join, the
+    exact verdict and the dismissal reason remain) and
+    `vectorscope-continuation.md`, and append the correcting entry for the
+    stale `:16000` sentence. SF-05b touches neither file.

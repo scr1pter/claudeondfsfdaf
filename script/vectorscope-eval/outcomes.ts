@@ -17,6 +17,7 @@ import { fromGitHubFiles, parseUnifiedDiff, type GitHubPrFile } from "../../pack
 import {
   DEFAULT_CONFIDENCE,
   DEFAULT_SLACK,
+  independentDifference,
   proportion,
   severityGradient,
   wilson,
@@ -47,7 +48,7 @@ import {
   readState,
   type ThreadInfo,
 } from "../../packages/core/src/review/state"
-import { BULK_RESOLVE_THREADS, type DismissalMarker } from "../../packages/core/src/review/team"
+import { BULK_RESOLVE_THREADS, DISMISSAL_WHY, type DismissalMarker } from "../../packages/core/src/review/team"
 import {
   CATEGORIES,
   DEFAULT_REVIEW_CONFIG,
@@ -152,6 +153,27 @@ export const AUDIT_INFO = "vectorscope-outcomes audit ids/1"
 // A labels file larger than this is refused before it is read. A sample's own file, at most 2 × AUDIT_DRAW entries,
 // stays far below it.
 export const MAX_LABELS_BYTES = 4 * 1024 * 1024
+// VS-46d items 5 to 11's report (addendum B §1.9; SF-05b). Items 5 and 9 compare PRs within size terciles: the matured
+// PRs with a band, every stratum, cut by added plus deleted lines into three groups of about equal count.
+export const TERCILES = ["small", "middle", "large"] as const
+export type Tercile = (typeof TERCILES)[number]
+// Item 5's proxy for the review's verdict: ReviewState records none until SF-39, and no ledger reads one before a /3.
+export const VERDICT_PROXIES = ["clean", "findings", "incomplete", "unreviewed"] as const
+export type VerdictProxy = (typeof VERDICT_PROXIES)[number]
+// Item 10: an earlier fix counts toward recurrence when it lies within this many days before the reviewed PR's merge.
+export const RECURRENCE_DAYS = 365
+// Item 11's kill criterion: latent-forecast precision under LATENT_KILL_PRECISION on at least LATENT_MIN_DROPS matured
+// drops. The report says whether the criterion is met; the decision is the owner's.
+export const LATENT_KILL_PRECISION = 0.1
+export const LATENT_MIN_DROPS = 100
+// latentDrops reads at most this many drops from one artifact: anyone who can write the file sets its length.
+export const MAX_LATENT_DROPS = 10_000
+// Item 11's status when latent outcomes were given and hold none, and when none were given: `open` reads no eval
+// artifact and nothing joins drops to later fixes yet, so it passes none, and the report cannot say none were recorded.
+export const NO_DROPS = "no drops recorded"
+export const NO_DROPS_READ = "no drops read: open reads no eval artifact and no join is built"
+// Item 6: schema 2 keeps each dismissal's role (writer, author or unattributed), not its reason.
+export const NO_DISMISSAL_REASON = "unavailable: schema 2 records no dismissal reason"
 // How far after `now` a ledger's collection time may be and still open: the clock at collection against this one.
 export const CLOCK_SKEW_MS = 300_000
 // At most this many GitHub requests per collection. A PR that cannot be read within it is marked truncated.
@@ -2174,6 +2196,28 @@ const AuditLabelsFile = Schema.Struct({
   ),
 })
 const decodeAuditLabels = Schema.decodeUnknownOption(AuditLabelsFile)
+// VS-42 pre-existing drops in a local eval artifact (latentDrops). Provisional: R5's producer owns the record. The class
+// is a finding category, so no artifact text reaches the report's class table. `at` is a UTC instant in the ECMAScript
+// date-time string format (toISOString's), the form Date.parse is specified to read: the scorer sorts and matures drops
+// by it.
+const LineNumber = Schema.Int.check(Schema.isGreaterThan(0))
+const LatentDropEntry = Schema.Struct({
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  base: Schema.Struct({
+    sha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/)),
+    start: LineNumber,
+    end: LineNumber,
+  }).check(Schema.makeFilter((base) => base.end >= base.start)),
+  class: Schema.Literals(CATEGORIES),
+  fingerprint: Schema.String.check(Schema.isPattern(/^[0-9a-f]{12}$/)),
+  at: IsoDate.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/)),
+})
+const decodeLatentDrops = Schema.decodeUnknownOption(Schema.Array(LatentDropEntry))
+// What latentForecast scores: each drop as latentDrops reads it, and the days to its fix as the ledger counts a fix
+// entry's days (finite, at or above 0).
+const decodeLatentOutcomes = Schema.decodeUnknownOption(
+  Schema.Array(Schema.Struct({ drop: LatentDropEntry, fixedDays: Schema.optional(Amount) })),
+)
 
 // The owner's answers for this ledger's repository and when the file holding them expires, or why they cannot be read:
 // not JSON, malformed, another repository's, expired (it names PRs, and carries the expiry of the ledger it was drawn
@@ -2305,10 +2349,12 @@ export interface OutcomeReport {
   measurement?: Measurement
   // VS-46d items 1 to 4 (SF-05a): a schema-2 ledger in the full decision only, as the measurement.
   labelQuality?: LabelQuality
+  // VS-46d items 5 to 11 (SF-05b): the same.
+  cohorts?: Cohorts
   split: Record<"agent" | "agent-signal" | "bulk", Record<Outcome, number>>
   cycle: { n: number; p50: number; p90: number } | null
   // A schema-1 ledger only: it has none of the fields the schema-2 sections read, so each says so, whatever the volume
-  // decision. VS-46c's and SF-05a's sections are in that list; SF-05b adds its own.
+  // decision. VS-46c's, SF-05a's and SF-05b's sections are in that list.
   unavailable?: typeof V1_UNAVAILABLE
   problems: string[]
 }
@@ -2453,18 +2499,138 @@ export interface LabelQuality {
   density: Record<RiskBand | "all", DensityRow> // item 4
 }
 
+// VS-46d items 5 and 9 (SF-05b). One side of a stratum's comparison: its PRs, the label's positives among them, and
+// their rate, shown from MIN_PULLS PRs.
+export interface CohortSide {
+  pulls: number
+  positives: number
+  rate: Proportion
+}
+
+// One stratum's comparison of two groups on one label: item 5's clean against findings, item 9's agent against human.
+export interface CohortRow {
+  stratum: RiskBand | Tercile | "all"
+  a: CohortSide
+  b: CohortSide
+  expected: { a: number; b: number } // each group's PRs times the label's rate over both groups in this stratum
+  // "shown": both groups have at least MIN_PULLS PRs and MIN_EXPECTED expected positives; "empty": a group has no PR;
+  // "underpowered": otherwise; "unpaired": the unstratified row, powered, with no stratified difference of its label
+  // shown to set it beside.
+  status: "shown" | "empty" | "underpowered" | "unpaired"
+  difference: { difference: number; interval: [number, number] } | null // a less b, Newcombe's interval, when shown
+  cycle: Cycle // over both groups' PRs
+}
+
+export interface VerdictLabel {
+  bands: CohortRow[] // one per RISK_BANDS
+  terciles: CohortRow[] // one per TERCILES
+  raw: CohortRow // every compared PR of the label's population, unstratified, so confounded by size
+}
+
+// Item 5, over the human-stratum matured PRs with a band that no read cut short.
+export interface VerdictStrata {
+  proxy: true // the verdict is a proxy from the sticky state and the findings, not ReviewState's
+  groups: Record<VerdictProxy, number> // those PRs by proxy group; only clean and findings are compared
+  excluded: { agent: number; "agent-signal": number } // matured PRs with a band of the other strata, left out
+  filteredIncomplete: number // compared PRs not reverted within MATURITY_DAYS whose mark leaves the filtered rows
+  labels: Record<"revert" | "filtered", VerdictLabel>
+}
+
+// Item 7: the confirmed-fix share of settled human-stratum findings, with its population's human-comment volume.
+export interface AddressedRate {
+  rate: Proportion
+  pulls: number // distinct PRs of those findings
+  comments: { total: number; p50: number | null; p90: number | null; missing: number } // missing: PRs with no count
+  cycle: Cycle
+}
+
+export interface HumanReviewRow {
+  pulls: number
+  rate: Proportion // humanReview over the row's PRs
+  cycle: Cycle
+}
+
+// Item 9, within item 5's size terciles: agent-stratum PRs (the owner's trusted record) against human-stratum ones.
+export interface AgentSplit {
+  excluded: number // agent-signal matured PRs with a band: untrusted, so in neither group
+  // filteredOther: the filtered label with same-agent follow-ups removed from agent PRs.
+  labels: Record<"revert" | "filtered" | "filteredOther", CohortRow[]>
+  unknown: number // agent PRs left out of filteredOther: only fixes with no sameAgent flag could make them positive
+  // The same-agent share of fix entries within MATURITY_DAYS on agent PRs, with no interval; unknown entries left out.
+  sameAgent: Record<"filtered" | "unfiltered", { share: Proportion; unknown: number }>
+}
+
+// Item 10, over one label's fix entries within MATURITY_DAYS: those with an earlier fix in the same file, or the same
+// function, within RECURRENCE_DAYS before the PR's merge. Shares carry no interval.
+export interface RecurrenceSide {
+  fixes: number
+  file: Proportion
+  fn: Proportion
+  cycle: Cycle
+}
+
+export interface Recurrence {
+  // `full`: only entries whose PR's lookback starts after the first merge's day, before which no fix commit is kept.
+  labels: Record<"filtered" | "unfiltered", RecurrenceSide & { full: RecurrenceSide }>
+  first: string | null // the day of the ledger's first merge, YYYY-MM-DD
+  capped: number // fix commits that kept only their first MAX_FIX_LOCATIONS locations
+}
+
+// Item 11: one VS-42 pre-existing drop, as R5 is to record it in a local eval artifact. Provisional: SF-21 produces the
+// record and owns its shape. `at` is when the review dropped it, per drop.
+export interface LatentDrop {
+  path: string
+  base: { sha: string; start: number; end: number } // the base commit and its line span
+  class: Category
+  fingerprint: string
+  at: string
+}
+
+// A drop joined to the base branch's later history: the days from the drop to the first fix that edited its base
+// lines, when one did, finite and at or above 0. Nothing builds the join yet; see latentForecast.
+export interface LatentOutcome {
+  drop: LatentDrop
+  fixedDays?: number
+}
+
+export interface LatentForecast {
+  // "not-read": no latent outcomes were given, as `open` gives none. "refused": one was malformed, so none is scored.
+  // "kill-met": precision under LATENT_KILL_PRECISION on at least LATENT_MIN_DROPS matured drops.
+  status: "not-read" | "refused" | "no-drops" | "too-few" | "kill-met" | "kill-not-met"
+  drops: number // distinct fingerprints
+  repeated: number // further drops of a fingerprint already counted
+  matured: number
+  precision: Proportion // fixed within MATURITY_DAYS among matured drops: a value from LATENT_MIN_DROPS, no interval
+  byClass: { class: Category; matured: number; fixed: number }[]
+}
+
+export interface Cohorts {
+  size: { cut: [number, number] | null; pulls: Record<Tercile, number> } // the terciles items 5 and 9 share
+  verdict: VerdictStrata // item 5
+  dismissals: { reason: typeof NO_DISMISSAL_REASON } // item 6
+  addressed: AddressedRate // item 7
+  humanReview: Record<RiskBand | "all", HumanReviewRow> // item 8
+  agent: AgentSplit // item 9
+  recurrence: Recurrence // item 10
+  latent: LatentForecast // item 11
+}
+
 /**
  * The internal report (D12). Truncated PRs are left out of every count but the totals. Rates come from settled
  * human-stratum findings; a cell over fewer than MIN_SETTLED settled findings, or MIN_PULLS PRs or reviews, keeps its
  * count and interval and shows no rate. Below MIN_VOLUME settled human-stratum findings on PRs merged in the 90 days
  * before collection, only the gradient, its sensitivity row, the split and the counts are reported. In the full
  * decision a schema-2 ledger also gets VS-46c's measurement, under the rule sealed in it (MEASUREMENT_RULE when it has
- * none), and VS-46d's label quality: `audit` is a sample auditSample drew from this ledger and the owner's answers to
- * it, without which every follow-up-fix rate is unaudited. It never changes the ledger.
+ * none), VS-46d's label quality, and VS-46d's outcome strata, dismissals, agent split, recurrence and latent forecasts
+ * (`cohorts`). `audit` is a sample auditSample drew from this ledger and the owner's answers to it, without which every
+ * follow-up-fix rate is unaudited. `latent` is VS-42's pre-existing drops joined to later fixes. Nothing builds that
+ * join yet, so `open` passes none and the section reads NO_DROPS_READ; NO_DROPS is only for latent outcomes given and
+ * holding none. It never changes the ledger.
  */
 export function outcomeReport(
   ledger: OutcomeLedger | OutcomeLedgerV1,
   audit?: { sample: AuditSample; labels: AuditLabels },
+  latent?: readonly LatentOutcome[],
 ): OutcomeReport {
   // Every v1 section reads only v1 fields, whichever schema the ledger has.
   const all: readonly LedgerPullV1[] = ledger.pulls
@@ -2630,6 +2796,7 @@ export function outcomeReport(
       ? {
           measurement: measurementOf(v2.ledger, v2.populations, cycleOf),
           labelQuality: labelQualityOf(v2.ledger, v2.populations, cycleOf, audit),
+          cohorts: cohortsOf({ ...v2, findings, settled, cycleOf, latent }),
         }
       : {}),
   }
@@ -3212,6 +3379,409 @@ function densityOf(
   }
 }
 
+/**
+ * VS-46d items 5 to 11 (addendum B §1.9; SF-05b) on the labels' populations, as the measurement reads them. Each part
+ * reads only this ledger and the latent outcomes it is given.
+ */
+function cohortsOf(input: {
+  ledger: OutcomeLedger
+  populations: Populations
+  findings: readonly LedgerFinding[] // on PRs no read cut short, every stratum and outcome
+  settled: readonly LedgerFinding[] // the settled human-stratum ones
+  cycleOf: (numbers: Iterable<number>) => Cycle
+  latent: readonly LatentOutcome[] | undefined
+}): Cohorts {
+  const terciles = tercilesOf(input.populations.ranked)
+  return {
+    size: { cut: terciles.cut, pulls: tally(TERCILES, input.populations.ranked.map(terciles.of)) },
+    verdict: verdictStrataOf(
+      input.populations,
+      new Set(input.findings.map((finding) => finding.pr)),
+      terciles,
+      input.cycleOf,
+    ),
+    dismissals: { reason: NO_DISMISSAL_REASON },
+    addressed: addressedOf(input.ledger, input.settled, input.cycleOf),
+    humanReview: humanReviewOf(input.ledger, input.cycleOf),
+    agent: agentSplitOf(input.populations, terciles, input.cycleOf),
+    recurrence: recurrenceOf(input.ledger, input.populations, input.cycleOf),
+    latent: latentForecast(input.latent, Date.parse(input.ledger.observedUntil)),
+  }
+}
+
+// The size terciles of the matured PRs with a band, every stratum: cuts at the ceil(n/3)-th and the ceil(2n/3)-th
+// smallest added plus deleted lines, so PRs of one size share a tercile, and ties can leave one short or empty.
+function tercilesOf(ranked: readonly Ranked[]) {
+  const sorted = ranked.map((entry) => entry.lines).toSorted((a, b) => a - b)
+  const cut: [number, number] | null = sorted.length
+    ? [sorted[Math.ceil(sorted.length / 3) - 1], sorted[Math.ceil((2 * sorted.length) / 3) - 1]]
+    : null
+  const of = (entry: Ranked): Tercile =>
+    !cut || entry.lines <= cut[0] ? "small" : entry.lines <= cut[1] ? "middle" : "large"
+  return { cut, of }
+}
+
+type Terciles = ReturnType<typeof tercilesOf>
+
+// Two groups of one stratum on one label. The difference needs MIN_PULLS PRs in each group, so both rates show, and
+// MIN_EXPECTED expected positives in each at the two groups' pooled rate in this stratum.
+function compared(
+  stratum: CohortRow["stratum"],
+  a: readonly Ranked[],
+  b: readonly Ranked[],
+  positive: (entry: Ranked) => boolean,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): CohortRow {
+  const side = (group: readonly Ranked[]): CohortSide => {
+    const positives = group.filter(positive).length
+    return { pulls: group.length, positives, rate: cell(positives, group.length, MIN_PULLS) }
+  }
+  const first = side(a)
+  const second = side(b)
+  const pooled = first.positives + second.positives
+  const total = first.pulls + second.pulls
+  const expected = { a: expectedOf(first.pulls, pooled, total), b: expectedOf(second.pulls, pooled, total) }
+  const status =
+    !first.pulls || !second.pulls
+      ? "empty"
+      : Math.min(first.pulls, second.pulls) < MIN_PULLS || Math.min(expected.a, expected.b) < MIN_EXPECTED
+        ? "underpowered"
+        : "shown"
+  return {
+    stratum,
+    a: first,
+    b: second,
+    expected,
+    status,
+    difference:
+      status === "shown"
+        ? independentDifference(
+            { count: first.positives, total: first.pulls },
+            { count: second.positives, total: second.pulls },
+          )
+        : null,
+    cycle: cycleOf([...a, ...b].map((entry) => entry.pull.number)),
+  }
+}
+
+// Item 5: the proxy's clean and findings groups of the human-stratum PRs, on each label's population, within each band,
+// within each tercile, and unstratified. The unstratified difference is shown only beside a stratified one.
+function verdictStrataOf(
+  populations: Populations,
+  posted: ReadonlySet<number>,
+  terciles: Terciles,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): VerdictStrata {
+  const grouped = (entries: readonly Ranked[], group: VerdictProxy) =>
+    entries.filter((entry) => entry.pull.stratum === "human" && verdictProxy(entry.pull, posted) === group)
+  const label = (entries: readonly Ranked[], positive: (entry: Ranked) => boolean): VerdictLabel => {
+    const clean = grouped(entries, "clean")
+    const findings = grouped(entries, "findings")
+    const row = (stratum: CohortRow["stratum"], test: (entry: Ranked) => boolean) =>
+      compared(stratum, clean.filter(test), findings.filter(test), positive, cycleOf)
+    const bands = RISK_BANDS.map((band) => row(band, (entry) => entry.band === band))
+    const sized = TERCILES.map((tercile) => row(tercile, (entry) => terciles.of(entry) === tercile))
+    const raw = row("all", () => true)
+    const paired = [...bands, ...sized].some((entry) => entry.status === "shown")
+    return {
+      bands,
+      terciles: sized,
+      raw: raw.status === "shown" && !paired ? { ...raw, status: "unpaired", difference: null } : raw,
+    }
+  }
+  const strata = populations.ranked.map((entry) => entry.pull.stratum)
+  return {
+    proxy: true,
+    groups: tally(
+      VERDICT_PROXIES,
+      populations.ranked.flatMap((entry) => (entry.pull.stratum === "human" ? [verdictProxy(entry.pull, posted)] : [])),
+    ),
+    excluded: {
+      agent: strata.filter((stratum) => stratum === "agent").length,
+      "agent-signal": strata.filter((stratum) => stratum === "agent-signal").length,
+    },
+    filteredIncomplete: [...grouped(populations.kept, "clean"), ...grouped(populations.kept, "findings")].filter(
+      (entry) => entry.pull.filteredIncomplete === true,
+    ).length,
+    labels: {
+      revert: label(populations.ranked, (entry) => reverted(entry.pull, MATURITY_DAYS)),
+      filtered: label(populations.complete, (entry) => filteredFixed(entry.pull, MATURITY_DAYS)),
+    },
+  }
+}
+
+// Item 5's proxy for the verdict: unreviewed without the job's sticky state or a completed review; with findings when
+// the ledger holds a finding on the PR, in any stratum or outcome; otherwise incomplete when the state was pruned, since
+// summary findings may then be lost, and clean only when its last run left no file unreviewed, so incomplete when it
+// left some or the count is missing.
+function verdictProxy(pull: LedgerPull, posted: ReadonlySet<number>): VerdictProxy {
+  if (!pull.reviewed || pull.reviews === 0) return "unreviewed"
+  if (posted.has(pull.number)) return "findings"
+  if (pull.statePruned) return "incomplete"
+  return pull.unreviewedFiles === 0 ? "clean" : "incomplete"
+}
+
+// Item 7: the confirmed-fix share of settled human-stratum findings, every severity together, and the human-comment
+// volume on their PRs.
+function addressedOf(
+  ledger: OutcomeLedger,
+  settled: readonly LedgerFinding[],
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): AddressedRate {
+  const numbers = new Set(settled.map((finding) => finding.pr))
+  const counts = ledger.pulls.flatMap((pull) =>
+    numbers.has(pull.number) && pull.humanComments !== undefined ? [pull.humanComments] : [],
+  )
+  const found = spread(counts)
+  return {
+    rate: cell(
+      settled.filter((finding) => finding.outcome === "fixed-confirmed-by-thread").length,
+      settled.length,
+      MIN_SETTLED,
+    ),
+    pulls: numbers.size,
+    comments: {
+      total: counts.reduce((sum, count) => sum + count, 0),
+      p50: found?.p50 ?? null,
+      p90: found?.p90 ?? null,
+      missing: numbers.size - counts.length,
+    },
+    cycle: cycleOf(numbers),
+  }
+}
+
+// Item 8: humanReview by band, over every PR with a band that no read cut short, matured or not, every stratum.
+function humanReviewOf(
+  ledger: OutcomeLedger,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): Record<RiskBand | "all", HumanReviewRow> {
+  const banded = ledger.pulls.filter((pull) => !pull.truncated && pull.band !== undefined)
+  const row = (group: readonly LedgerPull[]): HumanReviewRow => ({
+    pulls: group.length,
+    rate: cell(group.filter((pull) => pull.humanReview).length, group.length, MIN_PULLS),
+    cycle: cycleOf(group.map((pull) => pull.number)),
+  })
+  return Object.fromEntries([
+    ...RISK_BANDS.map((band) => [band, row(banded.filter((pull) => pull.band === band))] as const),
+    ["all", row(banded)] as const,
+  ]) as Record<RiskBand | "all", HumanReviewRow>
+}
+
+// Item 9: agent-stratum PRs (the owner's trusted record) against human-stratum ones within each tercile, on each label's
+// population. Agent-signal PRs, from untrusted markers, are in neither group. filteredOther removes same-agent
+// follow-ups: an agent PR is positive there only through a filtered fix within MATURITY_DAYS whose sameAgent is false,
+// and is left out when only fixes with no flag could make it so.
+function agentSplitOf(
+  populations: Populations,
+  terciles: Terciles,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): AgentSplit {
+  const of = (entries: readonly Ranked[], stratum: PullStratum) =>
+    entries.filter((entry) => entry.pull.stratum === stratum)
+  const rows = (entries: readonly Ranked[], positive: (entry: Ranked) => boolean) =>
+    TERCILES.map((tercile) => {
+      const sized = entries.filter((entry) => terciles.of(entry) === tercile)
+      return compared(tercile, of(sized, "agent"), of(sized, "human"), positive, cycleOf)
+    })
+  const other = (entry: Ranked) => inLabelWindow(entry.pull.fixesFiltered).some((fix) => fix.sameAgent === false)
+  const unknown = (entry: Ranked) =>
+    entry.pull.stratum === "agent" &&
+    !other(entry) &&
+    inLabelWindow(entry.pull.fixesFiltered).some((fix) => fix.sameAgent === undefined)
+  const share = (
+    entries: readonly Ranked[],
+    fixes: (pull: LedgerPull) => readonly { days: number; sameAgent?: boolean }[] | undefined,
+  ) => {
+    const flags = of(entries, "agent").flatMap((entry) => inLabelWindow(fixes(entry.pull)).map((fix) => fix.sameAgent))
+    const known = flags.filter((flag) => flag !== undefined)
+    return { share: bare(known.filter(Boolean).length, known.length, MIN_PULLS), unknown: flags.length - known.length }
+  }
+  return {
+    excluded: of(populations.ranked, "agent-signal").length,
+    labels: {
+      revert: rows(populations.ranked, (entry) => reverted(entry.pull, MATURITY_DAYS)),
+      filtered: rows(populations.complete, (entry) => filteredFixed(entry.pull, MATURITY_DAYS)),
+      filteredOther: rows(
+        populations.complete.filter((entry) => !unknown(entry)),
+        (entry) => (entry.pull.stratum === "agent" ? other(entry) : filteredFixed(entry.pull, MATURITY_DAYS)),
+      ),
+    },
+    unknown: populations.complete.filter(unknown).length,
+    sameAgent: {
+      filtered: share(populations.complete, (pull) => pull.fixesFiltered),
+      unfiltered: share(populations.kept, (pull) => pull.fixes),
+    },
+  }
+}
+
+// Item 10, descriptive only: each label's fix entries within MATURITY_DAYS with an earlier fix commit, other than their
+// own, in the same file (or the same file and function, a funcname on both sides) dated from RECURRENCE_DAYS before the
+// PR's merge day up to the day before it. Fix commits keep only their day, so one on the merge day is left out. A
+// filtered entry is placed at its own location; an unfiltered one at every location its fix commit edited.
+function recurrenceOf(
+  ledger: OutcomeLedger,
+  populations: Populations,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): Recurrence {
+  const day = (time: number) => new Date(time).toISOString().slice(0, 10)
+  const earliest = ledger.pulls.length ? Math.min(...ledger.pulls.map((pull) => Date.parse(pull.mergedAt))) : undefined
+  const first = earliest === undefined ? null : day(earliest)
+  const placed = ledger.fixCommits.flatMap((commit, index) =>
+    commit.locations.map((location) => ({ commit: index, date: commit.date, location })),
+  )
+  const files = Map.groupBy(placed, (entry) => entry.location.path)
+  const fns = Map.groupBy(
+    placed.filter((entry) => entry.location.fn !== undefined),
+    (entry) => `${entry.location.path}\0${entry.location.fn}`,
+  )
+  type Entry = { pull: LedgerPull; commit: number; locations: readonly LedgerLocation[] }
+  const prior = (
+    entry: Entry,
+    keys: readonly string[],
+    index: ReadonlyMap<string, readonly (typeof placed)[number][]>,
+  ) => {
+    const merged = Date.parse(entry.pull.mergedAt)
+    const from = day(merged - RECURRENCE_DAYS * DAY)
+    const until = day(merged)
+    return keys.some((key) =>
+      (index.get(key) ?? []).some((fix) => fix.commit !== entry.commit && fix.date >= from && fix.date < until),
+    )
+  }
+  const side = (entries: readonly Entry[]): RecurrenceSide => ({
+    fixes: entries.length,
+    file: bare(
+      entries.filter((entry) =>
+        prior(
+          entry,
+          entry.locations.map((location) => location.path),
+          files,
+        ),
+      ).length,
+      entries.length,
+      MIN_PULLS,
+    ),
+    fn: bare(
+      entries.filter((entry) =>
+        prior(
+          entry,
+          entry.locations.flatMap((location) =>
+            location.fn === undefined ? [] : [`${location.path}\0${location.fn}`],
+          ),
+          fns,
+        ),
+      ).length,
+      entries.length,
+      MIN_PULLS,
+    ),
+    cycle: cycleOf(entries.map((entry) => entry.pull.number)),
+  })
+  const full = (entries: readonly Entry[]) =>
+    entries.filter((entry) => first !== null && day(Date.parse(entry.pull.mergedAt) - RECURRENCE_DAYS * DAY) > first)
+  const filtered = populations.complete.flatMap((ranked) =>
+    inLabelWindow(ranked.pull.fixesFiltered).map((fix) => ({
+      pull: ranked.pull,
+      commit: fix.commit,
+      locations: [fix.location],
+    })),
+  )
+  const unfiltered = populations.kept.flatMap((ranked) =>
+    inLabelWindow(ranked.pull.fixes).map((fix) => ({
+      pull: ranked.pull,
+      commit: fix.commit,
+      locations: ledger.fixCommits[fix.commit]?.locations ?? [],
+    })),
+  )
+  return {
+    labels: {
+      filtered: { ...side(filtered), full: side(full(filtered)) },
+      unfiltered: { ...side(unfiltered), full: side(full(unfiltered)) },
+    },
+    first,
+    capped: ledger.fixCommits.filter((commit) => commit.capped === true).length,
+  }
+}
+
+/**
+ * VS-46d item 11's drops in a local eval artifact: `drops`, each with R5's path, base line span, class, base SHA and
+ * fingerprint and the time `at` the review dropped it. Every other field is ignored, and an artifact with no `drops`
+ * (one written before R5) records none. Provisional: R5's producer (SF-21) owns the record and may change this reader.
+ * It returns a reason instead when the artifact is not an object, holds more than MAX_LATENT_DROPS drops, or holds a
+ * malformed one. Nothing calls it before the join below exists, so `open` reads no artifact.
+ */
+export function latentDrops(artifact: unknown): LatentDrop[] | string {
+  if (artifact === null || typeof artifact !== "object" || Array.isArray(artifact))
+    return "the artifact is not an object"
+  const drops = obj(artifact).drops
+  if (drops === undefined) return []
+  if (Array.isArray(drops) && drops.length > MAX_LATENT_DROPS)
+    return `the artifact holds more than ${MAX_LATENT_DROPS} drops`
+  const decoded = decodeLatentDrops(drops)
+  if (Option.isNone(decoded)) return "the artifact holds a malformed drop"
+  return [...decoded.value]
+}
+
+/**
+ * Item 11's scorer, on drops already joined to later fixes (LatentOutcome). The join is not built: following a drop's
+ * base lines through later history is new machinery, which this script's blame does not do, and no package owns it yet.
+ * With no outcomes given (`undefined`, as `open` gives) it reads "not-read". Every outcome is checked first, as the
+ * ledger's entries are: a drop latentDrops would refuse, or a fixedDays that is not a finite number of days at or above
+ * 0, refuses them all, so a producer's fault cannot move the precision. A defect dropped on several reviews counts once,
+ * at its earliest drop (ties in input order). A drop is matured once MATURITY_DAYS have passed by observedUntil, and
+ * fixed when its first fix came more than 0 and at most MATURITY_DAYS days after it, as the follow-up-fix label counts
+ * days. The kill criterion is met when precision is under LATENT_KILL_PRECISION on at least LATENT_MIN_DROPS matured
+ * drops; the decision is the owner's.
+ */
+export function latentForecast(outcomes: readonly LatentOutcome[] | undefined, observedUntil: number): LatentForecast {
+  const decoded = outcomes === undefined ? undefined : decodeLatentOutcomes(outcomes)
+  if (decoded === undefined || Option.isNone(decoded))
+    return {
+      status: decoded === undefined ? "not-read" : "refused",
+      drops: 0,
+      repeated: 0,
+      matured: 0,
+      precision: bare(0, 0, LATENT_MIN_DROPS),
+      byClass: [],
+    }
+  const distinct = [
+    ...Map.groupBy(
+      decoded.value.toSorted((a, b) => Date.parse(a.drop.at) - Date.parse(b.drop.at)),
+      (outcome) => outcome.drop.fingerprint,
+    ).values(),
+  ].map((group) => group[0])
+  const matured = distinct.filter((outcome) => Date.parse(outcome.drop.at) + MATURITY_DAYS * DAY <= observedUntil)
+  const fixed = (outcome: LatentOutcome) =>
+    outcome.fixedDays !== undefined && outcome.fixedDays > 0 && outcome.fixedDays <= MATURITY_DAYS
+  const hits = matured.filter(fixed).length
+  return {
+    status: !distinct.length
+      ? "no-drops"
+      : matured.length < LATENT_MIN_DROPS
+        ? "too-few"
+        : hits / matured.length < LATENT_KILL_PRECISION
+          ? "kill-met"
+          : "kill-not-met",
+    drops: distinct.length,
+    repeated: decoded.value.length - distinct.length,
+    matured: matured.length,
+    precision: bare(hits, matured.length, LATENT_MIN_DROPS),
+    byClass: CATEGORIES.flatMap((category) => {
+      const group = matured.filter((outcome) => outcome.drop.class === category)
+      return group.length ? [{ class: category, matured: group.length, fixed: group.filter(fixed).length }] : []
+    }),
+  }
+}
+
+// A label's fix entries within MATURITY_DAYS of the merge.
+function inLabelWindow<T extends { days: number }>(fixes: readonly T[] | undefined) {
+  return (fixes ?? []).filter((fix) => fix.days <= MATURITY_DAYS)
+}
+
+// A share over units that cluster (fix entries within PRs and fix commits, drops within reviews): its count and total,
+// and its value from `minimum`, with no interval, since a Wilson interval would treat the units as independent.
+function bare(count: number, total: number, minimum: number): Proportion {
+  return { ...cell(count, total, minimum), interval: null }
+}
+
 // The share of `fixes` among `among`, by severity, through VS-45's severityGradient. A share over fewer than
 // MIN_SETTLED findings keeps its count and interval and shows no value; the steps' own intervals decide the trend.
 function gradientOf(
@@ -3337,10 +3907,16 @@ export function renderOutcomes(report: OutcomeReport): string {
       ? measurementLines(report.measurement, report.bands, cycle, report.labelQuality?.audit)
       : { before: [], after: [] }
   const labelled = report.labelQuality ? labelLines(report.labelQuality, cycle) : []
+  const cohorted = report.cohorts ? cohortLines(report.cohorts, cycle, report.labelQuality?.audit.audited === true) : []
   // A schema-1 ledger: each VS-46c and VS-46d section says it is unavailable, whatever the volume decision.
   const unavailable = report.unavailable
   const legacy = unavailable
-    ? [...MEASUREMENT_SECTIONS, ...LABEL_SECTIONS].flatMap((heading) => ["", heading, "", unavailable])
+    ? [...MEASUREMENT_SECTIONS, ...LABEL_SECTIONS, ...COHORT_SECTIONS].flatMap((heading) => [
+        "",
+        heading,
+        "",
+        unavailable,
+      ])
     : []
   const problems = report.problems.length
     ? ["", "## Problems", "", ...report.problems.map((problem) => `- ${problem}`)]
@@ -3352,6 +3928,7 @@ export function renderOutcomes(report: OutcomeReport): string {
     ...full,
     ...measured.after,
     ...labelled,
+    ...cohorted,
     ...legacy,
     ...problems,
     "",
@@ -3374,6 +3951,18 @@ const LABEL_SECTIONS = [
   "## Untraceable fixes",
   "## Filter reattribution",
   "## Fix-edited lines per kLOC",
+] as const
+
+// VS-46d items 5 to 11's sections (SF-05b), in their order, after SF-05a's. A schema-1 ledger prints each with
+// V1_UNAVAILABLE.
+const COHORT_SECTIONS = [
+  "## Verdict against outcome",
+  "## Dismissal reasons by severity",
+  "## Addressed rate",
+  "## Human review by band",
+  "## Agent-authored split",
+  "## Recurrence",
+  "## Latent forecasts",
 ] as const
 
 // The band table's separation, read on one v1 label (item 2). The too-few sentence is VS-46a's.
@@ -3575,6 +4164,160 @@ function labelLines(quality: LabelQuality, cycle: (value: Cycle) => string) {
     density("all", quality.density.all),
     "",
     `Lines added count only a PR's reviewed files, as riskFeatures counts them for the band, while a fix's blamed lines count every file it edited, skipped files such as lockfiles and generated files included, so fixes that edit skipped files read higher here. No interval: lines cluster within fix commits. The filtered columns are ${mark}; the unfiltered columns are unaudited.`,
+  ]
+}
+
+/**
+ * VS-46d items 5 to 11's sections (addendum B §1.9; SF-05b), after SF-05a's. No sentence here says that anything is
+ * ruled out for good, and none compares this repository with any other population (D12). `audited` is SF-05a's audit
+ * of the filtered label: only then do the filtered rows read audited.
+ */
+function cohortLines(cohorts: Cohorts, cycle: (value: Cycle) => string, audited: boolean) {
+  const verdict = cohorts.verdict
+  const groups = verdict.groups
+  const size = cohorts.size
+  const addressed = cohorts.addressed
+  const agent = cohorts.agent
+  const recurrence = cohorts.recurrence
+  const latent = cohorts.latent
+  const mark = `(SZZ-based, size-biased, ${audited ? "audited" : "unaudited"})`
+  const bands: readonly string[] = RISK_BANDS
+  const name = (stratum: CohortRow["stratum"]) =>
+    stratum === "all"
+      ? "all PRs, unstratified: confounded by size"
+      : bands.includes(stratum)
+        ? `band ${stratum}`
+        : `tercile ${stratum}`
+  const gap = (row: CohortRow) =>
+    row.difference
+      ? `${signed(row.difference.difference)} [${signed(row.difference.interval[0])}, ${signed(row.difference.interval[1])}]`
+      : {
+          shown: "n/a",
+          empty: "n/a",
+          underpowered: "underpowered (not yet)",
+          unpaired: "n/a: no stratified difference to set it beside",
+        }[row.status]
+  const line = (row: CohortRow) =>
+    `| ${name(row.stratum)} | ${formatCell(row.a.rate)} | ${formatCell(row.b.rate)} | ${row.expected.a.toFixed(1)} / ${row.expected.b.toFixed(1)} | ${gap(row)} | ${cycle(row.cycle)} |`
+  const verdictTable = (title: string, label: VerdictLabel) => [
+    "",
+    `${title}:`,
+    "",
+    "| Stratum | Clean, nothing posted (proxy) | With findings (proxy) | Expected positives, clean (proxy) / with findings (proxy) | Clean (proxy) − with findings (proxy), points [interval] | Cycle p50 / p90 (h) |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...[...label.bands, ...label.terciles, label.raw].map(line),
+  ]
+  const agentTable = (title: string, rows: readonly CohortRow[]) => [
+    "",
+    `${title}:`,
+    "",
+    "| Stratum | Agent (trusted record) | Human | Expected positives, agent / human | Agent − human, points [interval] | Cycle p50 / p90 (h) |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...rows.map(line),
+  ]
+  const cut = size.cut
+    ? `small up to ${size.cut[0]} lines (${size.pulls.small} PRs), middle up to ${size.cut[1]} (${size.pulls.middle}), large above ${size.cut[1]} (${size.pulls.large})`
+    : "none, with no matured PR with a band"
+  const count = (value: number | null) => (value === null ? "n/a" : value.toFixed(1))
+  const status = {
+    "not-read": NO_DROPS_READ,
+    refused:
+      "refused: a latent outcome is malformed (a drop latentDrops would refuse, or a fixedDays that is not a finite number of days at or above 0), so none is scored",
+    "no-drops": NO_DROPS,
+    "too-few": `too few to read: ${latent.matured} matured drops, fewer than ${LATENT_MIN_DROPS}, so not yet`,
+    "kill-met": `kill criterion met (precision under ${whole(LATENT_KILL_PRECISION)} on at least ${LATENT_MIN_DROPS} matured drops); the decision is the owner's`,
+    "kill-not-met": `kill criterion not met (precision at least ${whole(LATENT_KILL_PRECISION)} on at least ${LATENT_MIN_DROPS} matured drops); the decision is the owner's`,
+  }[latent.status]
+  return [
+    "",
+    "## Verdict against outcome",
+    "",
+    `VS-46d item 5: revert and filtered follow-up-fix rates within ${MATURITY_DAYS} days for PRs reviewed with nothing posted and complete, against PRs reviewed with findings, within each risk band and within each size tercile. The verdict here is a proxy, labelled as one, because ReviewState records no verdict yet. A PR is clean (proxy) when the review job's sticky state was found with at least one completed review, the ledger holds no finding on it, its state was not pruned, and its last run left no file unreviewed; it is with findings (proxy) when the ledger holds a finding on it, in any stratum or outcome. A pruned state (at its finding cap or near its size limit) may have lost summary findings, so it reads incomplete. The proxy is read from the sticky state and the finding markers. The exact clean-complete value from VS-32a's reviewVerdict replaces it only once SF-39 records the verdict in ReviewState and a later ledger collection field reads it, which is a /3. The ledger keeps no failed-run flag, so a failed last run that left no file unreviewed reads as complete. No depth assignment is recorded (VS-46 item 7), so there is no depth stratum.`,
+    "",
+    `- Compared: the human-stratum matured PRs with a band that no read cut short, ${groups.clean} clean (proxy) and ${groups.findings} with findings (proxy). Left out: ${groups.unreviewed} unreviewed (no sticky state, or no completed review) and ${groups.incomplete} incomplete (files left unreviewed, no count, or a pruned state); ${verdict.excluded.agent} agent-stratum PRs, which the agent-authored split reports on their own, because same-agent iteration confounds the follow-up-fix label; and ${verdict.excluded["agent-signal"]} agent-signal PRs, whose markers are untrusted, so they only exclude. The filtered rows also leave out the PRs reverted within ${MATURITY_DAYS} days and ${verdict.filteredIncomplete} marked filteredIncomplete.`,
+    `- Size terciles, by added plus deleted lines over every matured PR with a band, every stratum: ${cut}. PRs of one size share a tercile, so ties can leave a tercile short or empty. Band rows and tercile rows are two separate stratifications: a band row pools every size, and a tercile row every band.`,
+    `- A difference is clean less findings, in rate points, with Newcombe's ${whole(DEFAULT_CONFIDENCE)} interval. It is shown only when each group has at least ${MIN_PULLS} PRs, so both rates show, and at least ${MIN_EXPECTED} expected positives (its PRs times the two groups' pooled rate in that row); otherwise it reads underpowered, which means not yet.`,
+    "- Clean verdicts go mostly to small, low-reach PRs, whose fix and revert rates are lower anyway, so a raw difference measures size. The last row of each table pools every compared PR and is confounded by size: it is printed only beside the stratified rows, and its difference is shown only when a stratified row of the same table shows one.",
+    ...verdictTable(`Revert within ${MATURITY_DAYS} days`, verdict.labels.revert),
+    ...verdictTable(`Filtered follow-up fix within ${MATURITY_DAYS} days ${mark}`, verdict.labels.filtered),
+    "",
+    "## Dismissal reasons by severity",
+    "",
+    "VS-46d item 6: each severity's dismissals, by the role that dismissed them, are the dismissed-writer, dismissed-author and dismissed-unattributed counts in the Resolution table above, over the human-stratum findings on PRs that no read cut short; bulk resolutions are split out.",
+    "",
+    `Reasons: ${NO_DISMISSAL_REASON}. VS-35b's classes (${DISMISSAL_WHY.join(", ")}) come from its classifier, dismissalWhy, which reads a writer's reply text and has no caller until an owner-repository precision sample of at least 0.9 qualifies it; the ledger keeps no reply text. Recording a reason needs a new ledger schema (/3).`,
+    "",
+    "## Addressed rate",
+    "",
+    `VS-46d item 7. Definition: a finding is addressed when it was marked fixed and its thread was resolved by a person who is neither a bot nor the PR author (fixed-confirmed-by-thread). The rate is addressed findings over settled ones (${SETTLED.join(", ")}): the severity gradient's confirmed-fix share, every severity together. Population: the ${addressed.rate.total} settled human-stratum findings on ${addressed.pulls} PRs that no read cut short, merged in the window, matured or not; agent, agent-signal and bulk findings are split out.`,
+    "",
+    `- Addressed: ${formatCell(addressed.rate)} (cycle p50 / p90 ${cycle(addressed.cycle)} h).`,
+    `- Human-comment volume on those PRs: ${addressed.comments.total} comments by people other than the PR author and the bots (issue comments, review-thread comments and reviews with a body); per PR, p50 / p90 ${count(addressed.comments.p50)} / ${count(addressed.comments.p90)}; ${addressed.comments.missing} of the PRs carry no count (not reviewed).`,
+    "",
+    "Internal (D12): this rate is comparable only within this population under this definition, as a paired or A/B comparison on this repository. It is not comparable with any vendor's addressed, acceptance or resolution rate, or with any other population's.",
+    "",
+    "## Human review by band",
+    "",
+    "VS-46d item 8: the share of PRs that a person other than the PR author and the bots reviewed or commented on (humanReview), by band, over every PR with a band that no read cut short, matured or not, every stratum. It is a cheap proxy for whether repository rules change scrutiny (P3-2), and evidence for Q28; it shows no cause.",
+    "",
+    "| Band | PRs | Human review | Cycle p50 / p90 (h) |",
+    "| --- | --- | --- | --- |",
+    ...([...RISK_BANDS, "all"] as const).map((band) => {
+      const row = cohorts.humanReview[band]
+      return `| ${band} | ${row.pulls} | ${formatCell(row.rate)} | ${cycle(row.cycle)} |`
+    }),
+    "",
+    "## Agent-authored split",
+    "",
+    `VS-46d item 9: outcome rates for agent-authored PRs, from the owner's trusted record only (stratum agent), against human-stratum PRs, within the size terciles above, over each label's population as the measurement reads it. Untrusted markers only exclude: the ${agent.excluded} agent-signal PRs enter neither group. There is no unstratified row. Same-agent iteration confounds the follow-up-fix label (P3-11), so the third table removes same-agent follow-ups: an agent PR is positive there only through a filtered fix within ${MATURITY_DAYS} days that the record shows is not the same agent's, and ${agent.unknown} agent PRs are left out, because only fixes whose own PR the call cap left unknown could make them positive. Differences are agent less human, shown under the same rule as above.`,
+    "",
+    `- Same-agent share of follow-up fixes on agent PRs, per fix entry within ${MATURITY_DAYS} days: filtered label ${formatCell(agent.sameAgent.filtered.share)}, with ${agent.sameAgent.filtered.unknown} unknown and left out; unfiltered label ${formatCell(agent.sameAgent.unfiltered.share)}, with ${agent.sameAgent.unfiltered.unknown} unknown and left out. No interval: fix entries cluster within PRs and fix commits. SZZ-based and unaudited: the audit samples PRs, not fix entries.`,
+    ...agentTable(`Revert within ${MATURITY_DAYS} days`, agent.labels.revert),
+    ...agentTable(`Filtered follow-up fix within ${MATURITY_DAYS} days ${mark}`, agent.labels.filtered),
+    ...agentTable(
+      `Filtered follow-up fix within ${MATURITY_DAYS} days, same-agent follow-ups removed ${mark}`,
+      agent.labels.filteredOther,
+    ),
+    "",
+    "This is evidence for Q41, which is the owner's; this report decides nothing. On one repository it will most likely stay undecided.",
+    "",
+    "## Recurrence",
+    "",
+    `VS-46d item 10, descriptive only: the share of matured follow-up fixes (fix entries within ${MATURITY_DAYS} days of a PR's merge) whose fixed lines fall in a file, or a function, that had an earlier fix within ${RECURRENCE_DAYS} days before the reviewed PR's merge. Filtered: each entry's own location (where most of its lines are), over the filtered label's population. Unfiltered: every location its fix commit edited, over the PRs not reverted within ${MATURITY_DAYS} days. An earlier fix is any fix commit the scan labelled other than the entry's own, dated from ${RECURRENCE_DAYS} days before the merge day to the day before it: fix commits keep only their day, so one on the merge day is left out. A function match needs the same file and a funcname on both sides. It measures hotspot co-location, which round two found does not help ranking, and it cannot show that a prior-fix card helps detection, so it gates nothing; L6 waits on the Q9 ablation alone.`,
+    "",
+    `- Truncated lookback: the scan keeps fix commits only after the window's first merge (${recurrence.first ?? "none"}), so a PR merged within ${RECURRENCE_DAYS} days of it has a shorter lookback. The full-lookback columns count only the entries whose lookback starts after that day.`,
+    `- ${recurrence.capped} fix commits had more than ${MAX_FIX_LOCATIONS} locations and keep only their first ${MAX_FIX_LOCATIONS}, so a later file of theirs is not matched.`,
+    "",
+    "| Label | Fixes | Earlier fix in file | Earlier fix in function | Full lookback: fixes | In file | In function | Cycle p50 / p90 (h) |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...(["filtered", "unfiltered"] as const).map((key) => {
+      const side = recurrence.labels[key]
+      return `| ${key} | ${side.fixes} | ${formatCell(side.file)} | ${formatCell(side.fn)} | ${side.full.fixes} | ${formatCell(side.full.file)} | ${formatCell(side.full.fn)} | ${cycle(side.cycle)} |`
+    }),
+    "",
+    "No interval: fix entries cluster within PRs and fix commits. Unaudited: the audit samples PRs, not fix entries.",
+    "",
+    "## Latent forecasts",
+    "",
+    `VS-46d item 11: when local eval artifacts hold VS-42 pre-existing drops (path, base line span, class, base SHA, fingerprint), each is joined to later fixes of its base lines, and latent-forecast precision is the share of matured drops (recorded at least ${MATURITY_DAYS} days before the clone's history ends) whose base lines a fix edited within ${MATURITY_DAYS} days. A defect dropped on several reviews counts once, at its earliest drop. Kill criterion: precision under ${whole(LATENT_KILL_PRECISION)} on at least ${LATENT_MIN_DROPS} matured drops; the report says whether it is met, and the decision is the owner's. It reads only local eval artifacts, and no GitHub state or markers, which are public.`,
+    "",
+    `Status: ${status}.`,
+    ...(latent.drops
+      ? [
+          "",
+          `- Drops: ${latent.drops} distinct (${latent.repeated} further drops of a fingerprint already counted), ${latent.matured} matured; fixed within ${MATURITY_DAYS} days ${formatCell(latent.precision)}. No interval: drops cluster within reviews and files, and the criterion reads the point estimate only.`,
+          ...(latent.byClass.length
+            ? [
+                "",
+                `| Class | Matured drops | Fixed within ${MATURITY_DAYS} days |`,
+                "| --- | --- | --- |",
+                ...latent.byClass.map((row) => `| ${row.class} | ${row.matured} | ${row.fixed} |`),
+              ]
+            : []),
+        ]
+      : []),
+    "",
+    `Limits: drops exist only when scopeGate: introduced and guardrail: strict are both set, and both are off by default; once wired, the scope prompt clause suppresses most pre-existing findings before they become drops; StrictResult.dropped keeps only counts, so drop locations are new retained data (R5); following base lines through later history is new machinery, because this script's blame returns no base line, and nothing here builds that join yet; on one repository the stream may not reach ${LATENT_MIN_DROPS} matured drops. Drops are not PRs, so this section has no cycle time.`,
   ]
 }
 
