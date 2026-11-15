@@ -629,3 +629,290 @@ a packaged app (read from the repository's handling), safeStorage, and a real st
 `packages/app/src/context/settings.tsx`, `settings-memory.css` and `general.tsx`: unchanged.
 
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+## A46 ops Worker: outbound checks
+
+Codium finish R46a, 15 Nov 2026. Part 1 of the A46 review: the Worker's outbound requests and its protocol. Part 2
+(R46b) reviews `index.ts`, `internal.ts`, `limits.ts`, `runtime.ts` and the rest of `ops-account.ts`. Read on
+`codium-finish` `8a43f2b2`; line numbers are at `8a43f2b2` unless a line says "now". Scratch was under
+`/tmp/vector-v2/codium/r46a/` (HEAD copies in `head/`, the repaired copies in `new/`, the mutation runner in `mut/`, the
+planning probes in `plan/`). Nothing here boots the engine.
+
+### Scope
+
+- `packages/ops-worker/src/ssrf.ts` (223 lines), `check.ts` (159), `release-watch.ts` (135), `bytes.ts` (50) and
+  `protocol.ts` (135).
+- `git log --oneline 334aab8d..HEAD -- packages/ops-worker/src` lists two commits, and both touch `src/`. `3082bb2c`
+  changed the probe's user agent (check.ts:23) from `VectorOps/1` to `Vector/Ops (+https://vectordev.ai/docs/codium)`,
+  with check.test.ts's expectation; `packages/web/src/pages/docs/codium.astro` already existed, so this links no new
+  page. `025d75da` dropped the `KILL_KEY` export from `index.ts` (R46b's file). A third commit in range for
+  `packages/ops-worker` (not `src/`), `c4f5ad28`, touched the package's `package.json` only.
+- `protocol.ts` is types only and must import nothing (source.test.ts:41-43), so the task's "protocol.ts validates every
+  field" was read as the validators of its bodies, which live in `ops-account.ts`: the body parse in `internal()`
+  (`:152-160`), `suspend` (`:319-327`), `flags` (`:440-441`), `parsePlan` (`:916-948`), `parseConfig` (`:950-966`) and
+  `parseRelease` (`:968-983`). Only those parts of `ops-account.ts` were reviewed and edited.
+
+### Findings repaired here
+
+**R46-1. Confirmed: a DNS-over-HTTPS answer was read whole before its size cap.**
+- Cause: `ssrf.ts:200` `await response.text()`, then `:201` `text.length > 64 * 1024`. A streamed 1 MiB answer was
+  pulled to its end (1,025 pulls in the planning probe) before the check. Severity low: the endpoint is fixed
+  (`cloudflare-dns.com`, `:154`), and the 8 s signal (`:194`) bounds the time but not the memory.
+- Hardening in the same repair (not defects on their own, since the endpoint is fixed): the cap counted UTF-16 code
+  units, so an 80 KB answer of two-byte characters passed, and an answer that was not UTF-8 was decoded with
+  replacement characters and accepted.
+- Repair:
+  - `bytes.ts` gains `readPrefix(body, limit)` (now `bytes.ts:18-49`). It reads as the bytes arrive until `limit` came
+    or the body ended, then cancels the rest, so at most `limit` bytes plus one chunk are held. `complete` means the body
+    ended before `limit` bytes came; a failed read (an error, or the request's signal) answers undefined; no body is
+    empty and complete. No try/catch.
+  - `ssrf.ts`'s lookup (now `:204-207`) reads with `readPrefix(response.body, 64 * 1024)` and decodes with `bytes.ts`'s
+    fatal `fromUtf8` (unused before, its first caller). An answer of 64 KiB or more, or one that is not UTF-8, is a
+    failed lookup (`error`).
+  - `check.ts`'s `sniff` (`:105-136`, single use, the same loop) is removed; the 5xx HTML branch (now `:80-86`) uses
+    `readPrefix` with the same `size < limit` loop, so its verdicts do not change. The critique's case, a page that sends
+    exactly 8 KiB and then stalls, is still judged at once (pinned by a new case). The one difference: a body that ended
+    is no longer cancelled after its end, which did nothing. The page is still decoded with a non-fatal `TextDecoder`,
+    since the challenge markers are ASCII.
+- Regression tests: ssrf.test.ts "an answer is read only to 64 KiB as it arrives, counted in bytes, and must be UTF-8"
+  (80 KB of "é" → error; a 1 MiB stream → error after exactly 64 pulls and one cancel, where HEAD pulls 1,025; a 0xff
+  byte → error; the same answer in UTF-8 → public); the new `test/bytes.test.ts` (its exact-limit case pins that a
+  body of exactly `limit` bytes reads as `complete: false` with one cancel, so a 65,536-byte DoH answer is a failed
+  lookup and check.ts's exact-8-KiB-then-stall page is judged without a ninth read); check.test.ts "a 5xx HTML page is read
+  only to its first 8 KiB, and the rest is cancelled", "…of exactly 8 KiB that then stalls is judged at once" and
+  "…whose body stalls past the timeout fails as a timeout" (these three pass on HEAD and pin the swap).
+
+**R46-2. Confirmed: a failed lookup of one address kind was ignored when the other kind answered public.**
+- Cause: `resolvePublic` returned public (`ssrf.ts:177-181`) before its error rule (`:184`). That contradicts the
+  module's own rule (`:7-10`: every address, looked up just before, is public). With AAAA SERVFAIL the host's IPv6
+  addresses were never checked, while the Worker's fetch, which looks the name up again (R46-8), may connect over IPv6.
+- This reverses a reading A46 made on purpose: ssrf.test.ts:222, "public addresses of one kind are enough when the other
+  kind's lookup failed".
+- Repair: the error rule moved to just after the blocked check (now `ssrf.ts:181-182`). A blocked address still wins
+  over an error.
+- Effect: such a check is inconclusive (`resolver`, `check.ts:38-42`): not probed, never reported down, and it neither
+  counts toward nor breaks a run of failures.
+- Cost, recorded: if a host's DNS fails AAAA lookups for good, its monitor stays inconclusive and a real outage there is
+  never reported. Failed lookups are not cached (only public, blocked and missing are, `ops-account.ts:493-495`), so
+  each wake asks again. The app's ops screens (`packages/app/src/features/cloud/ops/ops-model.ts`) show incidents,
+  which an inconclusive check never opens, and no screen line names the `resolver` reason, so the person is not told
+  the host is not being checked. A product reading for the lead; no screen was changed.
+- Divergence, recorded: the API's `safe-fetch.ts` takes every address the system resolver returns (`:226-230`) and
+  connects straight to the checked address (`:233`). The Worker cannot pin, so its lookup rule is now the stricter one;
+  the address ranges are still the same (R46-6).
+- Test: ssrf.test.ts:222-225 is replaced, with its expectation tightened, by "a lookup that failed for either kind leaves
+  the host unknown; a private address still refuses it" (A public + AAAA SERVFAIL, A 502 + AAAA public, A SERVFAIL +
+  AAAA public → error; A 127.0.0.1 + AAAA SERVFAIL → blocked).
+
+**R46-3. Confirmed: a truncated answer (TC) was judged complete.**
+- Cause: the lookup never read `TC` (`ssrf.ts:202-205`).
+- Repair: now `ssrf.ts:208-210`: `TC: true` is a failed lookup.
+- Test: ssrf.test.ts "an answer cut short (TC) is a failed lookup". The fakes and the smoke's resolver
+  (`e2e/ops-smoke.mjs:78-85`) never send TC.
+
+**R46-4. Confirmed: a field the Worker does not know was ignored, not refused, at every level of plan, config and
+release.**
+- Cause: the parsers pick the fields they know (`parsePlan` `:916-948`, `parseConfig` `:950-966` with the monitor at
+  `:957-958`, `parseRelease` `:968-983`, and `internal()`'s parse `:152-160`). Nothing unknown was stored, because each
+  parser rebuilds its value, but the repository's rule elsewhere is refusal: `packages/hosted-computer/src/actions.ts:273`
+  ("unknown fields and out-of-range values are refused, never ignored"), `api/_lib/ops-api.ts:120` and
+  `api/_lib/hosted-api.ts:94`.
+- Repair, `ops-account.ts`:
+  - `BODY_FIELDS` (now `:62-80`) lists the fields of plan, config and release, each checked with
+    `satisfies Record<keyof PlanBody, true>` (and `ConfigBody`, `ReleaseBody`). `PLAN_FIELDS`, `ON_CALL_FIELDS`,
+    `RELEASE_GUARD_FIELDS` and `MONITOR_FIELDS` (now `:81-93`) are tied to `OpsPlan` and the `ConfigBody` monitor the
+    same way, so a field added to a protocol type without its list, or a list key the type lacks, fails `bun typecheck`
+    (mutations M13 and M14). Every list in `BODY_FIELDS` is tied to a type; the state body has none (it is lenient,
+    below).
+  - `onlyFields` (now `:959-962`) checks own keys with `Object.hasOwn`, so a JSON `__proto__` key counts as a field
+    (with `in`, it and `toString` would pass: M10).
+  - `internal()` refuses (now `:203-204`) before anything is written or scheduled; `parsePlan` (now `:968`, `:978`,
+    `:991`) and `parseConfig` (now `:1009`) refuse nested extras. The answer is 400 `INTERNAL_BAD_REQUEST`.
+- Kept lenient on purpose: state, erase, suspend and flags. They rebuild their values and store nothing unknown, and
+  the API turns any non-2xx answer into 503 `OPS_UNAVAILABLE` (`api/_lib/ops-worker.ts:110-113`). Refusing them while
+  the API sent a field the Worker did not know yet would block account deletion (`ops-cleanup.ts:93-94`), the guard's
+  hold (`ops-guard.ts:320-321`, "did not apply the hold"), the guard's read before that hold (`ops-guard.ts:443-448`:
+  a refused state is counted as a failure and the account is not held) and the owner's kill switch
+  (`ops-worker.ts:159-162` answers `failed`). Safety actions, and the read a safety action depends on, fail toward
+  applying. erase, suspend and flags came from the critique; state was moved here in the review round below.
+- What a refusal of the strict three leaves during version skew: a refused plan leaves the stored plan, which runs to
+  its own `validUntil` (`api/_lib/ops-worker.ts:205-212`): `min(periodEnd + 24 h, now + 39 d)` when it was pushed for an
+  active or renewing account, `now + 35 d` when pushed for a paused one. So a refused push that would stop checks (a
+  freeze, a refund, an end) does not stop them at once: they run until that stored `validUntil`, up to 39 days after the
+  last accepted push. A refused config leaves the previous monitors probed, within that same bound; a refused release
+  is not watched. The Worker is not deployed anywhere yet and every caller sends exactly the listed fields, so no live
+  skew exists.
+- Every caller already sends exactly the known fields: plan `codium-provisioners.ts:305` with `opsPlanFor`
+  (`ops-worker.ts:184-213`), config `ops-settings.ts:354-360` (`workerConfig`), release `release-guard.ts:391-403`,
+  state `ops-guard.ts:443`, and the smoke (`e2e/ops-smoke.mjs:146-152`, `:168-182`, `:232-240`). The root tests that
+  drive the real Worker with API-built bodies pass (Tests below).
+- `protocol.ts`: a comment only (now `:5-9`), limited to the request bodies and naming the lenient four; it still
+  imports nothing. `owner-actions/hosted-ops.md` step 6 gains the deploy order, as two merges.
+- Regression test: the new `test/protocol.test.ts` (exact bodies taken; extras refused at eight places with a snapshot
+  of meta, monitors, releases, the alarm and the kill value unchanged; the lenient four still apply with an extra, state
+  answering exactly as without it; every field required at every level).
+
+### Checks that hold
+
+- **R46-5. Every URL form.** The WHATWG parser folds decimal, octal, hex, shorthand, percent-encoded and full-width IPv4
+  into dotted form, which the all-numeric last label catches (`ssrf.ts:40-46`, `:70-71`). IPv6 literals are refused by
+  the `[` check (`:71`). Trailing dots are stripped before the name rules (`:50`, `:70`). Userinfo (`:68`), ports other
+  than 443 (`:69`; `:0443` parses to 443), schemes other than https (`:67`), zone ids (a parse error) and URLs over 2,048
+  characters (`:60`) are refused. The fetched URL is the parser's own `href` (`:73-74`), so the checked and fetched
+  spellings cannot differ; a backslash reads as a slash, so `https://host\@evil.example/` probes the path
+  `/@evil.example/` on the verified host. Bun's parser runs in the tests and workerd's in production; both follow WHATWG.
+  The table now holds 52 refused spellings and 4 more normalised ones.
+- **R46-6. Address ranges** (`ssrf.ts:78-116`). IPv4: 0/8, 10/8, 100.64/10, 127/8, 169.254/16 (169.254.169.254
+  included), 172.16/12, 192.0.0/24, the documentation and benchmarking blocks, 192.168/16, 224/4, 240/4 and Azure's
+  168.63.129.16. IPv6: everything outside 2000::/3 (::1, ::, fc00::/7, fe80::/10, NAT64 64:ff9b::/96 and /48,
+  IPv4-compatible), mapped ::ffff:a.b.c.d judged as IPv4, 2001::/23, 2001:db8::/32, 2002::/16, 3fff::/20, and any zone.
+  Parity with `safe-fetch.ts` stays the root contract test's job (`test/ops-worker-contract.test.ts`, unchanged).
+- **R46-7. DNS answers are checked, not only the literal host.** `probeAll` looks up every host of the wake before any
+  probe (`ops-account.ts:475-506`), A and AAAA both (`ssrf.ts:174`), and one non-public address refuses the host
+  (`:176`); a host whose only A record is 169.254.169.254 is blocked (new row).
+- **R46-8. Rebinding and the platform (a reading).** The Worker cannot pin the address it checked: `fetch` looks the
+  name up again. workerd 1.20251118.0 (installed with wrangler 4.50.0) says its default network allows `"public"` only
+  and filters the addresses returned by the fetch's own lookup
+  (`node_modules/.bun/workerd@1.20251118.0/node_modules/workerd/workerd.capnp:786-826`), so inside open-source workerd a
+  rebinding between the DoH check and the fetch cannot reach a private or local address. miniflare 4.20251118.1 allows
+  `["public", "private", "240.0.0.0/4"]` (`dist/src/index.js:52616`), and the smoke answers every outbound request
+  in-process (`e2e/ops-smoke.mjs:76-119`), so neither CI nor the unit tests exercise network filtering. Cloudflare's
+  production network is not described by that file, and developers.cloudflare.com is outside this session's network:
+  A46's sentence "Cloudflare's own fetch also refuses private and prohibited addresses" (old `ssrf.ts:11-12`) stays
+  unverified and is left to the outside security review (spec 8.2 step 16). The header comment now says so. The residual
+  is blind: a probe carries no credentials (`check.ts:22-26`) and keeps no body; only outcome, reason and status leave
+  (`protocol.ts:98-108`). The 60 s to 5 min reuse of DoH answers (`ssrf.ts:179-180`) does not change this boundary.
+- **R46-9. Redirects are never followed.** `redirect: "manual"` at `check.ts:52`, `ssrf.ts:193` and `internal.ts:188`;
+  source.test.ts:45-51 counts them; the smoke's `/moved` 302 (`e2e/ops-smoke.mjs:105`) covers the real runtime.
+- **R46-10. Timeouts while streaming.** One `AbortSignal.timeout` (8 s) covers a probe's headers and its 5xx read
+  (`check.ts:49`, `:80`); each DoH request has its own 8 s signal (`ssrf.ts:194`), which now also bounds its
+  `readPrefix`. The new check case shows a stalled body ending as a timeout under Bun. That workerd errors a body read
+  when the request's signal aborts follows the Fetch standard and is not exercised in CI: deferred verification.
+- **R46-11. Release-watch parsing is bounded.** `release-watch.ts` parses nothing. `parseRelease`
+  (`ops-account.ts:968-983`) caps `urls` at the plan's paths (at most 5) of at most 2,048 characters each, `environment`
+  at 255 code units without control characters, `deployment` at 64, and `repositoryId`/`at` to safe integers, all in a
+  32 KiB body. A watch's maps are keyed by its own URLs (`release-watch.ts:35-39`, created at `:78-80`). `watchWindow`
+  clamps the window (`:56-59`), and `stepWatch` never lets the next round fall at or before now (`:113-114`).
+- **R46-12. No secret or account key is logged.** source.test.ts:31-39 bans `console.` in `src/`. `ssrf.ts`,
+  `check.ts`, `release-watch.ts`, `bytes.ts` and `protocol.ts` touch no secret; probe and DoH requests carry only fixed
+  headers.
+
+### Readings, not repaired
+
+- **R46-13. Trailing dot.** A URL host with a trailing dot is verified without the dot but probed as entered, and the
+  API's `monitorUrl` (`api/_lib/ops-settings.ts:244-258`) keeps it too; a server that answers 301 to the dotless host
+  reads as a cross-origin redirect. SSRF-safe (the DoH lookup and the fetch use names that resolve alike); a
+  correctness reading only.
+- **R46-14. NAT64 and 6to4** are refused even when the embedded IPv4 is public. Conservative.
+- **R46-15. DoH privacy.** Monitored host names go to `cloudflare-dns.com`, the platform the Worker already runs on.
+
+### For R46b (recorded, not repaired here)
+
+- **R46-16.** `index.ts:41-44` reads the whole inbound body with `arrayBuffer()` when `content-length` is absent, before
+  the 32 KiB check (confirmed by reading; reachable by unsigned callers on `workers.dev`). `readPrefix` can serve it.
+- **R46-17 (plausible).** `RunState` is one JSON meta row (`ops-account.ts:843-851`); the watch maps hold up to perDay
+  concurrent watches × 5 URLs × 2,048 characters in about four copies. Check it against Cloudflare's per-value limit.
+- **R46-18.** source.test.ts's redirect count (`:45-51`) matches only `fetcher(` and `deps.fetch(`, not a direct
+  `runtime.fetch(` or bare `fetch(` call.
+- **R46-19.** `wrangler.jsonc` has no `observability` setting (uncaught-exception logs).
+- **Carry forward.** R46-2's follow-up for the lead (below) must be carried into R46b's close-out record and the
+  lane's follow-ups, so it is not lost when R46b closes.
+
+### For the lead
+
+- No defect was found in another lane's file.
+- R46-2's product reading, a lane follow-up (no code change in R46a): a monitor whose host keeps failing one kind's
+  lookup (an AAAA SERVFAIL, say) stays inconclusive with `resolver`, is never probed, and its outages are never
+  reported, and no ops screen says so. Proposed: an ops-screen line for a monitor that stays inconclusive with
+  `resolver`, or a counter of such checks in the Worker's state answer. A product decision for the lead.
+
+### Review round (15 Nov 2026)
+
+Six non-blocking findings from the package review; all taken, none disagreed with.
+- The state body is now lenient (the review's option 1): the guard reads it before it holds an account
+  (`api/_lib/ops-guard.ts:443-448`), so refusing it under skew would count a failure instead of a hold, the M9 risk
+  the critique used to keep suspend lenient. `BODY_FIELDS` drops `state`; protocol.test.ts moves the state row from the
+  refused case to the lenient one (M15); `protocol.ts`'s comment and `owner-actions/hosted-ops.md` step 6 name the
+  strict three. This also settles the finding that `state` was the one list not tied to a type with `satisfies`: there
+  is no state list now, so every list in `BODY_FIELDS` is tied.
+- R46-4's skew effects were corrected: a refused plan runs to the stored plan's own `validUntil` (up to now + 39 d, or
+  now + 35 d after a paused push), not simply periodEnd + 24 h.
+- bytes.test.ts pins the exact-limit edge (`complete: false`, one cancel); `readPrefix` is unchanged.
+- check.test.ts's exact-8-KiB-then-stall case waits with `timeoutMs: 10_000` and passes under 2,000 ms, so a slow
+  runner cannot reach the timeout path; `pulled: 8, cancelled: 1` still shows no ninth read.
+- The root `ops-domain-health`, `ops-screens` and `ship-desk` files were run locally (Tests below), and the Scope bullet
+  now says that two commits touch `src/` and that `c4f5ad28` touched `package.json` only.
+- R46-2's follow-up is worded as a lane follow-up for the lead and carried forward to R46b (above).
+
+### Mutations
+
+Each was applied as an exact one-occurrence substitution by `/tmp/vector-v2/codium/r46a/mut/run.py`, run, and restored;
+`diff -q` against the saved repaired copy confirmed every restore.
+
+| Mutation | Turns red |
+| --- | --- |
+| M1: the HEAD `await response.text()` and character cap | ssrf "an answer is read only to 64 KiB…" |
+| M2: `new TextDecoder().decode` in place of `fromUtf8` | ssrf "an answer is read only to 64 KiB…" (the 0xff row) |
+| M3: the error rule back after public, as at HEAD | ssrf "a lookup that failed for either kind…" |
+| M4: drop the TC line | ssrf "an answer cut short (TC)…" |
+| M5: drop the `BODY_FIELDS` check in `internal()` | protocol "a field the Worker does not know…" |
+| M6: drop the `onCall` `onlyFields` | protocol "a field the Worker does not know…" |
+| M7: drop the monitor `onlyFields` | protocol "a field the Worker does not know…" |
+| M8: `readPrefix` loops `size <= limit` | bytes "reading stops once the limit has come…" and (review round) "a body of exactly the limit is not complete…"; check "…first 8 KiB…" and "…exactly 8 KiB that then stalls…" |
+| M9: `readPrefix` without its cancel | bytes "reading stops once the limit has come…" |
+| M10: `key in fields` in place of `Object.hasOwn` | protocol "a field the Worker does not know…" (the `__proto__` row) |
+| M11: drop the plan `onlyFields` | protocol "a field the Worker does not know…" |
+| M12: drop the `releaseGuard` `onlyFields` | protocol "a field the Worker does not know…" |
+| M13: an extra key `name` in `MONITOR_FIELDS` | `bun typecheck` (TS2353) |
+| M14: drop `repositoryId` from the release fields | `bun typecheck` (TS2741) |
+| M15 (review round): `state: { account: true }` back in `BODY_FIELDS` | protocol "state, erase, suspend and flags still apply…" |
+
+Red runs against the HEAD sources (copied back into `src/`, then restored and checked with `diff -q`): ssrf.test.ts 9
+pass, 3 fail (the R46-1, R46-2 and R46-3 cases); protocol.test.ts 3 pass, 1 fail (the unknown-field case);
+bytes.test.ts fails to load (no `readPrefix` export); check.test.ts 16 pass (its three new cases pin unchanged
+behaviour). The bytes and check pull counts are exact because their streams hold nothing ahead (`highWaterMark: 0`):
+measured first in `/tmp/vector-v2/codium/r46a/plan/pulls.ts`, Bun pulls once per read then, and once more ahead with
+the default high-water mark.
+
+### Tests run here (one file at a time)
+
+Through `vector-serial` with `--timeout 30000`: `packages/ops-worker` with `bun test`; the root `test/` with
+`bun test ./<file>`.
+
+| Package | File | Before (HEAD `8a43f2b2`) | After |
+| --- | --- | --- | --- |
+| ops-worker | `test/ssrf.test.ts` | 10 pass (171 `expect()` calls) | 12 pass (271) |
+| ops-worker | `test/check.test.ts` | 13 pass (63) | 16 pass (70) |
+| ops-worker | `test/bytes.test.ts` | new | 6 pass (12) |
+| ops-worker | `test/protocol.test.ts` | new | 4 pass (63) |
+| ops-worker | `test/release-watch.test.ts` | 14 pass (85) | 14 pass (85) |
+| ops-worker | `test/source.test.ts` | 7 pass (58) | 7 pass (58) |
+| ops-worker | `test/internal.test.ts` | 17 pass (97) | 17 pass (97) |
+| ops-worker | `test/on-call.test.ts` | 16 pass (60) | 16 pass (60) |
+| ops-worker | `test/schedule.test.ts` | 12 pass (137) | 12 pass (137) |
+| root | `test/ops-worker-contract.test.ts` | — | 8 pass (59) |
+| root | `test/on-call.test.ts` | — | 30 pass, 1 skip (299) |
+| root | `test/release-guard.test.ts` | — | 36 pass, 1 skip (345) |
+| root | `test/ops-guard.test.ts` | — | 13 pass (87) |
+| root | `test/ops-payment-pipeline.test.ts` | — | 10 pass (78) |
+| root | `test/account-delete.test.ts` | — | 37 pass, 1 skip (454) |
+| root | `test/github-webhook.test.ts` | — | 30 pass (223) |
+| root | `test/ops-screens.test.ts` | — | 6 pass (41) |
+| root | `test/ops-domain-health.test.ts` | — | 9 pass (57) |
+| root | `test/ship-desk.test.ts` | — | 26 pass, 1 skip (270) |
+
+The root skips are the Valkey cases (`VECTOR_TEST_REDIS_URL`), CI only. Nine root files import `test/ops-fixture.ts`;
+the other three ops files (`ops-domain-health`, `ops-screens`, `ship-desk`) import none and need no Valkey, and were
+run locally in the review round. `bun typecheck` clean in
+`packages/ops-worker`. `prettier --check` clean on the five changed sources and four changed or new tests (prettier
+rewrapped three lines this package wrote); the Markdown records are not prettier-formatted (`codium-p7-repairs.md`
+was not prettier-clean at HEAD either). `git diff --check` clean. The full turbo typecheck and the api tree are
+pre-push steps and were not run in this step.
+
+**CI only:** Vector Codium's Codium tests job (it selects the changed ops-worker test files since the base, plus the
+root files it always runs), its Hosted services ops Worker job (the dry run and the miniflare smoke, which sends the
+smoke's exact bodies to the real runtime), the HttpApi exerciser (no route changed), typecheck.yml, and
+vector-hosted-ci.yml's Hosted tests job, which runs every `packages/ops-worker` test. CI: pending; this step left the
+change uncommitted, and the run and job ids go in a dated line here in the lane commit that follows the runs.
+
+Edits to `api/_lib/model-plan-*.ts`: none.

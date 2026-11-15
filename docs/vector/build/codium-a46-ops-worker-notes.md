@@ -110,3 +110,16 @@ These are in `owner-actions/hosted-ops.md`:
   - **Domain health.** Certificate expiry, domain expiry and DNS drift run in the daily `/api/ops/domains` job (A50, `api/_lib/ops-health.ts`; the route and its cron are A47's).
   - **Readiness.** `perkServices` in `api/_lib/codium-perks.ts` has readiness checks for `on-call`, `release-guard` and `ship-desk` (A50, not A47 or A48 as the bullet expected). Since P7, new ops work also needs its perk listed on the server (`api/_lib/ops-listing.ts`).
   - No build item from this list stays open; deployment, the owner steps above and listing the ops perks remain.
+- **Status on 15 Nov 2026 (Codium finish R46a).** The P7 review addendum's part 1 (outbound checks and the protocol;
+  `codium-p7-repairs.md`, "A46 ops Worker: outbound checks") repaired four findings. R46-1: a DNS-over-HTTPS answer is
+  read as it arrives, at most 64 KiB counted in bytes, and must be UTF-8 (`readPrefix` in `src/bytes.ts`, which the 5xx
+  sniff in `src/check.ts` now uses too, with unchanged verdicts). R46-2 and R46-3: the S8 row above now also leaves a
+  host unknown (inconclusive, never probed) when either kind's lookup fails or an answer is cut short (`TC`); this
+  reverses the 4 Nov reading that one kind's public addresses were enough. R46-4: the plan, config and release bodies,
+  and the nested plan, `onCall`, `releaseGuard` and monitor objects, refuse fields they do not list (400
+  `INTERNAL_BAD_REQUEST`); state, erase, suspend and flags still ignore them (the guard reads state before a hold). The Interface row above holds: its fields are
+  exactly the lists, checked against `src/protocol.ts`'s types. New tests: `test/bytes.test.ts` and
+  `test/protocol.test.ts`; `ssrf.test.ts` and `check.test.ts` gained cases. The deploy order for a new field (the Worker
+  first, in its own merge) is in `owner-actions/hosted-ops.md` step 6. `ssrf.ts`'s header no longer states that
+  Cloudflare's production fetch refuses private addresses: unverified, left to the outside security review. R46b
+  (part 2: `index.ts`, `internal.ts`, `limits.ts`, `runtime.ts` and the rest of `ops-account.ts`) follows. CI: pending.

@@ -15,7 +15,17 @@ import { base64url } from "./bytes"
 import { pool, probe, resolutionResult, type ProbeResult } from "./check"
 import { INTERNAL_NONCE_KEEP_MS, callbackOrigin, internalSecret, sendReport } from "./internal"
 import { OPS_LIMITS } from "./limits"
-import type { MonitorState, OpsEvent, OpsPlan, ProbeReason, ReleaseAnswer, ReleaseState } from "./protocol"
+import type {
+  ConfigBody,
+  MonitorState,
+  OpsEvent,
+  OpsPlan,
+  PlanBody,
+  ProbeReason,
+  ReleaseAnswer,
+  ReleaseBody,
+  ReleaseState,
+} from "./protocol"
 import {
   concluded,
   dueAt,
@@ -49,6 +59,38 @@ const DEPLOYMENT = /^[A-Za-z0-9_-]{1,64}$/
 const ENVIRONMENT = /^[^\u0000-\u001f\u007f]{1,255}$/
 const ACCOUNT = /^[\x21-\x7e]{1,128}$/
 const WRITES: readonly InternalAction[] = ["plan", "config", "release", "suspend"]
+/**
+ * The fields of each body that is refused with any other field (protocol.ts). state, erase, suspend and flags are left
+ * out on purpose: they rebuild their values and store nothing unknown, and refusing one while the API and the Worker
+ * differ by a version would block the guard's hold (it reads state before it holds an account), an account's deletion
+ * or the owner's kill switch.
+ */
+const BODY_FIELDS: Partial<Record<InternalAction, Record<string, true>>> = {
+  plan: { account: true, plan: true } satisfies Record<keyof PlanBody, true>,
+  config: { account: true, domains: true, monitors: true } satisfies Record<keyof ConfigBody, true>,
+  release: {
+    account: true,
+    repositoryId: true,
+    environment: true,
+    sha: true,
+    deployment: true,
+    at: true,
+    urls: true,
+  } satisfies Record<keyof ReleaseBody, true>,
+}
+const PLAN_FIELDS = {
+  version: true,
+  domains: true,
+  onCall: true,
+  releaseGuard: true,
+  validUntil: true,
+} satisfies Record<keyof OpsPlan, true>
+const ON_CALL_FIELDS = { urls: true, intervalSec: true } satisfies Record<keyof NonNullable<OpsPlan["onCall"]>, true>
+const RELEASE_GUARD_FIELDS = { perDay: true, watchMin: true, paths: true } satisfies Record<
+  keyof NonNullable<OpsPlan["releaseGuard"]>,
+  true
+>
+const MONITOR_FIELDS = { id: true, url: true } satisfies Record<keyof ConfigBody["monitors"][number], true>
 
 type HourTotals = { hour: number; ok: number; failed: number; inconclusive: number; ms: number }
 type MonitorRun = {
@@ -158,6 +200,8 @@ export class OpsAccount {
     } catch {
       return failure(400, "INTERNAL_BAD_REQUEST")
     }
+    const fields = BODY_FIELDS[action]
+    if (fields && !onlyFields(body, fields)) return failure(400, "INTERNAL_BAD_REQUEST")
     if (action === "flags") return this.flags(body)
     if (typeof body.account !== "string" || !ACCOUNT.test(body.account)) return failure(400, "INTERNAL_BAD_REQUEST")
     const known = this.meta<string>("account")
@@ -912,10 +956,16 @@ function integer(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
 }
 
+/** Whether a parsed JSON object has no field but those of `fields` (own keys only, so `__proto__` is a field too). */
+function onlyFields(value: object, fields: Record<string, true>) {
+  return Object.keys(value).every((key) => Object.hasOwn(fields, key))
+}
+
 /** A pushed plan within the bounds any real plan keeps (ENTITLEMENTS, checked in the root contract test). */
 export function parsePlan(input: unknown, now: number): OpsPlan | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
   const plan = input as Record<string, unknown>
+  if (!onlyFields(plan, PLAN_FIELDS)) return undefined
   if (!integer(plan.version, 0, Number.MAX_SAFE_INTEGER)) return undefined
   if (!integer(plan.domains, 0, OPS_LIMITS.maxDomains)) return undefined
   if (!integer(plan.validUntil, 0, now + OPS_LIMITS.maxValidAheadMs)) return undefined
@@ -925,6 +975,7 @@ export function parsePlan(input: unknown, now: number): OpsPlan | undefined {
     if (
       !value ||
       typeof value !== "object" ||
+      !onlyFields(value, ON_CALL_FIELDS) ||
       !integer(value.urls, 1, OPS_LIMITS.maxMonitors) ||
       !integer(value.intervalSec, OPS_LIMITS.minIntervalSec, OPS_LIMITS.maxIntervalSec)
     )
@@ -937,6 +988,7 @@ export function parsePlan(input: unknown, now: number): OpsPlan | undefined {
     if (
       !value ||
       typeof value !== "object" ||
+      !onlyFields(value, RELEASE_GUARD_FIELDS) ||
       !integer(value.perDay, 1, OPS_LIMITS.maxReleasesPerDay) ||
       !integer(value.watchMin, 1, OPS_LIMITS.maxWatchMin) ||
       !integer(value.paths, 1, OPS_LIMITS.maxReleasePaths)
@@ -954,7 +1006,7 @@ function parseConfig(body: Record<string, unknown>) {
   if (!Array.isArray(monitors) || monitors.length > OPS_LIMITS.maxMonitors) return undefined
   const parsed: { id: string; url: string; host: string }[] = []
   for (const entry of monitors) {
-    if (!entry || typeof entry !== "object") return undefined
+    if (!entry || typeof entry !== "object" || !onlyFields(entry, MONITOR_FIELDS)) return undefined
     const { id, url } = entry as { id?: unknown; url?: unknown }
     if (typeof id !== "string" || !MONITOR_ID.test(id)) return undefined
     const target = probeTarget(url)

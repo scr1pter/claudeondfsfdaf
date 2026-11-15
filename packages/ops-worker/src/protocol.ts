@@ -3,7 +3,10 @@
 //
 // The API calls the Worker: POST https://<worker>/internal/v1/<action>, signed with WP A37's HMAC under the `ops`
 // service key (VECTOR_OPS_SHARED_SECRET on the API, INTERNAL_SECRET on the Worker). Each body is a JSON object; every
-// action but `flags` names the account.
+// action but `flags` names the account. Every field of the plan, config and release bodies below is required, and one
+// of those bodies with any other field, at any level, is refused (400 INTERNAL_BAD_REQUEST), so the Worker is deployed
+// with a new field before the API sends it. state, erase, suspend and flags ignore fields they do not know: refusing
+// would block the guard's hold (which reads state first), a deletion or the kill switch.
 //
 //   plan {account, plan}                     what the account's plan allows, from its entitlement snapshot (§4.4):
 //                                            onCall null stops checks, releaseGuard null stops new watches, and

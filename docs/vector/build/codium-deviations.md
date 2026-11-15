@@ -3885,6 +3885,91 @@ inventory. Findings, repairs and tests are in `codium-p7-repairs.md` ("A45 Setti
   and the owner-actions files are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none.
 
+Part 3 (Codium finish R46a, 15 Nov 2026): the A46 ops Worker review, part 1, its outbound requests and protocol
+(`ssrf.ts`, `check.ts`, `release-watch.ts`, `bytes.ts`, `protocol.ts` and the body validators in `ops-account.ts`).
+Findings R46-1 to R46-19, repairs, mutations and tests are in `codium-p7-repairs.md` ("A46 ops Worker: outbound
+checks"). Read on `codium-finish` `8a43f2b2`; scratch under `/tmp/vector-v2/codium/r46a/`.
+
+- **Rebinding and the platform (R46-8).** The Worker cannot pin the address its DoH lookup checked; its `fetch` looks
+  the name up again. Open-source workerd 1.20251118.0's default network allows `"public"` only and filters the
+  addresses that lookup returns (`workerd.capnp:786-826`), so inside workerd a rebinding cannot reach a private or local
+  address. miniflare 4.20251118.1 allows private addresses (`dist/src/index.js:52616`) and the smoke answers every
+  outbound request in-process, so CI exercises no network filtering. Whether Cloudflare's production fetch filters the
+  same way is unverified (developers.cloudflare.com is outside this session's network): A46's sentence "Cloudflare's
+  own fetch also refuses private and prohibited addresses" is withdrawn from `ssrf.ts`'s header, which now says it is
+  unverified, and the question goes to the outside security review (spec 8.2 step 16). Not a blocker: a probe carries
+  no credentials and returns no body.
+- **Every address must be known (R46-2, R46-3).** A lookup that failed for either kind (A or AAAA), or an answer with
+  `TC` (cut short), now leaves the host unknown: inconclusive, never probed. This reverses A46's own reading and test
+  ("public addresses of one kind are enough when the other kind's lookup failed"), because without pinning the fetch
+  may use the unchecked kind. Cost: a host whose AAAA lookups fail for good is never checked and its outages are never
+  reported, and no ops screen names the `resolver` reason (a product reading for the lead). The lookup rule is now
+  stricter than `safe-fetch.ts`'s, which can pin; the address ranges stay the same.
+- **DoH answers are read as they arrive (R46-1).** At most 64 KiB is read, counted in bytes, then the rest is
+  cancelled; a longer answer, or one that is not UTF-8, is a failed lookup. The byte count and UTF-8 parts are hardening
+  against a fixed endpoint, not defects on their own. `check.ts`'s 5xx sniff uses the same `readPrefix` with its old
+  `size < limit` loop, so its verdicts are unchanged (the critique's exact-8-KiB-then-stall case is pinned).
+- **Unknown fields (R46-4).** The plan, config and release bodies, and the nested plan, `onCall`, `releaseGuard` and
+  monitor objects, refuse any field they do not list (400 `INTERNAL_BAD_REQUEST`, nothing applied). Reason: the
+  repository's convention (`api/_lib/ops-api.ts:120`, `api/_lib/hosted-api.ts:94`,
+  `packages/hosted-computer/src/actions.ts:273`). state, erase, suspend and flags stay lenient: refusing them during
+  version skew would block the guard's hold (it reads state first, `api/_lib/ops-guard.ts:443-448`, and counts a refused
+  state as a failure, not a hold), account deletion and the kill switch, since the API turns any non-2xx into 503
+  (`api/_lib/ops-worker.ts:110-113`); safety actions, and the read a safety action depends on, fail toward applying.
+  Every field list is checked against `protocol.ts`'s types with `satisfies`, so the two cannot drift without a
+  typecheck error. During skew a refused plan leaves the stored plan running to its own `validUntil`, which is
+  `min(periodEnd + 24 h, now + 39 d)` for an active or renewing push and `now + 35 d` for a paused one
+  (`api/_lib/ops-worker.ts:205-212`), so a refused freeze, refund or end does not stop checks at once. Deploy order, now
+  in `owner-actions/hosted-ops.md` step 6: a change that adds a field goes in two merges, the Worker first (merged and
+  deployed with the hosted deploy workflow), then the API change that sends it, because the API deploys on every merge
+  to main and the Worker only by an approved dispatch. The Worker is not deployed anywhere yet and every caller sends
+  exactly the listed fields, so no live skew exists.
+- **"protocol.ts validates every field"** was read as `ops-account.ts`'s validators of the protocol's bodies, because
+  `protocol.ts` must import nothing (source.test.ts:41-43); `protocol.ts` changed by a comment only.
+- **Trailing dot (R46-13).** A host with a trailing dot is verified without it and probed as entered; SSRF-safe, a
+  correctness reading only. NAT64 and 6to4 stay refused even with a public embedded IPv4 (R46-14).
+- **For R46b:** `index.ts:41-44` reads the whole inbound body before its 32 KiB check (R46-16); the RunState row size
+  (R46-17, plausible); source.test.ts's redirect count misses direct `fetch(` calls (R46-18); no `observability` in
+  `wrangler.jsonc` (R46-19).
+- **Plan and critique.** Taken from the critique: erase, suspend and flags left lenient (the plan refused extras on
+  all seven actions, which would have blocked deletion, the hold and the kill switch under skew); the hosted-ops.md
+  rule worded as two merges, without the plan's "skew made visible" rationale (the API discards the Worker's code and
+  answers 503); every citation re-derived at `8a43f2b2` (source.test.ts, release-watch.ts, index.ts and the smoke's
+  ranges were wrong in the plan); the `ssrf.ts` header worded as unverified for production; `account-delete.test.ts`
+  and `github-webhook.test.ts` added to the local root runs (nine root files use `ops-fixture.ts`, not five); the
+  check.ts swap kept on `size < limit` so that it really is behaviour-neutral, with the exact-8-KiB case added;
+  R46-2's reversal, its missed-outage cost and the divergence from `safe-fetch.ts` recorded; field lists tied to the
+  types with `satisfies`; the `protocol.ts` sentence limited to the strict request bodies; Bun's pull behaviour
+  measured first (`/tmp/vector-v2/codium/r46a/plan/pulls.ts`) so the pull counts are exact; the UTF-8 and byte-count
+  parts labelled hardening; one mutation per repaired rule. Not taken: none rejected. The critique's base-input point
+  (fetch before the ancestry check; stop and report if #33 merged without main in this branch) applies to the push
+  step, which this step does not perform.
+- **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`: `packages/ops-worker`
+  `test/ssrf.test.ts` (12), `check.test.ts` (16), `bytes.test.ts` (6, new), `protocol.test.ts` (4, new),
+  `release-watch.test.ts` (14), `source.test.ts` (7), `internal.test.ts` (17), `on-call.test.ts` (16) and
+  `schedule.test.ts` (12); root `test/ops-worker-contract.test.ts` (8), `on-call.test.ts` (30, 1 Valkey skip),
+  `release-guard.test.ts` (36, 1 skip), `ops-guard.test.ts` (13), `ops-payment-pipeline.test.ts` (10),
+  `account-delete.test.ts` (37, 1 skip), `github-webhook.test.ts` (30), `ops-screens.test.ts` (6),
+  `ops-domain-health.test.ts` (9) and `ship-desk.test.ts` (26, 1 skip). Red runs on the HEAD sources and fifteen
+  mutations are in the P7 record. `bun typecheck` in `packages/ops-worker`; `prettier --check` on the changed code;
+  `git diff --check`.
+- **Only in CI:** the Hosted services ops Worker job (dry run and miniflare smoke, the real runtime with the smoke's
+  exact bodies), Vector Codium's Codium tests job and its HttpApi exerciser (no route changed), every Valkey case,
+  typecheck.yml, and
+  vector-hosted-ci.yml's Hosted tests job. Pending: this step left the change uncommitted.
+- **Review round (15 Nov 2026).** All six non-blocking findings were taken; none was disagreed with. For the state
+  body the review offered two options; option 1 was taken (state lenient, like erase, suspend and flags), because the
+  guard's hold depends on that read and the state body stores nothing. That also settles the finding that the state
+  list was the one not tied to a type with `satisfies`: the list is gone. Option 2's record corrections that still
+  apply (the plan's skew bound) were made too. bytes.test.ts pins the exact-limit edge, check.test.ts's timing case
+  has 8 s of margin instead of 0.5 s, the three root ops files were run locally, the Scope bullet was reworded, and
+  R46-2's follow-up (an ops-screen line or a counter for checks that stay inconclusive with `resolver`) is carried to
+  R46b and the lane's follow-ups.
+- `MODEL-PLANS.md` is unchanged: no setting changed, and its "every address … public" description still holds. No
+  flag, route, listing, price, public page, SDK or generated file changed, and nothing was deployed.
+  `owner-actions/hosted-ops.md` gained one instruction for the owner and performs nothing.
+- Edits to `api/_lib/model-plan-*.ts`: none.
+
 ## Codium finish: B10 acceptance (15 Nov 2026)
 
 Track B B10 ("Add `skills` and `insights` sections to the vault manifest (restored as drafts for review); main-built

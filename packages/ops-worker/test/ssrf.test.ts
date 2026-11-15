@@ -22,6 +22,18 @@ describe("probe targets", () => {
       ok: true,
       host: "vector-fixture.com",
     })
+    // The parser's own spelling is what is checked and fetched: an empty userinfo, a zero-padded port, upper case, and
+    // a backslash, which the parser reads as a slash, so "@evil.example" is a path on the verified host.
+    for (const [input, url] of [
+      ["https://@status.vector-fixture.com/", "https://status.vector-fixture.com/"],
+      ["https://status.vector-fixture.com:0443/", "https://status.vector-fixture.com/"],
+      ["HTTPS://STATUS.VECTOR-FIXTURE.COM/", "https://status.vector-fixture.com/"],
+      ["https://status.vector-fixture.com\\@evil.example/", "https://status.vector-fixture.com/@evil.example/"],
+    ] as const)
+      expect({ input, target: probeTarget(input, VERIFIED) }).toEqual({
+        input,
+        target: { ok: true, url, host: "status.vector-fixture.com" },
+      })
   })
 
   test("only verified hosts, matched exactly: no subdomain and no parent", () => {
@@ -65,6 +77,27 @@ describe("probe targets", () => {
       ["https://router.lan/", "address"],
       ["https://site.test/", "address"],
       ["https://site.invalid/", "address"],
+      ["https://0x7f000001/", "address"],
+      ["https://127.0.0.1./", "address"],
+      ["https://%31%32%37.0.0.1/", "address"],
+      ["https://\uff11\uff12\uff17.0.0.1/", "address"],
+      ["https://0.1.2.3/", "address"],
+      ["https://100.127.255.254/", "address"],
+      ["https://169.254.0.1/", "address"],
+      ["https://[fe80::1]/", "address"],
+      ["https://[fc00::1]/", "address"],
+      ["https://[::ffff:7f00:1]/", "address"],
+      ["https://[64:ff9b::a9fe:a9fe]/", "address"],
+      ["https://LOCALHOST./", "address"],
+      ["https://metadata.google.internal./", "address"],
+      ["https://localhost../", "address"],
+      ["https://\u24dbocalhost/", "address"],
+      ["https://user@status.vector-fixture.com/", "credentials"],
+      ["https://:secret@status.vector-fixture.com/", "credentials"],
+      ["wss://status.vector-fixture.com/", "scheme"],
+      ["javascript:alert(1)", "scheme"],
+      ["data:text/plain,x", "scheme"],
+      ["https://[fe80::1%25eth0]/", "url"],
       ["not a url", "url"],
       [`https://status.vector-fixture.com/${"a".repeat(2048)}`, "url"],
     ]
@@ -128,6 +161,16 @@ describe("addresses", () => {
       "2002:a00:1::1",
       "3fff::1",
       "fe80::1%eth0",
+      "0.1.2.3",
+      "100.127.255.255",
+      "169.254.0.1",
+      "febf::1",
+      "fdff:ffff::1",
+      "::ffff:0:7f00:1",
+      "64:ff9b:1::1",
+      "::127.0.0.1",
+      "::ffff:7f00:1",
+      "2001:db8:ffff::1",
       "999.1.1.1",
       "not-an-address",
     ])
@@ -141,6 +184,7 @@ describe("addresses", () => {
       "172.32.0.1",
       "100.128.0.1",
       "2606:4700::6810:84e5",
+      "2001:4860:4860::8888",
       "::ffff:8.8.8.8",
     ])
       expect({ address, blocked: blockedAddress(address) }).toEqual({ address, blocked: false })
@@ -187,6 +231,8 @@ describe("DNS-over-HTTPS lookups", () => {
       AAAA: { Status: 0, Answer: [record(28, "::1")] },
     })
     expect(await resolvePublic("status.vector-fixture.com", v6.fetch)).toEqual({ kind: "blocked" })
+    const metadata = doh({ A: { Status: 0, Answer: [record(1, "169.254.169.254")] }, AAAA: { Status: 0 } })
+    expect(await resolvePublic("status.vector-fixture.com", metadata.fetch)).toEqual({ kind: "blocked" })
   })
 
   test("a name with no address is missing (the site's outage); a failed lookup is an error (ours)", async () => {
@@ -219,8 +265,63 @@ describe("DNS-over-HTTPS lookups", () => {
     ).toEqual({ kind: "error" })
   })
 
-  test("public addresses of one kind are enough when the other kind's lookup failed", async () => {
-    const { fetch } = doh({ A: { Status: 0, Answer: [record(1, "104.16.132.229")] }, AAAA: { Status: 2 } })
-    expect(await resolvePublic("status.vector-fixture.com", fetch)).toMatchObject({ kind: "public" })
+  test("a lookup that failed for either kind leaves the host unknown; a private address still refuses it", async () => {
+    const v4 = { Status: 0, Answer: [record(1, "104.16.132.229")] }
+    const v6 = { Status: 0, Answer: [record(28, "2606:4700::6810:84e5")] }
+    for (const [name, answers, kind] of [
+      ["A public, AAAA SERVFAIL", { A: v4, AAAA: { Status: 2 } }, "error"],
+      ["A 502, AAAA public", { A: new Response("no", { status: 502 }), AAAA: v6 }, "error"],
+      ["A SERVFAIL, AAAA public", { A: { Status: 2 }, AAAA: v6 }, "error"],
+      [
+        "A private, AAAA SERVFAIL",
+        { A: { Status: 0, Answer: [record(1, "127.0.0.1")] }, AAAA: { Status: 2 } },
+        "blocked",
+      ],
+    ] as const)
+      expect({ name, resolution: await resolvePublic("status.vector-fixture.com", doh(answers).fetch) }).toEqual({
+        name,
+        resolution: { kind },
+      })
+  })
+
+  test("an answer cut short (TC) is a failed lookup", async () => {
+    const { fetch } = doh({ A: { Status: 0, TC: true, Answer: [record(1, "104.16.132.229")] }, AAAA: { Status: 0 } })
+    expect(await resolvePublic("status.vector-fixture.com", fetch)).toEqual({ kind: "error" })
+  })
+
+  test("an answer is read only to 64 KiB as it arrives, counted in bytes, and must be UTF-8", async () => {
+    const answer = { Status: 0, Answer: [record(1, "104.16.132.229")] }
+    // 40,000 two-byte characters: 80 KB on the wire, though under 64 Ki characters.
+    const padded = doh({ A: { ...answer, pad: "\u00e9".repeat(40_000) }, AAAA: { Status: 0 } })
+    expect(await resolvePublic("status.vector-fixture.com", padded.fetch)).toEqual({ kind: "error" })
+
+    // 1 MiB in 1 KiB chunks. A stream with no buffer ahead (highWaterMark 0) is pulled once per read, so 64 pulls
+    // reach 64 KiB and the rest is cancelled unread.
+    const stream = { pulled: 0, cancelled: 0 }
+    const endless = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          stream.pulled++
+          if (stream.pulled > 1024) return controller.close()
+          controller.enqueue(new Uint8Array(1024).fill(0x20))
+        },
+        cancel() {
+          stream.cancelled++
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    const large = doh({ A: new Response(endless), AAAA: { Status: 0 } })
+    expect(await resolvePublic("status.vector-fixture.com", large.fetch)).toEqual({ kind: "error" })
+    expect(stream).toEqual({ pulled: 64, cancelled: 1 })
+
+    // One 0xff byte, which UTF-8 never has, in place of the note's "~".
+    const json = new TextEncoder().encode(JSON.stringify({ ...answer, note: "~" }))
+    const bad = json.map((byte) => (byte === 0x7e ? 0xff : byte))
+    const invalid = doh({ A: new Response(bad), AAAA: { Status: 0 } })
+    expect(await resolvePublic("status.vector-fixture.com", invalid.fetch)).toEqual({ kind: "error" })
+    // The same answer in valid UTF-8 is public.
+    const valid = doh({ A: new Response(json), AAAA: { Status: 0 } })
+    expect(await resolvePublic("status.vector-fixture.com", valid.fetch)).toMatchObject({ kind: "public" })
   })
 })

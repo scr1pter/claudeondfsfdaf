@@ -11,6 +11,7 @@
 // The body is never stored: it is cancelled unread, except the first 8 KiB of a 5xx HTML answer, read to tell a
 // challenge from an outage.
 
+import { readPrefix } from "./bytes"
 import { discard } from "./internal"
 import { OPS_LIMITS } from "./limits"
 import type { ProbeOutcome, ProbeReason } from "./protocol"
@@ -77,9 +78,9 @@ export async function probe(
     return { outcome: "inconclusive", reason: "rate-limited", status, ms: ms() }
   }
   if (status >= 500 && /text\/html/i.test(response.headers.get("content-type") ?? "")) {
-    const head = await sniff(response, OPS_LIMITS.challengeSniffBytes)
-    if (head === undefined && signal.aborted) return { outcome: "fail", reason: "timeout", status, ms: ms() }
-    if (head !== undefined && CHALLENGE_BODY.test(head))
+    const head = await readPrefix(response.body, OPS_LIMITS.challengeSniffBytes)
+    if (!head && signal.aborted) return { outcome: "fail", reason: "timeout", status, ms: ms() }
+    if (head && CHALLENGE_BODY.test(new TextDecoder().decode(head.bytes)))
       return { outcome: "inconclusive", reason: "challenge", status, ms: ms() }
     return { outcome: "fail", reason: "status", status, ms: ms() }
   }
@@ -100,39 +101,6 @@ export function sameOrigin(url: string, location: string | null): boolean {
 
 function challengeHeaders(headers: Headers) {
   return CHALLENGE_HEADERS.some(([name, value]) => value.test(headers.get(name)?.trim() ?? ""))
-}
-
-/** The first bytes of the body as text, then the rest cancelled. Undefined when it could not be read. */
-async function sniff(response: Response, limit: number): Promise<string | undefined> {
-  const reader = response.body?.getReader()
-  if (!reader) return ""
-  const chunks: Uint8Array[] = []
-  let size = 0
-  try {
-    while (size < limit) {
-      const { done, value } = await reader.read()
-      if (done) break
-      chunks.push(value)
-      size += value.byteLength
-    }
-  } catch {
-    return undefined
-  } finally {
-    try {
-      await reader.cancel()
-    } catch {
-      // Already done.
-    }
-  }
-  const bytes = new Uint8Array(Math.min(size, limit))
-  let offset = 0
-  for (const chunk of chunks) {
-    if (offset >= bytes.byteLength) break
-    const part = chunk.subarray(0, bytes.byteLength - offset)
-    bytes.set(part, offset)
-    offset += part.byteLength
-  }
-  return new TextDecoder().decode(bytes)
 }
 
 function timedOut(error: unknown, signal: AbortSignal) {
