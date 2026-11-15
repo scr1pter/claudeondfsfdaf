@@ -1043,3 +1043,148 @@ Source: `connect-finish` at `7ce17182` (CN-07). This package changes `packages/e
     - oxlint gave 0 errors on the nine changed code files. The warnings are the `consistent-return` and `no-unnecessary-type-assertion` kinds the same files already carry, for example hub.ts's.
     - After the review round: `bun typecheck` passed in packages/engine and packages/client. `prettier --check` passed on the six code files the round changed, and `git diff --check` is clean. oxlint gave 0 errors on them; its one new warning is `no-unsafe-type-assertion` on the test ledger wrapper's `ConnectDirectoryRequest.node.implementation` cast (`directory.test.ts:139`), the same cast `test/server/task-batch-promotion.test.ts` makes for TaskManager. The round changed no route, schema or public type (`onBound` and the hub's `bound` are internal), so nothing was regenerated.
   - *CI:* none is claimed. The Linux engine shard of test.yml is the authority.
+
+## 2026-11-15 — C6b: directory-request ledger retention and pruning (CN-09)
+
+Source: `connect-finish` at `409f8de3` (CN-08). This package changes `packages/engine/src/connect/directory-request.ts` and `packages/engine/src/connect/directory.ts` (a bounded receipt reader and `ConnectDirectory.settled`), with tests in `packages/engine/test/connect/directory-request.test.ts`. It changes no route, public schema, SDK type, flag, startup or background work, so nothing was regenerated. With Connect off, `ConnectOwner.directoryReview` still fails `disabled` before `reserve` (`owner.ts:110`, `:384`), so no prune or sweep ever runs. It deletes only this ledger's own files under `storage/connect-directory-requests`, never a receipt, job row or session. It was built uncommitted, and the lane's commit gate records its commit.
+
+- **What it closes.** The second half of review connect:correctness-security #6, "the ledger is never pruned: after 4,096 reviews in one directory (or 65,536 overall) every new directory review is refused for good", which is v2-complete-plan §4.1 C6 **B**'s "prune". It also closes a permanent refusal that predates CN-09: a crash between an admission's pointer write and its global index write (or between the slot and the scope index) left every directory, or that directory, `unavailable` for good. With CN-08's reconcile, the engine side of C6 is fixed for keys whose review ends while the engine runs; the exceptions are under Known limits, and CN-10's app recovery remains. As in CN-01 and CN-08, the plan and review-findings files are not edited.
+- **Retention contract.**
+  - A settled key replays for `RETENTION_MS`, 30 days, measured from its tombstone (`refusedAt`) or from the end of the run it bound (the receipt's `time.ended`). A bound key whose receipt is gone, which only `ConnectDirectory.prune` causes and only after the run was done, ages from its reservation.
+  - When the key's directory is at its cap, or the whole ledger is, an admission may prune a settled key once it is past `REPLAY_MS`, 24 hours, oldest first. The brief says eligible means older than RETENTION, and separately that nothing younger than the replay window is pruned and that a full directory prunes before refusing. The lane reads that as: retention is the floor without pressure, and the replay window is the floor under cap pressure. So key memory is bounded by RETENTION, and by REPLAY_MS while a directory or the ledger is full.
+  - Nothing pending, prepared, live (a token this process holds), or younger than the floor is ever pruned, and neither is a binding whose run is still open or whose receipt cannot be read.
+  - After that, a retried key is a new request and can start a second review. The app keeps its key in sessionStorage (`app/src/features/connect/directory-review.tsx:52`) and removes it only on `confirm()` (`directory-review-reservation.ts:58-63`), so a long-lived desktop window holding an unconfirmed key can retry across these windows. So can public HTTP and SDK clients, which choose and keep their own keys. CN-10's recovery should treat a key older than the replay window as possibly new.
+- **What changed.**
+  - *Limits are layer options* (`Limits`, `LIMITS`, `directory-request.ts:38`; `nodeWith` at `:965` for tests; `node` keeps the defaults). They are `maxKeys` (4,096), `maxTotalKeys` (65,536), `retentionMs` (30 days), `replayMs` (24 hours) and `pruneLimit` (64). Bad values die when the layer builds, with a plain range check (`valid`): the caps may only be smaller than the constants, `maxKeys ≤ maxTotalKeys`, `replayMs ≤ retentionMs`, and `pruneLimit` is 1 to 64. The index schemas and byte caps stay bound by the constants, so the same disk decodes under any configuration. `Options` (grace, writer, inspect bound) stays a per-call Reference, unchanged.
+  - *Locators.* A new reservation carries `folder` (the two hashes its scope folder is named by, `:56`), as its last field so the decoded record's key order matches the literal. Index entries carry the reservation's `createdAt`. Both are optional, so keys written before CN-09 still decode. The sizes stay under the byte caps: about 150 bytes an entry, 0.6 MB for a full scope index and 9.8 MB for a full global index.
+  - *The global index* (`:108`) gains three optional fields:
+    - `pruning`, the prune journal: at most `PRUNE_LIMIT` keys, already gone from `entries`, whose scope entry and files may still exist.
+    - `admitting`, the admission intent: one key in `entries` whose pointer, slot or scope entry may not be written yet.
+    - `cursor`, where the last scan stopped. A scope index also gains its own `cursor`.
+  - *Consistency checks explain only the journal and the intent* (`globalIndex` `:442`, `index` `:474`).
+    - Every pointer must be indexed or journaled, and every entry must have its pointer, except the intent's own key.
+    - In a scope, every entry must have its slot, and a slot or record that no entry names must be one the journal or intent names for that folder. With neither open, this is CN-08's equality rule.
+    - `index` has three modes. `create` starts an empty scope, `open` is an existing one, and `inspect` is used for other directories while pruning: it creates no folders and writes nothing.
+    - Unnamed files that neither explains still read `unavailable` with no write, so CN-08's tamper cases pass unchanged.
+  - *Admission writes in a crash-safe order* (`:841-876`):
+    1. the global index with the new entry and `admitting`;
+    2. the pointer, O_EXCL;
+    3. the slot, O_EXCL;
+    4. the scope index;
+    5. the global index without `admitting`.
+    A reservation is returned only after step 5.
+  - *The sweep* (`finish`, `:577`) runs at the start of every `reserve`, under both locks, before any other read.
+    - An intent rolls forward when its scope index names the key with the entry's digest. Otherwise it rolls back: the slot and pointer are removed, then the entry. It refuses (unavailable) if a binding, prepared or tombstone file exists for that key. That cannot happen without tampering, because no caller ever held the key. Such an intent, like one whose scope index cannot be read or names the key with another digest, fails every `reserve` in every directory, replays included, until the ledger is repaired by hand. That is by design: only tampering or a corrupt disk leaves one. `prepare`, `bind` and `refuse` never sweep, so live claims still finish.
+    - Journaled keys are finished one folder at a time (`forget`, `:555`): the scope index is rewritten without them, then their binding, prepared, tombstone and slot files are removed, then their pointers. Each step can be repeated.
+    - A folder that cannot be finished (its index does not decode or cannot be rewritten, or a journaled key is live) stays journaled, and the sweep carries on. Its keys are never journaled twice: both scans skip every journaled key, including one its folder's index still names with all its files (`going`, `:611`). One corrupt or unwritable directory never blocks another, within the journal bound under Known limits.
+    - Then the global index is rewritten with what is left. `prepare`, `bind` and `refuse` never sweep; `held()` only tolerates the journal and the intent.
+  - *Pruning* (`prune`, `:602`) runs only on the new-key admission path, under both locks, before the cap check. Replays and the `pending`, `consumed` and `unavailable` answers never prune, because only an admission grows the ledger.
+    - Up to three picks, sharing at most `min(pruneLimit, PRUNE_LIMIT − journal length)` keys:
+      1. a full directory gives up its own keys past the replay window;
+      2. a full ledger takes keys past the replay window from any directory;
+      3. the remaining room goes to keys past their retention, in any directory.
+    - Each scan (`walk`, `:649`) visits its index's entries oldest first by `(createdAt, key)`, starting just after its cursor and wrapping once. Entries created after `now − floor` are skipped with no I/O. Each scan inspects at most `pruneLimit` entries, and its cursor moves to the last one inspected, so entries that can never be pruned are passed over instead of starving the keys behind them.
+    - An entry is a candidate only when all of these hold: its key is not live and not already journaled; its pointer reads and matches the entry's digest; its folder is known (from the pointer, or the current scope for a key written before CN-09); that folder's index passes the read-only check and names the key with the same digest; the slot matches; and the records are consistent. Its settled time is the tombstone's `refusedAt`, a done receipt's `ended`, or for `gone` the reservation's `createdAt`, each at least the reservation's `createdAt`. Anything else, including any read error, skips the key.
+    - Applying is journal-first: the global index without the chosen keys and with them appended to `pruning`, then `finish`.
+    - A refused admission writes only the scan cursors (when they moved), so the next admission inspects other entries. The refusal is now temporary, and its message is unchanged.
+  - *Per-call bounds* (`FOLDER_LIMIT` 8 and `RECEIPT_BUDGET` 8 MiB, `:33`, `:35`). One admission inspects at most 2 × 64 = 128 entries, and at most 8 other directories. It stops reading receipts after 8 MiB. Its reads under the global lock are at most about 20 MiB:
+    - up to five records of at most 4 KiB per entry, about 2.5 MiB;
+    - receipts, at most 9 MiB with the last one read;
+    - 8 foreign scope indexes of at most 1 MiB, each with 4 bounded readdirs.
+    - On top of that come the global index writes (at most 16 MiB each). A plain admission now writes the global index twice (the intent and the final write; once before CN-09). A pruning admission writes it twice more (the journal and the sweep's clear).
+  - *Receipt evidence* (`ConnectDirectory.settled`, `directory.ts:166`). It finds the receipt by the two folder hashes and `runID`, through the bounded reader that `load` now shares (`bounded`, `:107`; `load` behaves as before). It answers:
+    - `done` (with `ended`) for a receipt whose run id, request id, anchor, `hash(projectID)` and `hash(canonical)` all match and whose run is done;
+    - `open` for such a receipt whose run is not done;
+    - `gone` only when the receipt file is missing but its folder exists;
+    - `unknown` otherwise, which includes a missing folder (another data root, or a tampered tree).
+    It skips `current()`, so a deleted or replaced directory can still be settled. It reports the bytes it read, for the receipt budget.
+  - The comment on `both` (`:430-433`) records why cross-scope writes under the global lock are safe: every holder of a scope lock takes the global lock first, and only this file takes these keys.
+- **Brief corrections and decisions.**
+  - *D1, the journal replaces "a later prune sweeps record files that no index names".* A blind sweep would break CN-08's pinned tamper contract (unindexed prepared and tombstone records stay unavailable with no write, `directory-request.test.ts:513`). It would also go against the 2026-11-14 boundary that keys are never blindly released. The admission intent covers the other job the blind sweep would have done, recovering a crashed admission, with evidence.
+  - *D2, a missing receipt counts as terminal only when its folder exists.* The hub writes the receipt before it binds the key (`hub.ts:1538-1539`), and only `ConnectDirectory.prune` removes receipts, done ones only (`directory.ts:215`). Without the folder there is no evidence the receipt ever existed under this data root.
+  - *The two floors, and pruning on admission only,* as described above.
+  - *Plan critique, taken.*
+    - The scan cursors: the blocker. Without them, 256 never-prunable entries sorted ahead would stall pruning for good.
+    - The admission intent: the critique's third point, so this entry may say C6 is fixed in the engine, within the Known limits.
+    - Stuck journal items are kept and appended to, never replaced, and they block no other directory (within the journal bound under Known limits).
+    - Read-only `inspect` mode for other directories.
+    - The evaluation bound is lowered to `pruneLimit` per scan, with a folder budget and a receipt-byte budget; the worst case is the number above.
+    - The `gone` folder check (D2).
+    - The retention wording above.
+    - A test for `held()`'s journal tolerance.
+    - Journal and index bounds use the constants, and the limits check is a synchronous range check rather than a Schema decode.
+  - *Plan critique, the open-binding point.* The second option was taken: the rule is kept, and the real rate is stated under Known limits. The owner-evidence callback was not built here, because it widens `ConnectOwner` and `ConnectHub` and needs its own tests. It is the follow-up below.
+  - *No owner.ts or hub.ts change.* `reserve`'s interface and error codes are unchanged.
+- **Known limits.**
+  - *Open bindings are never pruned.* A binding whose receipt never reached done has nothing to show that its run ended. Every directory review still running when the app quits or the engine restarts leaves one of these, because runs in progress do not persist (spec §"Restarts", line 170) and only a live writer rewrites a receipt (`owner.ts` through `ConnectDirectory.write`). So the rate is one such binding per review interrupted by a quit or restart, not only one per crash. Each counts against its directory's 4,096 for good. A directory that collects 4,096 of them still refuses for good, so "unlimited reviews without permanent refusal" holds for reviews that end while the engine runs.
+    - *Follow-up (unscheduled; it belongs with the 2026-11-14 boundary "orphan reconciliation and retention need prepared-anchor/failed-tombstone evidence").* Add an owner-supplied callback like `inspect` that answers terminal when the durable job row is settled, or is running with a dead owner (`BackgroundJobStore.liveness`), and treat such a binding as settled at its reservation's age. The ledger itself never guesses.
+  - *Pending and prepared keys are never pruned.* Such a key is left when its owner never settled it (a crash before `refuse`), and it reconciles only when the same key is retried (CN-08). The app's keys live in one window's sessionStorage, so after that window closes no retry comes, and the key counts against the caps for good. The same follow-up could reconcile them through `inspect`.
+  - *The journal holds at most 64 marks* (`PRUNE_LIMIT`, its schema bound), and stuck marks count against it. A mark is stuck while its folder cannot be finished, and every `reserve` retries it. While 64 are stuck, no admission anywhere prunes, so a full directory or a full ledger refuses again until a stuck folder can be finished; admissions under the caps still work. The bound is not widened, because the pointer folder's file bound (`MAX_TOTAL_KEYS + PRUNE_LIMIT`, `:444`) rests on it.
+  - A partial O_EXCL tombstone, binding or prepared write (a crash mid-write) leaves that key `unavailable`, and it is never pruned, because `records()` fails and the candidate is skipped.
+  - Keys written before CN-09 in another directory have no `folder`, so the global scans skip them. They are pruned through admissions in their own directory.
+  - A directory that settles more than `maxKeys` keys inside 24 hours refuses new keys until they pass the replay window. The refusal is temporary, and its message is unchanged.
+  - Oldest-first is per scan from its cursor: after a wrap, a scan restarts at the oldest entry.
+  - A clock jump forward prunes earlier, though never under the jumped clock's floors. A jump back delays pruning.
+  - An older engine on the same data folder reads `unavailable` while a journal or intent is open. Its admissions drop the cursors and write reservations without `folder`, which take the pre-CN-09 path. It never prunes.
+- **Tests added** (`directory-request.test.ts`, 12 new cases; the 14 existing ones pass unchanged, including the 4,096-key cap case, which now takes the pre-CN-09 entry path). The time-based cases run under `TestClock`. Receipts are written with the real `ConnectDirectory.issue` and `write`, under the process data root, which `afterEach` cleans.
+  - age pruning: a tombstone, a done binding, a binding with no receipt (`gone`), a running binding, a binding whose receipt folder is missing (`unknown`), and a key tombstoned at 29 days. At 29 days every key replays, and every file remains. At 30 days and 1 ms, the first tombstone and the `gone` binding are pruned from every place, while the done binding (ended at day 1), the running binding, the `unknown` binding and the late tombstone stay. At 31 days the done binding goes too. The pruned keys then start new requests with new nonces;
+  - cap pressure: a full directory refuses a new key while its oldest tombstone is 2 hours old, and the tombstone still replays. At 24.5 hours the same key is admitted and only that tombstone is pruned. The next new key is refused, because the next oldest is 23.5 hours old;
+  - pending, prepared, live and young keys are never pruned in a full directory and a full ledger. The record files are byte-identical, the index entries unchanged, the young tombstone still replays, and the live token still binds;
+  - a scan cursor: four stale reservations, twice one scan's budget, sorted ahead of a tombstone. The tombstone is pruned by the third admission;
+  - the global index prunes another directory's keys, one under ledger pressure, then two by age (the prune limit), leaving a third eligible key for the next admission, which a full directory then prunes;
+  - one admission prunes at most the prune limit;
+  - a prune interrupted after its journal write, after the scope index rewrite, and between file removals finishes on the next start. Contrast: a key missing from the global index with no journal entry, and an indexed key whose slot is missing, both stay `unavailable`, and nothing is removed;
+  - an admission interrupted after its intent (no pointer), or after a partial pointer and slot, rolls back and the key starts fresh. One that wrote its scope index rolls forward, and the key then reconciles to `consumed` like any stale one;
+  - an open journal that already left its scope index keeps a live claim's `prepare` and `bind` working, unswept, until the next `reserve` finishes it;
+  - a corrupt journaled directory stays journaled while another directory admits and prunes, twice; its own key stays `unavailable`;
+  - review round: a journaled key that its own full directory cannot finish (the folder is read-only, so the sweep reads its index but cannot rewrite it) is never journaled twice. Two admissions there answer `unavailable`, the journal names the key once and stays distinct, the key's pointer, slot, tombstone and scope entry remain, and another directory still admits. Once the folder is writable, the next start finishes every journaled key. Permissions do not hold for root or on Windows, so the case returns early there, as `hub.test.ts`'s unlistable-folder case does; the wrapper and the unprivileged Linux and macOS CI runners exercise it;
+  - out-of-range limits die when the layer builds.
+- **Review round.** Seven findings, two blocking; the text above already reads as fixed.
+  - *Blocking, fixed (both findings name the same path).* A journaled key whose own folder's `forget` failed before its index rewrite (an unwritable folder, a full disk, or a Windows rename refused by a scanner) is still named by that folder's index with its pointer, slot and tombstone. When that directory was at its cap, the scope scan picked the key again, and `prune` appended it to the journal a second time. `atomic` does not decode what it writes, so the duplicate reached `index.json`, and from then on `GlobalIndex`'s `distinct` check made every `reserve`, `prepare`, `bind` and `refuse` in every directory `unavailable` for good. Now `prune` builds `going` from the journal (`:611`), and both scans skip those keys next to the `chosen` check, so they spend no inspection budget and do not move a cursor. The journal append also filters `going` as a backstop. The global scan could not hit this, because a journaled key is never in `entries`. Any other key a scope index names without the global index has no pointer (`globalIndex` refuses an unindexed pointer), so `evaluate` already skips it.
+  - *Non-blocking, recorded rather than changed: a contradictory admission intent.* `finish` lets a failed `settleAdmission` fail the call, so such an intent blocks every `reserve`, replays included. It is now stated above as by design, with the reason. The other option the finding offered, keeping the intent and refusing only new admissions, would still refuse every new admission in every directory, because an admission's own intent write would replace the stuck one. Its only gain is replays during a state that needs tampering or a corrupt disk, so the simpler rule is kept.
+  - *Non-blocking, recorded: the 64-mark journal bound.* Added under Known limits. Keeping stuck marks out of the room budget would need either a journal longer than its schema bound, which the finding rules out, or dropping stuck marks from the journal, which would leave their pointers unexplained and make `globalIndex` `unavailable` in every directory.
+  - *Non-blocking, fixed.* The spec's status line now names the open-binding and pending-key exceptions. The handoff's CN-09 sentence now says that a receipt `ConnectDirectory.prune` already removed counts as done. In `finish`, `stuck` is built with `Effect.forEach` and `.flat()`, and `forget` clears `dropped` with `forEach`. `walk` keeps its `spent` and `scan` holders, because the scan breaks early on three budgets, and the loop reads more plainly than a fold there.
+- **Held.** Q6 (connect's routes and file ledger stay). CN-10 (app recovery). The open-binding and orphan evidence follow-up above. Every flag stays off, and Q1 stays open.
+- **Receipts.** Every `bun` command ran through `/home/user/.tools/vector-serial`, one test file at a time from packages/engine, with `--timeout 30000`. "Wrapper" means `/tmp/vector-v2/connect/as-ci.sh` (uid 1000, `CI=true`). Logs are in `/tmp/vector-v2/connect/cn09/` (the review round's in `/tmp/vector-v2/connect/cn09-fix/`).
+  - `test/connect/directory-request.test.ts`: before any test edit, the 14 existing cases passed on the new sources (110 expect() calls). Final: 25 pass, 0 fail, 183 expect() calls, both as root and through the wrapper.
+  - `test/connect/directory.test.ts`: 23 pass, 0 fail, 138 expect() calls, both ways.
+  - `test/connect/owner.test.ts`: 6 pass, 0 fail, both ways.
+  - `test/server/httpapi-connect.test.ts`: 11 pass, 0 fail, both ways.
+  - `test/connect/hub.test.ts`: 48 pass as root. Through the wrapper: 47 pass and 1 fail, the same known wrapper failure CN-06 and CN-08 recorded ("missing snapshot capability lists configuration without probing MCP").
+  - `test/connect/directory-live.test.ts`: 7 pass, 0 fail, through the wrapper. It fails as root in this sandbox, as CN-08 recorded.
+  - Mutations, each run against the full test file and restored with `sha256sum -c`:
+
+    | Mutation | Caught by |
+    | --- | --- |
+    | a pending key counted as eligible | the never-pruned case, and the cursor case |
+    | the ledger-pressure floor set to 0 | the never-pruned case |
+    | the directory-pressure floor set to 0 | the cap-pressure case |
+    | the age pick uses the replay floor | the age case (at 29 days), and the cross-directory case |
+    | an open receipt counted as terminal | the age case (running binding) |
+    | age measured from `createdAt`, not the run's end | the age case (done binding) |
+    | a tombstone aged from `createdAt`, not `refusedAt` | the age case (late tombstone) |
+    | `gone` without its folder | the age case (`unknown` binding) |
+    | the sweep disabled | 9 cases |
+    | unnamed pointers tolerated (a blind sweep) | the interrupted-prune case's contrast |
+    | an entry without its slot tolerated | the interrupted-prune case's contrast |
+    | the global pick limited to the current directory | the cross-directory case |
+    | `pruneLimit` ignored | the prune-limit case |
+    | the scan cursor ignored | the cursor case |
+    | `held()` without the journal | the open-journal case |
+    | the intent never rolled back | the interrupted-admission case |
+    | a stuck journal item fails every reserve | the corrupt-journal case |
+    | the journal replaced, not appended | the corrupt-journal case |
+    | the `live` check removed | not caught: a live key is always pending or prepared, so the check is redundant by design, kept as a statement of intent |
+    | review round: the scans do not skip journaled keys, and the journal append is not filtered | the never-journaled-twice case, through the wrapper (the journal names the key twice) |
+
+  - Static checks:
+    - `bun typecheck` passed in packages/engine.
+    - `prettier --check` passed on the three code files, and `git diff --check` is clean.
+    - oxlint gave 0 errors on them. Its warnings are the `consistent-return` kind the ledger already carried: 5 at `409f8de3`, and one more on `forget`, with the same shape as `tombstone`'s.
+    - The full-tree typecheck is run before the push.
+  - Review round:
+    - `test/connect/directory-request.test.ts`: 26 pass, 0 fail, 192 expect() calls through the wrapper. As root: 26 pass, 0 fail, 183 expect() calls, because the new case returns early under uid 0.
+    - `test/connect/directory.test.ts`: 23 pass, 0 fail, 138 expect() calls, both ways.
+    - `bun typecheck` passed in packages/engine. `prettier --check` passed on both changed code files, and `git diff --check` is clean. oxlint gave 0 errors and the same 6 `consistent-return` warnings.
+    - owner.test.ts, httpapi-connect.test.ts, hub.test.ts and directory-live.test.ts were not rerun. The round changed only `prune`'s scan and `finish`'s loop, not `reserve`'s interface or answers.
+  - *CI:* none is claimed. The Linux engine shard of test.yml is the authority.
