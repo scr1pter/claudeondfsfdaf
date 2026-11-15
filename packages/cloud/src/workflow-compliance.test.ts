@@ -7,9 +7,11 @@ import { fileURLToPath } from "node:url"
 import {
   browserCommand,
   owningDirectory,
+  parseShard,
   retried,
   selectBrowserSpecs,
   selectHostedTests,
+  selectShard,
   selectUnitTests,
   unitCommand,
 } from "./codium-ci-tests"
@@ -525,6 +527,7 @@ describe("Codium CI lane", () => {
     env?: Record<string, string>
     with?: Record<string, unknown>
     "working-directory"?: string
+    "timeout-minutes"?: number
   }
   type Job = {
     environment?: string
@@ -533,7 +536,8 @@ describe("Codium CI lane", () => {
     env?: Record<string, string>
     outputs?: Record<string, string>
     services?: Record<string, { image?: string }>
-    strategy?: { matrix?: { include?: Array<Record<string, string>> } }
+    name?: string
+    strategy?: { "fail-fast"?: boolean; matrix?: { include?: Array<Record<string, string>>; shard?: number[] } }
     steps?: Step[]
   }
   type Workflow = { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> }
@@ -616,12 +620,24 @@ describe("Codium CI lane", () => {
       expect(image).toMatch(/@sha256:[a-f0-9]{64}$/)
       expect(image).toBe(sharing.jobs.integration?.services?.[name]?.image)
     }
+    // The selection outgrew one job's 40-minute step on an integration branch (Vector Codium runs 43631064967 and
+    // the one with job 132574374820), so it runs in shards that together take every selected file.
+    const shards = tests?.strategy?.matrix?.shard ?? []
+    expect(shards).toEqual(shards.map((_, index) => index + 1))
+    expect(shards.length).toBeGreaterThanOrEqual(4)
+    expect(tests?.strategy?.["fail-fast"]).toBe(false)
+    expect(tests?.name).toBe(`Codium tests (shard \${{ matrix.shard }}/${shards.length})`)
     const run = step(tests, "Run the Codium test files")
-    expect(run?.run).toBe("GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts")
+    expect(run?.run).toBe(
+      `GITHUB_ACTIONS=false bun packages/cloud/src/codium-ci-tests.ts --shard=\${{ matrix.shard }}/${shards.length}`,
+    )
+    expect(run?.["timeout-minutes"]).toBe(40)
     expect(run?.env?.VECTOR_TEST_REDIS_URL).toBe("redis://127.0.0.1:6379")
     expect(run?.env?.VECTOR_TEST_POSTGRES_URL).toStartWith("postgres://vector_fixture:fixture-only@127.0.0.1:5432/")
-    expect(step(tests, "Run HttpApi exerciser gates")).toMatchObject({ run: "bun run test:httpapi" })
-    expect(step(tests, "Check generated client")).toMatchObject({ run: "bun run check:generated" })
+    // The exerciser and the generated client do not depend on the shard: one shard runs each of them once.
+    const once = "${{ !cancelled() && matrix.shard == 1 }}"
+    expect(step(tests, "Run HttpApi exerciser gates")).toMatchObject({ run: "bun run test:httpapi", if: once })
+    expect(step(tests, "Check generated client")).toMatchObject({ run: "bun run check:generated", if: once })
     expect(step(lane.jobs.browser, "Run the Codium browser specs")?.run).toBe(
       "bun packages/cloud/src/codium-ci-tests.ts --browser",
     )
@@ -682,6 +698,33 @@ describe("Codium CI lane", () => {
       "packages/app/e2e/regression/account-settings.spec.ts",
       "packages/app/e2e/regression/codium-image-routing.spec.ts",
     ])
+  })
+
+  test("the shards split the selection so every file runs once and each shard takes part of the hosted suite", () => {
+    const files = [
+      ...Array.from({ length: 9 }, (_, index) => `packages/engine/test/session/slow-${index}.test.ts`),
+      ...Array.from({ length: 4 }, (_, index) => `packages/web/test/model-plans-${index}.test.ts`),
+      ...Array.from({ length: 6 }, (_, index) => `test/hosted-${index}.test.ts`),
+    ].sort()
+    const shards = [1, 2, 3, 4].map((index) => selectShard(files, { index, count: 4 }))
+    expect(shards.flat().sort()).toEqual(files)
+    expect(new Set(shards.flat()).size).toBe(files.length)
+    expect(shards.map((shard) => shard.length)).toEqual([5, 5, 5, 4])
+    // The hosted test/ files sort last; a split into contiguous runs would leave them all to the final shard.
+    for (const shard of shards) {
+      expect(shard.filter((file) => file.startsWith("test/")).length).toBeGreaterThan(0)
+      expect(shard.filter((file) => file.startsWith("packages/engine/")).length).toBeGreaterThan(1)
+    }
+    expect(shards[1]).toEqual([files[1], files[5], files[9], files[13], files[17]])
+    // Every shard sees the same sorted selection, so the split is the same in each job.
+    expect(selectShard(files, { index: 2, count: 4 })).toEqual(shards[1])
+    expect(selectShard(files, { index: 1, count: 1 })).toEqual(files)
+    expect(selectShard(files.slice(0, 2), { index: 3, count: 4 })).toEqual([])
+
+    expect(parseShard([])).toEqual({ index: 1, count: 1 })
+    expect(parseShard(["--list", "--shard=3/4"])).toEqual({ index: 3, count: 4 })
+    for (const value of ["0/4", "5/4", "1/0", "a/4", "2", "1/4/2", ""])
+      expect(() => parseShard([`--shard=${value}`])).toThrow("--shard takes i/n")
   })
 
   test("each picked file runs from the package that owns it, as that package's test script runs it", async () => {
@@ -765,6 +808,13 @@ describe("Codium CI lane", () => {
     expect(files.filter((file) => file.split("/").includes("e2e"))).toEqual([])
     for (const file of files)
       expect(owningDirectory(file, exists)).toMatch(/^(?:test|packages\/[^/]+|packages\/sdk\/js)$/)
+    const hosted = files.filter((file) => file.startsWith("test/"))
+    for (const index of [1, 2, 3, 4]) {
+      const shard = selectShard(files, { index, count: 4 })
+      expect(shard.filter((file) => file.startsWith("test/")).length).toBeGreaterThanOrEqual(
+        Math.floor(hosted.length / 4),
+      )
+    }
   })
 
   test("the end-to-end workflow is dispatch-only and only the codium-test environment sees secrets", async () => {
