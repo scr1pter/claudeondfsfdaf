@@ -785,6 +785,32 @@ function cloudBindingFixture() {
 }
 
 describe("the registered cloud-agent repository handler through the signed router", () => {
+  // The handler reads nothing while the service is off (SEC-2); these cases run it with both switches on.
+  const switches = ["MODEL_PLANS_ENABLED", "VECTOR_GITHUB_BRAIN_ENABLED"]
+  const previous = Object.fromEntries(switches.map((name) => [name, process.env[name]]))
+  beforeEach(() => {
+    Object.assign(process.env, { MODEL_PLANS_ENABLED: "true", VECTOR_GITHUB_BRAIN_ENABLED: "true" })
+  })
+  afterEach(() => {
+    for (const name of switches) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  })
+
+  test("a signed deletion with the service off reaches the ops handler and reads no binding", async () => {
+    await ready()
+    delete process.env.VECTOR_GITHUB_BRAIN_ENABLED
+    const f = cloudBindingFixture()
+    const payload = { action: "deleted", repository: { id: REPO } }
+    expect(
+      await deliver(f.route, { event: "repository", payload, delivery: "cccccccc-0000-4000-8000-000000000003" }),
+    ).toMatchObject({ status: 200, body: { ok: true } })
+    expect(f.state.reads).toEqual([])
+    expect(f.state.suspended).toEqual([])
+    expect((await readOpsSettings(MAX, world.fetcher())).settings?.repos).toEqual([])
+  })
+
   test("a signed deletion reaches both real handlers once; invalid signatures reach neither", async () => {
     await ready()
     const f = cloudBindingFixture()
