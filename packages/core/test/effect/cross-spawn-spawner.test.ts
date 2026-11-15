@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import childProcess, { spawn } from "node:child_process"
 import os from "node:os"
 import path from "node:path"
@@ -653,31 +653,21 @@ console.log(JSON.stringify({
         const pids = yield* Effect.sync(() => {
           const deadline = performance.now() + 5_000
           while (performance.now() < deadline) {
-            const text = (() => {
-              try {
-                return readFileSync(ready, "utf8").trim()
-              } catch {
-                return ""
-              }
-            })()
-            if (text) return text.split(" ").map(Number)
+            // The shell renames a complete file into place, so once it exists it holds both pids.
+            if (existsSync(ready)) return readFileSync(ready, "utf8").trim().split(" ").map(Number)
             Bun.sleepSync(5)
           }
           throw new Error("The owned shell did not start its group member")
         })
+        const [leader, member] = pids
+        // Never leak the tree, even when the interrupt or an assertion below fails. A group already gone throws ESRCH.
+        yield* Effect.addFinalizer(() =>
+          Effect.try({ try: () => process.kill(-leader, "SIGKILL"), catch: () => "gone" }).pipe(Effect.ignore),
+        )
         yield* Fiber.interrupt(fiber)
         const exit = yield* Fiber.await(fiber)
         // The interrupt was requested before the spawn event was delivered, and the spawn never handed out a handle.
         expect(Exit.isFailure(exit) && Exit.hasInterrupts(exit)).toBe(true)
-        const [leader, member] = pids
-        // Never leak the tree, even when the assertions below fail.
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            try {
-              process.kill(-leader, "SIGKILL")
-            } catch {}
-          }),
-        )
         // A reparented zombie may keep its pid until the container's init reaps it; it no longer runs.
         const running = (pid: number) =>
           childProcess
