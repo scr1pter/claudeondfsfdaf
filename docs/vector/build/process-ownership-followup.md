@@ -138,3 +138,31 @@ This document does not close PR #23.
 CI here ran only on Linux and Windows runners. No macOS run, artifact ZIP
 verification, release review or other platform acceptance is claimed. No merge
 or release is claimed.
+
+## Hosted sandbox cleanup (C9), 15 November 2026
+
+The process-spawn review's C9 worried that the POSIX owned-group cleanup could not
+confirm a stop inside the hosted engine sandbox, because the sandbox `/proc` might be
+empty. At the `native-qualify` head that case cannot occur in any shipped or CI build:
+
+- A legacy hosted `@vector` engine runs with the host `/proc`. The bubblewrap floor is off,
+  and so is the native build. So the `kill(-pgid, 0)` check and the `/bin/ps` zombie check
+  in `OwnedProcess` work there.
+- A native CI build has an empty `/proc`, but it refuses owned commands before launch.
+
+The new Linux test `packages/engine/test/task/shell-required-isolation-posix.test.ts`
+covers this path. Under required isolation it stops an owned background group that
+ignores SIGTERM, and it shows:
+
+- cleanup `"confirmed"`;
+- both group members gone (on a GitHub-hosted runner strictly `ESRCH`; elsewhere a
+  reparented zombie that PID 1 has not reaped yet is also accepted);
+- the slot released;
+- the stop inside the default bounds (3 s grace, then 3 s kill).
+
+No process-ownership guarantee or deadline changed: grace, kill and drain stay at 3 s
+each, and ShellJobs sets none. A `setsid` grandchild still leaves the group and is not
+contained; that limit is unchanged. Hosted CI evidence comes from the Linux engine shard of
+`test.yml` at the end of the lane. The details are in the
+[spawn-review addendum](v2-spawn-review.md#addendum-15-november-2026-c9-spawn-1-and-spawn-2-at-the-native-qualify-head-nq-2)
+and the [lane notes](native-qualify-notes.md#nq-2-15-november-2026).

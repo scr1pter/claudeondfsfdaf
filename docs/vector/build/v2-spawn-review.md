@@ -320,3 +320,99 @@ A useful trick: `requireIsolation()` cannot be reset, but off Linux `launch` **a
 2. **Native lane:** delegate (`OwnedProcess.delegate`) or refuse owned commands under a native plan until qualification? Either is safe. The delegate is the end state.
 3. **BI lane:** can background shells run in a hosted GitHub run? If yes, decide what happens to #26's `ps`-based check when the engine's `/proc` is empty (C9). Today it fails closed and holds the slot. Refusing background shells while `ProcessIsolation.required()` is the simplest option.
 4. **Outside this review's scope, noted while reading:** the legacy shell wrap joins argv with spaces, `[file, ...args].join(" ")` (BI core/process-isolation.ts:79; NS :306). The shell tool passes no args, so it is harmless there. A future caller with `shell: true` and arguments would lose its quoting.
+
+---
+
+## Addendum, 15 November 2026: C9, SPAWN-1 and SPAWN-2 at the native-qualify head (NQ-2)
+
+This is a dated addendum, and nothing above it was edited. The citations are at the
+`native-qualify` lane head. The code they cite is unchanged since `597dbcc9`, which is
+based on `release-finish` `0ee486e3`. The path shorthand is the same as above. The
+evidence and the §6 Q3 reasoning are in
+[`native-qualify-notes.md`](native-qualify-notes.md#nq-2-15-november-2026), NQ-2.
+
+**Superseded, not edited:** three sentences above say that the hosted engine has an empty
+`/proc`:
+
+- Summary item 6, line 26: "where `/proc` is empty";
+- the §1 build-integrate "Engine sandbox" bullet, line 58: "runs under bwrap with an empty,
+  read-only `/proc`";
+- C9, line 133: "In hosted GitHub runs the engine runs with an empty, read-only `/proc`",
+  with the "not checked" note on background shells.
+
+The lines below replace them for the code as it stands now.
+
+**C9 is not reachable.**
+
+- Only `ProcessIsolation.engineArguments` mounts the empty `/proc`
+  (`core/process-isolation.ts:215-245`, with `--tmpfs /proc --remount-ro /proc` at
+  `:228-231`).
+- `engineLaunch` uses it only when its `floor` argument is true
+  (`engine/cli/cmd/github.sandbox.ts:629-643`). Otherwise it returns the plain sudo argv
+  (`:639-640`).
+- The hosted caller passes `native || ProcessIsolation.FLOOR` (`:798`):
+  - `FLOOR` is the literal `false` (`core/process-isolation.ts:26`);
+  - `native` is `GithubIsolation.enabled()` (`github.sandbox.ts:669`,
+    `engine/cli/cmd/github.isolation.ts:872-875`), which returns the literal `false` in
+    `engine/cli/cmd/github.isolation-build.ts:2`; the core literal is
+    `core/process-isolation/build.ts:2`.
+- So every shipped hosted engine sees the host `/proc`. The sandbox probe reads it
+  (`packages/engine/test/fixture/sandbox-probe.ts:26-27`, `64`), and the `/bin/ps` call in
+  `groupEmpty` works there (`core/owned-process.ts:74-96`, `/bin/ps` at `:79-82`).
+- The native CI build does get the empty `/proc`, but it refuses an owned command before
+  any process exists (`core/cross-spawn-spawner.ts:405-411`). So there is no owned group
+  there, and no `groupEmpty` call.
+
+**When C9 could come back:** only if FLOOR is enabled (owner-gated), or if a native build
+ever routes an owned command through `OwnedProcess.track`. Adopting the §4.4
+`OwnedProcess.delegate` would not bring it back, because a delegate never signals and
+never calls `groupEmpty`.
+
+`groupEmpty` is deliberately unchanged.
+
+**SPAWN-2** (the PR #33 review's copy of C9) has the same status. It is not reachable at
+the lane head, it returns only under the two conditions above, and no code change is made.
+
+**SPAWN-1, POSIX half, is covered.** The new
+`packages/engine/test/task/shell-required-isolation-posix.test.ts` runs only on Linux and
+is skipped explicitly elsewhere; CI runs it in the Linux engine shard of `test.yml`. Its
+child process calls `requireIsolation()` and runs an owned background command through
+`ShellJobs`. That command is a shell plus two sleepers, all ignoring SIGTERM. FLOOR is
+false, so `decide` returns the plain command (`core/process-isolation.ts:326`). The plain
+owned process group is therefore the only signaler (`core/owned-process.ts:63-70`, `track`
+`:112-163`). The test asserts:
+
+- the sleepers' parent and process group are the leader;
+- `stop` returns stopped;
+- the row says `cleanup: "confirmed"`;
+- the stop took at least the 3 s grace and less than grace plus kill (6 s);
+- each sleeper has ended: on a GitHub-hosted runner, whose PID 1 reaps, it must be gone
+  (`ESRCH`) within 2 s; elsewhere a zombie already reparented away from the leader is
+  also accepted;
+- the slot is released while seven other commands still run.
+
+Two local mutations make it fail: removing the fixture's TERM trap, and signalling only
+the leader in `owned-process.ts`.
+
+This is not S4-2 as written. S4-2 expects `handle.pid` to be bwrap and a `setsid` canary
+that does not survive, and both need the FLOOR. Without it a `setsid` grandchild leaves
+the group (`engine/task/shells.ts:31`). That is a pre-existing limit, recorded and not
+asserted.
+
+**SPAWN-1, native half, is not covered yet.** The refusal at
+`core/cross-spawn-spawner.ts:411` cannot be tested from source, because the build literal
+is false. It belongs to an `owned` refusal scenario in the native-shell fixture (NQ-6 or
+NQ-7). By code reading, that refusal fires inside the job's `run`
+(`engine/task/shells.ts:630`), after `background.start` has written the durable row
+(`:695`). So the scenario should expect a row that ends with cleanup `"confirmed"`. That
+differs from the Windows S4-3 contract, where no row is written.
+
+**C10, S4-5 and SPAWN-3.** C10 is implemented: before `spawn`, the canceller of an owned
+command runs `owned.stop` (`core/cross-spawn-spawner.ts:508`). S4-5 (its test) and SPAWN-3
+belong to the review-fixes lane.
+
+**§6 Q3.** From code reading, background shells are reachable in a hosted legacy
+`@vector` run on Linux; the reasoning is in the lane notes. Whether to offer them is a
+product decision that stays with the owner. Until it is made, uncertain cleanup keeps
+failing closed: the row is failed and the slot stays held. §6 Q2 (delegate or refuse)
+also stays open.
