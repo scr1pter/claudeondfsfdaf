@@ -238,7 +238,7 @@ CI: pending, recorded by the commit stage in "Evidence scope" (WS-05(b)). The `v
 
 Deviations:
 
-- D1: the `vector-workspaces.yml` dispatch is blocked, as above.
+- D1: the `vector-workspaces.yml` dispatch is blocked, as above. Superseded: GitHub accepts the dispatch from this branch even though the file is not on `main`, and WS-01's dispatch, run `43658792887` on `96061a85`, succeeded (see WS-03's CI below).
 - D2 (deliberate, outside WS-01's enumerated items (a)-(d), for the reviewer to accept explicitly; if rejected, revert to `group: vector-workspaces-${{ github.ref }}`): moving `push` to `main` under the old `vector-workspaces-${{ github.ref }}` group with `cancel-in-progress` would let each merge cancel the run of the merge before it, leaving a cancelled check in `main`'s history and no engine-smoke evidence for that commit. The workflow therefore adopts `vector-everywhere.yml`'s concurrency idiom: each run on `main` keeps its own group (`run_id`), and pull requests and branches still cancel stale runs.
 - D3: the `paths` filter leaves out files the new steps read: the root `tsconfig.json` and `packages/engine/**` (hosted API typecheck and engine smoke), `packages/web/src/lib/account-client*` (imported by the account island), `packages/schema/src/codium-*` (the plan copy that feeds the no-credits/prices assertion), and the whole of `packages/web/src/components` and `src/lib` scanned by the email check. They stay out as specified. `test.yml`'s Linux unit job backstops only the page tests, and only once its earlier steps pass. On pull requests the hosted API typecheck has no backstop for those files: `vector-sharing.yml`, `vector-free-models.yml` and `vector-at-mention.yml` run the same command, but their pull-request paths never list the root `tsconfig.json` and list `packages/engine` only in part. On pushes to `main`, `vector-at-mention.yml` runs it for every change. Widening the list is the lead's call; if approved, add at least `tsconfig.json` and `packages/web/src/lib/account-client*` to both lists, keeping them identical.
 - D4: no cloud-workspaces progress or deviations file exists in `docs/vector/build`, so the lane record lives in this section; a later package may move it.
@@ -280,7 +280,14 @@ Local evidence (uncommitted tree on `96061a85`, Bun 1.3.14, every Bun command th
   - against `origin/review-fixes` (`1433d105`) it conflicts in `.github/workflows/vector-workspaces.yml` and `docs/vector/build/cloud-workspaces.md`, as it did without WS-03 (FIT-4 `f251ac2c` against WS-01), and now also in `api/_lib/codium-erase.ts`. That conflict is one hunk: the comment's last line and the revoke statement. `test/account-delete.test.ts` and `account-erasure-integration.md` merge cleanly, and the identical test (a) hunks collapse into one copy.
 - Logs under `/tmp/vector-v2/workspaces-finish/`: `ws03r1-account-delete.log`, `ws03r1-account-delete-api.log`, `ws03r1-api-typecheck.log`, `ws03r1-mutation.log` (no `revoke` stop) and `ws03r1-mutation-norevoke.log` (no revoke step); the first round's `ws03-*.log` are kept.
 
-CI: the `vector-workspaces.yml` dispatch is **blocked, not green**. `git ls-tree origin/main .github/workflows/vector-workspaces.yml` is still empty at `58f85edc`. Unlike a docs-only change, this one matches the workflow's `api/**` and `test/account-delete.test.ts` paths, so a pull request from this branch, or a push to `main` after PR #33, runs it.
+- Commit gate (committed as `b15af3fe`, same tree): both files and the hosted API typecheck again with the same counts, and the full tree (`bun turbo typecheck --concurrency=2`, 27 of 27 tasks) passes. Logs: `ws03g-account-delete.log`, `ws03g-account-delete-api.log`, `ws03g-api-typecheck.log` and `ws03g-turbo-typecheck.log`.
+
+CI on `b15af3fe`, both by `workflow_dispatch` on `workspaces-finish`, both green:
+
+- `vector-workspaces.yml` run `43665190166` (run 22): every step passed. Its "Account gateway and deletion regressions" step ran `account-delete.test.ts` with the new DP-2 describe ("a refused revocation write stops the pass at revoke ..." passed), 79 pass, 1 skip, 0 fail across its 5 files.
+- `typecheck.yml` run `43665192219` (run 496): success.
+
+The dispatch was expected to be blocked, because `git ls-tree origin/main .github/workflows/vector-workspaces.yml` is still empty at `58f85edc`. GitHub accepted it anyway: the workflow is already registered (id `411461989`), and the dispatch runs the file as it is on the requested ref. WS-01's own dispatch (run `43658792887` on `96061a85`) had also succeeded, so D1's "blocked" no longer holds.
 
 Deviations:
 
