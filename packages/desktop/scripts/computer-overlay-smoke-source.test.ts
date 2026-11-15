@@ -126,7 +126,7 @@ describe("independent overlay source admission", () => {
       "app.setAccessibilitySupportEnabled(true)",
     )
   })
-  test("the optional UIA observer owns only a shared atomic phase across late native work", async () => {
+  test("the optional UIA observer keeps an immutable first-timeout phase across late native work", async () => {
     const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
     const header = await readFile(path.join(native, "uia_native.h"), "utf8")
     const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
@@ -143,13 +143,39 @@ describe("independent overlay source admission", () => {
     expect(implementation).not.toMatch(/WindowsUiaDiagnostic\s*[*&]/)
     expect(driver).toContain("std::make_shared<WindowsUiaDiagnostic>()")
     expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic)")
-    expect(driver).toContain("diagnostic->phase.load(std::memory_order_relaxed)")
+    expect(header).toContain("std::atomic<uint32_t> timeout_observation{0}")
+    expect(header).toContain("std::atomic<uint32_t>::is_always_lock_free")
+    expect(header).toContain("uint32_t{1} + static_cast<uint32_t>(phase.load(std::memory_order_relaxed))")
+    expect(header).toContain("timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed)")
+    expect(header).toContain("if (available) return phase.load(std::memory_order_relaxed)")
+    expect(header).toContain("if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none")
+    expect(header).toContain("return static_cast<WindowsUiaPhase>(observed - 1)")
+    expect(driver).toContain("diagnostic->failure_phase(available)")
+    const timeout = implementation.slice(
+      implementation.indexOf("if (result.wait_until(deadline)"),
+      implementation.indexOf("return result.get();"),
+    )
+    expect(timeout.indexOf("note(WindowsUiaPhase::actor_expired)")).toBeLessThan(
+      timeout.indexOf("ticket->cancelled.store(true)"),
+    )
+    const note = implementation.slice(
+      implementation.indexOf("void note_uia("),
+      implementation.indexOf("struct UiaActor"),
+    )
+    expect(note).toContain("phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired")
+    expect(note.match(/note_timeout\(\)/g)).toHaveLength(1)
+    expect(note.indexOf("state->note_timeout()")).toBeLessThan(note.indexOf("state->phase.store(phase,"))
+    expect(timeout).toContain("ticket->cancelled.store(true); actor_->revoked.store(true)")
+    expect(timeout).toContain("actor_->quarantined = true")
+    expect(timeout).toContain("(void)CoCancelCall(thread, 0); unavailable();")
+    expect(implementation).toContain("ticket->deadline = now_ms() + 50")
     const rootFailure = driver.slice(
       driver.indexOf("try { root = uia.root(window); }"),
       driver.indexOf("stage = OverlayDriverStage::stop_hit;"),
     )
     expect(rootFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
-    expect(rootFailure).toContain("if (available && diagnostic)")
+    expect(rootFailure).toContain("diagnostic->failure_phase(available)")
+    expect(rootFailure).not.toContain("diagnostic->phase.load")
     const hitFailure = driver.slice(
       driver.indexOf(
         'try { require(static_cast<bool>(uia.overlay_hit), L"stop_target_invalid"); element = uia.overlay_hit(root, point(request)); }',
@@ -160,7 +186,8 @@ describe("independent overlay source admission", () => {
     expect(hitFailure).toContain(
       "available ? OverlayDriverStage::stop_hit_refused : OverlayDriverStage::stop_hit_retired",
     )
-    expect(hitFailure).toContain("if (available && diagnostic)")
+    expect(hitFailure).toContain("diagnostic->failure_phase(available)")
+    expect(hitFailure).not.toContain("diagnostic->phase.load")
     expect(hitFailure).toContain("throw;")
     for (const phase of ["uninitialized", "cancellation_unavailable", "timer_unavailable", "expired"])
       expect(implementation).toContain(`WindowsComObservation::${phase}: note(WindowsUiaPhase::actor_com_${phase})`)

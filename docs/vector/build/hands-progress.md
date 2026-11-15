@@ -1,5 +1,7 @@
 # Vector Hands continuation checkpoint
 
+**14 November diagnostic candidate:** helper `1.0.17` retains the immutable UIA timeout observation and adds closed substages for actual ARM64 inventory, affinity-plan and listener-health failures. The exact `1.0.16` x64 Stop pass is preserved separately; these diagnostics are not a functional fix or ARM64 qualification. The measured `1.0.15` Mac lock remains enforced and unchanged; fresh exact-source native/package and Mac identity qualification are required. See [the diagnostic scope and remaining gates](./hands-uia-timeout-diagnostic.md). Earlier receipts below retain their exact baseline scope.
+
 The build contract is [hands-build-spec.md](./hands-build-spec.md). Read [hands-deviations.md](./hands-deviations.md) before continuing. Work only on `hands`, implement one work package at a time in the contract's order, and push each package. Do not merge or push to `main`.
 
 The historical continuation prompt, superseded by the checkpoint below, is [hands-handoff.md](./hands-handoff.md), in the original five-section briefing format. It recorded the code checkpoint at `49155228` and the then-remaining work packages and validation boundaries. Implementation resumed from that handoff with D5b, committed on `hands` on top of `50ac11c9`.

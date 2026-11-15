@@ -220,8 +220,8 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
       if (uia.available) {
         const auto available = uia.available();
         stage = available ? OverlayDriverStage::stop_root_refused : OverlayDriverStage::stop_root_retired;
-        // A retired worker may still run late; only a positively healthy actor refines this failure.
-        if (available && diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+        // For a retired actor only the immutable deadline snapshot is eligible; never its live worker phase.
+        if (diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->failure_phase(available))) stage = *observed;
       }
     } catch (...) {}
     throw;
@@ -234,7 +234,7 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
       if (uia.available) {
         const auto available = uia.available();
         stage = available ? OverlayDriverStage::stop_hit_refused : OverlayDriverStage::stop_hit_retired;
-        if (available && diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+        if (diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->failure_phase(available))) stage = *observed;
       }
     } catch (...) {}
     throw;

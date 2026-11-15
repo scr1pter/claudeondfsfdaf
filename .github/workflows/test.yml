@@ -28,6 +28,7 @@ on:
           - linux
           - windows
           - windows-units
+          - macos-measure
           - macos-signing
           - macos-overlay
           - windows-overlay
@@ -107,7 +108,7 @@ jobs:
             exit 1
           fi
           case "$COMPUTER_HELPER_TARGET" in
-            all|linux|windows|windows-units|macos-signing|macos-overlay|windows-overlay) ;;
+            all|linux|windows|windows-units|macos-measure|macos-signing|macos-overlay|windows-overlay) ;;
             *) echo "::error::Unsupported computer-helper target."; exit 1 ;;
           esac
           for value in "$COMPUTER_HELPER" "$DESKTOP_ENGINE_NODE" "$HANDS_UI" "$HANDS_BENCHMARK" "$RELEASE_EVIDENCE" "$PRODUCTION_BENCHMARK" "$OFFLINE_FOOTPRINT"; do
@@ -145,6 +146,25 @@ jobs:
       # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
       # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
       isolated-desktop: true
+
+  # Measurement uses the registered dispatcher without enabling isolated input, desktop fixtures or publication.
+  # The existing helper still enforces the old measured Mac lock after reproducibility and grant-free core checks.
+  computer-helper-macos-measure:
+    needs: validate-dispatch
+    if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'macos-measure' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    uses: ./.github/workflows/computer-helper.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      helper-channel: prod
+      artifact-suffix: mac-measure-${{ github.sha }}
+      reuse-artifacts: false
+      full-desktop-e2e: false
+      isolated-desktop: false
+      privileged-required: false
+      windows-only: false
+      linux-only: false
 
   computer-helper-windows-units:
     needs: validate-dispatch

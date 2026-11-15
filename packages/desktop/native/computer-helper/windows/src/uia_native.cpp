@@ -34,7 +34,10 @@ void desktop_ready() {
     throw Failure{L"secure_desktop", L"The interactive desktop is unavailable."};
 }
 void note_uia(const std::shared_ptr<WindowsUiaDiagnostic>& state, WindowsUiaPhase phase) noexcept {
-  if (state) state->phase.store(phase, std::memory_order_relaxed);
+  if (state) {
+    if (phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired) state->note_timeout();
+    state->phase.store(phase, std::memory_order_relaxed);
+  }
 }
 struct UiaActor {
   std::shared_ptr<WindowsUiaDiagnostic> diagnostic;

@@ -300,6 +300,111 @@ test("Windows privileged diagnostic enums match the native report allowlists exa
   }
 })
 
+test("ARM diagnostics retain apps reply codes and the original affinity and listener checks in order", async () => {
+  const source = await readFile(
+    path.join(desktopDirectory, "native/computer-helper/windows/src/privileged_self_test.cpp"),
+    "utf8",
+  )
+  const compact = (text: string) => text.replace(/\s+/g, " ").trim()
+  const plan = source.slice(
+    source.indexOf("NativeReply capture_affinity_display("),
+    source.indexOf("JsonObject args =", source.indexOf("NativeReply capture_affinity_display(")),
+  )
+  const guards = [
+    ["affinity-plan-context", "state->available()"],
+    ["affinity-plan-target", "target && target->current()"],
+    [
+      "affinity-plan-fixture",
+      "frame.window && valid_windows_target_state(shown) && shown.affinity && shown.excluded_visible && shown.patch.contains(shown.excluded_bounds)",
+    ],
+    [
+      "affinity-plan-main",
+      "target->pid() == shown.pid && frame.window->hwnd == shown.window && frame.window->surface == shown.window && frame.window->bounds == shown.bounds && frame.window->owner.process.pid == shown.pid && frame.window->physical_owner.process.pid == shown.pid && frame.window->window_class == windows_target_class",
+    ],
+    [
+      "affinity-plan-session",
+      "frame.session_id == phase.id && frame.run_epoch == phase.run_epoch && frame.observation_epoch == phase.observation_epoch && frame.revision == phase.revision",
+    ],
+    ["affinity-plan-current-frame", "state->captures->current(frame, phase)"],
+    [
+      "affinity-plan-display",
+      "display != frame.inventory.displays.end() && display->bounds.contains(shown.excluded_bounds)",
+    ],
+    ["affinity-plan-excluded-surface", "excluded != frame.inventory.windows.end() && excluded->window"],
+    [
+      "affinity-plan-excluded-owner",
+      'excluded->window->surface == shown.excluded && excluded->window->bounds == shown.excluded_bounds && excluded->window->owner.process.pid == shown.pid && excluded->window->physical_owner.process.pid == shown.pid && excluded->window->window_class == L"VectorComputerIsolatedTargetExcluded"',
+    ],
+    [
+      "affinity-plan-geometry",
+      "x >= 0 && y >= 0 && x < fit.width && y < fit.height && source_x >= 0 && source_y >= 0 && source_x < display->bounds.width && source_y < display->bounds.height",
+    ],
+    ["affinity-plan-request", "next < 999'999"],
+    ["affinity-plan-current", "value->current()"],
+    ["affinity-plan-current-context", "state->available()"],
+  ] as const
+  const ordered = guards.map(([name, predicate]) => {
+    const match = plan.match(new RegExp(`diagnostic_stage\\(L"${name}", \\[&\\] \\{ require\\(([\\s\\S]*?)\\); \\}\\)`))
+    expect(match, name).not.toBeNull()
+    expect(compact(match![1]!), name).toBe(predicate)
+    expect(WINDOWS_NATIVE_STAGES).toContain(name)
+    return plan.indexOf(`diagnostic_stage(L"${name}"`)
+  })
+  expect(ordered).toEqual([...ordered].sort((left, right) => left - right))
+  expect(plan.indexOf("const auto phase = session()")).toBeLessThan(ordered[0]!)
+  for (const [text, count] of [
+    ["session()", 1],
+    ["state->available()", 2],
+    ["target->current()", 1],
+    ["state->captures->current(frame, phase)", 1],
+    ["value->current()", 1],
+    ["std::find_if(", 2],
+    ["fit_capture(", 1],
+  ] as const)
+    expect(plan.split(text).length - 1, text).toBe(count)
+  expect(plan.indexOf("frame.inventory.displays.begin()")).toBeLessThan(plan.indexOf("frame.inventory.windows.begin()"))
+  expect(plan).not.toMatch(/retry|sleep_for|WindowsBackend::system|target->request\(/)
+
+  const running = source.slice(
+    source.indexOf("bool running_target("),
+    source.indexOf("std::wstring windows_privileged_native_code("),
+  )
+  expect(running).toContain('NativeScenario::success(reply, L"apps-list-reply")')
+  expect(running.indexOf("NativeScenario::success")).toBeLessThan(
+    running.indexOf('diagnostic_stage(L"apps-list-decode"'),
+  )
+  const app = source.slice(source.indexOf("run(1, [&]"), source.indexOf("run(2, [&]"))
+  expect(app.split('native->request(L"apps.list"').length - 1).toBe(1)
+  expect(app.indexOf('diagnostic_stage(L"apps-list-request"')).toBeLessThan(
+    app.indexOf('diagnostic_stage(L"apps-list-target"'),
+  )
+  expect(app).not.toMatch(/while|sleep_for|retry/)
+
+  const health = source.slice(
+    source.indexOf('diagnostic_stage(L"input-listener-health"'),
+    source.indexOf('diagnostic_stage(L"input-calibration-required"'),
+  )
+  expect(health).toContain("const auto deadline = GetTickCount64() + 750")
+  expect(health).toContain(
+    "while (native->state->available() && target->current() && !detector->listener_health_ready() && GetTickCount64() < deadline)",
+  )
+  const final = [
+    ["input-health-context", "native->state->available()"],
+    ["input-health-target", "target->current()"],
+    ["input-health-ready", "detector->listener_health_ready()"],
+  ].map(([name, predicate]) => {
+    const text = `diagnostic_stage(L"${name}", [&] { require(${predicate}); })`
+    expect(health).toContain(text)
+    expect(WINDOWS_NATIVE_STAGES).toContain(name!)
+    return health.indexOf(text)
+  })
+  expect(final).toEqual([...final].sort((left, right) => left - right))
+  expect(health.split("native->state->available()").length - 1).toBe(2)
+  expect(health.split("target->current()").length - 1).toBe(2)
+  expect(health.split("detector->listener_health_ready()").length - 1).toBe(2)
+  expect(health).not.toMatch(/setup_start|deadline\s*\+=|WindowsBackend::system/)
+})
+
 test("Windows channel inference verifies all test artifacts before the first helper version launch", async () => {
   const prepared = await windowsArtifacts()
   const order: string[] = []
