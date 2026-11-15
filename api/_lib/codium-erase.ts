@@ -60,8 +60,8 @@ import { eraseAccountPushSubscriptions } from "./web-push.js"
  * lists their retention); the run-token revocation mark (a security record that expires); the disabled OpenRouter keys
  * and Stripe's own records. Per-period counters keyed by the account id itself (`meter:`, `estimate:`, the cloud
  * computer's fair-use counts) are not ledger lines and are erased. The tombstone itself is kept `TOMBSTONE_KEEP_MS`
- * after the deletion finished, and so is Everywhere's closed marker (`vector:everywhere:closed:<account>`), which the
- * last pass rewrites with that expiry so no late Everywhere writer can recreate the account's data meanwhile.
+ * after the deletion finished, and so is Everywhere's closed marker (everywhereKeys.accountClosed in everywhere/keys.ts),
+ * which the last pass rewrites with that expiry so no late Everywhere writer can recreate the account's data meanwhile.
  */
 
 const MINUTE_MS = 60_000
