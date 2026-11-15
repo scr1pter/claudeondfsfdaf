@@ -57,6 +57,8 @@ const state = {
   rebind: false,
   brain: false,
   reads: 0,
+  stores: 0,
+  fetches: 0,
 }
 const env = {
   VECTOR_RUN_ARTIFACT_SECRET: "owner-artifact-fixture-at-least-32-characters",
@@ -68,10 +70,12 @@ const api = createOwnerArtifactReadApi({
   env,
   now: () => at,
   fetcher: (async (_url, init) => {
+    state.fetches++
     expect(JSON.parse(String(init?.body))).toEqual(["GET", `vector:cli-revoked:${account}`])
     return Response.json({ result: state.revoked ? "1" : null })
   }) as typeof fetch,
   store: async (command) => {
+    state.stores++
     if (command[0] === "HGETALL") {
       expect(command[1]).toBe(`vector:cloud-agents:run:${rid}`)
       return Object.entries({
@@ -212,6 +216,32 @@ test("a rebind during slow metadata verification and the closed activation switc
   try {
     expect((await post()).status).toBe(503)
     expect(state.reads).toBe(0)
+  } finally {
+    state.enabled = true
+  }
+})
+
+test("with the switch off the owner read answers 503 before any store or fetch", async () => {
+  Object.assign(state, { enabled: false, stores: 0, fetches: 0, reads: 0 })
+  const token = mintCliToken({ id: account, email: "fixture@example.test" }, at, "desktop").token
+  try {
+    for (const method of ["POST", "GET"]) {
+      const response = await fetch(origin, {
+        method,
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+      })
+      expect({ method, status: response.status, body: await response.json() }).toEqual({
+        method,
+        status: 503,
+        body: { error: { code: "ARTIFACT_READ_UNAVAILABLE", message: expect.any(String) } },
+      })
+    }
+    expect({ stores: state.stores, fetches: state.fetches, reads: state.reads }).toEqual({
+      stores: 0,
+      fetches: 0,
+      reads: 0,
+    })
   } finally {
     state.enabled = true
   }

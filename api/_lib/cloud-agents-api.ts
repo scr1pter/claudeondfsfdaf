@@ -490,6 +490,13 @@ export function createCloudAgentsApi(
       windowSeconds: 3600,
       requirePersistent: true,
     })
+    // Brain history (V27): an owner-desktop run is the only run that can obtain Brain context, so it never holds the
+    // ordinary conversation key, whichever key it asks for first (deviations, "2026-11-15 BT03").
+    const live = await liveRun(claims.sub, claims.rid, store)
+    if (!live || live.jti !== claims.jti)
+      throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized.")
+    if (live.triggerSource === "desktop")
+      throw new ApiError(403, "ARTIFACT_KEY_NOT_ALLOWED", "This conversation key is not available to this run.")
     json(response, 200, cloudRunArtifactKey(claims))
   }
 

@@ -169,6 +169,7 @@ Remaining:
 - The runner side of the session proof: the FD3 bridge (`github.sandbox.ts:626-637`) and the proof-checked copy into `vector-session` (`:785-790`, `:828-850`).
 - The workflow upload of `vector-session-<thread>` (`core/src/review/workflow.ts:702-703`).
 - Desktop preview and import (`desktop/src/main/github-agents-brain.ts:114,192,269,361`), with the engine's local `/experimental/brain/preview` and `/experimental/brain/run-proposals/import` routes.
+- BT03 (`brain-transport`): the Brain upload store and the live run reader are hardened and tested against real Redis, and with the switch off every Brain route answers 503 first (deviations, "2026-11-15 BT03"). The ordinary artifact key is now refused (403 `ARTIFACT_KEY_NOT_ALLOWED`) to every owner-desktop run, so the engine client in item 3 must take a Brain run's conversation key from `brain-download`'s `artifactKey`, never call artifact-key when `VECTOR_BRAIN_UPLOAD` is set, and treat that 403 as "no ordinary key" (the run then saves no session).
 
 **Missing: the Actions engine side does none of this yet.**
 1. **Save and restore.**
