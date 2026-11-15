@@ -17,8 +17,8 @@ env:
 jobs:
   shell:
     name: Shell seam (${{ matrix.runtime }}, ${{ matrix.mode }}, ${{ matrix.family }})
-    # Only reviewed source on main qualifies the native seam; a lane branch that needs a run widens this on its own branch.
-    if: github.ref == 'refs/heads/main'
+    # Dispatch is the only trigger and a manual step, so any ref may run the seam: a lane branch qualifies it before it
+    # merges. The artifacts carry the commit SHA, and only a run on main is the qualification of record.
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:

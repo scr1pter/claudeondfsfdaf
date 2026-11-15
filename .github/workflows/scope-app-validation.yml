@@ -3,6 +3,7 @@ name: VectorScope owner review memory UI
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
