@@ -530,11 +530,15 @@ async function requireTopLevel(repo: Repo) {
 // The base read into the private index, `git add -A` outside vector-out/, then what changed against the base.
 // Untracked repositories of their own and names git refuses are kept out of the add, since either one makes the whole
 // add fail; listed entries publish refuses are reset to the base. Everything left out is listed. More than
-// PATCH_LIMITS.files new paths for the add, or listed changes before the reset, is the "files" refusal.
+// PATCH_LIMITS.files new paths for the add, new and changed paths together before it, or listed changes before the
+// reset, is the "files" refusal. The listing stays the count of record; the counts before the add only spare git
+// writing thousands of objects for a run that is refused anyway.
 async function stage(repo: Repo, base: string): Promise<Staged> {
   await must(repo, ["read-tree", base])
   const untracked = await listUntracked(repo)
   if (!untracked || untracked.added > GithubAgents.PATCH_LIMITS.files) return filesRefusal(untracked?.added)
+  const counted = await countChanges(repo, untracked)
+  if (counted === undefined || counted > GithubAgents.PATCH_LIMITS.files) return filesRefusal(counted)
   await must(
     repo,
     ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
@@ -574,6 +578,23 @@ async function listUntracked(repo: Repo) {
   const keys = listed.output.toString("latin1").split("\0").slice(0, -1)
   const left = keys.filter((key) => key.endsWith("/") || unsafePath(key))
   return { left: left.map((key) => key.replace(/\/$/, "")), added: keys.length - left.length }
+}
+
+// The new paths plus the base paths the add would change or remove, read without writing an object. After read-tree the
+// private index holds no stat data, so the refresh hashes each base path once and records what is unchanged; the
+// listing then hashes only what differs, and the add skips the rest. The refresh takes no pathspec, since `add --refresh`
+// dies on a base with nothing outside vector-out/, and ls-files takes no pathspec file, so the paths the add leaves out
+// are dropped here, with what is under them. undefined past RAW_LIMIT bytes.
+async function countChanges(repo: Repo, untracked: { left: string[]; added: number }) {
+  await must(repo, ["update-index", "-q", "--refresh"])
+  const listed = await git(repo, ["ls-files", "-z", "--modified", "--", ".", EXCLUDE], { limit: RAW_LIMIT })
+  if (listed.overflow) return undefined
+  const changed = listed.output
+    .toString("latin1")
+    .split("\0")
+    .slice(0, -1)
+    .filter((key) => !untracked.left.some((left) => key === left || key.startsWith(`${left}/`)))
+  return untracked.added + changed.length
 }
 
 /**

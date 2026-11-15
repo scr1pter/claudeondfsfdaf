@@ -108,20 +108,28 @@ class ScenarioBuilder<S = undefined> {
     )
   }
 
-  /** Assert JSON status/content-type plus an optional synchronous body check. */
-  json(status = 200, inspect?: (body: unknown, ctx: SeededContext<S>) => void, compare: Comparison = "json") {
+  /**
+   * Assert JSON status/content-type plus an optional synchronous body check. A status function reads the seeded
+   * state, for a route whose answer depends on a host capability the seed observed.
+   */
+  json(
+    status: number | ((ctx: SeededContext<S>) => number) = 200,
+    inspect?: (body: unknown, ctx: SeededContext<S>) => void,
+    compare: Comparison = "json",
+  ) {
     return this.jsonEffect(status, inspect ? (body, ctx) => Effect.sync(() => inspect(body, ctx)) : undefined, compare)
   }
 
   /** Assert JSON status/content-type plus optional Effect assertions, e.g. DB side effects. */
   jsonEffect(
-    status = 200,
+    status: number | ((ctx: SeededContext<S>) => number) = 200,
     inspect?: (body: unknown, ctx: SeededContext<S>) => Effect.Effect<void>,
     compare: Comparison = "json",
   ) {
     return this.done(compare, (ctx, result) =>
       Effect.gen(function* () {
-        if (result.status !== status) throw new Error(`expected ${status}, got ${result.status}: ${result.text}`)
+        const expected = typeof status === "number" ? status : status(ctx)
+        if (result.status !== expected) throw new Error(`expected ${expected}, got ${result.status}: ${result.text}`)
         if (!looksJson(result))
           throw new Error(`expected JSON response, got ${result.contentType || "no content-type"}`)
         if (inspect) yield* inspect(result.body, ctx)
