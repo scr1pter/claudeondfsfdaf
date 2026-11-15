@@ -19,9 +19,15 @@ import {
   acknowledgement,
   counters,
   json,
+  type ShellStage,
 } from "./native-shell-payload"
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+// Refusal bookkeeping only: one fixed stage and the round's closed case name, reported on the protocol channel.
+const progress: { nonce?: string; stage: ShellStage<"engine">; case: string | null } = {
+  stage: "engine-identity",
+  case: null,
+}
 
 async function main() {
   // First main action: the real global loader admits actual stdin and activates the monotonic authority itself.
@@ -33,6 +39,7 @@ async function main() {
       ProcessIsolation.required(),
   )
   const manifest = decodeManifest(json(await rootFile(MANIFEST, 16_384)))
+  progress.nonce = manifest.nonce
   const spec = LinuxIsolation.decodeSpec(await rootFile(LinuxIsolation.SPEC, 65_536))
   need(
     manifest.nonce === spec.nonce &&
@@ -43,6 +50,7 @@ async function main() {
       manifest.mode === process.env.VECTOR_MODE &&
       (manifest.runtime === "bun") === Boolean(process.versions.bun),
   )
+  progress.stage = "engine-setup"
   const native = ProcessIsolation.nativeBuild()
   need(native.enabled && typeof native.entrySHA === "string")
   const { GithubIsolation } = await import("../../src/cli/cmd/github.isolation")
@@ -174,6 +182,8 @@ async function main() {
             need(controlSignals === 1)
             const selected = manifest.family === "engine-death" ? ["death"] : CASES
             for (const name of selected) {
+              progress.stage = "engine-round"
+              progress.case = name
               yield* Effect.promise(procEmpty)
               emit("round-begin", { case: name })
               yield* Effect.promise(() => acknowledgement(manifest, name, "baseline"))
@@ -325,6 +335,8 @@ async function main() {
               yield* Effect.promise(procEmpty)
               need(controlSignals === 1)
             }
+            progress.stage = "engine-finish"
+            progress.case = null
             need(guard.attempts().length === 0, "A fixture attempted an unexpected network call")
             let proofWritten = false
             if (manifest.mode === "codium") {
@@ -351,7 +363,21 @@ async function main() {
   }
 }
 
-void main().catch(() => {
-  process.stderr.write("Native Shell engine fixture refused\n")
+void main().catch(async () => {
   process.exitCode = 125
+  process.stderr.write("Native Shell engine fixture refused\n")
+  // Before the manifest nonce was known, a bounded Root read may still name the identity stage; nothing else is read.
+  const nonce =
+    progress.nonce ??
+    (await rootFile(MANIFEST, 16_384)
+      .then((bytes) => decodeManifest(json(bytes)).nonce)
+      .catch(() => undefined))
+  if (!nonce) return
+  // A protocol pipe the host already closed must not turn the refusal into an uncaught EPIPE and another exit code.
+  process.stdout.on("error", () => {})
+  process.stdout.write(
+    PREFIX +
+      JSON.stringify({ v: 1, event: "engine-failure", nonce, stage: progress.stage, case: progress.case }) +
+      "\n",
+  )
 })

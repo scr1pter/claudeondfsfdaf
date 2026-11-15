@@ -125,7 +125,7 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-3 | Refuse at admission any mask whose ancestors the keeper cannot search | Once, `{"diagnostic_cell": true}` | Committed (see below; D45); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log |
 | NQ-4 | Inventory direct process spawn sites and their isolation stance | None (typecheck; test.yml at the lane end) | Committed (see below; D56); passes locally; the engine shards of `test.yml` run it at the lane end |
 | NQ-5 | Mask the runner home instead of its unreachable temporary leaf | Once, `{"diagnostic_cell": true}` | Committed (see below; D57-D74); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log by a later package (D45) |
-| NQ-6 | Native baseline cell follow-up A | Once, `{"diagnostic_cell": true}` | Planned |
+| NQ-6 | Native baseline cell follow-up A | Once, `{"diagnostic_cell": true}` | Committed (see below; D75-D82); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log by a later package (D45) |
 | NQ-7 | Native baseline follow-up B and the full matrix | Exactly one: the diagnostic cell, or `{"diagnostic_cell": false}` (eight cells) only if the diagnostic cell is green with the `owned` refusal case. Any full-matrix spend beyond that one bounded dispatch is owner-gated. | Planned |
 | NQ-8 | Close the lane's native qualification and spawn-review records | None (typecheck) | Planned |
 
@@ -137,7 +137,8 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-2 | None: not a native package | | | | | Only the runner's automatic `native-guard-unit.yml` and `typecheck.yml` dispatches follow the push. |
 | NQ-3 | [43675930370](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675930370) (`workflow_dispatch`, attempt 1, failure) | `132695971881` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `f05f991616584eb0542f9ac1fead49e730ba1027` | `{"diagnostic_cell": true}` (the run has this single job) | `prepare-mask-host-temp-keeper-search` (entry `RuntimeError`, errno and exit null; control `native-prepare` `CalledProcessError` exit 125; transport `close` `ChildExit` exit 1) | Gate: guard-unit [43675734735](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675734735) (job `132695351609`, `Ran 40 tests in 0.132s` ... `OK`) and typecheck [43675737341](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675737341) both passed at the same head. Steps 1-12 passed: control policy (3 pass, 0 fail, 33 `expect()` calls), pure Python (`Ran 40 tests in 0.197s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" failed (exit 125). Steps 14-16 (seed, verify, lifecycle witness) were skipped. Step 17 "Always finish the exact owned native operation; missing state is refused" printed transport `close` `ChildExit` exit 1 and control `native-state` `FileNotFoundError` `ENOENT` (no entry record), exit 125, and reports conclusion `success` in the API. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'failure' 'skipped' 'failure'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded the receipts (artifact `14146243257`). |
 | NQ-4 | None: not a native package | | `b861736d4c130dde51506500c951e40da9b452e1` | | | Only the runner's automatic dispatches followed the push: guard-unit [43680012678](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43680012678) and typecheck [43680015135](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43680015135), both `workflow_dispatch`, attempt 1, completed, success, at the head above (D70). |
-| NQ-5 | Pending: dispatched by the NQ-5 commit step after the push and the guard-unit gate | | | `{"diagnostic_cell": true}` | | Filled from the API by a follow-up docs commit if the commit step allows, else by NQ-6. |
+| NQ-5 | [43685383291](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685383291) (`workflow_dispatch`, run 15, attempt 1, failure) | `132724666982` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `4eb7e06c4868a9b6dc2ebd8c66cfe86ef2acde67` | `{"diagnostic_cell": true}` (the run has this single job) | None: the host step printed only its generic "Native Shell host fixture refused" line, because the host witness had no closed failure vocabulary (NQ-6 adds one) | Gate: guard-unit [43685344362](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685344362) (job `132724554817`) and typecheck [43685347436](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43685347436) both passed at the same head. Steps 1-12 passed: control policy (4 pass, 0 fail, 58 `expect()` calls), pure Python (`Ran 45 tests in 0.233s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" passed (06:26:42 to 06:27:28Z), the first hosted native prepare that passed. Step 14 (seed) and step 15 (verify) passed. Step 16 "Actual ShellTool and command lifecycle witness before any UID sweep" failed (exit 125) about 1.03 s after its group header (06:27:29.72 to 06:27:30.75Z). Step 17 "Always finish the exact owned native operation; missing state is refused" reports `success` and printed nothing; step 18's argv shows `steps.finish.outcome` `success`. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'success' 'failure' 'success'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded 4 of the 5 paths, without the absent host report `/home/runner/work/_temp/native-shell-bun-own-key-baseline.json` (artifact `14150081960`, 3649 bytes, zip SHA256 `aee95e23ab6720213477364b3c8c6b14631c85e36bade52f1d1da4c3dd7f875d`). |
+| NQ-6 | Pending: dispatched by the NQ-6 commit step after the push and the guard-unit and typecheck gate | | | `{"diagnostic_cell": true}` | | Filled from the API by a follow-up docs commit if the commit step allows, else by NQ-7. |
 
 Before NQ-1, `list_workflow_runs` for `native-shell.yml` on `native-qualify` returned
 `total_count` 0, and `origin/native-qualify` did not exist.
@@ -159,6 +160,17 @@ NQ-5 filled the NQ-4 row from `get_workflow_run` for both gate runs and re-read
 `list_workflow_runs` for `native-shell.yml` on `native-qualify` (`total_count` 2, newest
 43675930370, completed, no run in progress), on 15 November 2026. NQ-5 interprets the
 NQ-1 and NQ-3 rows (D58) and does not record them again.
+
+NQ-6 filled the NQ-5 row on 15 November 2026 from `list_workflow_runs` for
+`native-shell.yml` on `native-qualify` (`total_count` 3; 43685383291 is the newest), then
+`list_workflow_jobs`, `get_workflow_job` and a 400-line job log tail. At the plan's first
+read the run was still in progress; it was re-read after the code reading and was then
+completed with conclusion `failure` (created 06:25:38Z, job completed 06:27:34Z). The
+implement step re-read `get_workflow_job`, `list_workflow_runs` (still `total_count` 3),
+`get_workflow_run` for both gate runs (both completed, success, at `4eb7e06c`) and a
+120-line log tail, with the same facts. `download_workflow_run_artifact` returned a blob
+URL that the agent proxy refused (CONNECT 403); it was not retried, and the empty scratch
+directory was removed (D77).
 
 ## NQ-1, 15 November 2026
 
@@ -1575,3 +1587,343 @@ From the worktree, one Bun workload at a time through the lock:
   full `bun turbo typecheck --concurrency=2` with `TURBO_CACHE_DIR` inside the worktree
   (27 of 27 tasks). The single `diagnostic_cell` dispatch follows the guard-unit gate
   written under Deferred.
+
+## NQ-6, 15 November 2026
+
+All citations are at the lane head `4eb7e06c` before this change (D75).
+
+### Precondition and what the run shows
+
+- The newest completed `native-shell.yml` run on `native-qualify` is 43685383291 (job
+  `132724666982`, head `4eb7e06c`), the NQ-5 dispatch, now recorded in the dispatch log.
+  It failed, so item 1 of the brief applies and items 2 and 3 do not (D76).
+- Hosted evidence (API and log):
+  - steps 1-15 passed. That includes step 13, the first hosted native prepare that passed
+    (mask admission with the runner-home mask, keeper, broker, publish and mask proof),
+    then the seed and the byte verification;
+  - step 16, the host witness, refused about 1.03 s after its group header and printed
+    only its generic line. It has no closed label;
+  - step 17, finish, exited 0 after a ready prepare. Whether any engine or Shell command
+    ran is unknown. Finish runs the control `cleanup` operation, so its success proves
+    nothing about `inspect` or `validate_masks`. It is not a qualification;
+  - step 18 refused as designed, and step 19 uploaded 4 of 5 paths (no host report).
+- Code reading, not a result:
+  - The driver and engine stderr never reaches the log: `receive()` in
+    `native-shell-host.ts` keeps only a private 4 KiB tail. The top-level catch prints
+    one generic line for both roles. The receipts would not name the stage either.
+  - About 1 s covers the host's `configuration()` (it hashes about 240 MB of assets),
+    Root's `controls` observer, the driver's own `configuration()` and the start of the
+    production `run()` in `github.sandbox.ts`. The verify step, which hashes the same
+    assets, took about 0.36 s. Reaching `engine-ready` (a third hashing pass, runtime
+    startup and imports) within 1 s is implausible, so the refusal most likely lies in
+    the host controls, the driver, or `run()` before launch.
+  - Checks that pass on reading: the Root seeds and canary modes, the manifest and
+    `SUPPORT` names, `VECTOR_MODE` in the sandbox environment allowlist, the synthetic
+    token formats, and `source_record` (mode, uid and gid only, so a canary file in
+    `/home/runner` does not change it). No single candidate is confirmed.
+- The NQ-5 CI witness obligations stay open, because the host did not show whether it
+  reached them: the runner-home canaries are `ENOENT`, `/home/runner/work` is `EROFS`,
+  and Root reads both hosted seeds before the privilege drop.
+
+### What landed
+
+Only CI fixtures and their tests change; no production source does.
+
+- `packages/engine/test/fixture/native-shell-payload.ts` holds the shared pure helpers:
+  - `FAILURE_PREFIX` (`VECTOR_NATIVE_SHELL_FAILURE `), `OBSERVER_PREFIX`
+    (`VECTOR_NATIVE_SHELL_OBSERVER `) and `OBSERVER_OPERATIONS` (the host `root()`
+    allowlist, which now uses it);
+  - `SHELL_STAGES`, five closed, role-prefixed lists (see the vocabulary table);
+  - `RUN_REFUSALS`, exact copies of three production refusal messages;
+  - `shellStage(kind, value)`, which tests membership only;
+  - `observerStage(stderr)`, which returns the one stage line Root's observer writes, or
+    null. The input must be a string of at most 4096 bytes with exactly one prefixed
+    line that matches `^VECTOR_NATIVE_SHELL_OBSERVER \{"stage":"([a-z-]{1,64})"\}$`
+    and names a member;
+  - `runError(error, isolation)`, which classifies a `run()` error (D78);
+  - `shellFailure(value)`, which validates the ten witness fields, rebuilds a new object
+    with only those fields plus `v`, re-encodes the control projection field by field
+    (tokens of at most 128 characters; the longest `FAILURE_STAGES` label has 86), and
+    returns one line of at most 4096 bytes. If any field other than `host` fails its
+    own validation, or the line would exceed the bound, it returns the minimal line
+    `{"v":1,"host":"<stage>"}`. Without a closed host stage it returns nothing (D82).
+  The only new import is a type import of `GithubIsolation`, which is erased, so no
+  bundle's import graph changes.
+- `packages/engine/test/fixture/native-shell-host.ts`:
+  - `OBSERVE` (Python) installs a `sys.excepthook` right after its import line. On any
+    uncaught exception it writes only
+    `VECTOR_NATIVE_SHELL_OBSERVER {"stage":"<STAGE>"}` to stderr, and the exit status
+    stays 1. `STAGE` is assigned at seven fixed points: start, the operation dispatch,
+    the four parts of `controls` (hosted Root reads, privilege drop, agent canaries,
+    readonly control) and the output. `MASKS`, `CANARIES`, `HOSTED` and every check,
+    owner, mode and bound are unchanged.
+  - A module-level `witness` holds the host stage: 15 host labels, the initial
+    `host-configuration` plus 14 set by `at()` at 16 call sites (`host-protocol` has
+    three; see the table). `fail()` freezes it, so the first failure wins. `host-close`
+    is set only after `await queue`, so the close path reports `host-close` once every
+    queued handler has settled. The close check also refuses a run in which the engine
+    or the driver reported its own refusal, in both families (D82).
+  - Protocol header decoding (JSON, `v`, nonce and event) moves from `handle()` into
+    `receive()`, so a malformed line reads `host-protocol`. `receive()` also refuses
+    the 1 MiB output bound and a synthetic-secret disclosure, which read
+    `host-protocol` too. Each `handle()` branch sets its own stage first, and an unknown
+    event sets `host-protocol` before it throws.
+  - `root()` records the first failing observer operation and its stage from the
+    observer's stderr.
+  - Two report-only events record the other roles: `driver-failure` (driver stage, run
+    label and control projection; the host re-validates the projection through
+    `GithubIsolation.failureMetadata`) and `engine-failure` (engine stage and case). They
+    never move the host stage.
+  - The driver role tracks `driver-channel`, `driver-secrets` and `driver-run`. A
+    `run()` rejection is classified by `runError` and projected by `failureMetadata`
+    before it is rethrown. On refusal the driver sets exit code 125 and writes its
+    unchanged stderr line, then, once its manifest nonce is known, one `driver-failure`
+    protocol line to stdout, with a no-op stdout error listener so that a pipe the host
+    already closed cannot change the exit code (D82).
+  - On refusal, the host role writes `shellFailure(witness)` to stderr, then the
+    unchanged generic line, with exit 125.
+- `packages/engine/test/fixture/native-shell-engine.ts` tracks four coarse stages
+  (`engine-identity`, `engine-setup`, `engine-round` with its case, `engine-finish`). On
+  refusal it sets exit code 125 and writes the unchanged stderr line, then one
+  `engine-failure` protocol line behind the same no-op stdout error listener (D82). If
+  the nonce is not yet known, it tries one bounded Root read of the manifest and reports
+  `engine-identity` (D80).
+- Tests:
+  - `native-shell-ci/policy.test.ts` (4 to 9 tests);
+  - `test/cli/github.isolation.test.ts` (34 to 36 tests).
+
+### Vocabulary
+
+| Role | Labels |
+| --- | --- |
+| `host` (15) | `host-configuration`, `host-environment`, `host-controls`, `host-driver-start`, `host-engine-ready`, `host-signal-control`, `host-round-begin`, `host-round-done`, `host-engine-summary`, `host-driver-exit`, `host-protocol`, `host-deadline`, `host-close`, `host-final-snapshot`, `host-receipt` |
+| `observer` (7) | `observer-start`, `observer-operation`, `observer-controls-hosted`, `observer-controls-drop`, `observer-controls-agent`, `observer-controls-readonly`, `observer-output` |
+| `driver` (3) | `driver-channel`, `driver-secrets`, `driver-run` |
+| `engine` (4) | `engine-identity`, `engine-setup`, `engine-round`, `engine-finish` |
+| `run` (75) | `run-refused`, `run-adapter`, `run-engine-executable`, `run-isolation`, `run-unavailable`; `run-operation-<install, realpath, stat, id, setpriv>`; `run-errno-<syscall>-<errno>` for syscall in `open`, `read`, `lstat`, `stat`, `realpath`, `scandir`, `access`, `mkdir` and errno in `eacces`, `eperm`, `enoent`, `enotdir`, `eloop`, `erofs`, `eexist`, `eisdir` (64); `run-other` |
+
+The FAILURE line has exactly eleven keys: `v`, `host`, `case`, `operation`, `observer`,
+`driver`, `run`, `driverExit` (an integer from 0 to 255 or null), `engine`,
+`engineCase` and `control` (the `failureMetadata` projection or null). `case` and
+`engineCase` are a closed case name (`CASES` or `death`) or null; `operation` is an
+`OBSERVER_OPERATIONS` name or null.
+
+### Counts
+
+| Item | Before | After |
+| --- | --- | --- |
+| `native-shell-ci/policy.test.ts` | 4 pass, 58 `expect()` | 9 pass, 570 `expect()` |
+| `github.isolation.test.ts` | 34 pass, 2989 `expect()` | 36 pass, 3591 `expect()` |
+| Python fixture tests (CI) | 45 | 45 (unchanged) |
+| Keeper logs / stages; mask admission product; TypeScript per-mask entries | 97 / 582; 73; 62 | unchanged |
+
+### Expected hosted outcome for NQ-7 to verify
+
+A prediction from code reading, not a result (D81). The dispatch should end with one
+`VECTOR_NATIVE_SHELL_FAILURE` line directly above "Native Shell host fixture refused".
+
+| Label seen | Meaning |
+| --- | --- |
+| `host-configuration` or `host-environment` | A contradiction of the verified install or of the step's fixed environment |
+| `host-controls` with `operation` `controls` and `observer-controls-hosted`, `-drop`, `-agent` or `-readonly` | Root's controls step refused in that part |
+| `host-controls` with `operation` `controls` and observer null | sudo, a timeout, or an exception before the hook ran |
+| `host-controls` with operation null | The controls counts disagreed |
+| `host-close` + `driver-run` + a control projection | `run()`'s native validation refused; the records name the `live-*` or `client-*` stage (NQ-5's "refusal after prepare in the mask-source re-check" row) |
+| `host-close` + `driver-run` + `run-errno-*`, `run-operation-*`, `run-engine-executable` or `run-unavailable`, control null | A non-native `run()` refusal at that syscall, sandbox operation or runtime check |
+| `host-close` + `driver-run` + `run-refused` or `run-other`, control null | A plain `run()` refusal. `run-refused` has about 15 sites in `run()`; a finer split needs instrumentation in `github.sandbox.ts`, which is outside the brief's fix list, so NQ-7 takes that to the lead and does not widen scope on its own |
+| `host-close` with driver null and driverExit null | The driver refused before its manifest was decoded |
+| `driverExit` 125 with engine null | The engine fixture refused before any nonce could be read. Another exit code points to sudo, bwrap, prlimit or setpriv in the launch chain |
+| `engine-*` (with `engineCase`) | The engine refused at that stage |
+| Another `host-*` stage, with `operation` and `observer` | The host refused at that stage, on that Root observer operation |
+| `host-protocol` | A malformed or unknown protocol line, the 1 MiB output bound, or a synthetic-secret disclosure in `receive()` |
+| A FAILURE line with only `v` and `host` | A witness field failed its own validation, or the line exceeded 4096 bytes; the host stage still holds. A reporting defect to fix next |
+| No FAILURE line | A reporting defect; fix it first |
+
+### Evidence (local)
+
+From the worktree, one Bun workload at a time through the lock, each test file from
+`packages/engine`:
+
+- `bun test --timeout 30000 test/fixture/native-shell-ci/policy.test.ts`: 9 pass,
+  0 fail, 570 `expect()` calls. It also passes with `native-shell-host.ts` and
+  `native-shell-engine.ts` converted to CRLF, as a Windows checkout may write them
+  (both restored and checked with `cmp`).
+- `bun test --timeout 30000 test/cli/github.isolation.test.ts`: 36 pass, 0 fail, 3591
+  `expect()` calls.
+- `bun typecheck` passes in `packages/engine` and `packages/core` (`tsgo --noEmit`).
+- Prettier rewrote `policy.test.ts` and reported the four other TypeScript files
+  unchanged. `git diff --check` is clean.
+- Supplementary and AST-only: `/tmp/vector-v2/native/nq6/static-check.py` extracts the
+  `OBSERVE` body, parses it with `ast.parse` under `python3 -I -S -B`, and checks the
+  seven `STAGE` assignments, the single `observer_failure` definition and the
+  `sys.excepthook` assignment. It never compiles or executes the script (the D13 rule).
+- Mutations, from `/tmp/vector-v2/native/nq6/mutate.sh`. Each was applied once, then
+  restored from `/tmp/vector-v2/native/nq6/current` and checked with `cmp`:
+
+| Mutation | Result |
+| --- | --- |
+| M1: drop `observer-controls-agent` from `SHELL_STAGES` | `policy.test.ts` 6 pass, 3 fail (observer stage, witness line, source agreement) |
+| M2: drop `separators` from the Python hook | 8 pass, 1 fail (source agreement) |
+| M3: `driverExit` bound 256 | 8 pass, 1 fail (witness line) |
+| M4: a trailing space in `RUN_REFUSALS["run-refused"]` | `github.isolation.test.ts` 35 pass, 1 fail (production messages) |
+| M5: drop the `engine-setup` assignment | `policy.test.ts` 8 pass, 1 fail (source agreement) |
+| M6: `at("host-protocol")` in the `driver-failure` branch | 8 pass, 1 fail (source agreement) |
+| M7: drop the errno allowlist check from `runError` | 8 pass, 1 fail (run errors) |
+| M8: CRLF host and engine files without the line-ending normalisation | 8 pass, 1 fail (source agreement) |
+| M9: control token bound back to 64 | `github.isolation.test.ts` 35 pass, 1 fail (keeper startup product) |
+| M10: drop the self-refusal close condition from the host | `policy.test.ts` 8 pass, 1 fail (source agreement) |
+| M11: `shellFailure` returns nothing instead of the minimal line | 8 pass, 1 fail (witness line) |
+
+M8 to M11 come from the review-fix round, applied from `/tmp/vector-v2/native/nq6-review`
+and restored the same way.
+
+- No local fixture build, no native execution and no Root observer run.
+
+### Deferred
+
+- The hosted label and the wiring of all three roles are CI-only. NQ-7 reads the NQ-6
+  dispatch.
+- Before that dispatch, only local runs cover the new tests. Guard-unit runs only the
+  Python fixture, and typecheck runs no tests. `policy.test.ts` runs in the native
+  job's "Check CI control policy" step (step 7) and also in `test.yml`'s engine shards
+  on Linux (4 shards) and Windows (12 shards), which have no path filter. Of those, the
+  NQ-6 dispatch is the first CI run of its five new tests in this lane.
+  `github.isolation.test.ts` runs on CI in the same `test.yml` engine shards at the lane
+  end (D79).
+- The `owned` scenario (SPAWN-1 native half, S10-2 "refuse option") waits for a green
+  baseline cell, which is item 2 of the brief.
+- The three NQ-5 witness obligations stay open, and D34 (which of `/home/runner` and
+  `/home/runner/work` blocked the keeper) is unchanged.
+- Commit, push, the gate, the single dispatch and the NQ-6 dispatch-log row belong to the
+  commit step (D81).
+
+### Deviations and decisions
+
+- D75. Line drift and evidence: NQ-1 to NQ-5 moved the brief's `0ee486e3` lines (for
+  example the engine fixture's fd-source/fd-dest refusal is at lines 272-279 before this
+  change and the host's top-level catch at 871-874). The evidence was read in the plan
+  step and re-read in the implement step, as the dispatch-log paragraph records.
+- D76. Item 1 applies, and its remedy is the brief's own: extend diagnostics with fixed
+  labels only. No candidate root cause is confirmed (see Precondition), so a fix would
+  be a guess. `entry.py`, `linux.ts`, `github.isolation.ts`, `github.sandbox.ts`,
+  `process-isolation.ts` (`FLOOR` false), `build.ts` (`enabled` false, `entrySHA`
+  undefined), `cross-spawn-spawner.ts:405-411`, `manage.ts`, `common.ts` and
+  `native-shell.yml` are unchanged. The brief's three prepare vocabularies
+  (`keeper_failure_stage`, the Python fixture and `FAILURE_STAGES`) gain nothing,
+  because no prepare stage changes. The witness has its own three copies (the Python
+  `STAGE` assignments, `SHELL_STAGES` and the TypeScript assignments), and the policy
+  test keeps them in agreement.
+- D77. `download_workflow_run_artifact` returned a blob URL that the agent proxy refused
+  (CONNECT 403). It was not retried. The receipts would not have named the stage
+  anyway, because the host report is the missing fifth path.
+- D78 (critique accepted, with additions). Vocabulary design:
+  - Every role has its own prefix, so no label crosses roles: the plan's unprefixed
+    error labels became `run-*`, and `engine-executable` became
+    `run-engine-executable`. No label equals a protocol event name.
+  - `runError` reads own data properties only, never an accessor, and never returns the
+    message. It maps, in order: `LinuxIsolation.Unavailable`, an exact `RUN_REFUSALS`
+    message, the exact `ProcessIsolation.REFUSAL`, the exact
+    `Sandbox operation <name> failed or timed out; the run is refused.` for the five
+    names `run()` can reach, and an errno projection. That last one needs an
+    allowlisted `code` and `syscall`, both strings, and gives
+    `run-errno-<syscall>-<errno>`. Everything else is `run-other`. Beyond the plan:
+    - `run-adapter` maps `github.isolation.ts`'s own `REFUSAL`, the message of every
+      control-adapter refusal, which arrives with its control projection;
+    - `test` is dropped from the operation list, because inside `run()` the `test`
+      command runs under `setpriv` and its failure is named `setpriv`;
+    - the critique's `spawn` syscall is dropped, because Node's spawn errors carry the
+      executable path in `syscall` and `command()` already catches them; `read` is
+      added (from `readFile`), and `ENOTEMPTY` is replaced by `EISDIR`, which these
+      syscalls can return.
+  - The engine has four coarse stages instead of twelve (critique accepted). Its fast
+    refusal at about 1 s makes the finer engine split speculative.
+  - The two report-only branches never call `at()`. `host-close` follows `await queue`,
+    and the policy test asserts both (critique accepted).
+- D79 (critique accepted as a recorded deviation). The brief's test rule says any new
+  pure classification gets cases in `native-mask-origins.py` and
+  `github.isolation.test.ts`:
+  - No `native-mask-origins.py` case is added. That fixture tests `entry.py`, which does
+    not change, and the new Python hook is in the host `OBSERVE` script, which must not
+    run locally (D13). Its agreement is instead committed in the policy test, which
+    reads `native-shell-host.ts` as text: the `STAGE` set, the exact hook line and the
+    `sys.excepthook` assignment. The AST script stays supplementary.
+  - The pure TypeScript classifiers have their cases in `policy.test.ts` (T5-T9) and the
+    control-projection and production-message cases in `github.isolation.test.ts`
+    (T35, T36), as the brief asks. They were not moved into `policy.test.ts`, so T35 and
+    T36 run on CI only in `test.yml`'s engine shards at the lane end. T5-T9 run in the
+    native step 7 and also in those `test.yml` shards, Windows included (corrected in
+    D82: the first draft said step 7 only). That is why the source-agreement test
+    normalises CRLF to LF after reading the fixtures.
+- D80. Reportability limits and safety:
+  - A driver refusal before its manifest is decoded, and an engine refusal before any
+    nonce can be read, write no protocol line. Those read as driver null and as
+    `driverExit` with engine null.
+  - The engine's fallback is one bounded `rootFile` read of the Root manifest after the
+    failure. It changes no assertion.
+  - Nothing is weakened: no assertion, deadline (cell 180 s, keeper 5 s, native stop),
+    retry, manifest, provenance, cleanup, workflow, matrix or pinned action is relaxed.
+    The success path changes only by bookkeeping, header decoding moving into
+    `receive()`, and one stricter close condition (D82).
+  - Witness role labels are diagnostic only and are not authenticated per role. The
+    engine and the driver share one stdout pipe and both know the nonce, so either
+    could write the other's report line. The close check refuses a run with any role
+    report, so a forged report can only fail a cell, never pass one, and the label is
+    read as a lead, not as proof of which role refused.
+  - Output is limited to fixed labels, closed names, a 0-255 exit code and the
+    `failureMetadata`-validated control projection. `shellFailure` rebuilds the
+    projection from fixed keys whose values must be bounded tokens, small integers or
+    null. No path, message, stderr, argv or secret leaves. The observer's stderr is read
+    only through `observerStage`.
+  - `v2-spawn-review.md` and `process-ownership-followup.md` are unchanged. No spawn
+    hot-spot file, ownership contract or `OwnedProcess` behaviour is touched; the
+    `owned` refusal scenario is deferred to a green baseline.
+- D81. The interpretation table above is a prediction only. Nothing here qualifies native
+  isolation. Both native build switches and `FLOOR` stay false, native plus
+  `OwnedProcess` stays refused, and the §4.4 and §6 Q2/Q3 decisions stay open and
+  owner-gated. The commit step stages only the seven NQ-6 paths: the payload, host and
+  engine fixtures, `policy.test.ts`, `github.isolation.test.ts`,
+  `native-isolation-status.md` and this file. It sets the package-table row to
+  "Committed" in the NQ-6 commit itself (as in D45) and leaves the NQ-6 dispatch-log row
+  pending for its report or for NQ-7. Before the push it runs the full typecheck with
+  `TURBO_CACHE_DIR` inside the worktree. It dispatches `native-shell.yml` once with
+  `{"diagnostic_cell": true}`, only after the automatic guard-unit run (`Ran 45 tests`
+  ... `OK`) and the typecheck run pass at the pushed head.
+- D82. Review fixes, one round on 15 November 2026, all in the working tree before the
+  commit step:
+  - Blocking, fixed: `policy.test.ts` also runs in `test.yml`'s engine shards, Windows
+    included, and `.gitattributes` has no global LF rule. The source-agreement test
+    searched the fixtures for literal LF sequences, so on a CRLF checkout it failed on
+    every Windows shard. It now normalises CRLF to LF right after reading, and each of
+    its three slices asserts both markers, so a missing marker fails instead of widening
+    the slice to the end of the file. D79 and Deferred are corrected. The CRLF case was
+    simulated locally (M8).
+  - The control token bound in `failureControl` was 64 characters, below 408 of the
+    693 entry labels (the longest has 86). A wider label would have dropped the whole
+    witness line. That was not reachable yet, because `run()` records only `inspect`
+    stages of at most 30 characters. The bound is now 128, and
+    `github.isolation.test.ts` carries all 582 keeper startup labels, the longest
+    family, through `shellFailure` (M9). `shellFailure` also falls back to the minimal
+    `{"v":1,"host":"<stage>"}` line, so a refusal always prints a closed host label
+    (M11).
+  - The policy test's non-member case is now `unknown-case`. `owned` would join `CASES`
+    with NQ-7's planned refusal scenario.
+  - The `at()` count and the meaning of `host-protocol` are corrected above.
+  - `exact` now uses the shared `plain` and `sameKeys` helpers. One part of that
+    finding is declined: `shellFailure` does not call `GithubIsolation.failureMetadata`.
+    `native-shell-payload.ts` is its own bundle entry (`native-shell-payload.js` for
+    Node and Bun), so a runtime import would pull `github.isolation.ts` into that
+    bundle and change its import graph. The payload keeps only its erased type import.
+    The host already validates every received projection through `failureMetadata` in
+    the `driver-failure` branch, so `failureControl` stays a structural key whitelist.
+  - The host close check now also needs `witness.engine` and `witness.driver` to be
+    null, in both families (policy source assertion, M10). D80 records that the labels
+    are not authenticated per role.
+  - The engine and driver refusal paths now set exit code 125 and write their unchanged
+    stderr line first. They write the protocol line last, behind a no-op stdout error
+    listener, so an EPIPE on a pipe the host already closed cannot turn exit 125 into an
+    uncaught exception. The finding named the engine, and the driver's identical path
+    gets the same fix.
+  - Local evidence after the round: `policy.test.ts` 9 pass, 570 `expect()` calls, and
+    `github.isolation.test.ts` 36 pass, 3591 `expect()` calls. `bun typecheck` passes in
+    `packages/engine` and `packages/core`. Prettier is clean and `git diff --check` is
+    clean.

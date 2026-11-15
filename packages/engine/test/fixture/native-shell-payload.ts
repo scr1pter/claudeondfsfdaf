@@ -5,6 +5,7 @@ import path from "node:path"
 import { spawn } from "node:child_process"
 import { setTimeout } from "node:timers/promises"
 import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
+import type { GithubIsolation } from "../../src/cli/cmd/github.isolation"
 
 /** CI-only immutable fixtures. None of these helpers is a production authorization or launcher service. */
 export const ROOT = "/usr/libexec/vector-native-shell"
@@ -25,6 +26,199 @@ export const CASES = [
   "fd-source",
   "fd-dest",
 ] as const
+// Host witness refusal vocabulary. Each role reports only these fixed labels, closed case and operation names, an exit
+// code and the failureMetadata control projection; never a message, path, stderr, argv or secret.
+export const FAILURE_PREFIX = "VECTOR_NATIVE_SHELL_FAILURE "
+export const OBSERVER_PREFIX = "VECTOR_NATIVE_SHELL_OBSERVER "
+export const OBSERVER_OPERATIONS = [
+  "controls",
+  "register",
+  "control",
+  "kill-engine",
+  "snapshot",
+  "inspect",
+  "ack",
+  "hints",
+  "counters",
+] as const
+export const RUN_OPERATIONS = ["install", "realpath", "stat", "id", "setpriv"] as const
+export const RUN_SYSCALLS = ["open", "read", "lstat", "stat", "realpath", "scandir", "access", "mkdir"] as const
+export const RUN_ERRNOS = ["EACCES", "EPERM", "ENOENT", "ENOTDIR", "ELOOP", "EROFS", "EEXIST", "EISDIR"] as const
+// Exact copies of production messages; github.isolation.test.ts proves each one still exists verbatim.
+export const RUN_REFUSALS = {
+  "run-refused": "The GitHub agent sandbox could not verify its isolation or cleanup. The run is refused.",
+  "run-adapter": "The trusted Linux runner adapter refused its fixed installation or lifetime contract.",
+  "run-engine-executable": "The GitHub engine executable is inside a writable agent directory. The run is refused.",
+} as const
+const lower = <T extends string>(value: T) => value.toLowerCase() as Lowercase<T>
+export const SHELL_STAGES = Object.freeze({
+  host: [
+    "host-configuration",
+    "host-environment",
+    "host-controls",
+    "host-driver-start",
+    "host-engine-ready",
+    "host-signal-control",
+    "host-round-begin",
+    "host-round-done",
+    "host-engine-summary",
+    "host-driver-exit",
+    "host-protocol",
+    "host-deadline",
+    "host-close",
+    "host-final-snapshot",
+    "host-receipt",
+  ] as const,
+  observer: [
+    "observer-start",
+    "observer-operation",
+    "observer-controls-hosted",
+    "observer-controls-drop",
+    "observer-controls-agent",
+    "observer-controls-readonly",
+    "observer-output",
+  ] as const,
+  driver: ["driver-channel", "driver-secrets", "driver-run"] as const,
+  engine: ["engine-identity", "engine-setup", "engine-round", "engine-finish"] as const,
+  run: [
+    "run-refused",
+    "run-adapter",
+    "run-engine-executable",
+    "run-isolation",
+    "run-unavailable",
+    ...RUN_OPERATIONS.map((name) => `run-operation-${name}` as const),
+    ...RUN_SYSCALLS.flatMap((syscall) => RUN_ERRNOS.map((code) => `run-errno-${syscall}-${lower(code)}` as const)),
+    "run-other",
+  ],
+})
+export type ShellStage<K extends keyof typeof SHELL_STAGES> = (typeof SHELL_STAGES)[K][number]
+export interface ShellFailure {
+  host: ShellStage<"host">
+  case: string | null
+  operation: string | null
+  observer: ShellStage<"observer"> | null
+  driver: ShellStage<"driver"> | null
+  run: ShellStage<"run"> | null
+  driverExit: number | null
+  engine: ShellStage<"engine"> | null
+  engineCase: string | null
+  control: GithubIsolation.FailureCause | null
+}
+export function shellStage<K extends keyof typeof SHELL_STAGES>(kind: K, value: unknown): value is ShellStage<K> {
+  return typeof value === "string" && SHELL_STAGES[kind].some((item: string) => item === value)
+}
+export function shellCase(value: unknown) {
+  return typeof value === "string" && [...CASES, "death"].some((item) => item === value)
+}
+/** The one fixed stage line Root's observer excepthook writes, or null for anything else. */
+export function observerStage(stderr: unknown): ShellStage<"observer"> | null {
+  if (typeof stderr !== "string" || Buffer.byteLength(stderr) > 4096) return null
+  const lines = stderr.split("\n").filter((line) => line.startsWith(OBSERVER_PREFIX))
+  if (lines.length !== 1) return null
+  const stage = /^VECTOR_NATIVE_SHELL_OBSERVER \{"stage":"([a-z-]{1,64})"\}$/.exec(lines[0]!)?.[1]
+  return shellStage("observer", stage) ? stage : null
+}
+/** Classify a sandbox run() error by its exact message or an allowlisted errno only. The message never leaves. */
+export function runError(error: unknown, isolation: string): ShellStage<"run"> {
+  if (error instanceof LinuxIsolation.Unavailable) return "run-unavailable"
+  if (!(error instanceof Error)) return "run-other"
+  // Own data properties only: an accessor is never called.
+  const own = (name: string): unknown => {
+    const property = Object.getOwnPropertyDescriptor(error, name)
+    return property && Object.hasOwn(property, "value") ? property.value : undefined
+  }
+  const message = own("message")
+  const refusal = Object.entries(RUN_REFUSALS).find((entry) => entry[1] === message)?.[0]
+  if (shellStage("run", refusal)) return refusal
+  if (message === isolation) return "run-isolation"
+  const operation = `run-operation-${
+    typeof message === "string"
+      ? /^Sandbox operation ([a-z]{1,16}) failed or timed out; the run is refused\.$/.exec(message)?.[1]
+      : undefined
+  }`
+  if (shellStage("run", operation)) return operation
+  const code = own("code")
+  const syscall = own("syscall")
+  const errno = `run-errno-${String(syscall)}-${String(code).toLowerCase()}`
+  if (
+    RUN_ERRNOS.some((item) => item === code) &&
+    RUN_SYSCALLS.some((item) => item === syscall) &&
+    shellStage("run", errno)
+  )
+    return errno
+  return "run-other"
+}
+/**
+ * Re-encode only the closed witness fields as one bounded stderr line. If any other field fails its own validation,
+ * the line carries the closed host stage alone, so a refusal always prints a label; without one it prints nothing.
+ */
+export function shellFailure(value: unknown): string | undefined {
+  if (!plain(value) || !shellStage("host", value.host)) return
+  const minimal = FAILURE_PREFIX + JSON.stringify({ v: 1, host: value.host }) + "\n"
+  const nullable = (item: unknown, valid: (item: unknown) => boolean) => item === null || valid(item)
+  const control = failureControl(value.control)
+  if (
+    !nullable(value.case, shellCase) ||
+    !nullable(value.operation, (item) => OBSERVER_OPERATIONS.some((name) => name === item)) ||
+    !nullable(value.observer, (item) => shellStage("observer", item)) ||
+    !nullable(value.driver, (item) => shellStage("driver", item)) ||
+    !nullable(value.run, (item) => shellStage("run", item)) ||
+    !nullable(value.driverExit, (item) => Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 255) ||
+    !nullable(value.engine, (item) => shellStage("engine", item)) ||
+    !nullable(value.engineCase, shellCase) ||
+    control === undefined
+  )
+    return minimal
+  const text =
+    FAILURE_PREFIX +
+    JSON.stringify({
+      v: 1,
+      host: value.host,
+      case: value.case,
+      operation: value.operation,
+      observer: value.observer,
+      driver: value.driver,
+      run: value.run,
+      driverExit: value.driverExit,
+      engine: value.engine,
+      engineCase: value.engineCase,
+      control,
+    }) +
+    "\n"
+  return Buffer.byteLength(text) <= 4096 ? text : minimal
+}
+const RECORD_KEYS = ["v", "event", "origin", "operation", "stage", "class", "errno", "exit", "signal"] as const
+// The host accepts a control projection only through GithubIsolation.failureMetadata. This second, structural pass
+// rebuilds fixed keys whose values are bounded tokens, small integers or null, so free text cannot ride along. The
+// 128-character token bound exceeds the longest FAILURE_STAGES label (86 characters, a keeper startup log label);
+// github.isolation.test.ts carries every keeper startup label through this line.
+function failureControl(value: unknown) {
+  if (value === null) return null
+  if (!plain(value) || !sameKeys(value, ["v", "event", "records"])) return
+  if (value.v !== 1 || value.event !== "native-control-failure" || !Array.isArray(value.records)) return
+  if (value.records.length < 1 || value.records.length > 4) return
+  const records = value.records.map((row: unknown) => {
+    if (!plain(row) || !sameKeys(row, RECORD_KEYS)) return
+    const valid = RECORD_KEYS.every((key) => {
+      const item = row[key]
+      return (
+        item === null ||
+        (typeof item === "string" && /^[A-Za-z0-9-]{1,128}$/.test(item)) ||
+        (Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 255)
+      )
+    })
+    return valid ? Object.fromEntries(RECORD_KEYS.map((key) => [key, row[key]])) : undefined
+  })
+  if (!records.every((row) => row !== undefined)) return
+  return { v: 1, event: "native-control-failure", records }
+}
+function plain(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+function sameKeys(value: Record<string, unknown>, keys: readonly string[]) {
+  const found = Reflect.ownKeys(value)
+  return found.length === keys.length && found.every((key) => typeof key === "string" && keys.includes(key))
+}
 export const ARTIFACT = Buffer.from("synthetic native-shell session ciphertext\n")
 // Exact supporting outputs from the coherent fixture build; a new output requires an explicit reviewed update.
 export const SUPPORT_ASSETS = Object.freeze([
@@ -64,9 +258,7 @@ export function need(value: unknown, message = "Native Shell fixture contract re
   if (!value) throw new Error(message)
 }
 export function exact(value: unknown, keys: readonly string[]): asserts value is Record<string, unknown> {
-  need(value !== null && typeof value === "object" && !Array.isArray(value))
-  const found = Reflect.ownKeys(value)
-  need(found.length === keys.length && found.every((key) => typeof key === "string" && keys.includes(key)))
+  need(plain(value) && sameKeys(value, keys))
 }
 export const digest = (value: Uint8Array) => createHash("sha256").update(value).digest("hex")
 export function decodeManifest(value: unknown): Manifest {

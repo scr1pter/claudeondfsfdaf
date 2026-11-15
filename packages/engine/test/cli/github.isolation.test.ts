@@ -6,7 +6,15 @@ import path from "node:path"
 import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
 import { GithubIsolation } from "../../src/cli/cmd/github.isolation"
 import { run, finish } from "../../src/cli/cmd/github.sandbox"
-import { CANARY_ROOTS } from "../fixture/native-shell-payload"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import {
+  CANARY_ROOTS,
+  FAILURE_PREFIX,
+  RUN_OPERATIONS,
+  RUN_REFUSALS,
+  runError,
+  shellFailure,
+} from "../fixture/native-shell-payload"
 import { TEMP } from "../fixture/native-shell-ci/common"
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex")
@@ -258,6 +266,20 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
     }
     const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, entry] }
     expect(GithubIsolation.failureMetadata(new Error("private startup log and info", { cause }))).toEqual(cause)
+    // These are the vocabulary's longest labels (up to 86 characters); each crosses the host witness line whole.
+    const line = shellFailure({
+      host: "host-close",
+      case: null,
+      operation: null,
+      observer: null,
+      driver: "driver-run",
+      run: "run-adapter",
+      driverExit: null,
+      engine: null,
+      engineCase: null,
+      control: cause,
+    })
+    expect(line && JSON.parse(line.slice(FAILURE_PREFIX.length)).control).toEqual(cause)
     if (!timeout) {
       for (const exit of [0, 1, 255]) {
         const exited = { ...entry, exit }
@@ -1328,4 +1350,67 @@ test("asset corruption and unsupported scope or JSON authority fail without an e
   expect(() => GithubIsolation.parseState({ ...intent, approved: true })).toThrow()
   expect(() => GithubIsolation.parseState({ ...intent, phase: "ready" })).toThrow()
   expect(f.calls).toHaveLength(0)
+})
+test("a control failure projection crosses the host witness channel unchanged and tampering refuses it", () => {
+  const record = (origin: "transport" | "control" | "client", stage: string, kind: string, exit: number | null) => ({
+    ...failureRecord(),
+    origin,
+    operation: "inspect" as const,
+    stage,
+    class: kind as GithubIsolation.FailureRecord["class"],
+    errno: null,
+    exit,
+  })
+  const cause: GithubIsolation.FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [
+      record("transport", "close", "ChildExit", 1),
+      record("control", "live-client", "CalledProcessError", 125),
+      record("client", "client-masks", "RuntimeError", null),
+    ],
+  }
+  // The driver projects the run() error; Host re-validates the decoded line through the same projection.
+  const sent = GithubIsolation.failureMetadata(new Error("refused", { cause }))
+  expect(sent).toEqual(cause)
+  const received = GithubIsolation.failureMetadata(new Error("refused", { cause: JSON.parse(JSON.stringify(sent)) }))
+  expect(received).toEqual(cause)
+  const witness = {
+    host: "host-close",
+    case: null,
+    operation: null,
+    observer: null,
+    driver: "driver-run",
+    run: "run-adapter",
+    driverExit: null,
+    engine: null,
+    engineCase: null,
+    control: received ?? null,
+  }
+  const line = shellFailure(witness)
+  expect(line && JSON.parse(line.slice(FAILURE_PREFIX.length)).control).toEqual(cause)
+  for (const tampered of [
+    { ...cause, message: "/home/runner/private" },
+    { ...cause, records: [cause.records[1], cause.records[0]] },
+    { ...cause, records: [...cause.records, cause.records[2], cause.records[2]] },
+    { ...cause, records: cause.records[0] },
+    { ...cause, records: [{ ...cause.records[0], stage: "unknown-stage" }] },
+    { ...cause, records: [{ ...cause.records[0], path: "/home/runner" }] },
+    { ...cause, event: "native-control-success" },
+  ])
+    expect(GithubIsolation.failureMetadata(new Error("refused", { cause: tampered }))).toBeUndefined()
+})
+test("the sandbox refusal messages the witness driver classifies exist verbatim in production", async () => {
+  const read = (name: string) => Bun.file(path.join(import.meta.dir, name)).text()
+  const sandbox = await read("../../src/cli/cmd/github.sandbox.ts")
+  const isolation = await read("../../src/cli/cmd/github.isolation.ts")
+  const core = await read("../../../core/src/process-isolation.ts")
+  expect(sandbox).toContain(`return new Error("${RUN_REFUSALS["run-refused"]}")`)
+  expect(isolation).toContain(`const REFUSAL = "${RUN_REFUSALS["run-adapter"]}"`)
+  expect(core).toContain(`throw new Error("${RUN_REFUSALS["run-engine-executable"]}")`)
+  expect(sandbox).toContain(
+    "throw new Error(`Sandbox operation ${path.basename(operation ?? file)} failed or timed out; the run is refused.`)",
+  )
+  for (const name of RUN_OPERATIONS) expect(sandbox).toContain(`"/usr/bin/${name}"`)
+  expect(runError(new Error(RUN_REFUSALS["run-refused"]), ProcessIsolation.REFUSAL)).toBe("run-refused")
 })

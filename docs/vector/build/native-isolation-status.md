@@ -321,3 +321,35 @@ no alias or capture check is weakened. The run and its result are logged in
 No qualification follows from this change. Both native build switches and `FLOOR` stay
 false, and native plus `OwnedProcess` stays refused. No production activation is
 authorized by this document.
+
+## Host witness diagnostics, 15 November 2026
+
+Run 43685383291 (job `132724666982`, head `4eb7e06c`, the diagnostic cell) is the first
+hosted native prepare that passed: mask admission with the runner-home mask, keeper,
+broker, publish and mask proof. The seed and byte-verification steps passed too. The host
+witness then refused in about 1 s and printed only its generic line, because its driver
+and engine stderr stay private and it had no closed failure vocabulary. Finish exited 0
+after the ready prepare. Whether any engine or Shell command ran is unknown, and finish
+uses the control `cleanup` operation, so it proves nothing about `inspect` or mask
+validation. This is not a qualification.
+
+The CI-only host fixture now prints one `VECTOR_NATIVE_SHELL_FAILURE` line on refusal,
+before the generic line. That line carries only these fields:
+
+- fixed role-prefixed labels for the host, Root observer, driver, engine and `run()`
+  error stages;
+- closed case and operation names;
+- an exit code from 0 to 255;
+- the already-validated control failure projection.
+
+If any other field fails its own validation, the line carries the host stage alone. No
+path, message, stderr, argv or secret is printed. No assertion is weakened, and no
+deadline, manifest, provenance, cleanup step, workflow or matrix changes. The host's
+close check gains one condition: it also refuses a run in which the engine or the
+driver reported its own refusal. No production source changes.
+The runner-home witness obligations listed above stay open until a host witness passes.
+The run and the new vocabulary are logged in `native-qualify-notes.md`.
+
+No qualification follows from this change. Both native build switches and `FLOOR` stay
+false, and native plus `OwnedProcess` stays refused. No production activation is
+authorized by this document.
