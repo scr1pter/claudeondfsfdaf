@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import fs from "node:fs/promises"
 import { Effect, Option } from "effect"
 import { array, check, object } from "./assertions"
 import { http, route } from "./dsl"
@@ -56,16 +57,33 @@ export const reviewMemoryScenarios: Scenario[] = [
     }),
 ]
 
-// The owner authority derives the scope from a pinned Git common-directory identity that needs a supported host
-// statx reader (DirectoryIdentityReader). Read the same proof first, so a host without one expects the refusal.
+// The owner authority derives the scope from a pinned Git common-directory identity that needs the stock Ubuntu
+// noble python3.12 statx reader (DirectoryIdentityReader). Which answer to expect is decided from the host alone, so a
+// regression in that proof fails the seed on a qualifying host (the CI runners) instead of silently expecting 400.
 function physicalScope(ctx: ScenarioContext) {
   return Effect.gen(function* () {
-    const { ReviewMemoryScope } = yield* Effect.promise(() => import("../../../src/review/memory-scope"))
     if (!ctx.directory) throw new Error("review memory scenarios need a project directory")
-    return yield* ReviewMemoryScope.git(ctx.directory).pipe(
-      Effect.map((proof) => proof.binding.scope),
-      Effect.option,
+    const host = yield* Effect.promise(() =>
+      Promise.all([
+        Bun.file("/etc/os-release")
+          .text()
+          .catch(() => ""),
+        fs.realpath("/usr/bin/python3").catch(() => undefined),
+      ]),
     )
+    // A stock noble host: an alternatives switch to another python3 (as on some dev boxes) is not one.
+    const supported =
+      process.platform === "linux" &&
+      ["x64", "arm64"].includes(process.arch) &&
+      /^ID=ubuntu$/m.test(host[0]) &&
+      /^VERSION_CODENAME=noble$/m.test(host[0]) &&
+      host[1] === "/usr/bin/python3.12"
+    if (!supported) return Option.none<string>()
+    const { ReviewMemoryScope } = yield* Effect.promise(() => import("../../../src/review/memory-scope"))
+    const proof = yield* ReviewMemoryScope.git(ctx.directory).pipe(Effect.option)
+    if (Option.isNone(proof))
+      throw new Error("ReviewMemoryScope.git refused the exerciser repository on a supported noble host")
+    return Option.some(proof.value.binding.scope)
   })
 }
 
