@@ -4703,7 +4703,7 @@ export type MemoryResearchSourceText = {
 }
 
 export type ConnectApiError = {
-  code: "disabled" | "forbidden" | "not_found" | "invalid"
+  code: "disabled" | "forbidden" | "not_found" | "invalid" | "pending" | "consumed"
   message: string
 }
 

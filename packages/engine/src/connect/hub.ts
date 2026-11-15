@@ -108,7 +108,8 @@ export interface Call {
   readonly directory?: {
     readonly token: ConnectDirectory.Token
     readonly request: ConnectDirectoryRequest.Proof
-    readonly bind: (run: Connect.Run) => Effect.Effect<void, ConnectDirectoryRequest.Error>
+    /** `bound` is the ledger's report, from inside its binding write, that the key is bound to this run. */
+    readonly bind: (run: Connect.Run, bound: () => void) => Effect.Effect<void, ConnectDirectoryRequest.Error>
     readonly complete: (run: Connect.Run) => Effect.Effect<string, ConnectDirectory.Error>
   }
   /** Internal after-run work: opt-in authorizes the review, but no fresh question or write may be started. */
@@ -170,6 +171,13 @@ export interface Interface {
   readonly replayDirectory: (
     input: ConnectDirectoryRequest.Proof & { readonly runID: Connect.RunID; readonly anchorID: SessionID },
   ) => Effect.Effect<Connect.Run | undefined>
+  /**
+   * Owner reconciliation of a stale request key, read under the ledger's locks: whether the anchor's directory job was
+   * released by the binding gate. Bounded reads only; an unreleased job of this process is stopped by `stop` later.
+   */
+  readonly settleDirectory: (
+    input: ConnectDirectoryRequest.Proof & { readonly anchorID: SessionID },
+  ) => Effect.Effect<ConnectDirectoryRequest.Evidence>
   /** The ledger's runs, newest first; with `sessionID`, only the runs that session asked for. */
   readonly runs: (input?: { readonly sessionID?: SessionID }) => Effect.Effect<Connect.Run[]>
   /** The request a session is in (the message the user last wrote) and the review runs it already recorded. */
@@ -264,6 +272,8 @@ interface Entry {
   readonly directory?: NonNullable<ReturnType<typeof ConnectDirectory.read>>
   receiptHash?: string
   jobOwner?: string
+  /** A directory job's binding-gate answer: true once execution was released, false once it never may be. */
+  admitted?: boolean
   finishing?: boolean
   run: Connect.Run
   readonly adapter?: ConnectAdapter.Adapter
@@ -456,6 +466,21 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return [...found.values()].slice(0, limit)
       })
 
+      // A durable receipt's anchor: the private owner session of this instance's directory, with no guest input.
+      const directoryAnchor = Effect.fnUntraced(function* (anchorID: SessionID) {
+        const current = yield* InstanceState.context
+        const anchor = yield* sessions.get(anchorID).pipe(Effect.orElseSucceed(() => undefined))
+        return anchor &&
+          anchor.internal === ConnectDirectory.INTERNAL &&
+          anchor.parentID === undefined &&
+          anchor.projectID === current.project.id &&
+          FileLock.key(anchor.directory) === FileLock.key(current.directory) &&
+          (yield* audience.isPrivate(anchor.id)) &&
+          !(yield* audience.hasGuestInput(anchor.id))
+          ? anchor
+          : undefined
+      })
+
       const directoryRuns = Effect.fnUntraced(function* (runID?: string) {
         const current = yield* InstanceState.context
         const input = { projectID: current.project.id, directory: current.directory }
@@ -464,28 +489,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         for (const id of ids) {
           const receipt = yield* ConnectDirectory.load(input, id)
           if (!receipt) continue
-          const anchor = yield* sessions.get(receipt.anchor).pipe(Effect.orElseSucceed(() => undefined))
-          if (
-            !anchor ||
-            anchor.internal !== ConnectDirectory.INTERNAL ||
-            anchor.parentID !== undefined ||
-            anchor.projectID !== current.project.id ||
-            FileLock.key(anchor.directory) !== FileLock.key(current.directory) ||
-            !(yield* audience.isPrivate(anchor.id)) ||
-            (yield* audience.hasGuestInput(anchor.id))
-          )
-            continue
+          const anchor = yield* directoryAnchor(receipt.anchor)
+          if (!anchor) continue
           const job = (yield* jobStore.forParent(anchor.id)).find((item) => item.id === id)
-          if (
-            !job ||
-            job.type !== JOB_TYPE ||
-            FileLock.key(job.directory) !== FileLock.key(current.directory) ||
-            job.metadata?.directoryReview !== true ||
-            job.metadata.runID !== id ||
-            job.metadata.member !== "vectorscope" ||
-            job.metadata.action !== "review"
-          )
-            continue
+          if (!job || !directoryJob(job, id, current.directory)) continue
           if (job.status === "running") {
             if (BackgroundJobStore.alive(job.owner) !== "dead") continue
             if (receipt.run.status === "done") continue
@@ -497,16 +504,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             found.push(settled(receipt.run))
             continue
           }
-          const seal = job.metadata?.ended
-          if (
-            !seal ||
-            typeof seal !== "object" ||
-            !("kind" in seal) ||
-            seal.kind !== "connect.directory.receipt" ||
-            !("sha256" in seal) ||
-            seal.sha256 !== receipt.digest
-          )
-            continue
+          if (!sealed(job, receipt.digest)) continue
           if ((job.status === "cancelled" || job.status === "interrupted") && receipt.run.result?.state !== "cancelled")
             continue
           if (job.status === "error" && receipt.run.result?.state !== "failed") continue
@@ -561,6 +559,57 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         )
           return undefined
         return original
+      })
+
+      const settleDirectory: Interface["settleDirectory"] = Effect.fn("ConnectHub.settleDirectory")(function* (input) {
+        const state = yield* InstanceState.get(ledger)
+        const owned = [...state.runs.values()].filter(
+          (entry) =>
+            entry.directory?.sessionID === input.anchorID &&
+            entry.call.directory?.request.key === input.key &&
+            entry.call.directory.request.inputDigest === input.inputDigest &&
+            entry.call.directory.request.scopeDigest === input.scopeDigest,
+        )
+        const [entry] = owned
+        if (owned.length > 1) return { kind: "unknown" } as const
+        // This process's own job answers from its binding gate, which is settled once its owner call is gone.
+        if (entry) {
+          if (entry.admitted) return { kind: "released", runID: entry.run.id } as const
+          const id = entry.run.id
+          return {
+            kind: "unreleased",
+            stop: background.cancel(id).pipe(Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid),
+          } as const
+        }
+        const rows = (yield* jobStore.forParent(input.anchorID)).filter(
+          (row) =>
+            row.metadata?.requestKey === input.key &&
+            row.metadata.inputDigest === input.inputDigest &&
+            row.metadata.scopeDigest === input.scopeDigest,
+        )
+        const [row] = rows
+        // The durable job row is written before the binding gate can run, so with no row execution was never released.
+        if (!row) return { kind: "unreleased" } as const
+        const current = yield* InstanceState.context
+        if (
+          rows.length > 1 ||
+          !Schema.is(Connect.RunID)(row.id) ||
+          !directoryJob(row, row.id, current.directory) ||
+          (row.status === "running" && BackgroundJobStore.liveness(row) !== "dead") ||
+          !(yield* directoryAnchor(input.anchorID))
+        )
+          return { kind: "unknown" } as const
+        const receipt = yield* ConnectDirectory.load(
+          { projectID: current.project.id, directory: current.directory },
+          row.id,
+        )
+        // A pruned, unreadable or foreign receipt cannot show what the job did.
+        if (!receipt || receipt.anchor !== input.anchorID) return { kind: "unknown" } as const
+        // Only work the binding gate released is stamped `started`; a queued receipt, or one refused before release,
+        // has none. A dead owner's running row never resumes; a settled row is trusted only beside its seal.
+        if (receipt.run.time.started !== undefined) return { kind: "released", runID: row.id } as const
+        if (row.status === "running" || sealed(row, receipt.digest)) return { kind: "unreleased" } as const
+        return { kind: "unknown" } as const
       })
 
       // With a session, the runs it saved join the ledger's (the ledger wins on an id), so the list survives a
@@ -1390,8 +1439,22 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       // A background run: its work runs as a `connect` BackgroundJob, so it outlives the tool call. The caller waits
       // until the adapter's questions are behind it, the run ends, or the caller stops (which cancels the run). Which
       // of the caller and the note reports the end is decided in one step, so it is reported exactly once.
-      const detach = (entry: Entry, work: Effect.Effect<Connect.Result, Connect.Refusal>) =>
-        Effect.gen(function* () {
+      const detach = (entry: Entry, work: Effect.Effect<Connect.Result, Connect.Refusal>) => {
+        const admission = Deferred.makeUnsafe<boolean>()
+        // Whether the binding gate bound this run, as the ledger reports from inside its uninterruptible write: an
+        // interrupt can surface only after that write ended, so the call's own exit cannot say whether it happened. An
+        // owner interrupted before it settles admission releases the job only when its key was bound (a retry replays
+        // it); otherwise the job stops instead of waiting forever.
+        const gate = { bound: false }
+        const release = (value: boolean) =>
+          Deferred.succeed(admission, value).pipe(
+            Effect.tap((first) =>
+              Effect.sync(() => {
+                if (first) entry.admitted = value
+              }),
+            ),
+          )
+        return Effect.gen(function* () {
           const request = entry.run.request
           const minutes = request.budget?.timeoutMinutes
           const requestProof = entry.call.directory?.request
@@ -1408,7 +1471,6 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 }
               : {}),
           }
-          const admission = yield* Deferred.make<boolean>()
           const lease = entry.directory ? yield* background.lease() : undefined
           // Stopping the job (deleting its session, say) cancels the run, and the job ends only once the run did.
           const job = Effect.gen(function* () {
@@ -1474,10 +1536,15 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 metadata: directoryMetadata,
               })
               yield* entry.call.directory.complete(entry.run)
-              yield* entry.call.directory.bind(entry.run)
+              yield* entry.call.directory.bind(entry.run, () => {
+                gate.bound = true
+              })
             }).pipe(Effect.exit)
-            yield* Deferred.succeed(admission, Exit.isSuccess(persisted))
-            if (Exit.isFailure(persisted)) {
+            // A binding the ledger wrote releases the job even when the call failed after the write (a lock release
+            // defect): the key now replays this run, so the run must go.
+            const admitted = Exit.isSuccess(persisted) || gate.bound
+            yield* release(admitted)
+            if (!admitted) {
               yield* finish(
                 entry,
                 Exit.fail(
@@ -1510,7 +1577,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           if (owed) entry.detached = true
           yield* Deferred.succeed(entry.owed, owed)
           return owed ? shown : yield* Deferred.await(entry.done)
-        }).pipe(Effect.ensuring(Deferred.succeed(entry.owed, false)))
+        }).pipe(
+          Effect.ensuring(Deferred.succeed(entry.owed, false)),
+          Effect.ensuring(Effect.suspend(() => release(gate.bound))),
+        )
+      }
 
       // A background job stopped before or while its run went: the run is cancelled, and ends here even when its work
       // never started (the job registry was closing).
@@ -1634,7 +1705,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return list.map((member) => withActivity(member, state))
       })
 
-      return Service.of({ run, cancel, get, replayDirectory, runs, request, members, dismiss })
+      return Service.of({ run, cancel, get, replayDirectory, settleDirectory, runs, request, members, dismiss })
     }),
   )
 
@@ -1827,6 +1898,31 @@ function ended(entry: Entry, state: "refused" | "failed" | "cancelled", summary:
     sessions: [...entry.sessions].slice(0, Connect.MAX_SESSIONS),
     notes: [],
   }
+}
+
+// A durable `connect` job row of a directory review for this run, member and directory.
+function directoryJob(job: BackgroundJobStore.Row, id: string, directory: string) {
+  return (
+    job.type === JOB_TYPE &&
+    FileLock.key(job.directory) === FileLock.key(directory) &&
+    job.metadata?.directoryReview === true &&
+    job.metadata.runID === id &&
+    job.metadata.member === "vectorscope" &&
+    job.metadata.action === "review"
+  )
+}
+
+// A settled directory job's seal names the terminal receipt it ended with.
+function sealed(job: BackgroundJobStore.Row, digest: string) {
+  const seal = job.metadata?.ended
+  return (
+    typeof seal === "object" &&
+    seal !== null &&
+    "kind" in seal &&
+    seal.kind === "connect.directory.receipt" &&
+    "sha256" in seal &&
+    seal.sha256 === digest
+  )
 }
 
 /**

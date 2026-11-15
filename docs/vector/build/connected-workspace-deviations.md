@@ -907,3 +907,139 @@ Source: `connect-finish` at `539ec394` (CN-06). This package changes `packages/c
     - `prettier --check` passed on every changed code file, and `git diff --check` is clean.
     - oxlint gave 0 errors on every changed code file. The six package files give 75 warnings, the same as their `539ec394` versions; the review round's test files add none on a changed line, and `connect-sweep.ts` has none.
   - *CI:* none is claimed. The Linux engine and unit shards of test.yml are the authority for the Linux-gated cases.
+
+## 2026-11-15 — C6a: directory-review keys reconcile to bound or consumed (CN-08)
+
+Source: `connect-finish` at `7ce17182` (CN-07). This package changes `packages/engine/src/connect/directory-request.ts`, `connect/owner.ts` (`directoryReview`), `connect/hub.ts` (one new method, the admission gate, and three helpers shared with `directoryRuns`) and the code literals in `server/routes/instance/httpapi/groups/connect.ts:15`. It also regenerates the ConnectApiError union in `packages/sdk/openapi.json`, `packages/sdk/js/src/gen/types.gen.ts` and `packages/sdk/js/src/v2/gen/types.gen.ts`. Its tests are in `test/connect/directory-request.test.ts`, `directory.test.ts`, `owner.test.ts`, `test/server/httpapi-connect.test.ts` and the ledger worker `test/fixture/directory-request-worker.ts`. It adds no route, flag, sweep or startup work. With Connect off, `directoryReview` still fails `disabled` before `reserve`, so nothing here runs. It was built uncommitted, revised after one review round (below), and the lane's commit gate records its commit.
+
+- **What it closes.** Part 1 of C6 (review connect:correctness-security #6: "directory key stuck pending"), which is v2-complete-plan §4.1 C6 **B**'s "bind or release in onExit, reconcile orphans". It also settles the key bullet of the 2026-11-14 entry's "Remaining Tier B boundaries": a key is never blindly released or replaced, and it reconciles only on prepared-anchor and failed-tombstone evidence. C6 part 2 (fixed caps and no pruning, `MAX_KEYS`/`MAX_TOTAL_KEYS`) is CN-09, and app recovery is CN-10. As in CN-01, the plan and findings files are not edited.
+- **Brief correction (read from code, then pinned).** A member-unavailable refusal does not leave the key pending. The hub checks member readiness (`ConnectMembers.gate`) in `admit`, which runs inside the job after the binding gate. So that key is bound, and a retry replays the refused run: 200 with state `refused`, where the first answer was 400 `invalid`. This is recorded, not changed (Held). At `7ce17182` these paths did leave a key pending:
+  - the agent was unavailable;
+  - anchor creation failed;
+  - `fenceIsolation` failed;
+  - `ConnectDirectory.issue` failed;
+  - the hub refused before `detach` (decode, and the private-authority check);
+  - the durable lease, job start or receipt write failed;
+  - the bind failed;
+  - the owner was interrupted before bind;
+  - the engine exited in that window.
+- **Confirm first: the admission hang (§2b of the plan).** An owner interrupted after `background.start` but before admission was settled left its job waiting on `admission` forever, with a live heartbeat. The directory.test.ts case "an owner interrupted while its queued job awaits the binding gate never leaves that job running" uses only APIs that exist at `7ce17182` (reserve, fence, issue, then `hub.run` with `bind: () => Effect.never`). Run against `7ce17182`'s `hub.ts`, it failed: the job was still `running` 5 s after the interrupt. It passes now and stays as the pin.
+- **What changed.**
+  - *Two new O_EXCL record kinds* under each scope folder, written under the existing global-then-scope EffectFlock pair with the bounded reader:
+    - `prepared/<key>.json` holds the reservation's fields plus `anchorID`, `writer {pid, start}` and `preparedAt`. `ConnectDirectoryRequest.prepare` writes it right after the anchor session exists and before `hub.run`.
+    - `refused/<key>.json` is a terminal tombstone. It holds the reservation's fields plus `reason` (`agent | anchor | prepare | fence | issue | run | bind | abandoned`), an optional `anchorID` and `refusedAt`.
+    - Each must repeat its reservation exactly (version, key, nonce, both digests, createdAt). These read `unavailable` and write nothing: a mismatch, a partial file, a binding beside a tombstone, a prepared anchor that differs from the binding's or the tombstone's, a record or non-file entry for a key the scope index does not list.
+    - The reservation record itself is byte-for-byte unchanged and has no writer field, so keys already on disk and their digests stay valid. `index()` now creates and lists `prepared/` and `refused/`, and requires both to be subsets of the index.
+  - *The tombstone rule.* A tombstone is written only when no binding exists, checked under both locks. The key stays consumed for good: nothing is deleted or released, and `bind` and `prepare` answer `consumed` for a tombstoned key. So a review can never run twice for one key.
+  - *Uninterruptible writes.* Every locked check-and-write body runs under `Effect.uninterruptible` inside the two locks (`both`, `directory-request.ts:331`), so an interrupted caller waits for its own O_EXCL write. Acquiring the locks stays interruptible.
+    - An interrupt that lands during that body surfaces as soon as the body ends, so the call's exit reads interrupted even when the write finished. `bind` therefore takes an `onBound` callback and runs it inside the body, right after the binding write and the token's removal (`directory-request.ts:619`). The owner and the hub learn of a written binding only from it, never from the call's exit.
+    - The owner's evidence (`inspect`, below) is the one read that runs under the process-wide lock. It is bounded by `INSPECT_MS`, 10 s (`directory-request.ts:25`, `:520`), and a read that runs out answers `unknown`: `unavailable`, with no write. It writes nothing, so it runs interruptibly inside the body. `Options.inspectMs` lowers the bound for tests.
+  - *Liveness* (`claimed`, `directory-request.ts:282`). A pending or prepared key reconciles only when no live claim can exist:
+    - It is never in `live`, the process-wide set of keys this process holds a token for. Like `dropped`, the set is keyed by ledger root plus key, so two data roots in one process never mix. A key joins `live` on the reserve that wins, and leaves it on bind, refuse or release.
+    - With no prepared record, the key must be in `dropped` (this process let its token go without a binding or tombstone) or older than the grace.
+    - With a prepared record, one of these must hold: the grace has passed; the writer is another pid and `kill(pid, 0)` answers ESRCH (the existing `BackgroundJobStore.exited`, with its 5 s probe cache); or the writer is this pid with another start time, which is an earlier run.
+    - The same pid and start (this process) with no token stays pending unless the key is in `dropped`. The owner always binds, refuses or releases, so in practice that leaves only a lost binding file, which waits for the grace.
+    - The start time is `Math.floor(performance.timeOrigin)`, as in read-only-git's owner marker. The grace is `GRACE_MS`, 10 minutes. `ConnectDirectoryRequest.Options` is a `Context.Reference` read on every call; tests set its grace to 0.
+  - *Reconcile order* in `reserve`, all under both locks:
+    1. the existing mismatch and unavailable checks;
+    2. read the binding, tombstone and prepared records;
+    3. a tombstone answers `consumed`;
+    4. a binding answers `bound`;
+    5. `claimed` answers `pending`, without inspecting;
+    6. with no prepared record, write an `abandoned` tombstone and answer `consumed`;
+    7. with no `inspect`, answer `unavailable` with no write, since only the owner can tell whether a job was released;
+    8. `inspect` the prepared anchor. `released` writes the binding `{…reservation, anchorID, runID}` O_EXCL and answers `bound`. `unreleased` writes an `abandoned` tombstone with the anchorID and answers `consumed`; its `stop` runs only after the locks are released. `unknown` answers `unavailable` with no write.
+  - *Release evidence* (`ConnectHub.settleDirectory`, `hub.ts:564`), in three kinds:
+    1. This process's ledger entry for that anchor and proof decides first. `admitted` (the binding gate released it) means `released`. Otherwise the answer is `unreleased`, with a `stop` that cancels the job and is forked into the hub's scope.
+    2. No durable job row for the key means `unreleased`. The row is written before the binding gate can run.
+    3. The answer is `unknown` for any of these: more than one row; a row failing `directoryJob`; a running row whose owner is not dead (`BackgroundJobStore.liveness`); an anchor failing `directoryAnchor`; a receipt that is missing (pruned, unreadable, or its directory identity changed) or names another anchor.
+    4. A receipt with `time.started` means `released`. A running row whose owner is dead never resumes, so it is `unreleased`. So is a settled row whose seal matches its receipt. Anything else is `unknown`.
+    - `directoryAnchor`, `directoryJob` and `sealed` (`hub.ts:470`, `:1904`, `:1916`) are the checks `directoryRuns` already made, moved into helpers so the two share them.
+  - *Owner* (`owner.ts:407-528`).
+    - `reserve` is the acquire of `Effect.acquireUseRelease`, so an interrupt landing just after it cannot skip settlement.
+    - `reached` records the step, the anchor and the bind state. The bind state becomes `bound` only in the ledger's `onBound` callback (`owner.ts:485-498`), which runs inside the uninterruptible write, so a bind whose write finished still counts when an interrupt surfaces right after it. The first build set it in `onExit`, which an interrupt landing during the write turned into a failure (review round, below).
+    - The release does nothing for a bound attempt or a successful bind. An interrupt-only exit calls `release(token)`: nothing is written, and the token is dropped so the next retry reconciles at once. Any other exit calls `refuse(token, {reason: bind called ? "bind" : step, anchorID})`, and a failure there is logged.
+    - When the ledger refused the bind as `consumed` (another retry reconciled first), the owner answers `consumed`. The hub's own answer would have been `invalid`, "could not preserve its durable job and receipt".
+    - The first answer of a refused start keeps its own code and message (`forbidden`, or `invalid` with the hub's summary). The retry answers `consumed`.
+  - *Hub admission gate* (`hub.ts:1442-1583`). This fix is unconditional, because a job queued in memory before its durable row exists needs it whatever the confirm-first test showed. `detach` settles `admission` in `Effect.ensuring`, keyed on whether the binding gate bound the run (`gate.bound`). The ledger sets it through the `bound` callback that `Call.directory.bind` now passes down (`hub.ts:1539-1541`):
+    - If bound, the job is released, and a retry replays it, which matches a response lost after bind.
+    - The normal path releases the job when the gate succeeded or the ledger reported the binding (`hub.ts:1545`). So a binding whose call failed after the write (a lock-release defect) still runs its job, because the key now replays it.
+    - If not, it is stopped.
+    - `Entry.admitted` records the answer for `settleDirectory`. A second `Deferred.succeed` is a no-op, so the normal path is unchanged.
+  - *Public codes.* `ConnectOwner.Error` and `ConnectApiError` gain `pending` and `consumed`, with status 400 and the handler unchanged. The ledger's `mismatch` and `unavailable` still map to `invalid` (`requestError`, `owner.ts:75`).
+    - `pending`: "This review start is not confirmed yet. Retry it shortly; a retry never starts a second review."
+    - `consumed`: "This review start did not complete and no review ran. Start a new review."
+  - *Generators.* `./packages/sdk/js/script/build.ts` at `7ce17182`, before any edit, gave no drift. After the edits, `bun run generate` and `bun run check:generated` in packages/client gave no diff, because the client has no connect routes. The SDK script then changed only the ConnectApiError code union in the three SDK files above. Both used fresh XDG roots under `/tmp/vector-v2/connect/cn08/xdg`.
+- **Plan critique decisions.** Every point was taken, with these exceptions:
+  - *"A sealed row is unknown."* This is narrowed, not taken whole. A settled row whose seal matches a terminal receipt without `time.started` is a run that never executed, so `unreleased` is true there, and a lost binding then reads `consumed`. A sealed row whose receipt is gone (pruned) stays `unknown`. The directory.test.ts evidence case pins that.
+  - *The lost-response replay case lives in directory.test.ts, not owner.test.ts.* The ledger can be wrapped there, so the case interrupts the owner inside the ledger's binding write (review round, below). httpapi-connect.test.ts "a lost actual directory POST response and case-variant explicit retry recover one run without another ask" covers a response lost after the run returned, end to end.
+  - *The planned directory.test.ts "lost binding" case* is merged into the evidence case.
+  - *The mutation matrix* is limited to the safety-critical rows.
+- **Tests added.**
+  - `directory-request.test.ts`, 6 new cases:
+    - another live process's young prepared claim stays pending without inspection; with a grace of 0 its unreleased anchor is tombstoned (`abandoned`, with the anchorID), and that process's held `bind` answers `consumed` with no binding file;
+    - a writer that exited: no job gives `consumed` once, then without inspecting again; a released job gives `bound` with the worker's anchor and the evidence run id;
+    - an earlier run of this pid gives `consumed`. A writerless reservation is `pending`, then `consumed` with a grace of 0 and no anchorID. `unknown` evidence gives `unavailable` and writes nothing;
+    - this process's live claim stays `pending` with a grace of 0. After `refuse` the key is `consumed` and the old token's `prepare` and `bind` answer `unavailable`. A released claim with no prepared record gives `consumed` at once;
+    - an interrupted `bind`, at four delays, settles as `bound` or `consumed`, never `unavailable`;
+    - seven corrupt or contradictory layouts stay `unavailable`, with no write and no inspection;
+    - in the earlier-run case, an `inspect` that never answers (`Effect.never`, bound 50 ms) gives `unavailable` with no write, and the next `reserve` takes the lock at once.
+    - The existing cases pass unchanged, including 6-process concurrency (5 pending), the frozen input and binding (pending after the binding is deleted), the tampered index, the failed O_EXCL binding, the missing pointer and index, and the scope cap.
+  - `directory.test.ts`, 4 new cases:
+    - the admission-hang pin (above);
+    - an interrupted queued start: the retry gives `consumed`, the tombstone carries the anchor, the job leaves `running`, and there is no model call, ask or second anchor;
+    - an owner interrupted inside the ledger's binding write (`directory.test.ts:642`): a test wrapper over the real ledger keeps `bind` in an uninterruptible region after the write, and the owner fiber is interrupted there. No tombstone is written, the bound job reaches its consent question, an uppercase retry replays the same run id while it is still going, and after approval the run completes with one model call and one job row. This case failed on the first build's `onExit` sources ("No directory consent was published"): the job was cancelled while its key stayed bound;
+    - a lost binding: within the grace it is `pending`. With a grace of 0 it rebinds to the in-memory released job, and the rewritten binding is byte-identical. After a reload it rebinds to the durable started receipt and replays the done run. With the receipt also gone it gives `invalid`, with no binding or tombstone written.
+  - `owner.test.ts`, 2 new cases. The real audience is used, with a test switch to fail or skip `fenceIsolation`. A fence failure, then a retry, gives `forbidden` then `consumed`. A hub refusal before the gate, then a retry, gives `invalid` (authority summary) then `consumed`. Each leaves one INTERNAL anchor, no job row, no ask and no LLM input.
+  - `httpapi-connect.test.ts`, 1 new case. A key a real worker process holds answers 400 `{code: "pending"}` on the wire. A key it tombstoned answers 400 `{code: "consumed", message}`, also for an uppercase retry. The public spec the SDK is generated from (`OpenApi.fromApi(PublicApi)`) lists both codes in ConnectApiError's enum; the typed constant also checks them against the generated SDK type. No internal session, ask, run or LLM input.
+  - The ledger worker can also `prepare`, take a `writer`, `refuse`, and `hold` its token for one `bind <runID>` line on stdin.
+- **Review round (one).** One blocking finding and eight non-blocking ones (some repeated), all checked against the code.
+  - *Blocking: the bind state came from `onExit`, outside the ledger's uninterruptible write.* Confirmed. An interrupt that landed during the write left `gate.bound` false, so the job cancelled itself while its key stayed bound, and a retry replayed a cancelled run. Fixed with the reviewer's option (b): the ledger's `onBound` callback, inside the body, sets both the owner's `reached.bind` and the hub's `gate.bound`. Option (a), making the hub's whole `bind` call uninterruptible, was not taken: it would also make the lock wait uninterruptible, and a binder that never answers (the admission-hang pin's `bind: () => Effect.never`) would then never let an interrupted owner go. The new directory.test.ts case pins the fix. The owner's own `bound` state is belt-and-braces: once the binding is written the token is gone, so `refuse` and `release` are no-ops anyway.
+  - *The `unrecorded` JSDoc was attached to `directoryJob`.* Fixed: `directoryJob` and `sealed` now sit above that block (`hub.ts:1903-1926`).
+  - *A missing receipt stays `unknown`.* Not taken; Known limits says why.
+  - *No owner-level interrupted-after-bind replay case.* Added in directory.test.ts, which can wrap the ledger. Plan critique decisions says where the cases live.
+  - *The httpapi code check could never fail.* Replaced with a check of the public spec's enum.
+  - *The global lock is held across `settleDirectory`'s reads.* Bounded by `INSPECT_MS`, and recorded under Known limits. Removing the explicit `Effect.interruptible` around `inspect` is not caught by the new case, because Effect's `timeoutOrElse` interrupts its loser either way. It stays as a statement of intent: the evidence writes nothing.
+  - *A writerless reservation waits out the grace.* The `claims/` record was not added; Known limits says why.
+- **Known limits.**
+  - A data folder shared across machines or pid namespaces can read a remote live writer's pid as gone. The result is a refused start (`consumed`) whose late bind is refused, never a second run.
+  - Clock skew keeps a key pending longer.
+  - A reservation with no prepared record reconciles only by age, or through this process's `dropped` set. It carries no writer identity, so a young one may be held by a live process the ledger cannot see; that is a possible live claim, and the brief's "Done when" holds. The review round's optional `claims/<key>.json` writer record was not added. With it, a dead reserver would reconcile at once, but the brief pins "no replacement after process exit" and the httpapi `pending` wire case on exactly this window, so the window is accepted for up to the 10-minute grace.
+  - "Retry it shortly" can last up to the 10-minute grace while a foreign writer's pid answers.
+  - The owner's acquire is uninterruptible. An aborted request therefore waits for the ledger locks (bounded by EffectFlock's timeout) and the reconcile reads. Those reads (`settleDirectory`: the session, audience, job store and receipt) run while the process-wide `directory-request:global` lock is held, so a slow database stalls every directory start until `INSPECT_MS` (10 s) answers `unavailable` for that key.
+  - An engine crash after the durable job row is written but before its queued receipt (`jobStore.started`, then `complete`) leaves that key `unavailable` (public `invalid`) for good, never `pending`. The review round suggested reading "row present, no receipt" as `unreleased`, since `complete` comes before `bind`. That was not taken. A receipt that is missing cannot be told from one pruned after a done run (`ConnectDirectory.prune` removes done receipts, including one whose row went unsealed in a crash), and only a binding proves a release. So with a lost binding the new rule could answer "no review ran" for a review that ran. directory.test.ts's lost-binding case pins `invalid` for that layout.
+  - An older engine running at the same time on the same data folder knows nothing of tombstones. Its bind could write a binding beside one, which reads `unavailable`, never a second run.
+- **Held.**
+  - CN-09: caps and retention.
+  - CN-10: app recovery.
+  - Q6: connect's routes and file ledger stay.
+  - The bound-refused replay inconsistency (first answer 400 `invalid`, retry 200 `refused`).
+  - The bound-but-unreplayable `invalid` answer.
+  - Every flag stays off, and Q1 stays open.
+- **Receipts.** Every `bun` command ran through `/home/user/.tools/vector-serial`, one test file at a time from packages/engine, with `--timeout 30000`. "Wrapper" means `/tmp/vector-v2/connect/as-ci.sh` (CN-07's: uid 1000, `CI=true`). Logs are in `/tmp/vector-v2/connect/cn08/` (the review round's in `/tmp/vector-v2/connect/cn08-fix/`).
+  - `test/connect/directory-request.test.ts`: 14 pass, 0 fail, 109 expect() calls, both as root and through the wrapper. After the review round: 14 pass, 0 fail, 110 expect() calls, both ways.
+  - `test/connect/directory.test.ts`: 22 pass, 0 fail, 131 expect() calls, through the wrapper; 22 pass as root. After the review round: 23 pass, 0 fail, 138 expect() calls, both ways.
+  - `test/connect/owner.test.ts`: 6 pass, 0 fail, 36 expect() calls, through the wrapper; 6 pass as root. The same after the review round.
+  - `test/server/httpapi-connect.test.ts`: 11 pass, 0 fail, 119 expect() calls, through the wrapper; 11 pass as root. The same after the review round.
+  - `test/connect/hub.test.ts`: 48 pass as root (48 pass, 378 expect() calls, after the review round; not rerun through the wrapper). Through the wrapper it gives 47 pass and 1 fail ("missing snapshot capability lists configuration without probing MCP"). That case fails the same way under the wrapper with `7ce17182`'s `directory-request.ts`, `hub.ts` and `owner.ts` restored, so it is outside this package and recorded, not fixed.
+  - `test/connect/directory-live.test.ts`: 7 pass, 0 fail, 58 expect() calls, through the wrapper, also after the review round. As root all 7 fail with "This review's Git reads cannot be inspected safely", with this package's sources and with `7ce17182`'s alike. That is the root sandbox; CN-07 also ran it through the wrapper.
+  - The confirm-first pin failed on `7ce17182`'s `hub.ts` and passes now.
+  - Mutations, each restored with `sha256sum -c`. Every row was caught:
+
+    | Mutation | Caught by |
+    | --- | --- |
+    | `bind` ignores the tombstone | the live-process case |
+    | `claimed` ignores the live set | this process's live-claim case |
+    | no pid-gone probe | the exited-writer case |
+    | released evidence treated as unreleased | the exited-writer case, and directory.test.ts's lost-binding case |
+    | the owner maps `consumed` to `invalid` | both owner cases, and the HTTP case |
+    | the writer's start time ignored | the earlier-run case |
+    | review round: the hub ignores the ledger's `bound` report | directory.test.ts's interrupted-bind case |
+    | review round: the ledger never calls `onBound` | directory.test.ts's interrupted-bind case |
+
+  - Static checks:
+    - `bun typecheck` passed in packages/engine, packages/client and packages/sdk/js.
+    - `prettier --check` passed on every changed code file, and `git diff --check` is clean.
+    - oxlint gave 0 errors on the nine changed code files. The warnings are the `consistent-return` and `no-unnecessary-type-assertion` kinds the same files already carry, for example hub.ts's.
+    - After the review round: `bun typecheck` passed in packages/engine and packages/client. `prettier --check` passed on the six code files the round changed, and `git diff --check` is clean. oxlint gave 0 errors on them; its one new warning is `no-unsafe-type-assertion` on the test ledger wrapper's `ConnectDirectoryRequest.node.implementation` cast (`directory.test.ts:139`), the same cast `test/server/task-batch-promotion.test.ts` makes for TaskManager. The round changed no route, schema or public type (`onBound` and the hub's `bound` are internal), so nothing was regenerated.
+  - *CI:* none is claimed. The Linux engine shard of test.yml is the authority.

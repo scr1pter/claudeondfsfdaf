@@ -4,14 +4,15 @@ import { spawn } from "node:child_process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Exit, Schema } from "effect"
+import { Effect, Exit, Fiber, Schema } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Global } from "@vectordevai/core/global"
 import { Connect } from "@vectordevai/schema/connect"
+import { ConnectDirectory } from "@/connect/directory"
 import { ConnectDirectoryRequest } from "@/connect/directory-request"
 import { SessionID } from "@/session/schema"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "vector-directory-request-"))
 const data = path.join(temporary, "data")
@@ -40,7 +41,13 @@ const fixture = Effect.gen(function* () {
   const directory = path.join(data, "workspace")
   yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
   const scope = { projectID: "directory-request-fixture", directory }
-  return { service, scope }
+  const identity = yield* ConnectDirectory.capture(directory)
+  const folder = path.join(
+    data,
+    "storage",
+    ...ConnectDirectoryRequest.prefix({ projectID: scope.projectID, canonical: identity.canonical }),
+  )
+  return { service, scope, folder }
 })
 const refused = <A>(effect: Effect.Effect<A, ConnectDirectoryRequest.Error>) => effect.pipe(Effect.flip)
 const worker = path.join(import.meta.dir, "../fixture/directory-request-worker.ts")
@@ -59,8 +66,68 @@ const child = (scope: ConnectDirectoryRequest.Scope, request: Connect.DirectoryR
   })
 const WorkerResult = Schema.Struct({
   kind: Schema.Literals(["reserved", "bound", "refused"]),
-  code: Schema.optional(Schema.Literals(["pending", "mismatch", "unavailable"])),
+  code: Schema.optional(Schema.Literals(["pending", "mismatch", "unavailable", "consumed"])),
 })
+
+// A ledger worker that keeps running: its printed lines, one per step, and a stdin line for its held token.
+const start = (request: {
+  readonly scope: ConnectDirectoryRequest.Scope
+  readonly input: Connect.DirectoryReviewInput
+  readonly prepare?: string
+  readonly writer?: ConnectDirectoryRequest.Writer
+  readonly refuse?: ConnectDirectoryRequest.Reason
+  readonly hold?: boolean
+}) => {
+  const proc = spawn(process.execPath, [worker, JSON.stringify({ data, ...request })], {
+    cwd: path.join(import.meta.dir, "../.."),
+  })
+  const lines: unknown[] = []
+  const partial = { text: "", errors: "" }
+  proc.stdout.on("data", (chunk) => {
+    const parts = (partial.text + String(chunk)).split("\n")
+    partial.text = parts.pop() ?? ""
+    lines.push(...parts.filter(Boolean).map((part): unknown => JSON.parse(part)))
+  })
+  proc.stderr.on("data", (chunk) => {
+    partial.errors += String(chunk)
+  })
+  const closed = new Promise<number>((resolve) => proc.on("close", (code) => resolve(code ?? 1)))
+  return {
+    lines,
+    line: (index: number) =>
+      pollWithTimeout(
+        Effect.sync(() => lines[index]),
+        "The ledger worker did not print its next step",
+        "20 seconds",
+      ),
+    send: (text: string) => proc.stdin.write(`${text}\n`),
+    exit: Effect.promise(() => closed).pipe(
+      Effect.tap((code) => Effect.sync(() => expect(code, partial.errors).toBe(0))),
+    ),
+  }
+}
+const writer = { pid: process.pid, start: Math.floor(performance.timeOrigin) }
+const grace = (graceMs: number) => Effect.provideService(ConnectDirectoryRequest.Options, { graceMs, writer })
+// An owner's evidence for a stale prepared anchor, recording each anchor it was asked about.
+const inspector = (evidence: ConnectDirectoryRequest.Evidence) => {
+  const calls: ConnectDirectoryRequest.Prepared[] = []
+  const inspect: ConnectDirectoryRequest.Inspect = (prepared) =>
+    Effect.sync(() => {
+      calls.push(prepared)
+      return evidence
+    })
+  return { calls, inspect }
+}
+const readJson = (file: string) =>
+  Effect.promise(async (): Promise<unknown> => JSON.parse(await fs.readFile(file, "utf8")))
+const exists = (file: string) =>
+  Effect.promise(() =>
+    fs.lstat(file).then(
+      () => true,
+      () => false,
+    ),
+  )
+const CONSUMED = "This review start did not complete and no review ran. Start a new review."
 
 it.live(
   "concurrent processes reserve one UUID once, including alternate UUID casing, and an exited pending winner is never replaced",
@@ -274,4 +341,250 @@ it.live(
       ).toBe(false)
     }),
   30_000,
+)
+
+it.live(
+  "a live process's young prepared claim stays pending; after the grace its unreleased anchor is tombstoned and that process's bind is refused",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const request = input()
+      const anchorID = SessionID.create()
+      const held = start({ scope: f.scope, input: request, prepare: anchorID, hold: true })
+      yield* held.line(2)
+      expect(held.lines).toEqual([{ kind: "reserved" }, { step: "prepare", kind: "ok" }, { step: "hold", kind: "ok" }])
+      const unreleased = inspector({ kind: "unreleased" })
+      expect((yield* refused(f.service.reserve(f.scope, request, unreleased.inspect))).code).toBe("pending")
+      expect(unreleased.calls).toEqual([])
+      const answer = yield* refused(f.service.reserve(f.scope, request, unreleased.inspect).pipe(grace(0)))
+      expect(answer).toMatchObject({ code: "consumed", message: CONSUMED })
+      expect(unreleased.calls.map((call) => call.anchorID)).toEqual([anchorID])
+      expect(yield* readJson(path.join(f.folder, "refused", `${request.requestKey}.json`))).toMatchObject({
+        key: request.requestKey,
+        reason: "abandoned",
+        anchorID,
+      })
+      held.send(`bind ${Connect.RunID.create()}`)
+      expect(yield* held.line(3)).toEqual({ step: "bind", kind: "refused", code: "consumed" })
+      yield* held.exit
+      expect(yield* exists(path.join(f.folder, "bindings", `${request.requestKey}.json`))).toBe(false)
+    }),
+  30_000,
+)
+
+it.live(
+  "a prepared key whose writer exited reconciles once: no job is consumed, and a released job is bound",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const lost = input()
+      yield* start({ scope: f.scope, input: lost, prepare: SessionID.create() }).exit
+      const unreleased = inspector({ kind: "unreleased" })
+      expect((yield* refused(f.service.reserve(f.scope, lost, unreleased.inspect))).code).toBe("consumed")
+      expect((yield* refused(f.service.reserve(f.scope, lost, unreleased.inspect))).code).toBe("consumed")
+      expect(unreleased.calls).toHaveLength(1)
+
+      const kept = input()
+      const anchorID = SessionID.create()
+      yield* start({ scope: f.scope, input: kept, prepare: anchorID }).exit
+      const runID = Connect.RunID.create()
+      const released = inspector({ kind: "released", runID })
+      const bound = yield* f.service.reserve(f.scope, kept, released.inspect)
+      if (bound.kind !== "bound") throw new Error("The released job was not bound")
+      expect(bound.binding).toMatchObject({ key: kept.requestKey, anchorID, runID })
+      expect(released.calls.map((call) => call.anchorID)).toEqual([anchorID])
+      expect(yield* readJson(path.join(f.folder, "bindings", `${kept.requestKey}.json`))).toMatchObject({ runID })
+      expect((yield* f.service.reserve(f.scope, kept, released.inspect)).kind).toBe("bound")
+      expect(released.calls).toHaveLength(1)
+      expect(yield* exists(path.join(f.folder, "refused", `${kept.requestKey}.json`))).toBe(false)
+    }),
+  30_000,
+)
+
+it.live(
+  "an earlier run of this pid and a writerless reservation past the grace reconcile; unknown evidence never writes",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const earlier = input()
+      yield* start({
+        scope: f.scope,
+        input: earlier,
+        prepare: SessionID.create(),
+        writer: { pid: process.pid, start: 1 },
+      }).exit
+      expect(
+        (yield* refused(f.service.reserve(f.scope, earlier, inspector({ kind: "unreleased" }).inspect))).code,
+      ).toBe("consumed")
+
+      const bare = input()
+      yield* start({ scope: f.scope, input: bare }).exit
+      const never = inspector({ kind: "unreleased" })
+      expect((yield* refused(f.service.reserve(f.scope, bare, never.inspect))).code).toBe("pending")
+      expect((yield* refused(f.service.reserve(f.scope, bare, never.inspect).pipe(grace(0)))).code).toBe("consumed")
+      expect(never.calls).toEqual([])
+      const tombstone = yield* readJson(path.join(f.folder, "refused", `${bare.requestKey}.json`))
+      expect(tombstone).toMatchObject({ key: bare.requestKey, reason: "abandoned" })
+      expect(tombstone).not.toHaveProperty("anchorID")
+
+      const unknown = input()
+      yield* start({ scope: f.scope, input: unknown, prepare: SessionID.create() }).exit
+      expect((yield* refused(f.service.reserve(f.scope, unknown, inspector({ kind: "unknown" }).inspect))).code).toBe(
+        "unavailable",
+      )
+      // A stuck owner read is bounded while it holds the global lock: unavailable, no write, and the lock is free.
+      const stuck = f.service
+        .reserve(f.scope, unknown, () => Effect.never)
+        .pipe(
+          Effect.provideService(ConnectDirectoryRequest.Options, {
+            graceMs: ConnectDirectoryRequest.GRACE_MS,
+            writer,
+            inspectMs: 50,
+          }),
+        )
+      expect((yield* refused(stuck)).code).toBe("unavailable")
+      expect((yield* refused(f.service.reserve(f.scope, unknown))).code).toBe("unavailable")
+      for (const folder of ["refused", "bindings"])
+        expect(yield* exists(path.join(f.folder, folder, `${unknown.requestKey}.json`))).toBe(false)
+    }),
+  30_000,
+)
+
+it.live("this process's live claim stays pending, and a refused or released claim is consumed at once", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture
+    const request = input()
+    const claim = yield* f.service.reserve(f.scope, request)
+    if (claim.kind !== "reserved") throw new Error("No first writer")
+    const anchorID = SessionID.create()
+    yield* f.service.prepare(claim.token, anchorID)
+    const never = inspector({ kind: "released", runID: Connect.RunID.create() })
+    expect((yield* refused(f.service.reserve(f.scope, request, never.inspect).pipe(grace(0)))).code).toBe("pending")
+    yield* f.service.refuse(claim.token, { reason: "fence", anchorID })
+    expect(yield* refused(f.service.reserve(f.scope, request, never.inspect))).toMatchObject({
+      code: "consumed",
+      message: CONSUMED,
+    })
+    expect(yield* readJson(path.join(f.folder, "refused", `${request.requestKey}.json`))).toMatchObject({
+      reason: "fence",
+      anchorID,
+    })
+    expect((yield* refused(f.service.prepare(claim.token, anchorID))).code).toBe("unavailable")
+    expect((yield* refused(f.service.bind(claim.token, { anchorID, runID: Connect.RunID.create() }))).code).toBe(
+      "unavailable",
+    )
+    expect(never.calls).toEqual([])
+
+    const dropped = input()
+    const second = yield* f.service.reserve(f.scope, dropped)
+    if (second.kind !== "reserved") throw new Error("No second writer")
+    yield* f.service.release(second.token)
+    expect((yield* refused(f.service.reserve(f.scope, dropped, never.inspect))).code).toBe("consumed")
+    expect(never.calls).toEqual([])
+    expect(yield* readJson(path.join(f.folder, "refused", `${dropped.requestKey}.json`))).toMatchObject({
+      reason: "abandoned",
+    })
+  }),
+)
+
+it.live("an interrupted bind settles as bound or consumed, never as a contradictory key", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture
+    for (const delay of [0, 1, 2, 5]) {
+      const request = input()
+      const claim = yield* f.service.reserve(f.scope, request)
+      if (claim.kind !== "reserved") throw new Error("No first writer")
+      const anchorID = SessionID.create()
+      yield* f.service.prepare(claim.token, anchorID)
+      const fiber = yield* f.service
+        .bind(claim.token, { anchorID, runID: Connect.RunID.create() })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Effect.sleep(`${delay} millis`)
+      yield* Fiber.interrupt(fiber)
+      yield* f.service.release(claim.token)
+      const settled = yield* f.service
+        .reserve(f.scope, request, inspector({ kind: "unreleased" }).inspect)
+        .pipe(Effect.match({ onSuccess: (answer) => answer.kind, onFailure: (error) => error.code }))
+      expect(["bound", "consumed"]).toContain(settled)
+    }
+  }),
+)
+
+it.live("partial, foreign or contradictory prepared and tombstone records stay unavailable with no write", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture
+    const request = input()
+    const claim = yield* f.service.reserve(f.scope, request)
+    if (claim.kind !== "reserved") throw new Error("No first writer")
+    yield* f.service.release(claim.token)
+    const file = (folder: string, key = request.requestKey) => path.join(f.folder, folder, `${key}.json`)
+    const anchorID = SessionID.create()
+    const record = claim.claim.record
+    const stray = randomUUID()
+    const cases: { name: string; files: Record<string, string>; folders?: string[] }[] = [
+      { name: "partial prepared", files: { [file("prepared")]: "{" } },
+      {
+        name: "prepared with another nonce",
+        files: {
+          [file("prepared")]: JSON.stringify({
+            ...record,
+            nonce: randomUUID(),
+            anchorID,
+            writer: { pid: 1, start: 0 },
+            preparedAt: 0,
+          }),
+        },
+      },
+      { name: "partial tombstone", files: { [file("refused")]: "{" } },
+      {
+        name: "binding beside a tombstone",
+        files: {
+          [file("bindings")]: JSON.stringify({ ...record, anchorID, runID: Connect.RunID.create() }),
+          [file("refused")]: JSON.stringify({ ...record, reason: "fence", refusedAt: 0 }),
+        },
+      },
+      {
+        name: "prepared record of an unindexed key",
+        files: {
+          [file("prepared", stray)]: JSON.stringify({
+            ...record,
+            key: stray,
+            anchorID,
+            writer: { pid: 1, start: 0 },
+            preparedAt: 0,
+          }),
+        },
+      },
+      {
+        name: "tombstone of an unindexed key",
+        files: { [file("refused", stray)]: JSON.stringify({ ...record, key: stray, reason: "run", refusedAt: 0 }) },
+      },
+      { name: "directory inside refused", files: {}, folders: [file("refused", stray)] },
+    ]
+    for (const item of cases) {
+      yield* Effect.promise(async () => {
+        await Promise.all(Object.entries(item.files).map(([target, text]) => fs.writeFile(target, text)))
+        await Promise.all((item.folders ?? []).map((target) => fs.mkdir(target)))
+      })
+      const never = inspector({ kind: "unreleased" })
+      expect((yield* refused(f.service.reserve(f.scope, request, never.inspect).pipe(grace(0)))).code, item.name).toBe(
+        "unavailable",
+      )
+      expect(never.calls, item.name).toEqual([])
+      const left = yield* Effect.promise(async () =>
+        (
+          await Promise.all(
+            ["prepared", "refused", "bindings"].map((folder) => fs.readdir(path.join(f.folder, folder))),
+          )
+        ).flat(),
+      )
+      expect(left.length, item.name).toBe(Object.keys(item.files).length + (item.folders?.length ?? 0))
+      yield* Effect.promise(() =>
+        Promise.all(
+          [...Object.keys(item.files), ...(item.folders ?? [])].map((target) => fs.rm(target, { recursive: true })),
+        ),
+      )
+    }
+    expect((yield* refused(f.service.reserve(f.scope, request))).code).toBe("consumed")
+  }),
 )

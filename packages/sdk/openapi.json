@@ -45358,7 +45358,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "enum": ["disabled", "forbidden", "not_found", "invalid"]
+            "enum": ["disabled", "forbidden", "not_found", "invalid", "pending", "consumed"]
           },
           "message": {
             "type": "string"

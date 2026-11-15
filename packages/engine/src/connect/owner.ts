@@ -42,7 +42,7 @@ import { TaskNotify } from "@/task/notify"
 import { TaskPlace } from "@/task/place"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectOwner.Error", {
-  code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid"]),
+  code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid", "pending", "consumed"]),
   message: Schema.String,
 }) {}
 
@@ -70,6 +70,13 @@ export class Service extends Context.Service<Service, Interface>()("@vector/Conn
 export const Sweep = Context.Reference<typeof ReadOnlyGit.sweepStale>("@vector/ConnectOwner.Sweep", {
   defaultValue: () => ReadOnlyGit.sweepStale,
 })
+
+// The ledger answers a caller can act on keep their code; any other ledger refusal is an invalid start.
+const requestError = (error: ConnectDirectoryRequest.Error) =>
+  new Error({
+    code: error.code === "pending" || error.code === "consumed" ? error.code : "invalid",
+    message: error.message,
+  })
 
 const layer = Layer.effect(
   Service,
@@ -397,73 +404,127 @@ const layer = Layer.effect(
             code: "forbidden",
             message: "Review this task from its launching conversation so its worktree ownership stays protected.",
           })
-        const attempt = yield* directoryRequests
-          .reserve({ projectID: current.project.id, directory: current.directory }, checked)
-          .pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
-        if (attempt.kind === "bound") {
-          const original = yield* hub.replayDirectory({
-            ...attempt.proof,
-            runID: attempt.binding.runID,
-            anchorID: attempt.binding.anchorID,
-          })
-          if (!original)
-            return yield* new Error({
-              code: "invalid",
-              message:
-                "This request key is consumed, but its original owned run is unavailable. No new review was started.",
-            })
-          return original
-        }
-        const requested = attempt.claim.input
-        const name = yield* agents.defaultAgent()
-        const agent = yield* agents.get(name)
-        if (!agent) return yield* new Error({ code: "invalid", message: "The owner's agent is unavailable." })
-        const anchor = yield* sessions.create({
-          title: "VectorScope directory review",
-          internal: ConnectDirectory.INTERNAL,
-        })
-        yield* audience
-          .fenceIsolation({ sessionID: anchor.id, actor: "owner" })
-          .pipe(
-            Effect.mapError(
-              () => new Error({ code: "forbidden", message: "The directory owner could not be verified." }),
-            ),
-          )
-        const token = yield* ConnectDirectory.issue(
-          {
-            sessionID: anchor.id,
-            projectID: current.project.id,
-            directory: current.directory,
+        // How far this start got, so a known failure before the binding gate tombstones its key with the step it
+        // reached, and an interruption (unknown outcome) only drops the token.
+        const reached: {
+          step: ConnectDirectoryRequest.Reason
+          anchorID?: SessionID
+          bind: "none" | "called" | "bound"
+          consumed?: ConnectDirectoryRequest.Error
+        } = { step: "agent", bind: "none" }
+        return yield* Effect.acquireUseRelease(
+          directoryRequests
+            .reserve({ projectID: current.project.id, directory: current.directory }, checked, (prepared) =>
+              hub.settleDirectory({ ...prepared.proof, anchorID: prepared.anchorID }),
+            )
+            .pipe(Effect.mapError(requestError)),
+          (attempt) =>
+            Effect.gen(function* () {
+              if (attempt.kind === "bound") {
+                const original = yield* hub.replayDirectory({
+                  ...attempt.proof,
+                  runID: attempt.binding.runID,
+                  anchorID: attempt.binding.anchorID,
+                })
+                if (!original)
+                  return yield* new Error({
+                    code: "invalid",
+                    message:
+                      "This request key is consumed, but its original owned run is unavailable. No new review was started.",
+                  })
+                return original
+              }
+              const requested = attempt.claim.input
+              const name = yield* agents.defaultAgent()
+              const agent = yield* agents.get(name)
+              if (!agent) return yield* new Error({ code: "invalid", message: "The owner's agent is unavailable." })
+              reached.step = "anchor"
+              const anchor = yield* sessions.create({
+                title: "VectorScope directory review",
+                internal: ConnectDirectory.INTERNAL,
+              })
+              reached.anchorID = anchor.id
+              reached.step = "prepare"
+              yield* directoryRequests.prepare(attempt.token, anchor.id).pipe(Effect.mapError(requestError))
+              reached.step = "fence"
+              yield* audience
+                .fenceIsolation({ sessionID: anchor.id, actor: "owner" })
+                .pipe(
+                  Effect.mapError(
+                    () => new Error({ code: "forbidden", message: "The directory owner could not be verified." }),
+                  ),
+                )
+              reached.step = "issue"
+              const token = yield* ConnectDirectory.issue(
+                {
+                  sessionID: anchor.id,
+                  projectID: current.project.id,
+                  directory: current.directory,
+                },
+                attempt.claim.scope,
+              ).pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
+              reached.step = "run"
+              const run = yield* hub.run({
+                request: {
+                  to: "vectorscope",
+                  action: "review",
+                  requester: { kind: "user", agent: agent.name },
+                  directory: current.directory,
+                  target: requested.target ?? { kind: "uncommitted" },
+                  background: true,
+                  ...(requested.budget ? { budget: requested.budget } : {}),
+                  ...(requested.security !== undefined ? { security: requested.security } : {}),
+                  ...(requested.since ? { since: requested.since } : {}),
+                },
+                call: {
+                  directory: {
+                    token,
+                    request: attempt.claim.proof,
+                    // The ledger reports the binding from inside its uninterruptible write, so an interrupt that
+                    // surfaces once the write ended still leaves this start bound, never refused or dropped.
+                    bind: (run, bound) =>
+                      Effect.suspend(() => {
+                        reached.bind = "called"
+                        return directoryRequests.bind(attempt.token, { anchorID: anchor.id, runID: run.id }, () => {
+                          reached.bind = "bound"
+                          bound()
+                        })
+                      }).pipe(
+                        Effect.tapError((error) =>
+                          Effect.sync(() => {
+                            if (error.code === "consumed") reached.consumed = error
+                          }),
+                        ),
+                      ),
+                    complete: (run) => ConnectDirectory.write(token, run),
+                  },
+                  promptOps,
+                  ...(options?.abort ? { abort: options.abort } : {}),
+                  update: (run) => ConnectDirectory.write(token, run).pipe(Effect.asVoid, Effect.orDie),
+                },
+              })
+              // Another retry reconciled this key first: the hub refused at the gate, and the key reads consumed.
+              if (reached.consumed) return yield* requestError(reached.consumed)
+              if (run.status === "done" && run.result?.state === "refused")
+                return yield* new Error({ code: "invalid", message: run.result.summary })
+              return run
+            }),
+          (attempt, exit) => {
+            if (attempt.kind === "bound" || reached.bind === "bound") return Effect.void
+            if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+              return directoryRequests.release(attempt.token)
+            return directoryRequests
+              .refuse(attempt.token, {
+                reason: reached.bind === "none" ? reached.step : "bind",
+                ...(reached.anchorID ? { anchorID: reached.anchorID } : {}),
+              })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("connect directory request key was not tombstoned", { cause }),
+                ),
+              )
           },
-          attempt.claim.scope,
-        ).pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
-        const run = yield* hub.run({
-          request: {
-            to: "vectorscope",
-            action: "review",
-            requester: { kind: "user", agent: agent.name },
-            directory: current.directory,
-            target: requested.target ?? { kind: "uncommitted" },
-            background: true,
-            ...(requested.budget ? { budget: requested.budget } : {}),
-            ...(requested.security !== undefined ? { security: requested.security } : {}),
-            ...(requested.since ? { since: requested.since } : {}),
-          },
-          call: {
-            directory: {
-              token,
-              request: attempt.claim.proof,
-              bind: (run) => directoryRequests.bind(attempt.token, { anchorID: anchor.id, runID: run.id }),
-              complete: (run) => ConnectDirectory.write(token, run),
-            },
-            promptOps,
-            ...(options?.abort ? { abort: options.abort } : {}),
-            update: (run) => ConnectDirectory.write(token, run).pipe(Effect.asVoid, Effect.orDie),
-          },
-        })
-        if (run.status === "done" && run.result?.state === "refused")
-          return yield* new Error({ code: "invalid", message: run.result.summary })
-        return run
+        )
       })
     const register: Interface["register"] = (input) =>
       own(

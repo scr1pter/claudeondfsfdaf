@@ -1,12 +1,18 @@
 import { afterEach, expect } from "bun:test"
+import { randomUUID } from "node:crypto"
 import os from "node:os"
 import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
+import { Database } from "@vectordevai/core/database/database"
+import { Node } from "@vectordevai/core/effect/app-node"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Npm } from "@vectordevai/core/npm"
 import type { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Auth } from "@/auth"
+import { ConnectDirectory } from "@/connect/directory"
 import { ConnectOwner } from "@/connect/owner"
 import { ConnectHub } from "@/connect/hub"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
@@ -88,11 +94,43 @@ const prompt = Layer.effect(
   }),
 ).pipe(Layer.provide(AppNodeBuilderV1.build(SessionPrompt.node, withRunner)))
 
+// The real audience over the test's database, except that a test can make the owner's isolation fence fail or skip it.
+const fence: { mode?: "fail" | "skip" } = {}
+const fencedAudience = Node.makeGlobalNode({
+  service: SessionAudience.Service,
+  layer: Layer.effect(
+    SessionAudience.Service,
+    Effect.map(Database.Service, (database) => {
+      const real = SessionAudience.make(database)
+      return SessionAudience.Service.of({
+        ...real,
+        fenceIsolation: (input) =>
+          fence.mode === "fail"
+            ? Effect.fail(new SessionAudience.Denied({ reason: "owner_required", message: "Fixture fence failure." }))
+            : fence.mode === "skip"
+              ? Effect.void
+              : real.fenceIsolation(input),
+      })
+    }),
+  ),
+  deps: [Database.node],
+})
+
 const it = testEffect(
   Layer.mergeAll(
     AppNodeBuilderV1.build(
-      LayerNode.group([ConnectOwner.node, SessionPrompt.node, Session.node, Permission.node, CrossSpawnSpawner.node]),
-      withRunner.concat([[SessionPrompt.node, prompt]]),
+      LayerNode.group([
+        ConnectOwner.node,
+        SessionPrompt.node,
+        Session.node,
+        Permission.node,
+        CrossSpawnSpawner.node,
+        BackgroundJobStore.node,
+      ]),
+      withRunner.concat([
+        [SessionPrompt.node, prompt],
+        [SessionAudience.node, fencedAudience],
+      ]),
     ),
     testInstanceStoreLayer,
     TestLLMServer.layer,
@@ -132,6 +170,7 @@ const on = sweepGraph(true)
 
 afterEach(async () => {
   delete control.current
+  delete fence.mode
   for (const item of swept.splice(0)) item.release()
   await disposeAllInstances()
   await resetDatabase()
@@ -268,6 +307,45 @@ for (const fail of [false, true])
               ).toBe(true)
             }
             expect(yield* permissions.list()).toEqual([])
+          }),
+        )
+      }),
+    30_000,
+  )
+
+for (const mode of ["fail", "skip"] as const)
+  it.live(
+    `a start that ${mode === "fail" ? "fails its owner fence" : "the hub refuses before the binding gate"} tombstones its key, so a retry answers consumed`,
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const directory = yield* tmpdirScoped({
+          trusted: true,
+          config: { ...testProviderConfig(llm.url), model: "lmstudio/test-model", permission: { connect: "ask" } },
+        })
+        fence.mode = mode
+        yield* provideInstance(directory)(
+          Effect.gen(function* () {
+            const owner = yield* ConnectOwner.Service
+            const sessions = yield* Session.Service
+            const permissions = yield* Permission.Service
+            const jobs = yield* BackgroundJobStore.Service
+            const input = { requestKey: randomUUID() }
+            const first = yield* owner.directoryReview(input).pipe(Effect.flip)
+            expect(first.code).toBe(mode === "fail" ? "forbidden" : "invalid")
+            if (mode === "skip") expect(first.message).toContain("private execution authority")
+            const retry = yield* owner
+              .directoryReview({ ...input, requestKey: input.requestKey.toUpperCase() })
+              .pipe(Effect.flip)
+            expect(retry.code).toBe("consumed")
+            expect(retry.message).toBe("This review start did not complete and no review ran. Start a new review.")
+            const anchors = (yield* sessions.list({ internal: true, roots: true })).filter(
+              (row) => row.internal === ConnectDirectory.INTERNAL,
+            )
+            expect(anchors).toHaveLength(1)
+            expect(yield* jobs.forParent(anchors[0].id)).toEqual([])
+            expect(yield* permissions.list()).toEqual([])
+            expect(yield* llm.inputs).toHaveLength(0)
           }),
         )
       }),
