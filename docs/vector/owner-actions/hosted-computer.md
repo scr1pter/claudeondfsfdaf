@@ -159,6 +159,10 @@ start", R2-R4):
   generation is unknown or below the signed-beat floor. No per-computer generation record exists yet, and the
   server-side image floor (H2a) is not built; when it is, it must not block download-only starts. The lane also tracks
   this as a defect for a later server package (`codium-a53-hosted-sessions-notes.md`, "Not done").
+  15 Nov 2026 (Codium finish H2a): the per-computer record now exists (`hosted:generation:<account>`, the generation
+  each computer's hostd last reported in a signed heartbeat), and the image floor below does not apply to download-only
+  starts. Whether a download start should be refused or not charged below the signed-beat floor is still yours; H2a
+  does neither.
 
 **The screens (H1c).** Once `computer` is listed, a customer whose plan ended (or no longer includes a cloud computer)
 and whose disks are still kept sees, on the desktop's bar and the phone's Cloud computer page, "Your cloud
@@ -249,6 +253,47 @@ that the commit is on `main`, and the inputs. The image job waits for your appro
 
 Then set `VECTOR_HOSTED_BASE_SNAPSHOT` in Vercel. New computers start from it. Computers that already have a disk keep
 their own programs until their disk is made again (after its retention lapses, or when you delete it).
+
+**The image floor (Codium finish H2a, optional).** `VECTOR_HOSTED_MIN_GENERATION` makes the server refuse job starts
+on computers whose disk was made from an older image, before anything is leased, held or started. Unset, blank or 0 is
+no floor, and nothing changes.
+
+- What it compares: the generation each computer's hostd reports in its signed heartbeat, which is the image's
+  `/usr/lib/vector/GENERATION` (the image workflow's `generation` input). A resumed computer keeps its whole disk, so
+  this is the generation its disk was made from.
+- When to set it: only after a rebuilt image is baked and `VECTOR_HOSTED_BASE_SNAPSHOT` points at it. Never set it
+  above the generation that snapshot was baked with: new computers report that generation, so a higher floor refuses
+  them from their second job on, and deleting one makes it again from the same snapshot.
+- What it does: a job start passes over an included computer below the floor and runs on another free one, without the
+  passed-over computer's files. When every included computer is below it, the start is refused with "This cloud
+  computer needs to be rebuilt." When the only free ones are below it and the rest are running, the start answers busy
+  ("Every cloud computer your plan includes is running or needs to be rebuilt."), so a queued Done by Morning job waits;
+  a refused one is missed.
+- Not checked: a computer that never reported a generation (it never booted, its image predates signed heartbeats, or
+  its hostd could not read the file and sent 0). Each computer is checked only after its first signed report from this
+  server version on, so its first start after you set the floor is not checked.
+- Not checked either: a computer whose report lapsed. A report lasts the plan's disk days from the computer's last
+  signed heartbeat, the earliest the provider may delete that disk, after which the next start may make the computer
+  afresh from the current snapshot. An idle subscriber whose disk lapsed is therefore not refused. The other side of
+  the same choice: the provider counts from when the computer stopped, normally within a minute of its last heartbeat
+  and at most the job's length later (a daemon that stopped reporting), so a start in that window resumes the old disk
+  unchecked, as `boot.sh` would also let it.
+- Not affected: download-only starts (an ended plan's files stay downloadable), running sessions and their renewals. To
+  stop running sessions, use the `hosted` switch.
+- A value that is not a whole number up to 1000000 stops every job start with "temporarily unavailable", and no other
+  screen says why. If starts stop after you set it, check the value first.
+- Nothing rebuilds a computer on its own. The person rebuilds one by deleting its disk (`POST /api/hosted/computers
+  {computer, action: "erase"}`); no screen offers that yet, and the API's erase has no confirmation step of its own, so
+  the confirmation belongs to that future screen. On a live plan a below-floor computer's files are kept only by not
+  deleting it: a live plan that includes a computer cannot start a download-only session. `GET /api/hosted/computers`
+  marks `rebuild: true` only on an included computer of a plan that has not ended, where a job start checks it; an
+  ended plan's kept disks and computers the plan no longer includes are never marked, because their files can only be
+  downloaded.
+- Yours to decide: an automatic rebuild (today the floor only refuses); passing over a below-floor computer versus
+  refusing any job start while one exists; what happens to a live plan's files on a below-floor computer; a queued job
+  that is missed when refused versus one that waits; and a report that lapses at the disk's earliest deletion (no
+  false refusal for a lapsed disk, a short unchecked window when the disk outlives it) versus one kept until its latest
+  (no unchecked window, a false refusal of up to the job's length).
 
 Not yet tried anywhere: the Vercel CLI's `vcr login docker` at that version and the registry's answers. If the sign-in
 step fails, the pinned version may predate the command: raise `VERCEL_CLI_VERSION` in

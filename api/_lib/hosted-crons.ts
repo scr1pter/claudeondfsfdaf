@@ -48,6 +48,7 @@ import {
   hostedDownloadEgressKey,
   hostedDownloadUploadedKey,
   hostedEgressKey,
+  hostedGenerationKey,
   hostedHandoffAlertKey,
   hostedHostdKey,
   hostedJobKey,
@@ -532,6 +533,7 @@ export async function eraseAccountHosted(account: string, options: SessionOption
       hostedSessionsKey(account),
       hostedLeaseKey(account),
       hostedComputersKey(account),
+      hostedGenerationKey(account),
       hostedSuspendKey(account),
       hostedTrueUpKey(account),
       hostedArchivesKey(account),
@@ -610,7 +612,8 @@ export async function runHostedNightly(options: CronOptions = {}): Promise<Night
           fetcher,
         )
       }
-      await store(["DEL", hostedComputersKey(account)], fetcher)
+      // The computers' reported image generations go with them (H2a).
+      await store(["DEL", hostedComputersKey(account), hostedGenerationKey(account)], fetcher)
       await store(["ZREM", hostedDiskDueKey(), account], fetcher)
       result.deleted++
     } catch {

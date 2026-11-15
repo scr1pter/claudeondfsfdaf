@@ -139,6 +139,10 @@ process to rule out an import-cycle failure (`codium-provisioners.ts` now import
   strands the session for its block; a definitive rejection (404, or a size other than `archiveBytes`) should answer
   `pack` or `upload`, which H1b's hostd already acts on. `codium-deviations.md` "Codium finish: H1 computer
   (15 Nov 2026)", O4 and O6, and the 15 Nov H1b row in "Lane status (8 Nov 2026)".
+- 15 Nov 2026 (Codium finish, H2a): the per-computer generation record now exists (`hosted:generation:<account>`,
+  from signed beats only), and the image floor (`VECTOR_HOSTED_MIN_GENERATION`) refuses job starts, never download-only
+  starts. The download-charging defect above is unchanged: nothing reads the record for a download start yet.
+  `codium-deviations.md` "Codium finish: H2 generation floor (15 Nov 2026)".
 
 **Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
 changed A53 in seven places: the nightly job stores the egress reading as soon as it charged (no double charge after a

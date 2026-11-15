@@ -81,6 +81,9 @@ export const ERROR_CODES = {
   HOSTED_JOB_STATE: 409,
   HOSTED_JOB_REFUSED: 403,
   HOSTED_JOB_JUDGE: 409,
+  // Codium finish H2a: every computer the plan includes reported an image older than VECTOR_HOSTED_MIN_GENERATION;
+  // deleting a computer's disk rebuilds it.
+  HOSTED_REBUILD_REQUIRED: 409,
 } as const
 export type ErrorCode = keyof typeof ERROR_CODES
 

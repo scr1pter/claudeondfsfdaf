@@ -486,6 +486,34 @@ describe("running the queue (the reaper's pass)", () => {
     expect(START_RETRY_MS).toEqual([5 * MINUTE, 15 * MINUTE])
   })
 
+  test("the image floor (H2a): a job whose every computer needs a rebuild is missed as refused; one whose free computers do waits as busy", async () => {
+    const w = await world()
+    const first = await started(w)
+    expect((await heartbeat(w, first.job.session!, first.token, { booted: true, generation: 2 })).status).toBe(200)
+    await endSession(w, first.job.session!)
+    expect(await runQueue(w)).toMatchObject({ settled: 1 })
+    alerts = []
+    // hostedSessionEnvironment's restore() puts the setting back after the test.
+    process.env.VECTOR_HOSTED_MIN_GENERATION = "3"
+    // Max includes one computer, and its daemon reported an image below the floor: refused before anything started.
+    const refused = await queued(w)
+    w.provider.calls.length = 0
+    expect(await runQueue(w)).toMatchObject({ started: 0, missed: 1 })
+    expect(await record(w, refused.id)).toMatchObject({ state: "missed", reason: "refused" })
+    expect(w.provider.calls).toEqual([])
+    expect(alerts.map((alert) => alert.title)).toEqual(["Done by Morning: a job could not start in time"])
+    // Three computers: two jobs pass computer 1 over and run on 2 and 3; the third waits for one of them (R6).
+    w.setSnapshot({ plan: "vector-200" })
+    const jobs = [await queued(w), await queued(w), await queued(w)]
+    expect(await runQueue(w)).toMatchObject({ started: 2, waiting: 1, missed: 0 })
+    const states = await Promise.all(jobs.map((job) => record(w, job.id)))
+    const sessions = await Promise.all(
+      states.filter((job) => job.state === "running").map((job) => readSessionRecord(job.session!, w.fetcher)),
+    )
+    expect(sessions.map((session) => session!.computer).sort()).toEqual([2, 3])
+    expect(states.filter((job) => job.state === "queued").map((job) => job.waiting)).toEqual(["busy"])
+  })
+
   test("a job waits until its start; one still queued at its deliver-by time is missed, never started late", async () => {
     const w = await world()
     const now = w.fakes.clock.now

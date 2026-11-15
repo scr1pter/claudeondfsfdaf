@@ -66,6 +66,8 @@ export function hostedSessionEnvironment(overrides: Record<string, string | unde
     VECTOR_HOSTED_ACCOUNT_SALT: HOSTED_SALT,
     VECTOR_HOSTED_ALLOW_ACCOUNTS: ACCOUNT_ID,
     VECTOR_HOSTED_EGRESS_MICRO_USD_PER_GB: undefined,
+    // No image floor unless a test sets one (H2a); listed so `restore()` puts back what a test set mid-test.
+    VECTOR_HOSTED_MIN_GENERATION: undefined,
     VECTOR_HOSTED_PROVIDER: undefined,
     VECTOR_HOSTED_RUN_HOST: undefined,
     VECTOR_HOSTED_RUN_SIGNING_KEY: "fixture-hosted-run-signing-key-".padEnd(48, "r"),

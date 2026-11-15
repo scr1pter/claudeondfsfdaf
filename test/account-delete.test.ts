@@ -35,6 +35,7 @@ import {
   hostedArchivesKey,
   hostedComputersKey,
   hostedEgressKey,
+  hostedGenerationKey,
   hostedPagesKey,
   hostedSessionKey,
   hostedSessionsKey,
@@ -421,6 +422,8 @@ async function seedEverything(w: World) {
   store.zset(hostedSessionsKey(ACCOUNT)).set(SESSION, now)
   store.set(hostedSessionKey(SESSION), JSON.stringify({ account: ACCOUNT, state: "ended" }))
   store.members(hostedComputersKey(ACCOUNT)).add("1")
+  // Codium finish H2a: the image generation computer 1's daemon last reported, and when that report lapses.
+  store.hash(hostedGenerationKey(ACCOUNT)).set("1", `2:${now + 7 * DAY}`)
   // A47-A50's settings, incident, card, domain health and the crons' roster.
   store.set(
     opsSettingsKey(ACCOUNT),

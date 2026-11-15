@@ -4,7 +4,12 @@ import { Hosted } from "../packages/schema/src/hosted"
 import { codiumKey } from "../api/_lib/codium-keys"
 import { hosted, PROVISIONERS } from "../api/_lib/codium-provisioners"
 import type { TransitionCause } from "../api/_lib/codium-provision"
-import { handleHostedHeartbeat, handleHostedSessionAction, handleHostedSessions } from "../api/_lib/hosted-api"
+import {
+  handleHostedComputers,
+  handleHostedHeartbeat,
+  handleHostedSessionAction,
+  handleHostedSessions,
+} from "../api/_lib/hosted-api"
 import { applyHostedTransition, hostedRosterKey, reapHostedSessions, runHostedNightly } from "../api/_lib/hosted-crons"
 import { hostedAccount, hostedRunningKey, readLine } from "../api/_lib/hosted-ledger"
 import { computerName } from "../api/_lib/hosted-provider"
@@ -13,6 +18,7 @@ import {
   hostedDiskDueKey,
   hostedDownloadEgressKey,
   hostedDownloadUploadedKey,
+  hostedGenerationKey,
   hostedSessionKey,
   hostedSessionsKey,
   readSessionRecord,
@@ -64,6 +70,15 @@ async function running(w: HostedWorld) {
   expect(answer.status).toBe(201)
   return answer.body.session as Hosted.SessionView
 }
+
+/** A heartbeat from computer 1's daemon, signed as hostd signs it. */
+const beat = (w: HostedWorld, id: string, body: Record<string, unknown>, fetcher = w.fetcher) =>
+  invoke((request, response) => handleHostedHeartbeat(request, response, { ...w.options, fetcher }), {
+    method: "POST",
+    authorization: w.provider.token(NAME())!,
+    body: daemonBeat(id, body),
+    query: { id },
+  })
 
 /**
  * Moves the account to `patch` and runs the `hosted` provisioner's work on the change, as the outbox does (with the
@@ -246,6 +261,29 @@ describe("§4.4's cloud computer row", () => {
     expect(JSON.stringify(lines)).not.toContain(ACCOUNT_ID)
   })
 
+  test("a computer's recorded image generation goes with its disk: at the deletion date and on account deletion (H2a)", async () => {
+    const generation = (w: HostedWorld) => w.fakes.store.keys().includes(hostedGenerationKey(ACCOUNT_ID))
+    const ended = await hostedWorld(ledger)
+    const first = await running(ended)
+    await beat(ended, first.id, { booted: true, generation: 2 })
+    expect(generation(ended)).toBe(true)
+    await transition(ended, { state: "ended", reason: "canceled" }, "ended")
+    // Kept with the disk for its 14 days, then deleted with it.
+    expect(generation(ended)).toBe(true)
+    ended.advance(Hosted.ENDED_DISK_DAYS * DAY + MINUTE)
+    expect((await runHostedNightly(ended.options)).deleted).toBe(1)
+    expect(generation(ended)).toBe(false)
+
+    const closing = await hostedWorld(ledger)
+    const second = await running(closing)
+    await beat(closing, second.id, { booted: true, generation: 2 })
+    expect(generation(closing)).toBe(true)
+    await transition(closing, { state: "ended", reason: "closing" }, "closing")
+    expect(generation(closing)).toBe(false)
+    const left = closing.fakes.store.keys().filter((key) => key.includes(ACCOUNT_ID) && key.startsWith("vector:codium:test:hosted:"))
+    expect(left).toEqual([])
+  })
+
   test("no plan, and a plan without a cloud computer that never had one: nothing happens", async () => {
     const w = await hostedWorld(ledger)
     await transition(w, { plan: "vector-50" }, "downgrade")
@@ -268,14 +306,6 @@ describe("§4.4's cloud computer row", () => {
 // H1a: the download-only start's part in the row: what the provisioner leaves running, what the nightly job charges and
 // deletes. Fakes only.
 describe("download-only starts in §4.4's row (H1a)", () => {
-  const beat = (w: HostedWorld, id: string, body: Record<string, unknown>, fetcher = w.fetcher) =>
-    invoke((request, response) => handleHostedHeartbeat(request, response, { ...w.options, fetcher }), {
-      method: "POST",
-      authorization: w.provider.token(NAME())!,
-      body: daemonBeat(id, body),
-      query: { id },
-    })
-
   async function uploaded(w: HostedWorld, bytes: number) {
     const session = (await startDownload(w)).body.session as Hosted.SessionView
     await beat(w, session.id, {})
@@ -388,5 +418,41 @@ describe("download-only starts in §4.4's row (H1a)", () => {
     const followed = await follow(late.body.url)
     expect(followed.status).toBe(410)
     expect(followed.body.error.code).toBe("HOSTED_DOWNLOAD_UNAVAILABLE")
+  })
+
+  test("a download-only start is not held to the image floor, so the files stay downloadable (H2a)", async () => {
+    const w = await hostedWorld(ledger)
+    // A plan whose disks are kept 30 days, so the report made on day 10 is still live once the plan ended on day 30.
+    w.setSnapshot({ plan: "vector-200" })
+    const session = await running(w)
+    await beat(w, session.id, { booted: true, generation: 2 })
+    await invoke((request, response) => handleHostedSessionAction(request, response, "stop", w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: {},
+      query: { id: session.id },
+    })
+    await endedWithDisk(w)
+    process.env.VECTOR_HOSTED_MIN_GENERATION = "3"
+    // Recorded below the floor, and the report has not lapsed.
+    const entry = String(w.fakes.store.command(["HGET", hostedGenerationKey(ACCOUNT_ID), "1"])).split(":")
+    expect([entry[0], Number(entry[1]) > w.fakes.clock.now]).toEqual(["2", true])
+    const view = await invoke((request, response) => handleHostedComputers(request, response, w.options), {
+      method: "GET",
+      authorization: w.desktopToken(),
+    })
+    // No job can start on an ended plan's kept disk, so its view never asks to erase it before the files are fetched.
+    expect(view.body.computers[0]).toMatchObject({ computer: 1, running: false })
+    expect(view.body.computers.some((item: { rebuild?: true }) => item.rebuild)).toBe(false)
+    const answer = await startDownload(w)
+    expect(answer.status).toBe(201)
+    expect(answer.body.session).toMatchObject({ computer: 1, mode: "download" })
+    expect((await beat(w, answer.body.session.id, {})).body).toMatchObject({ mode: "download", pack: true })
+
+    // An unreadable floor stops job starts only.
+    const other = await hostedWorld(ledger)
+    await endedWithDisk(other)
+    process.env.VECTOR_HOSTED_MIN_GENERATION = "three"
+    expect((await startDownload(other)).status).toBe(201)
   })
 })

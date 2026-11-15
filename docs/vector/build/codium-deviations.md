@@ -2330,6 +2330,15 @@ unchanged.
   H1a adds a hosted API field; the lead accepts it or sends the field back to H1a). Its Vector Codium, typecheck.yml and
   vector-hosted-ci.yml runs follow the lead's commit; H1c is done only once they are green. See "Codium finish: H1
   clients (15 Nov 2026)".
+  15 Nov 2026 (Codium finish H2a): H1c's three runs are green under the lane's baseline rule (Vector Codium
+  43760889035, typecheck.yml 43760891870, vector-hosted-ci.yml 43761604770); receipts at the end of "Codium finish: H1
+  clients (15 Nov 2026)".
+- **15 Nov 2026 (Codium finish, H2a).** The server-side image floor is built in the working tree, not committed by its
+  build step: each computer keeps the generation its daemon last reported in a signed beat, and with
+  `VECTOR_HOSTED_MIN_GENERATION` set a job start passes over or refuses (409 `HOSTED_REBUILD_REQUIRED`) a computer
+  below it before any lease, hold or provider call. Download-only starts, running sessions and renewals are exempt;
+  nothing rebuilds a disk on its own. Its Vector Codium, typecheck.yml and vector-hosted-ci.yml runs follow the lead's
+  commit; H2a is done only once they are green. See "Codium finish: H2 generation floor (15 Nov 2026)".
 
 ## P4 review decisions (8 Nov 2026)
 
@@ -5636,5 +5645,272 @@ and the rates file's `BLOCK_MINUTES`); the rejected alternative is `/api/hosted/
 server's refusals. It is not an engine `HttpApi` change, so no generator run is needed. Accept it here or send the
 field back to H1a. None in another lane's files. Records also touched: `codium-a56-hosted-clients-notes.md`, `codium-a53-hosted-sessions-notes.md`,
 `codium-p8-repairs.md`, `docs/vector/MODEL-PLANS.md` and `docs/vector/owner-actions/hosted-computer.md`.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+**H1c's CI receipts (recorded by Codium finish H2a, 15 Nov 2026)**
+
+For `5003fa2b` (H1c's commit), read from the runs' jobs and logs:
+
+- Vector Codium run 43760889035 (18 jobs): every job passed or was skipped by `services_only` (Hosted services'
+  typecheck and Hosted tests) except Codium tests job 132955226556, which failed only at "Run HttpApi exerciser gates"
+  with `summary pass=359 fail=0 skip=0 missing=4 extra=0` and exactly the four review-memory lines (`MISS DELETE
+  /experimental/review-memory/previews/{previewId}`, `MISS GET /experimental/review-memory`, `MISS POST
+  /experimental/review-memory/confirm`, `MISS POST /experimental/review-memory/prepare`). Its "Run the Codium test
+  files" and "Check generated client" steps report success, so the run is green under the lane's baseline rule. No
+  per-file count is claimed. Hosted services / Cloud computer image (Docker) job 132955227115 and Codium browser specs
+  job 132955226877 passed.
+- typecheck.yml run 43760891870: success.
+- vector-hosted-ci.yml run 43761604770: all 12 jobs passed; Hosted tests job 132957422106 ends "Hosted: 150/150 test
+  files passed", and its Cloud computer image (Docker) job 132957421851 passed.
+
+## Codium finish: H2 generation floor (15 Nov 2026)
+
+Package H2a, the gap in `codium-a54-hosted-image-notes.md` "For later packages" ("Server-side image floor"): hostd
+reported its generation, but nothing on the server refused a computer below a floor. `boot.sh`'s
+`check_disk_generation` (`packages/hosted-computer/image/boot.sh:57-58`) refuses only after the computer started and
+costs began, and per H1b's R4(d) a resumed computer runs its own disk's `boot.sh`, so it never refuses an old disk at
+all. The server floor is the one that acts, and it acts before anything is held. Built on `codium-finish` `5003fa2b`
+(H1c; equal to origin/codium-finish; PR #33 unmerged: origin/main `58f85edc`, origin/release-finish `cf2373c4`). H1a,
+H1b and H1c have landed. Scratch under `/tmp/vector-v2/codium/h2a/`. Not committed by this build step; CI ids follow
+in a dated line.
+
+**What landed** (`api/_lib/hosted-sessions.ts` unless named; line numbers after the round-one fixes below)
+
+- The record. `hostedGenerationKey` (`:151`), `hosted:generation:<account>`: a HASH from computer number to
+  `<generation>:<until>`, the generation its daemon last reported and when that report lapses. `recordHeartbeat`
+  writes it (`:1593-1602`) on every beat that carries a generation, only after `requireDaemonBeat` (`:1536`) and after
+  the early return for stopping and ended sessions (`:1551`). `until` is the beat's time plus the session's `diskDays`
+  (R12). The session record gains `diskDays` (`:214`, optional, so records from before H2a still decode), set by
+  `startHostedSession` (`:608`, the plan's `diskDays`) and `startHostedDownload` (`:815`, the days left before the
+  deletion date, as before); a record without it counts one day. The hash goes with the computer: `eraseHostedComputer`
+  HDELs its entry (`:1826`), the nightly deletion at the disk date DELs it with `hosted:computers:<account>`
+  (`api/_lib/hosted-crons.ts:616`), and account deletion DELs it (`hosted-crons.ts:536`; `eraseAccountKeys`' SCAN also
+  matches it, since the account id is in the key). A start that adds a number to `hosted:computers:<account>` (SADD
+  answers 1) HDELs that number's entry (`:616-617`), because a computer made anew is not the one that reported it.
+- The setting. `hostedMinGeneration` (`:364`) reads `process.env.VECTOR_HOSTED_MIN_GENERATION`: unset, blank or `0` is
+  no floor; a whole number up to `GENERATION_MAX` (`:133`, 1,000,000, the bound `parseHeartbeat` already used,
+  `:1433`) is the floor; anything else is `"invalid"`. It is not one of `hostedSessionProblems`, so downloads, the
+  status's kept disks and `computer`'s readiness are untouched.
+- The check. `computersBelow` (`:378`): among the numbers it is given (the account's known computers,
+  `knownComputers`, `:844`), those whose entry has not lapsed and holds a whole number above 0 and below the floor.
+  `startHostedSession` (`:566-590`), after `requireHostedStart` (which places no hold) and before any lease: an invalid
+  floor throws 503 `HOSTED_UNAVAILABLE`; when every included computer is below the floor it throws 409
+  `HOSTED_REBUILD_REQUIRED`, "This cloud computer needs to be rebuilt.", with detail `{computers}` (the included
+  computers below it, numbers only; `rebuildRequired`, `:1843`). Otherwise the claim passes over a computer below the
+  floor: a local recursive `claim` (`:580`) gives the lease back (`releaseLease`, now typed on the three fields it
+  reads, `:477`; a failed release is swallowed as in `abandonSession`) and claims again from the next number, at most
+  `MAX_COMPUTERS` times. When nothing is left and some included computer is below the floor, the answer is 429
+  `HOSTED_BUSY` with "Every cloud computer your plan includes is running or needs to be rebuilt." (`:588`); with none
+  below, the old message. With no floor the path is the old one: no store read, the same CLAIM call.
+- The view. `hostedComputers` (`:1777-1805`) adds `rebuild: true`, never the generation, to a computer below a set
+  floor only where a job start checks it: an included computer of a plan that has not ended (`hostedAccess(snapshot,
+  "on", now) !== "stop"`, `:1791`). It hands `computersBelow` the known numbers it already read, filtered to the
+  included ones, so a GET makes no second SMEMBERS. `GET /api/hosted/computers` carries it.
+- `packages/schema/src/hosted.ts`: `HOSTED_REBUILD_REQUIRED: 409` in `ERROR_CODES`, with a comment. Not the Protocol
+  or an `HttpApi`, so no generator run.
+- `test/hosted-sessions-fixture.ts`: `VECTOR_HOSTED_MIN_GENERATION: undefined` in `hostedSessionEnvironment`, so
+  `restore()` puts back what a test set.
+- `.env.example`: the name with a blank value and a two-line comment. MODEL-PLANS.md (A54 bullet and "Cloud computer
+  sessions (A53)" configuration line) and `owner-actions/hosted-computer.md` ("The image floor", and a dated sentence
+  on the H1b bullet).
+- Not changed: CLAIM, LEASE and SAVE (so the Valkey parity case is untouched), `startHostedDownload`'s checks (only its
+  doc, `:755`, and the `days` it already computed, now also on the record), the reaper, renewals, take-over, the
+  viewer, files, `hosted-jobs.ts`, the image and every client.
+
+**Readings**
+
+- **R1, starts and resumes are one path.** A job start either makes a computer (no record yet) or resumes its saved
+  disk (record checked). There is no separate resume route, so "refuse new starts and resumes" is the one check in
+  `startHostedSession`.
+- **R2, the record and its trust.** Only signed beats count: the HSET sits after `requireDaemonBeat`, so the agent,
+  which holds the run token but not hostd's key, cannot write a generation (pinned by the unsigned-beat case). The
+  number is hostd's `/usr/lib/vector/GENERATION` (`packages/hosted-computer/src/limits.ts:53`, read by `readGeneration`,
+  `hostd.ts:478-485`, sent on every beat, `daemon.ts:165`). `boot.sh` compares a different file,
+  `/var/lib/vector/disk-generation`, written on the disk's first boot. The two agree for a resumed computer only
+  because it restores its whole disk, `/usr/lib/vector` included (H1b R4(d)); so the recorded number is the
+  generation the disk was made from. The record lives on the computer (per account and number), not the session; the
+  provider's `hosted:computer:<name>` record is not used, because every start overwrites it and it expires an hour
+  after the session's timeout.
+- **R3, unrecorded passes.** A computer with no recorded generation is allowed, because it never booted, or never sent
+  a signed beat (an image from before signed heartbeats). A reported `0`, which hostd sends when it cannot read its
+  file, is dropped by `parseHeartbeat` and also counts as unrecorded. That is fail-open, the reading the package asks
+  for; the owner may change it. There is no backfill: every computer that booted before this server version reads as
+  unrecorded, so its first start after the floor is set is not checked, and the floor applies to it from its next
+  start. Harmless today, since no image has been built; the owner step says so.
+- **R4, download-only starts are exempt (H1a has landed).** `startHostedDownload` never reads the floor, so an ended
+  plan's files stay downloadable whatever image the disk was made from (§4.4). Pinned by the lifecycle case with the
+  floor above the recorded generation and with an unreadable floor. Running sessions and the reaper's
+  `renewHostedBlock` are not checked either: the floor is about new work on an old disk, and stopping running sessions
+  is the `hosted` switch's job.
+- **R5, pass over versus refuse.** With several computers, a start passes over one below the floor and runs on the
+  next free one; it is refused only when every included computer is below it. A passed-over start runs without the
+  passed-over computer's files: a job that would have resumed computer 1's disk runs on a fresh computer 2. On a live
+  plan those files can be kept only by not erasing the computer, since `requireHostedDownload` allows no download start
+  on a live plan that includes a computer. Refusing any start while one included computer is below the floor is the
+  other reading; it is listed with the owner's choices.
+- **R6, busy or rebuild when the free ones are below.** Critique point taken: when the only free computers are below
+  the floor and the rest are running, the old 429 message ("All the cloud computers your plan includes are running")
+  was false for the free one. The answer keeps 429 `HOSTED_BUSY`, so a queued Done by Morning job waits for a running
+  computer to free up (`startRefusal`, `hosted-jobs.ts:948-966`, treats `HOSTED_BUSY` as wait), and says "Every cloud
+  computer your plan includes is running or needs to be rebuilt." The rebuild code would have marked the job missed
+  even though a computer at or above the floor will free up.
+- **R7, no automatic wipe: the conservative choice, which the owner may change.** Nothing deletes anyone's disk for
+  the floor. The only rebuild is the explicit erase, `POST /api/hosted/computers {computer, action: "erase"}`
+  (`api/_lib/hosted-api.ts:281-286`, `eraseHostedComputer`), which also forgets the generation, so the next start makes
+  the computer again from `VECTOR_HOSTED_BASE_SNAPSHOT`. The package asks for "the subscriber's explicit, confirmed
+  action". The API's erase is explicit, but it has no confirmation step of its own, and no screen offers erase yet. The
+  confirmation belongs to that future screen; this package does not claim one exists. A computer whose disk lapsed at
+  the provider needs no erase: its report lapses no later than the disk (R12).
+- **R8, an unreadable floor.** Any value but a whole number up to 1,000,000 refuses job starts with 503
+  `HOSTED_UNAVAILABLE`, never with the rebuild code: an unknown floor must neither pass a stale computer nor tell anyone
+  to delete a disk. `0` is no floor (no generation is below 0), so the value an owner may type to mean "off" is not an
+  outage. Critique point partly taken: it asked for an owner signal. The perk readiness (`codium-perks.ts:82`) was
+  rejected as that signal, because an unready `computer` is unlisted, and unlisting closes the kept-files screens and
+  `hostedOpen` for downloads. No owner page lists hosted settings today. So the signal is in writing: `.env.example`
+  and the owner step say a bad value stops every job start, and to check it first when starts stop.
+- **R9, Done by Morning.** A queued job whose start answers `HOSTED_REBUILD_REQUIRED` (409) is missed and alerted as
+  `refused` ("Done by Morning: a job could not start in time"; `startRefusal` returns "refused" for a 4xx it does not
+  list); one that answers the invalid floor's 503 or R6's 429 waits. No `hosted-jobs.ts` change. Pinned since round one
+  by the hosted-jobs case "the image floor (H2a)".
+- **R10, the clients.** No screen calls `GET /api/hosted/computers`: `hosted-requests.ts:98` defines the request and
+  nothing sends it. The composer and the phone already show a refusal's message through `hostedErrorText`
+  (`packages/app/src/features/cloud/hosted/hosted-model.ts:561-566`). So the code and the message are enough, as the
+  package allows; no client change, no amounts.
+- **R11, contract additions.** A new store key (not in §4.6, which names only three hosted keys), a setting (not in
+  §4.16), an error code (not in §4.10; the schema already lists the extra hosted codes after its comment) and an
+  optional session-record field (`diskDays`, never in a view). H2a adds two hosted API fields, which its package text
+  asks for ("expose the state in the session or computer view"): `rebuild` on `GET /api/hosted/computers` and
+  `error.computers` on `HOSTED_REBUILD_REQUIRED`. The lane's rule names H1a as the only package that may add a hosted
+  API field, so both are named for the lead below.
+- **R12, the report lapses with the disk (round one).** The provider keeps a computer's disk `diskDays` after the
+  computer stops (`retentionMs`, `api/_lib/hosted-provider.ts:289`; Vercel's `snapshotExpiration` and
+  `keepLastSnapshots`, `hosted-provider-vercel.ts:88-89`), and then the next start makes the computer afresh from the
+  current snapshot. A report kept with no lifetime would refuse that fresh computer, or pass it over, until the person
+  erased a disk that no longer exists, through an API no screen offers. So each report carries `until`, the beat's
+  time plus that session's `diskDays`, and every signed beat writes it again. The computer stops after its last beat,
+  so `until` is never later than the disk's deletion: the report may lapse a little early (fail-open, as R3), never
+  late. The gap is the time between the last beat and the stop, normally under a minute, at most the job's length when
+  the daemon stopped reporting; a start in it resumes the old disk unchecked. The other bound, the session's deadline
+  plus the provider's grace plus `diskDays` (the review's example), never lapses early but refuses a lapsed disk for up
+  to the job's length; the owner step lists the choice. The cost is one HSET per beat that carries a generation (every
+  30 seconds while a computer runs), where the build wrote only on a change. The H1a download-only session's beats
+  carry its own `diskDays` (the days to the deletion date), so they keep the report for that long; the nightly deletion
+  at that date removes it anyway. On an ended plan whose final job ran more than its plan's `diskDays` before the
+  deletion date the report lapses first; no job can start there, and a plan that resumes inside that window resumes
+  unchecked (fail-open).
+
+**Critique points taken and rejected**
+
+- Taken (major): a stale entry for a number the account no longer has is never read. `computersBelow` counts only
+  numbers `knownComputers` lists; erase removes the generation before the SREM, so a failed SREM leaves the computer
+  unrecorded rather than refused; and a start that adds a number HDELs its entry. This closes the failed-last-write and
+  beat-after-erase cases (the plan's O3). Pinned by "a generation left for a computer the account no longer has is not
+  read, and a new computer drops it".
+- Taken: R7 says the API's erase is the only rebuild and that the confirmation is the future screen's.
+- Taken: R6 (busy with an accurate message) and its T6 case (computer 1 below, 2 and 3 running).
+- Taken in part: R8 (`0` is no floor; the warning is written down). The readiness signal is rejected for R8's reason.
+- Taken: the claim loop is inlined in `startHostedSession` as a local recursive closure, bounded by the claim range,
+  with the release's failure swallowed. A lease on a below-floor computer exists only between the claim and its
+  release in the same request; if that release fails, it lapses at its own time (the first hold plus two minutes),
+  as any lease a failed start leaves does. It stays inline because it is used once and needs the start's `id`,
+  `until` and `below`.
+- Taken: R5 says a passed-over start runs without that computer's files; "pass over vs refuse" is in the owner's
+  choices.
+- Taken: R3 says there is no backfill and that a reported 0 passes; R2 names the file and the R4(d) equivalence.
+- Taken: the rebuild detail is accurate: `{computers}` lists every included computer below the floor, numbers only.
+
+**Review findings (round one, 15 Nov 2026)**
+
+Seven findings, all non-blocking; all seven taken.
+
+- F1 (taken, code): the report had no lifetime, so a lapsed disk was refused or passed over until erased. R12: each
+  entry is `<generation>:<until>`, `until` the beat plus the session's `diskDays` (new optional record field), written
+  on every signed beat that carries a generation; `computersBelow` ignores a lapsed entry. The review's own bound (the
+  deadline plus grace plus `diskDays`) was not used, because it refuses a lapsed disk for up to the job's length; the
+  shorter bound fails open, which the review accepted as fitting R3. The owner step's "Not checked" and "Yours to
+  decide" lists say so. The hash and its three deletion paths are unchanged. Regression tests: "a report lapses with
+  the disk: once the plan's disk days have passed, the old generation no longer refuses" (new) and the signed-beat case
+  (each beat, the same generation included, writes the lapse time again).
+- F2 (taken, code): `rebuild` was set on an ended plan's kept disk and on computers the plan no longer includes. It is
+  now set only on an included computer of a plan that has not ended (`hostedAccess(...) !== "stop"`), where a job
+  start checks it. Regression tests: the lifecycle download case now expects no `rebuild` on the ended plan's kept
+  disk (it runs on a 30-day plan, so the report made on day 10 is still live once the plan ends on day 30), and the
+  several-computers case moves back to Max and expects `rebuild` on computer 1 only.
+- F3 (taken, test): `test/hosted-jobs.test.ts` "the image floor (H2a): a job whose every computer needs a rebuild is
+  missed as refused; one whose free computers do waits as busy" pins R9 and R6 for Done by Morning: on Max a refused
+  start misses the job with reason `refused`, nothing reaches the provider and the alert is "Done by Morning: a job
+  could not start in time"; on three computers with computer 1 below the floor, two jobs run on 2 and 3 and the third
+  stays queued, waiting `busy`. The setting is put back by `hostedSessionEnvironment`'s `restore()`.
+- F4 (taken, code): `hostedMinGeneration` reads `process.env.VECTOR_HOSTED_MIN_GENERATION` directly; the unused `env`
+  parameter is gone.
+- F5 (taken, test): `test/account-delete.test.ts` seeds `hostedGenerationKey(ACCOUNT)` next to `hostedComputersKey`,
+  so P5's erase checks cover the new family directly. Dropping it from `eraseAccountHosted`'s DEL list now fails
+  "Worker outage: the request answers pending, the tombstone stays, and the cron retries until it finishes" there (the
+  sweep still catches it on the main path).
+- F6 (taken, record): R11 and "For the lead" name both hosted API fields.
+- F7 (taken, code): `computersBelow` takes the known numbers; `hostedComputers` passes the ones it already read
+  (filtered to the included ones, per F2), `startHostedSession` reads them as before.
+
+**Observations (not changed)**
+
+- O1, a lapsed disk. Closed in round one by R12: the report lapses no later than the disk. What remains is the other
+  direction, a disk the provider lost early (a provider-side delete before its retention), which still reads its old
+  report until that lapses or the person erases the computer; the destroy then answers "missing", and erase answers
+  `deleted: false`, as before.
+- O2, a store fault inside a start. If the HDEL after a SADD that added the number fails, the start is abandoned, and
+  the next start's SADD answers 0, so a leftover entry for a re-made computer survives until that computer's first
+  signed generation beat overwrites it, or until it lapses. It needs a failed erase or a racing beat first, then a
+  store fault at that one step.
+- O3, a floor above the snapshot. A floor higher than the generation `VECTOR_HOSTED_BASE_SNAPSHOT` was baked with
+  refuses every computer from its second start on, and erasing only makes it again from the same snapshot. The owner
+  step says never to set it above the snapshot's generation.
+
+**Not built**
+
+- An erase screen with a confirmation (R7), and any screen that shows `rebuild` (R10).
+- Reading the record for a download start (the H1b defect on disks from before signed heartbeats stays open;
+  `codium-a53-hosted-sessions-notes.md`, "Not done").
+
+**Ran locally** (through `vector-serial`, one file at a time, `--timeout 30000`, after the last code edit of round
+one):
+- `test/`: `hosted-sessions-api.test.ts` 59 pass, 1 skip (10 in "the image generation floor (H2a)"; 49 pass, 1 skip at
+  HEAD); `hosted-lifecycle.test.ts` 21/0 (2 new; 19 at HEAD; the H1a describe's `beat` helper moved to module scope
+  unchanged); `hosted-jobs.test.ts` 32 pass, 1 skip (1 new; 31 pass, 1 skip at HEAD); `account-delete.test.ts` 37
+  pass, 1 skip (the seeded hash only).
+- Regressions, unchanged: `hosted-copy` 6/0 (the new message passes the copy rules), `hosted-reaper` 26/0,
+  `account-delete-api` 8/0, `codium-mode` 18/0, `hosted-clients` 12/0, `hosted-ledger` 31 pass 1 skip,
+  `hosted-internal` 12/0, `hosted-provider` 39/0; and, from the build step, `packages/web`
+  `test/codium-configuration.test.ts` 11/0 (`.env.example` names stay unique; `.env.example` is unchanged since).
+- Mutations, each restored afterwards (`cmp` against the saved copy). Build step: dropping the all-below refusal fails
+  3 floor cases; applying the floor in `startHostedDownload` fails the lifecycle download case; dropping the erase's
+  HDEL fails the erase case; an HSET before `requireDaemonBeat` fails the signed-beat case; dropping the known filter,
+  or the HDEL on an added number, fails the leftover-entry case; dropping the pass-over fails the several-computers
+  case; reading an invalid floor as none fails the unreadable-floor case; the nightly deletion or account deletion
+  keeping the hash fails the lifecycle deletion case; no HSET at all fails 5 cases. Round one, each failing exactly one
+  case: ignoring `until` fails the lapse case; writing only on a changed generation fails the signed-beat case;
+  `rebuild` on an ended plan fails the lifecycle download case; `rebuild` on a computer the plan does not include fails
+  the several-computers case; answering the rebuild refusal with 503 fails the hosted-jobs case (the job waits); the
+  rebuild code for free-but-below computers fails it too (the job is missed); account deletion keeping the hash fails
+  the account-delete outage case.
+- Typechecks: the api tree (`packages/engine`, `bun typecheck --project ../../tsconfig.json`) clean after round one;
+  `packages/schema` clean at the build step and unchanged since. The full turbo typecheck runs before the push.
+- No `prettier --write`: none of the edited code files was prettier-clean at HEAD. Added code lines are kept to 120
+  characters; six new test titles and one copied filter line are longer, as the files' existing ones are.
+
+**Only in CI.** The Valkey and Postgres cases (the sessions' Lua scripts are unchanged), the HttpApi exerciser,
+`check:generated` (no generator input changed), the Codium browser specs (none added), the typecheck matrix, and
+vector-hosted-ci.yml's Hosted tests and Docker job. Dispatches after the lead's commit, in order: Vector Codium on
+`codium-finish` with `base: "origin/release-finish"` and no `browser_specs`, then typecheck.yml, then
+vector-hosted-ci.yml once the Vector Codium run has finished.
+
+**For the lead.** None in another lane's files. H2a adds two hosted API fields under its package text, against the
+H1a-only rule: `rebuild` on `GET /api/hosted/computers` and `error.computers` on `HOSTED_REBUILD_REQUIRED`. Neither is
+an engine `HttpApi`, so no regeneration is needed. Accept them, or move them to H1a. Owner decisions, recorded in
+`owner-actions/hosted-computer.md` ("The image floor"): an automatic rebuild (today refuse-only), pass over versus
+refuse, a live plan's files on a below-floor computer, a queued job missed versus waiting, and a report that lapses at
+the disk's earliest deletion versus its latest. Setting `VECTOR_HOSTED_MIN_GENERATION` is an owner step after the image
+is rebuilt. Records also touched: `codium-a54-hosted-image-notes.md`, `codium-a53-hosted-sessions-notes.md`,
+`docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/hosted-computer.md` and `.env.example`.
 
 Edits to `api/_lib/model-plan-*.ts`: none.

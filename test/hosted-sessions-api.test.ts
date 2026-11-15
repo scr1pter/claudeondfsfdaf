@@ -24,9 +24,11 @@ import {
   assertHostedSessionLive,
   hostedDiskDueKey,
   hostedDownloadEgressKey,
+  hostedGenerationKey,
   hostedHostdKey,
   hostedJobKey,
   hostedLeaseKey,
+  hostedSessionsKey,
   hostedViewerKey,
   parseHeartbeat,
   readBeat,
@@ -611,6 +613,246 @@ describe("the computer's heartbeat (S3, S7)", () => {
     await expect(
       requireModelPlanCaller({ headers: { authorization: `Bearer ${token}` } }, w.fetcher, w.fakes.clock.now, registry),
     ).rejects.toMatchObject({ code: "MODEL_PLAN_RUN_EXPIRED" })
+  })
+})
+
+// Codium finish H2a: the server-side image floor. The daemon's signed beats record each computer's image generation;
+// with VECTOR_HOSTED_MIN_GENERATION set, a job start passes over or refuses a computer below it before any lease, hold
+// or provider call. Download-only starts are in hosted-lifecycle.test.ts. Fakes only.
+describe("the image generation floor (H2a)", () => {
+  const REBUILD = { code: "HOSTED_REBUILD_REQUIRED", message: "This cloud computer needs to be rebuilt." }
+  const rows = async () => (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
+  const held = () => `vector:codium:test:held:${SEEDED}`
+  const tokenFor = (w: HostedWorld, computer: number) => w.provider.token(computerName(ACCOUNT_ID, computer))!
+  const setFloor = (value: string) => {
+    process.env.VECTOR_HOSTED_MIN_GENERATION = value
+  }
+  /** What the account's computers reported, without the lapse times (never creating the hash). */
+  const generations = (w: HostedWorld) => {
+    const flat = w.fakes.store.command(["HGETALL", hostedGenerationKey(ACCOUNT_ID)]) as string[]
+    return Object.fromEntries(
+      flat.flatMap((field, index) => (index % 2 === 0 ? [[field, flat[index + 1]!.split(":")[0]]] : [])),
+    )
+  }
+  const computers = async (w: HostedWorld) =>
+    (
+      await invoke((request, response) => handleHostedComputers(request, response, w.options), {
+        method: "GET",
+        authorization: w.desktopToken(),
+      })
+    ).body
+  /** Everything a start could have touched, to compare before and after a refusal. */
+  const touched = async (w: HostedWorld) => ({
+    rows: await rows(),
+    held: [...w.fakes.store.zset(held())],
+    leases: [...w.fakes.store.hash(hostedLeaseKey(ACCOUNT_ID))],
+    running: [...w.fakes.store.hash(hostedRunningKey(ACCOUNT_ID))],
+    sessions: [...w.fakes.store.zset(hostedSessionsKey(ACCOUNT_ID))],
+  })
+
+  /** A session on `computer` whose daemon reported `generation` once booted, stopped again. */
+  async function ranWith(w: HostedWorld, generation: number, computer = 1) {
+    const session = await started(w)
+    expect(session.computer).toBe(computer)
+    expect((await beat(w, session.id, { booted: true, generation }, { token: tokenFor(w, computer) })).status).toBe(200)
+    await action(w, session.id, "stop")
+    return session
+  }
+
+  test("the daemon's signed beats record the computer's generation, which outlives the session; unsigned ones do not", async () => {
+    const w = await hostedWorld(ledger)
+    const session = await started(w)
+    const unsigned = await invoke((request, response) => handleHostedHeartbeat(request, response, w.options), {
+      method: "POST",
+      authorization: tokenFor(w, 1),
+      body: { booted: true, generation: 9 },
+      query: { id: session.id },
+    })
+    expect([unsigned.status, unsigned.body.error.code]).toEqual([403, "HOSTED_RUN_REFUSED"])
+    expect(generations(w)).toEqual({})
+    await beat(w, session.id, { booted: true, generation: 2 })
+    expect(generations(w)).toEqual({ "1": "2" })
+    // Each signed beat writes the report again with when it lapses: the plan's disk days (Max: 7) from that beat.
+    const entry = () => w.fakes.store.command(["HGET", hostedGenerationKey(ACCOUNT_ID), "1"])
+    w.advance(MINUTE)
+    await beat(w, session.id, { generation: 3 })
+    expect(entry()).toBe(`3:${w.fakes.clock.now + 7 * DAY}`)
+    // The same generation again still moves the lapse along.
+    w.advance(MINUTE)
+    await beat(w, session.id, { generation: 3 })
+    expect(entry()).toBe(`3:${w.fakes.clock.now + 7 * DAY}`)
+    await action(w, session.id, "stop")
+    expect(await readBeat(session.id, w.fetcher)).toBeUndefined()
+    expect(generations(w)).toEqual({ "1": "3" })
+  })
+
+  test("a report lapses with the disk: once the plan's disk days have passed, the old generation no longer refuses", async () => {
+    const w = await hostedWorld(ledger)
+    await ranWith(w, 2)
+    setFloor("3")
+    expect((await start(w)).status).toBe(409)
+    // Just before the lapse it still refuses; from then on the provider may have deleted the disk, so it passes.
+    w.advance(7 * DAY - 2 * MINUTE)
+    expect((await start(w)).status).toBe(409)
+    expect((await computers(w)).computers[0].rebuild).toBe(true)
+    w.advance(2 * MINUTE)
+    expect((await computers(w)).computers).toEqual([{ computer: 1, running: false, included: true }])
+    const again = await started(w)
+    expect(again.computer).toBe(1)
+    // Its first signed beat records what the computer runs now.
+    await beat(w, again.id, { booted: true, generation: 3 })
+    expect(generations(w)).toEqual({ "1": "3" })
+  })
+
+  test("no floor: a computer that reported an old generation starts and resumes as before", async () => {
+    const w = await hostedWorld(ledger)
+    await ranWith(w, 1)
+    setFloor("")
+    w.provider.calls.length = 0
+    const again = await started(w)
+    expect(again.computer).toBe(1)
+    expect(w.provider.calls).toEqual([`start ${computerName(ACCOUNT_ID, 1)}`, `boot ${computerName(ACCOUNT_ID, 1)}`])
+    expect((await computers(w)).computers).toEqual([{ computer: 1, running: true, session: again.id, included: true }])
+    // A floor of 0 is no floor either.
+    await action(w, again.id, "stop")
+    setFloor("0")
+    expect((await start(w)).status).toBe(201)
+  })
+
+  test("a floor above the recorded generation refuses the start before any lease, hold or provider call", async () => {
+    const w = await hostedWorld(ledger)
+    await ranWith(w, 2)
+    setFloor("3")
+    const before = await touched(w)
+    w.provider.calls.length = 0
+    for (const authorization of [w.desktopToken(), w.sessionToken()]) {
+      const refused = await start(w, {}, authorization)
+      expect(refused.status).toBe(409)
+      expect(refused.body.error).toEqual({ ...REBUILD, computers: [1] })
+      expectNoAmounts(refused.body)
+    }
+    expect(await touched(w)).toEqual(before)
+    expect(before.leases).toEqual([])
+    expect(before.running).toEqual([])
+    expect(w.provider.calls).toEqual([])
+    // The computer's view says so, with no generation and no amount.
+    const view = await computers(w)
+    expect(view.computers).toEqual([{ computer: 1, running: false, included: true, rebuild: true }])
+    expectNoAmounts(view)
+  })
+
+  test("an equal or higher generation passes", async () => {
+    const w = await hostedWorld(ledger)
+    await ranWith(w, 3)
+    setFloor("3")
+    const equal = await started(w)
+    expect((await beat(w, equal.id, { booted: true, generation: 4 })).status).toBe(200)
+    await action(w, equal.id, "stop")
+    expect(generations(w)).toEqual({ "1": "4" })
+    const higher = await started(w)
+    expect(higher.computer).toBe(1)
+    expect((await computers(w)).computers[0].rebuild).toBeUndefined()
+  })
+
+  test("a computer with no recorded generation passes: it never booted, or never reported one", async () => {
+    const w = await hostedWorld(ledger)
+    setFloor("3")
+    const first = await started(w)
+    // A daemon that could not read its generation sends 0, which counts as none.
+    await beat(w, first.id, { booted: true, generation: 0 })
+    await action(w, first.id, "stop")
+    expect(generations(w)).toEqual({})
+    expect((await start(w)).status).toBe(201)
+  })
+
+  test("a generation left for a computer the account no longer has is not read, and a new computer drops it", async () => {
+    const w = await hostedWorld(ledger)
+    // As after an erase whose last write failed, or a beat that raced it: number 1 is not one of the account's.
+    w.fakes.store.hash(hostedGenerationKey(ACCOUNT_ID)).set("1", `1:${w.fakes.clock.now + DAY}`)
+    setFloor("3")
+    expect((await computers(w)).computers).toEqual([{ computer: 1, running: false, included: true }])
+    const made = await started(w)
+    expect(made.computer).toBe(1)
+    expect(generations(w)).toEqual({})
+    await action(w, made.id, "stop")
+    expect((await start(w)).status).toBe(201)
+  })
+
+  test("with several computers a start passes over one below the floor; refused only when every included one is", async () => {
+    const w = await hostedWorld(ledger)
+    w.setSnapshot({ plan: "vector-200" })
+    await ranWith(w, 2)
+    setFloor("3")
+    const second = await started(w)
+    expect(second.computer).toBe(2)
+    expect(w.fakes.store.hash(hostedLeaseKey(ACCOUNT_ID)).has("1")).toBe(false)
+    const third = await started(w)
+    expect(third.computer).toBe(3)
+    // Computer 1 is free but below the floor and the others run: busy, and the message says why.
+    const busy = await start(w)
+    expect(busy.status).toBe(429)
+    expect(busy.body.error).toEqual({
+      code: "HOSTED_BUSY",
+      message: "Every cloud computer your plan includes is running or needs to be rebuilt.",
+    })
+    expect([...w.fakes.store.hash(hostedLeaseKey(ACCOUNT_ID)).keys()].sort()).toEqual(["2", "3"])
+    for (const session of [second, third]) {
+      await beat(w, session.id, { booted: true, generation: 2 }, { token: tokenFor(w, session.computer) })
+      await action(w, session.id, "stop")
+    }
+    w.provider.calls.length = 0
+    const refused = await start(w)
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toEqual({ ...REBUILD, computers: [1, 2, 3] })
+    expect(w.provider.calls).toEqual([])
+    expect((await computers(w)).computers.map((item: { rebuild?: true }) => item.rebuild)).toEqual([true, true, true])
+    // Back on Max, which includes one computer: no job starts on 2 or 3, so only computer 1 asks for a rebuild.
+    w.setSnapshot({ plan: "vector-100" })
+    expect((await computers(w)).computers).toEqual([
+      { computer: 1, running: false, included: true, rebuild: true },
+      { computer: 2, running: false, included: false },
+      { computer: 3, running: false, included: false },
+    ])
+  })
+
+  test("deleting the computer's disk is the only rebuild: nothing is deleted for the floor on its own", async () => {
+    const w = await hostedWorld(ledger)
+    await ranWith(w, 2)
+    setFloor("3")
+    expect((await start(w)).status).toBe(409)
+    await reapHostedSessions(w.options)
+    await runHostedNightly(w.options)
+    expect(w.provider.calls.some((call) => call.startsWith("destroy"))).toBe(false)
+    expect(w.provider.computers.has(computerName(ACCOUNT_ID, 1))).toBe(true)
+    const erase = await invoke((request, response) => handleHostedComputers(request, response, w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: { computer: 1, action: "erase" },
+    })
+    expect(erase.body).toEqual({ computer: 1, deleted: true })
+    expect(generations(w)).toEqual({})
+    const rebuilt = await started(w)
+    expect(rebuilt.computer).toBe(1)
+    expect(w.provider.computers.has(computerName(ACCOUNT_ID, 1))).toBe(true)
+    await beat(w, rebuilt.id, { booted: true, generation: 3 })
+    expect(generations(w)).toEqual({ "1": "3" })
+    expect((await computers(w)).computers[0].rebuild).toBeUndefined()
+  })
+
+  test("an unreadable floor refuses job starts as unavailable, never as a rebuild, and holds nothing", async () => {
+    const w = await hostedWorld(ledger)
+    await ranWith(w, 2)
+    const before = await touched(w)
+    w.provider.calls.length = 0
+    for (const value of ["three", "1.5", "-1", "2000000"]) {
+      setFloor(value)
+      const refused = await start(w)
+      expect([value, refused.status, refused.body.error.code]).toEqual([value, 503, "HOSTED_UNAVAILABLE"])
+      const view = await computers(w)
+      expect(view.computers[0].rebuild).toBeUndefined()
+    }
+    expect(await touched(w)).toEqual(before)
+    expect(w.provider.calls).toEqual([])
   })
 })
 

@@ -134,3 +134,20 @@ when it is (H2a), it must exempt download-only starts. Tests here: `daemon.test.
 pass (1 new), `recording`, `source` and `image` (`21 pass, 3 skip`) unchanged; typecheck, `bun run build` and
 `node --check` clean. The Docker job and the real-microVM check are CI and owner steps. `codium-deviations.md`
 "Codium finish: H1 computer (15 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H2a).** Closes "For later packages", "Server-side image floor", on the server side
+only; the image, `boot.sh` and hostd are unchanged. Each computer now keeps the generation its daemon last reported in a
+signed heartbeat (`hosted:generation:<account>` in `api/_lib/hosted-sessions.ts`, written in `recordHeartbeat` after
+`requireDaemonBeat`), until the plan's disk days after that beat, the earliest the provider may delete the disk. With
+`VECTOR_HOSTED_MIN_GENERATION` set, a job start passes over an included computer below it and is refused with 409
+`HOSTED_REBUILD_REQUIRED` ("This cloud computer needs to be rebuilt.") when every included computer is below it, before
+any lease, hold or provider call. A computer that never reported a generation, or whose report lapsed, passes.
+Download-only starts (H1a), running sessions and their renewals are not checked. Nothing rebuilds a computer on its own:
+deleting its disk (`eraseHostedComputer`) is the only rebuild. `GET /api/hosted/computers` marks such a computer
+`rebuild: true` when it is included in a plan that has not ended. `boot.sh`'s own `check_disk_generation` is unchanged,
+and per H1b's R4(d) it never acts on a resumed disk, so the server floor is the one that does. Tests:
+`test/hosted-sessions-api.test.ts` "the image generation floor (H2a)" (10 cases), two cases in
+`test/hosted-lifecycle.test.ts`, one in `test/hosted-jobs.test.ts` and the seeded hash in `test/account-delete.test.ts`,
+run locally; the Valkey cases, the Hosted tests job and the Docker job are CI. Setting the floor is an owner step after
+the image is rebuilt (`owner-actions/hosted-computer.md`, "The image floor"). `codium-deviations.md` "Codium finish: H2
+generation floor (15 Nov 2026)".
