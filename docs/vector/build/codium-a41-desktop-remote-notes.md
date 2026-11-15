@@ -70,4 +70,5 @@ Typecheck: `packages/desktop` `tsgo -b` (which builds `packages/app` too) and `p
 - The app setting `remote.enabled` (§4.15) is not added: whether Remote is on lives in the main process (`vector-remote` store), which decides whether to connect; A42's Settings reads and sets it through `platform.remote`.
 - A phone cannot choose a model or an agent for its turn, and the engine's V2 runner routes are not exposed; A42 may widen the allowlist deliberately.
 - The usage alert fires from the Codium usage card's check, which runs while that card is shown, as the desktop's 80% notification already does.
+  Status, 15 Nov 2026 (Codium finish F28): that check is now `sendUsageAlert` (`packages/app/src/components/codium-usage-alert.ts`), called from the card's effect. The phone alert goes at most once per account, plan and renewal for the app lifetime, even while the desktop notification keeps failing and is retried (P4 F28; `codium-p6-repairs.md`, "A41 phone usage alert (F28, P6 addendum)"). The threshold is the whole-percentage share the card shows.
 - Nothing was pushed or deployed.

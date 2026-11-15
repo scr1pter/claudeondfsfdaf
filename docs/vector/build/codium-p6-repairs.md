@@ -284,4 +284,132 @@ engine `orchestration/playbooks` (2) passed; `bun typecheck` in core and schema 
 This step left the change uncommitted; the run and job ids go in a dated line under this section in the lane commit
 that follows the runs. The Valkey and Postgres cases, the HttpApi exerciser and check:generated are not affected.
 
+CI, 15 Nov 2026 (recorded by Codium finish F28): Vector Codium run 43685974875 (dispatched on `265f4ea7`, R36's commit)
+and typecheck.yml run 43685977976 (success). Of the Vector Codium run's 18 jobs, 15 succeeded, 2 were skipped (the
+hosted call's "Hosted tests" and its typecheck matrix, which `services_only` skips), and Codium tests job 132726419932
+failed only at "Run HttpApi exerciser gates". That step's log (400-line tail) ends with exactly the four baseline MISS
+lines, `DELETE /experimental/review-memory/previews/{previewId}`, `GET /experimental/review-memory`,
+`POST /experimental/review-memory/confirm` and `POST /experimental/review-memory/prepare`, then
+`summary pass=359 fail=0 skip=0 missing=4 extra=0`, with no FAIL line in the visible tail. The job's step list
+(`get_workflow_job`) shows "Run the Codium test files" (2 min 25 s) and "Check generated client" succeeded. Under the
+lane's baseline rule the run counts as green. The visible tail covers only the exerciser, so no file-level result for
+the playbook tests is claimed from it; the step's success is the receipt.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+## A41 phone usage alert (F28, P6 addendum)
+
+P4b confirmed F28 by reading and handed it to the P6 addendum, because A41 (`4caf1073`) is in P6's range
+(`codium-p4-repairs.md` F28; `codium-deviations.md` "Hand-off to the P6 addendum (F28, A41)"). Read on `codium-finish`
+`265f4ea7`; scratch under `/tmp/vector-v2/codium/f28/`. Old lines are at `265f4ea7`; new lines are on the repaired,
+uncommitted tree. Contract readings are in `codium-deviations.md` ("P6 review addendum (15 Nov 2026)", the F28 bullet).
+Nothing was committed or pushed in this step.
+
+**F28. The phone usage alert repeated while the desktop notification failed.** Confirmed. In the old effect
+(`packages/app/src/components/settings-vector-codium.tsx:67-100`) one key per account, plan and renewal
+(`alertedPeriods`, old `:25`) guarded both channels. The phone alert went first (old `:86-90`), then the desktop
+`notify` (old `:92-98`), and a failed `notify` removed the shared key (`.catch(() => alertedPeriods.delete(key))`, old
+`:99`). `sendPhoneAlert` (`packages/app/src/context/phone-alerts.ts:36-41`) has no dedupe of its own. So with both
+switches on and the desktop notification failing, every later run of the effect with Usage open (the share left moving
+from 19% to 18%, or a good read after a failed one) sent the phone alert again. The desktop main process drops a
+repeated phone alert (same event and title) only within 60 s (`packages/desktop/src/main/remote-notify.ts:23,73-74`);
+Usage refreshes on focus at most once a minute, on Refresh and 15 s after a Codium turn ends, so reads further apart
+than that window went through to the phones. The block also compared the raw `(status.plan.left ?? 1) > 0.2` (old
+`:80`), which equals the share the card shows only because the server sends whole percentages (F24).
+
+Every `sendPhoneAlert` caller was checked (read only): `context/notification.tsx:369` ("finished"), `:386`
+("runGuard") and `:459` ("needsYou"), and `pages/layout/ask-notifications.ts:60` ("needsYou", Hands' file). The old
+`settings-vector-codium.tsx:87` was the only sender of the "usage" event in app, desktop and core; the other matches
+are the Settings row copy (`settings-v2/notifications-model.ts:23`) and the desktop event list and its test.
+
+**Repair.** The decision moved into `packages/app/src/components/codium-usage-alert.ts` (`sendUsageAlert`, `:18-57`),
+which takes the status, the identity, both switches, the dedupe state, `platform.notify` and the phone sender. A24's
+shared key (`sent.periods`) is unchanged: one alert per account, plan and renewal for the app lifetime, and a failed
+desktop notification removes it (`:56`) so the next read tries again. A second set, `sent.phone`, holds the periods
+whose phone alert went or is on its way (`:42-47`), so the desktop retry never repeats the phone alert. Its key is added
+before the send (`:43`), so overlapping reads cannot send twice, and removed only when `sendPhoneAlert` resolves false
+(`:45`: it held the alert back for quiet hours, the event switch, the plan's listing or a missing sender, or the send
+failed), so while the desktop notification keeps failing a held-back phone alert is tried at a later read, as before.
+The threshold is `usageShare(left).used < 80` (`:36`), the whole percentage the card shows (H5). The component keeps the
+state at module level (`settings-vector-codium.tsx:24`, both sets, for the app lifetime as before) and its effect
+(`:66-77`) passes the same tracked reads as before (status, identity, both switches, and `sendPhoneAlert`'s own
+synchronous reads of the event switch and quiet hours). Both titles and the desktop text are byte-identical. Defaults
+are unchanged: `codium.alert80` false and `notifications.events.usage` false (`context/settings.tsx`, not touched).
+
+**Regression** (`packages/app/src/components/codium-usage-alert.test.ts`, eight cases; the phone path runs through the
+real `sendPhoneAlert` with a fake `phoneAlerts.send`, a plan read that lists alerts and a fixed noon clock, and
+`resetPhoneAlerts()` runs before each case):
+
+- "with both switches on, the phone alert goes once while a failing desktop notification is tried again (F28)": the
+  desktop `notify` rejects at 19% and 18% left; exactly one `phoneAlerts.send`, the desktop tried twice, shown at 17%,
+  and nothing more at 16%. This is the hand-off's test.
+- "a phone alert held back by quiet hours goes at a later read while the desktop notification keeps failing": quiet
+  hours (11:00 to 13:00) hold the phone alert back at 19% while the desktop fails; at 18%, quiet hours off and the
+  desktop failing again, exactly one phone alert goes; nothing more at 17% (desktop shown) or 16%. A second window whose
+  desktop notification is shown while quiet hours hold the phone back sends no phone alert later (A24's shared key, as
+  before). Added after the package review (finding 1), so the repair only removes repeats.
+- "above 20% left nothing is sent; the threshold is the share the Usage card shows (H5)": 1, 0.5, 0.21 and 0.207 send
+  nothing; 0.2, 0.203 (shown as "80% used · 20% left"), 0.19 and 0 each send one of each.
+- Unchanged behaviour, pinned: desktop only, a failed notification is tried at the next read and one that was shown is
+  not repeated; both switches off sends nothing; the titles are exact and carry no amount, token, credit or dollar
+  word, and their only digits are "80" twice; each account, plan and renewal alerts once, and nothing goes without an
+  identity, a signed-in read, an error-free read, a plan or a share; a period that already alerted on one channel stays
+  silent when the other switch is turned on later (A24's shared key, both orders).
+
+The fake desktop `notify` is `async`, so a failure is a rejected promise (as `Platform.notify` always is), never a
+synchronous throw; each read awaits the check and then `Bun.sleep(0)`, so the rejection handler, the phone sender's
+plan read and its held-back key removal settle before the next read whether or not the check hands back the promise.
+The fake platform is checked with `satisfies` against `Pick<Platform, "notify" | "phoneAlerts">` and
+`Pick<VectorAccountPlatform, "codium">`, and cast to `Platform` only where `sendPhoneAlert` takes the whole type.
+
+Red proof: the old effect body was transcribed into the module through the same seams
+(`/tmp/vector-v2/codium/f28/codium-usage-alert.old.ts`, kept as scratch and not committed): `alertedPeriods` →
+`input.sent.periods`, `sendPhoneAlert(platform, settings.notifications, x)` → `input.sendPhone(x)`,
+`settings.codium.alert80()` → `input.desktop`, `settings.notifications.event("usage")` → `input.phone`, `state.status`
+and `state.identity` → `input.status` and `input.identity`, and `void platform.notify(...)` → returned. The gate order,
+the raw `left > 0.2`, the shared key, the phone sent first and the delete on failure are as at old `:73-99`. With the
+final test file it gave 5 pass, 3 fail (34 `expect()` calls): the F28 case at its first assertion (`toEqual`,
+`Expected - 0, Received + 4`: a second phone alert), the quiet-hours case at its last phone count (length 2, expected
+1: the same repeat) and the H5 case at 0.203 (`phone: 0`, `desktop: 0`, expected 1 each). The first draft of the repair
+(`/tmp/vector-v2/codium/f28/codium-usage-alert.new.ts`, which kept the phone key after a held-back send) gave 7 pass, 1
+fail: the quiet-hours case (`[]`, expected one phone alert at 18%). With the final body
+(`/tmp/vector-v2/codium/f28/codium-usage-alert.final.ts`): 8 pass, 0 fail, 44 `expect()` calls
+(`/tmp/vector-v2/codium/f28/green-final.txt`, taken on the final test file; it replaces the earlier
+`green-new-body.txt`, which predates the last test edits). The first red run also caught a test bug (an explicit
+`undefined` identity took the parameter default), fixed before the counts above.
+
+Mutations of the final body, each restored and checked with `cmp` against the saved final body:
+
+| Mutation | Cases that fail |
+| --- | --- |
+| M1: drop `!input.sent.phone.has(key)` | the F28 case, quiet hours |
+| M2: `.catch(() => undefined)` | the F28 case, quiet hours, desktop only |
+| M3: the raw `(status.plan.left ?? 1) > 0.2` | the H5 case |
+| M4: drop `if (input.sent.periods.has(key)) return` | the F28 case, quiet hours, desktop only, each period once, other switch later |
+| M5: drop `if (!went) input.sent.phone.delete(key)` | quiet hours |
+
+### Tests run here (one file at a time)
+
+Run through `vector-serial` with `bun test --isolate --timeout 30000` from `packages/app`. App unit tests boot no
+engine, so no XDG roots were needed.
+
+| Package | File | Before | After |
+| --- | --- | --- | --- |
+| app | `src/components/codium-usage-alert.test.ts` (new) | old body: 5 pass, 3 fail (red) | 8 pass (44 `expect()` calls) |
+| app | `src/context/phone-alerts.test.ts` | not re-run (no file it loads changed) | 6 pass |
+| app | `src/components/settings-v2/codium-usage-model.test.ts` | not re-run (no file it loads changed) | 10 pass |
+| app | `src/context/settings.test.ts` (asserts `codium.alert80` false) | not re-run (no file it loads changed) | 6 pass |
+| app | `src/components/settings-v2/notifications-model.test.ts` (asserts `events.usage` false) | not re-run (no file it loads changed) | 4 pass |
+
+Typecheck: `packages/app` `bun typecheck` (`tsgo -b`) clean, test file included. `prettier --check` passes on the three
+code files (the component was prettier-clean at HEAD). `git diff --check` clean. The full turbo typecheck and the api
+tree are pre-push steps and were not run here.
+
+**CI only:** Vector Codium's Codium tests job (it selects `codium-usage-alert.test.ts` and `codium-usage-model.test.ts`
+by name) and the browser spec `packages/app/e2e/regression/account-settings.spec.ts` ("Usage notifications require
+opt-in and do not repeat on refresh", which drives the real component's desktop path; its name does not match the
+picker, so it is passed as `browser_specs`), and typecheck.yml. CI: pending; the change is uncommitted, and the run and
+job ids go in a dated line here in the lane commit that follows the runs. Never exercised: a real desktop with a paired
+phone (B09's paired check, and the owner's listing of alerts, without which no phone receives anything).
+
 Edits to `api/_lib/model-plan-*.ts`: none.

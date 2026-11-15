@@ -2286,6 +2286,8 @@ unchanged.
   failing) to the P6 addendum, the package that appends the A36 review to `codium-p6-repairs.md`, since A41 is in P6's
   range; both are under "P4 review decisions" below and stay open here until those packages record them. P4c adds a
   dated line here with the Vector Codium run id and conclusion for P4b's own commit, once that run has completed.
+  15 Nov 2026 (Codium finish F28): F28 is closed; see `codium-p6-repairs.md`, "A41 phone usage alert (F28, P6
+  addendum)", and the F28 bullet in "P6 review addendum (15 Nov 2026)" below.
 - **8 Nov 2026 (P4c).** Run 42450985342 (push, head `c7b6376a`, P4b's commit) was queued when P4c began and completed
   with success, 14 of 14 jobs; its Codium tests job 128639976336 passed every step, and the last part of its log shows
   the last HttpApi exerciser gate at `pass=309 fail=0` followed by `check:generated` (the picker's file count was not
@@ -2416,6 +2418,8 @@ P4b's readings, from its review of A23 and A24 (`4fde1a49..b4c05481` and the A24
   range and past the P6 review, so it goes to the P6 addendum (the package that appends the A36 review to
   `codium-p6-repairs.md`). Its regression test: both switches on, the desktop `notify` rejects on two status reads whose
   share left differs (19% then 18% left), and exactly one `sendPhoneAlert` call (one `phoneAlerts.send`) is expected.
+  15 Nov 2026 (Codium finish F28): repaired, with that regression; see `codium-p6-repairs.md`, "A41 phone usage alert
+  (F28, P6 addendum)".
 
 P4c's readings, from its review of A25 (`b4c05481..295ab95e`; findings F35 to F56 in `codium-p4-repairs.md`, section
 "A25 output boundaries"):
@@ -3645,6 +3649,12 @@ and the fresh XDG and `TMPDIR` roots were under `/tmp/vector-v2/codium/r36/`.
 - **Only in CI:** Vector Codium and typecheck.yml, both pending. The Valkey block of `roadmap-api.test.ts` was skipped
   here. The HttpApi exerciser's `experimental.playbooks.install.invalid` scenario and the engine playbooks test are not
   selected by the picker (they are unchanged), so the engine install path has only the local receipt.
+  CI, 15 Nov 2026 (recorded by Codium finish F28): Vector Codium run 43685974875 on `265f4ea7` counts as green under
+  the lane's baseline rule: 15 of 18 jobs succeeded, 2 were skipped by `services_only`, and Codium tests job
+  132726419932 failed only at "Run HttpApi exerciser gates" with exactly the four `/experimental/review-memory` MISS
+  lines and `summary pass=359 fail=0 skip=0 missing=4 extra=0`; its step list shows "Run the Codium test files" and
+  "Check generated client" succeeded. typecheck.yml run 43685977976 succeeded. Details in `codium-p6-repairs.md`
+  (A36 addendum, "CI, 15 Nov 2026").
 - **For the lead.**
   1. A lighter allowlist module would keep the publish check from loading the Brain database and `global.ts`. It would
      mean moving `simple`, `helper`, `check` and their lists out of `packages/core/src/brain/skill.ts`, the brain lane's
@@ -3652,6 +3662,60 @@ and the fresh XDG and `TMPDIR` roots were under `/tmp/vector-v2/codium/r36/`.
   2. `ROLE` in `packages/core/src/playbooks/check.ts:137` and the pattern at
      `packages/engine/src/orchestration/runs.ts:202` should become one export once someone owns both files.
   3. F28 is still open; it has its own package.
+     15 Nov 2026 (Codium finish F28): closed; see the F28 bullet below.
   4. Re-measure the picker's selection before the dispatch. This package adds one new core test file and changes
      `test/roadmap-fixture.ts`, which `test/*.test.ts` already covers.
+- **F28 (Codium finish, 15 Nov 2026).** The phone usage alert repeated while the desktop notification kept failing
+  (P4b's hand-off). Findings, repair, regression and tests are in `codium-p6-repairs.md` ("A41 phone usage alert (F28,
+  P6 addendum)"). Read on `codium-finish` `265f4ea7`; scratch under `/tmp/vector-v2/codium/f28/`. Contract readings:
+  1. **One alert per account, plan and renewal, shared by both channels (A24), and the phone at most once.** A24's
+     shared key is kept: an alert on either channel still silences the other for that period, as before, so a switch
+     turned on later sends nothing for a period that already alerted (pinned by a test, both orders). The phone alert is
+     also recorded in a set of its own, so A24's retry after a failed desktop notification never repeats it. The plan
+     proposed separate per-channel sets, under which a switch turned on later would send its own alert; the critique
+     pointed out that this adds a send F28 does not ask for, and it was not taken. The fix only removes repeats.
+  2. **A phone alert that `sendPhoneAlert` held back is tried again, exactly as before.** The phone set's key is added
+     before the send, so overlapping reads cannot send twice, and removed when `sendPhoneAlert` resolves false (quiet
+     hours, the event switch off, alerts not listed for the plan, no `phoneAlerts.send`, or a failed send). So with both
+     switches on and the desktop notification failing, a held-back phone alert goes at a later read, as it did before
+     F28; once the desktop notification was shown, or with only the phone switch on, A24's shared key ends the period
+     and a held-back phone alert is not tried again, also as before (both pinned by the quiet-hours case). The first
+     draft of this repair kept the key after a held-back send, which also dropped that retry; the package review
+     (finding 1) pointed out that this narrowed behaviour beyond removing repeats, and it was changed.
+  3. **The threshold is `usageShare`'s whole percentage (H5).** `share.used < 80` replaces the raw `left > 0.2`. For
+     whole-percentage inputs, which are all the server sends (F24), nothing changes. A hand-made share with
+     0.2 < left < 0.205 now alerts, matching the card's "80% used · 20% left".
+  4. **The desktop main process's 60 s fingerprint dedupe (`packages/desktop/src/main/remote-notify.ts:23,73-74`) is
+     not the guard.** Usage reads further apart than a minute (focus, Refresh) passed it.
+  5. **Callers.** Every `sendPhoneAlert` caller was read: `context/notification.tsx:369` (finished), `:386` (Run
+     Guard), `:459` (needsYou), `pages/layout/ask-notifications.ts:60` (needsYou; Hands' file, read only). The Usage
+     card was the only sender of the "usage" event. v2-master-prompt 8.2 moves only `layout.tsx`'s alert (needsYou)
+     into `ask-notifications.ts`; the usage alert was never in `layout.tsx`.
+  6. **Defaults and settings.** `codium.alert80` and `notifications.events.usage` stay false (`context/settings.tsx`
+     not touched; `settings.test.ts` and `notifications-model.test.ts` assert them). No setting, switch, flag, copy,
+     price or page was added; both titles and the desktop text are byte-identical. `MODEL-PLANS.md` is unchanged. No
+     phone receives anything until the owner lists alerts (`phoneAlertsOffered`).
+  7. **The decision is a module beside the component** (`codium-usage-alert.ts`), with the dedupe state, `notify` and
+     the phone sender injected, so it is tested without a browser; the component keeps the state for the app lifetime
+     and its effect passes the same tracked reads.
+  8. **Plan and critique.** Taken: the shared key with one phone-only set (above); an `async` fake `notify` and a
+     macrotask flush after each read, with the old transcription returning the notify promise; the F28 case through the
+     real `sendPhoneAlert` and `phoneAlerts.send` with `resetPhoneAlerts()` before each case; the R36 receipt read from
+     the step list and a 400-line tail; dated closing lines under the P4 summary's F28 item and the Lane status note;
+     the old transcription kept in scratch with its substitutions recorded; full `Status` fixtures (`plan.left` is
+     optional in `ModelPlanStatus.Status`); every case each mutation turns red; word boundaries in the figure scan. Not
+     taken: the plan's per-channel sets and its "switch turned on later sends its own alert" case (reading 1). Package
+     review, all four findings taken: the held-back phone retry (reading 2) with its quiet-hours case; the fake platform
+     checked with `satisfies` against the `Platform` and `VectorAccountPlatform` parts it implements, cast only where
+     `sendPhoneAlert` takes the whole `Platform`; the readings re-wrapped; and the green receipt re-taken on the final
+     test file.
+  9. **Ran locally**, through `vector-serial`, one file at a time with `--isolate --timeout 30000` from `packages/app`:
+     `codium-usage-alert.test.ts` (red on the old body, 5 pass and 3 fail; then 8 pass, 44 `expect()` calls), five
+     mutations (each restored and checked with `cmp`), `phone-alerts.test.ts` (6), `codium-usage-model.test.ts` (10),
+     `settings.test.ts` (6) and `notifications-model.test.ts` (4); `bun typecheck` in `packages/app`; `prettier --check`
+     on the three code files; `git diff --check`.
+  10. **Only in CI:** Vector Codium (Codium tests selects the new file and `codium-usage-model.test.ts` by name; the
+      browser job runs `packages/app/e2e/regression/account-settings.spec.ts` when it is passed as `browser_specs`) and
+      typecheck.yml. Pending: this step left the change uncommitted.
+  11. **For the lead:** none. No other lane's file needed a change; `ask-notifications.ts` was read only.
 - Edits to `api/_lib/model-plan-*.ts`: none.

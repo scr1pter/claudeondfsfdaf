@@ -496,6 +496,17 @@ confirmed and handed off.
   status reads whose share left differs (19% then 18% left), and exactly one `sendPhoneAlert` call (one
   `phoneAlerts.send`) is expected. Not repaired here.
 
+**Status, 15 Nov 2026 (Codium finish F28): P4 finding F28 closed.** The check moved to `sendUsageAlert`
+(`packages/app/src/components/codium-usage-alert.ts`), which the component's effect calls. A24's shared key per account,
+plan and renewal is unchanged, including the retry after a failed desktop notification; the phone alert is also recorded
+in a set of its own, so it goes at most once per period for the app lifetime while the desktop notification keeps
+failing (a phone alert that `sendPhoneAlert` held back is still tried at a later read, as before). The threshold is now
+the whole-percentage share the card shows (`usageShare`, H5), which changes nothing for the whole percentages the server
+sends. Regression: `codium-usage-alert.test.ts`, "with both switches on, the phone alert goes once while a failing
+desktop notification is tried again (F28)", through the real `sendPhoneAlert` (one `phoneAlerts.send`); it failed on the
+old body (5 pass, 3 fail with the quiet-hours and H5 cases). Defaults are unchanged (`codium.alert80` false,
+`notifications.events.usage` false). Details: `codium-p6-repairs.md`, "A41 phone usage alert (F28, P6 addendum)".
+
 **F29. The recommender and outcomes might use Codium.** Not confirmed.
 `features/economics/economics-recommender.ts:26,100`, `economics-repository.ts:251`, `session-outcomes.ts:108`,
 `workspace-outcomes.ts:64` and `token-usage.ts:134` leave Codium out; `economics-recommender.test.ts` (39),
@@ -1560,6 +1571,7 @@ Open items, each recorded where it is owned:
 
 - F6: an unknown cost kind on self-evolving (hand-off to the self-evolving lane and owner step 9).
 - F28: A41's phone usage alert can repeat while the desktop notification keeps failing (hand-off to the P6 addendum).
+  Closed 15 Nov 2026 (Codium finish F28): repaired in the P6 addendum (dated line under F28).
 - F44: `--sanitize` keeps the lifecycle record's text fields (privacy, the lead's queue).
 - F63 and F64: Codex's evidence cost line and Actions log for mixed reviews (hand-offs to Codex).
 - O1 to O9: public copy and label-surface copy that are the owner's to decide (F65, F71).
@@ -1575,3 +1587,8 @@ O1 to O9 are not changed by this package.
 **Status, 15 Nov 2026 (Codium finish F44).** P4 finding F44 is closed (dated line under it): a sanitized legacy export
 now redacts the lifecycle record's text through an allow-list, and redacts every string in the session's other
 metadata. F43's token stripping is unchanged. F28 and O1 to O9 are not changed by this package.
+
+**Status, 15 Nov 2026 (Codium finish F28).** P4 finding F28 is closed (dated line under it): the phone usage alert goes
+at most once per account, plan and renewal while the desktop notification keeps failing, the desktop keeps A24's retry,
+and the 80% threshold is the share the card shows. Repaired in `codium-p6-repairs.md` ("A41 phone usage alert (F28,
+P6 addendum)"). O1 to O9 are not changed by this package.
