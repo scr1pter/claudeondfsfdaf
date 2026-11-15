@@ -1174,6 +1174,20 @@ nothing in carry mode (`:382`), and `c` stays dollars; `encodeRaw` writes `k` on
 - Proposed regression for Codex (`packages/engine/test/cli/github.evidence.test.ts`): `measureCost` over one Codium turn
   and one own free turn gives a line without `$0.00`; a mixed priced line contains `on your keys`. No test was added
   here: it would fail until Codex repairs its file.
+- **Status, 15 Nov 2026 (Codium finish TB): closed, no code change here.** The @vector lane's approved correction
+  (`vector-at-mention-deviations.md:537`, item 1 of "V19 evidence provenance and Actions output (2026-11-10)") changed
+  the contract: portable messages keep Codium attribution but not free-model versus OAuth-plan provenance, so mixed
+  evidence says "from other models", omits a zero subtotal and never infers "on your keys", "free" or a plan label.
+  Label plan §3.8's Mixed bullet (`codium-label-plan.md:196`) now reads `... 3.1k out from other models · 4 turns` and
+  "a zero non-Codium subtotal omits the price". `formatCost` (`github.evidence.ts:293-324`) matches it: `ownPrice`
+  (`:299`) is undefined when `codium && costUsd === 0 && unpriced === 0`, and the token part ends ` from other models`
+  (`:316`). Tests in `packages/engine/test/cli/github.evidence.test.ts`: the loop at `:348-373` (the mixed line
+  `**Cost:** $0.12 + Codium · 100 in / 20 out from other models · 2 turns`, no `$0.00`), `:436` (measured other-model
+  totals) and `:483-498` ("mixed evidence never infers a free or OAuth-plan label from a zero own-model amount": the
+  line `**Cost:** Codium · 100 in / 20 out from other models · 2 turns`, and no `$0.00`, `free + Codium` or `on your
+  keys`). CI: test.yml run 43636452606 (PR #33's merge ref), engine (linux, shard 1/4) job 132574289056, whose whole
+  log is visible: `github.evidence.test.ts` 24 pass, 0 fail, the `:483` case among them. F63's own "on your keys"
+  expectation is superseded by the contract change, so it closes as resolved by it. Not run locally by TB.
 
 **F64. Codex's GitHub Actions log for mixed reviews.** Confirmed, hand-off to Codex (not edited).
 
@@ -1182,6 +1196,16 @@ nothing in carry mode (`:382`), and `c` stays dollars; `encodeRaw` writes `k` on
 - Proposal: print `Spent: Codium` when `event.codium` is set and `costUsd` is 0, the same rule as core's PR total
   (`format.ts:891-898`). `run.ts`'s event is not changed, since `github.review.ts` is its only consumer. Proposed
   regression: a review with one own $0 step and one Codium step logs no `$0.0000`.
+- **Status, 15 Nov 2026 (Codium finish TB): closed, no code change here.** `github.review.ts:714-718` now logs
+  `Spent: Codium` when `deps.cloud || event.kind === "codium" || (event.codium && event.costUsd === 0)` (`:716`) and
+  `Spent $X + Codium` otherwise, which is the proposal above. `packages/engine/src/review/run.ts:428` still sends
+  `kind: "unknown"` once an own step is reported, so the `costUsd === 0` branch is what keeps `$0.0000` out. Tests in
+  `packages/engine/test/cli/github.review.test.ts`: `:2076` ("Codium progress, sticky footer and durable review count
+  contain no private figures") and `:2098` ("mixed Codium review progress reports only positive own spend": a free $0
+  step, then a $0.12 step; expects `Spent: Codium` and `Spent $0.1200 + Codium` and no `Spent $0.0000`). CI: test.yml
+  run 43636452606, engine (linux, shard 2/4) job 132574288967, whose whole log is visible: `github.review.test.ts`
+  46 pass, 0 fail, both cases among them (the job failed on other files and its 30-minute step limit, recorded in
+  `codium-deviations.md`, "Codium finish: Track B receipts and P4 closings"). Not run locally by TB.
 
 **F65. P4a's F10: the public share's model-switched notice keeps `vector-plan/<id>`.** Owner decision O9, no change.
 
@@ -1479,3 +1503,7 @@ Open items, each recorded where it is owned:
 - F44: `--sanitize` keeps the lifecycle record's text fields (privacy, the lead's queue).
 - F63 and F64: Codex's evidence cost line and Actions log for mixed reviews (hand-offs to Codex).
 - O1 to O9: public copy and label-surface copy that are the owner's to decide (F65, F71).
+
+**Status, 15 Nov 2026 (Codium finish TB).** F63 and F64 are closed (dated lines under each): by the @vector lane's
+approved V19 evidence correction and the code and tests it describes, with CI receipts from test.yml run 43636452606.
+No code changed. F6, F28, F44 and O1 to O9 are not changed by this package.

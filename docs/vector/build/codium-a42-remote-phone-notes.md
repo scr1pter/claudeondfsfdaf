@@ -101,3 +101,10 @@ model tests and the CI browser spec).
   provisioner already erases on closing).
 - `pushsubscriptionchange` is still not handled (A38's note).
 - Nothing was pushed or deployed.
+
+**Status, 15 Nov 2026 (Codium finish TB).** The "CI only" spec above has now run in CI. `remote-phone.spec.ts:44`
+(pairing with matching digits and allow once) and `:102` (a link for another origin refused) passed on their first
+attempt in Vector Codium run 43661511343, Codium browser specs job 132651657817 (`codium-finish` 02c9fc14), and in
+test.yml run 43636452606 (PR #33's merge ref), e2e (linux) job 132574288954 and e2e (windows) job 132574289008; each
+log is wholly visible. This is a browser run with Chromium's virtual authenticator, not a real phone, so "Never
+exercised anywhere" above is unchanged, and Track B's B09 paired desktop/phone check stays open.

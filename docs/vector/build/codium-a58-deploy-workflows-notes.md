@@ -117,3 +117,12 @@ more app browser specs). They reach `codium-ci-tests.ts` only as step environmen
 `CODIUM_CI_BROWSER_SPECS`), where `diffBase` and `requestedBrowserSpecs` check them before git or Playwright sees them.
 Pushes, `--hosted` and `vector-hosted-ci.yml` are unchanged. The reasons and counts are in `codium-deviations.md`
 ("Codium finish: CI0 lane dispatch inputs"); the first dispatch's run is recorded in a later dated line.
+
+**Status, 15 Nov 2026 (Codium finish TB).** The inputs work as dispatched. Vector Codium run 43659654730 (base
+`origin/release-finish`, no specs) and run 43661511343 (the same base and four receipt specs), both on 02c9fc14: each
+Select step's env shows the values, the browser jobs (132645885892 and 132651657817) ran 2 and 6 specs and passed, and
+each Codium tests job (132645886182 and 132651658143) picked 120 files and ran in about two minutes, against 40 minutes
+and a timeout before CI0. Neither run is green: both stop at "Codium: 119/120 test files passed" on
+`packages/web/test/model-plan-gateway-hooks.test.ts`, plus the exerciser's four review-memory MISS lines. The ids,
+steps and the failure's cause are in `codium-deviations.md` (the CI0 section's dated line and "Codium finish: Track B
+receipts and P4 closings").

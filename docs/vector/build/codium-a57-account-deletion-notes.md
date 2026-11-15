@@ -117,3 +117,24 @@ a production-sized store.
 found that the `computer` part left the sessions' packed files (`hosted/<mode>/<hash>/<session>/files.tar.gz`) to the
 bucket's 2-day rule. `eraseAccountHosted` now deletes them first (`eraseSessionArchives`) and a bucket refusal keeps the
 deletion pending; `test/account-delete.test.ts` covers it.
+
+**Status, 15 Nov 2026 (Codium finish TB).** The A59 item under "For later packages" and the first "Not done" bullet
+(Codex's bindings and run records) are covered, by a built-in part rather than `registerErasePart`. `ERASE_PARTS`
+(`api/_lib/codium-erase.ts:244`) holds `{id: "cloud-agents", configured: storeConfigured, erase: ...}` at `:268-277`;
+its erase calls `eraseCloudAgentsAccount` with a store wrapper that throws `ACCOUNT_ERASE_PENDING` (503) once the
+deletion's deadline has passed, before each store command. The `codium` part's `requires` lists `cloud-agents`
+(`:279-297`, at `:293`), and `keys` requires `codium` (`:298`), so the account's own records and keys wait for it;
+`registerErasePart` (`:311`) is left for later packages. `eraseCloudAgentsAccount` (`api/_lib/cloud-agents-runs.ts:332`)
+refuses with 409 `ACCOUNT_REVOCATION_REQUIRED` unless `vector:cli-revoked:<account>` is set, then erases the Brain
+uploads, revokes each repository binding, scans the run, bind-code, ticket and binder-ok keys (the index is capped, so
+the namespace is scanned too), deletes the account's used and sched keys, and deletes its bindings, binder-left, runs
+and live indexes. The item's second half: `cloudAgentView` answers `{active: false, reason: "closing"}` for a snapshot
+whose reason is `closing` (`api/_lib/codium-cloud-agents.ts:42`, reached from `cloudAgentAllowance` (`:78`) at `:91`),
+tested in `packages/web/test/cloud-agents-entitlement-contract.test.ts:38`; that an erased account reaches the same answer
+because `readEntitlement` returns the closing snapshot is a reading, not a test. Tests:
+`test/account-delete.test.ts:707` (the run order, `cloud-agents` included), `:741` (a failing part), `:1082`
+(`test.each` over `cloud-agents` and `everywhere`: required with the feature off and retried before identity deletion)
+and `:1120` (both indexed erasers honor the deadline). CI on the lane head 02c9fc14: Vector Codium run 43659654730,
+Codium tests job 132645886182 (whole log visible), `test/account-delete.test.ts` 38 pass, 0 fail, including "the last
+part on a real Valkey (CI only)" and the feature-off and deadline cases; the same 38/0 in run 43661511343, job
+132651658143. The brain-transport lane's B08/A59 joint check is untouched.

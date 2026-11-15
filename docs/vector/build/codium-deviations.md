@@ -2930,3 +2930,194 @@ sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
     `packages/cloud/src/workflow-compliance.test.ts`. If Bun or git fails to start there, the fix is another named
     Windows system variable in that case's pass-through list, never a skip and never a `CODIUM_CI_*` variable.
   - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change: these are CI inputs, not product settings.
+
+**Status, 15 Nov 2026 (Codium finish TB).** The CI line this section promised. Vector Codium run 43659654730, dispatched
+on `codium-finish` at 02c9fc14 with `base=origin/release-finish` and no `browser_specs`, concluded failure. Codium
+tests job 132645886182 (4680 lines, wholly visible): the unit step's env shows `CODIUM_CI_BASE:
+origin/release-finish`; "Run the Codium test files" ran 00:49:27 to 00:51:09 and ended "Codium: 119/120 test files
+passed", the one failure being `packages/web/test/model-plan-gateway-hooks.test.ts` ("ReferenceError: Cannot access
+'METER_EPOCH_PATTERN' before initialization." at `api/_lib/cloud-agents-run-token.ts:57`; cause and owner in the next
+section's For the lead); "Run HttpApi exerciser gates" failed with exactly the four `/experimental/review-memory` MISS
+lines and "summary pass=359 fail=0 skip=0 missing=4 extra=0"; "Check generated client" passed. Codium browser specs job
+132645885892 (667 lines, wholly visible): env `CODIUM_CI_BASE: origin/release-finish` with an empty spec list, the two
+Codium specs (`codium-image-routing`, `codium-usage-labels`), "5 passed (38.1s)". The eleven typecheck jobs and the
+relay, ops Worker and Docker image jobs passed; Hosted tests and the hosted typecheck matrix were skipped, as on every
+lane call. typecheck.yml run 43659657077 on the same SHA concluded success. So the step limit is fixed (120 files in
+under two minutes), but the run is not green under the lane rule, because of the gateway-hooks failure.
+
+## Codium finish: Track B receipts and P4 closings (15 Nov 2026)
+
+- **Why.** Track B's B06, B07 and B11 rows wait for browser runs of specs that are on main and unchanged, which the lane
+  picker never chose before CI0; B02 to B05 ask for combined regressions on the joined tree; and F63, F64 and A57's
+  "Codex's records are not erased" item were closed by other lanes' work while their records still read open.
+- **Docs only.** No source, spec, test, workflow, generated file or setting changed. `MODEL-PLANS.md` and
+  `owner-actions/` are unchanged; no perk is listed; no public, price, legal or comparative text was added. Files:
+  `codium-track-b-checkpoint.md`, `codium-p4-repairs.md`, `codium-a57-account-deletion-notes.md`,
+  `codium-a42-remote-phone-notes.md`, `codium-a58-deploy-workflows-notes.md` and this file (the dated line under CI0's
+  section above and this section). Every addition is a new dated paragraph or bullet; no existing line was rewritten.
+- **Reading: what counts as a browser receipt.** A spec passed in a job only when the job's log is wholly visible (its
+  first line is "Current runner version"), its begin line `[n/N] [chromium] › <spec>:<line>:1` is in the log, it is in
+  neither the failed nor the flaky block of the summary, and no `(retry #` line names it.
+  `packages/app/playwright.config.ts` sets `retries: process.env.CI ? 2 : 0` (`:26`) and the line reporter (`:28`), so a
+  retried test prints a `(retries)`-prefixed begin line ending `(retry #n)`. None of the four receipt specs contains
+  `skip` or `fixme`.
+- **Reading: the combined source.** `git merge-base --is-ancestor origin/main 0ee486e3` succeeds, so PR #33's
+  pull_request merge ref 0975ed15 (run 43636452606 names `refs/pull/33/merge` at that SHA) has 0ee486e3's tree; 0975ed15
+  is not in the local object store, so this is a reading from ancestry. `git diff 0ee486e3 02c9fc14` touches only CI0's
+  five files and nothing under `packages/engine`, `packages/app`, `packages/core` or `api/`, so test.yml run
+  43636452606 and the lane's runs on `codium-finish` test the same product source. `origin/release-finish` has since
+  moved on to cf2373c4 (13 commits past 0ee486e3); runs at cf2373c4 (test.yml 43656696007, completed, failure) are a
+  different tree and are not used as evidence here.
+- **Reading: the named suites and the closure rule.** A row closes only when every suite named for it shows passing on
+  the combined source (the merge ref or the lane head) in a visible log. B02 to B03 (combined label, prompt and
+  skill-learn regression and browser checks, with the helper and bootstrap of `23a37c0b3`):
+  `codium-usage-labels.spec.ts`, `codium-no-figures.test.ts`, core `review/format.test.ts`, engine
+  `cli/github.evidence.test.ts`, `session/prompt.test.ts`, `session/skill-learn.test.ts`,
+  `session/brain-helper.test.ts`, `session/distill.test.ts`, `server/memory-learn.test.ts` and
+  `server/memory-workflow.test.ts`, core `brain/learn.test.ts` and `brain/distill.test.ts`, app
+  `settings-v2/memory-brain-model.test.ts` and `memory-workflow-model.test.ts`. B04 (the integrated source check): core
+  `codium-auto.test.ts` and `brain/workflow.test.ts`, engine `session/codium-auto.test.ts`,
+  `orchestration/library.test.ts` and `orchestration/runs.test.ts`. B05 (combined provider and task regression): engine
+  `session/second-opinion.test.ts`, `provider/provider.test.ts`, `tool/task.test.ts` and `prompt.test.ts`'s task-tool
+  case.
+- **Browser receipts.** PR #33 was open (merged false), so the receipt run was dispatched on `codium-finish` at
+  01:06:47Z with `base=origin/release-finish` and `browser_specs` naming `race.spec.ts`, `playbooks-settings.spec.ts`,
+  `hosted-result-note.spec.ts` and `remote-phone.spec.ts` under `packages/app/e2e/regression/`. It is Vector Codium run
+  43661511343 (created 01:06:52Z, later than CI0's 43659654730 on the same SHA 02c9fc14), concluded failure (below).
+  - Codium browser specs job 132651657817, 690 lines, wholly visible. The Select step's env shows
+    `CODIUM_CI_BASE: origin/release-finish` and `CODIUM_CI_BROWSER_SPECS` with the four paths; it printed six specs
+    (`codium-image-routing`, `codium-usage-labels`, `hosted-result-note`, `playbooks-settings`, `race`, `remote-phone`);
+    "Running 10 tests using 1 worker"; begin lines `[6/10] … hosted-result-note.spec.ts:4:1`,
+    `[7/10] … playbooks-settings.spec.ts:4:1`, `[8/10] … race.spec.ts:5:1`, `[9/10] … remote-phone.spec.ts:44:1` and
+    `[10/10] … remote-phone.spec.ts:102:1`; "10 passed (1.2m)"; no failed or flaky block and no retry line.
+  - test.yml run 43636452606 (the merge ref), e2e (linux) job 132574288954, 1457 lines, wholly visible: begin lines
+    `[218/474]` hosted-result-note, `[265/474]` playbooks-settings, `[282/474]` race, `[283/474]` and `[284/474]`
+    remote-phone, `[42/474]` and `[43/474]` codium-usage-labels; summary "4 failed" (all four in
+    `vectorscope-changes-and-automatic-reviews.spec.ts`, at `:181`, `:209`, `:225` and `:244`), "1 skipped",
+    "469 passed (27.9m)"; the eight `(retry #` lines are those four tests' retries 1 and 2.
+  - e2e (windows) job 132574289008, 1346 lines, wholly visible: the same begin indexes, the same four failures,
+    "1 skipped", "469 passed (35.9m)", and eight retries, again only those four tests.
+  - So B06 (Race), B07 (the Settings regression), B11's runtime renderer and A42's Remote pairing (the base for B09's
+    paired check) each passed on the first attempt on both trees.
+- **Logs read for B02 to B05, and their visibility.** All from test.yml run 43636452606 unless named otherwise.
+  Wholly visible: engine (linux) shards 1/4 132574289056 (3518 lines), 2/4 132574288967 (3733), 3/4 132574288925 (3127)
+  and 4/4 132574289024 (3444); engine (windows) shards 6/12 132574289128 (1449) and 7/12 132574289180 (1357); and on the
+  lane head the Codium tests jobs 132645886182 (4680) and 132651658143 (4666). Partly visible: unit (linux)
+  132574288906 shows only its last 5000 of 10081 lines and unit (windows) 132574288900 its last 5000 of 9820; both tails
+  hold only `@vectordevai/core`'s test output, so per-file results are claimed only for core files in them. Step
+  conclusions come from the job listing, not the tails: unit (linux) "Run unit tests" success, "Run HttpApi exerciser
+  gates" failure (its visible lines are the four review-memory MISS lines and "summary pass=359 fail=0 skip=0 missing=4
+  extra=0"), the later steps skipped; core's visible summary "5408 pass", "64 skip", "0 fail", "Ran 5472 tests across
+  413 files", and turbo's "Tasks: 8 successful, 8 total". Per-file counts are `(pass)` and `(fail)` lines under each
+  file header.
+- **B02 to B03: open.**
+  - Passed: `codium-usage-labels.spec.ts` (job 132651657817; e2e jobs 132574288954 and 132574289008);
+    `codium-no-figures.test.ts` 2/0 (lane head, jobs 132645886182 and 132651658143); core `review/format.test.ts` 60/0,
+    `brain/learn.test.ts` 34/0 and `brain/distill.test.ts` 17/0 (132574288906's tail; `review/format` and `brain/learn`
+    also 60/0 and 34/0 in 132574288900's tail); engine `cli/github.evidence.test.ts` 24/0,
+    `session/skill-learn.test.ts` 17/0 and `session/brain-helper.test.ts` 3/0 (132574289056);
+    `session/distill.test.ts` 6/0 and `server/memory-learn.test.ts` 5/0 (132574288967); `server/memory-workflow.test.ts`
+    3/0 (132574288925).
+  - Failed: engine `session/prompt.test.ts` on Linux, 156 pass, 1 fail, 1 skip (132574288967): "running task tool
+    preserves metadata after tool-call transition [5316.28ms]", "error: timed out waiting for running task metadata" at
+    `packages/engine/test/lib/effect.ts:180`. On Windows the whole file passed, 135 pass, 0 fail, 22 skip, that case
+    included (4399.80ms; 132574289128). The RULES-v2 flake list names only Windows' `prompt.test.ts` 3 s case, so this
+    Linux failure needs a root cause (For the lead).
+  - Not shown: app `memory-brain-model.test.ts` and `memory-workflow-model.test.ts` (neither unit tail reaches the app
+    package, and no Codium-picked run selects them).
+- **B04: integrated source check done.** Core `codium-auto.test.ts` 7/0 and engine `session/codium-auto.test.ts` 19/0 on
+  the lane head (132645886182 and 132651658143); on the merge ref engine `session/codium-auto.test.ts` 19/0 and
+  `orchestration/library.test.ts` 7/0 (132574288925), `orchestration/runs.test.ts` 18/0 (132574289056) and core
+  `brain/workflow.test.ts` 15/0 (132574288906's tail, and 132574288900's). Listing `auto-learns` stays under the perk
+  acceptance policy and is the owner's.
+- **B05: open.** Engine `session/second-opinion.test.ts` 9/0 (132574289024) and `provider/provider.test.ts` 121/0
+  (132574289056) passed; `tool/task.test.ts` passed on Windows, 161/0 (engine (windows, shard 7/12) 132574289180,
+  "Ran 711 tests across 55 files", 0 fail), and never ran on Linux (next bullet); `prompt.test.ts`'s task-tool case
+  failed on Linux as above. The row stays open on that one Linux case.
+- **Why `tool/task.test.ts` is not in the Linux logs.** Engine (linux) shards 2/4 and 3/4 end at "The action 'Run Engine
+  shard' has timed out after 30 minutes." (step 8: 20:18:50 to 20:49:03 and 20:17:26 to 20:47:38, the last tests passing
+  until the cut), while 1/4 ("2193 pass", "9 skip", "0 fail", "Ran 2202 tests across 165 files") and 4/4 ("1857 pass",
+  "12 skip", "2 fail", "Ran 1871 tests across 164 files") finished. `packages/engine` holds 657 tracked test files at
+  0ee486e3 (655 `*.test.ts` and 2 `*.test.tsx`; 2 under `src/`), which is the number to compare with. Sorted and dealt
+  round-robin, they give exactly shard 1's 165 file headers in order, and shard 2's 149 and shard 3's 134 headers are
+  prefixes of their 164-file lists; so 612 headers (165 + 149 + 134 + 164) means 45 files never ran on Linux, and
+  `tool/task.test.ts` is file 158 of shard 3's 164. That Bun deals `--shard` round-robin over sorted paths is a reading
+  checked only against these headers. The same reading puts `prompt.test.ts` in Linux shard 2 and Windows shard 6, and
+  `tool/task.test.ts` in Windows shard 7, which is where they appear.
+- **F63 and F64 closed.** This closes the hand-offs under "P4 review decisions (8 Nov 2026)", "Hand-offs to Codex (F63,
+  F64)". F63: the @vector lane's approved correction (`vector-at-mention-deviations.md:537`) replaced "on your keys"
+  with "from other models" and a zero subtotal with no price; label plan §3.8 (`codium-label-plan.md:196`),
+  `github.evidence.ts` `formatCost` (`:293-324`, `ownPrice` at `:299`, " from other models" at `:316`) and
+  `github.evidence.test.ts:348-373`, `:436` and `:483-498` agree; job 132574289056, 24/0. F64: `github.review.ts:716`
+  logs `Spent: Codium` when `event.codium && event.costUsd === 0`; `packages/engine/src/review/run.ts:428` still sends
+  `kind: "unknown"` once an own step reports; `github.review.test.ts:2076` and `:2098`; job 132574288967, 46/0. Each
+  was checked against the code at 02c9fc14, and `origin/release-finish` does not touch these files. Dated lines are in
+  `codium-p4-repairs.md`.
+- **A57's Codex item closed.** The built-in `cloud-agents` part (`api/_lib/codium-erase.ts:268-277`, in `ERASE_PARTS` at
+  `:244`; required by `codium` at `:293`; not `registerErasePart`, `:311`) and `eraseCloudAgentsAccount`
+  (`api/_lib/cloud-agents-runs.ts:332`) erase Codex's bindings and run records; `cloudAgentView`'s `closing` answer is
+  at `api/_lib/codium-cloud-agents.ts:42`, tested at `packages/web/test/cloud-agents-entitlement-contract.test.ts:38`;
+  the erased-account path through `readEntitlement` is a reading. `test/account-delete.test.ts` 38/0 in jobs
+  132645886182 and 132651658143, including "the last part on a real Valkey (CI only)", the `cloud-agents` feature-off
+  case and the deadline case. Dated line in `codium-a57-account-deletion-notes.md`. The B08/A59 joint check stays with
+  brain-transport.
+- **Receipt run 43661511343's other jobs.** Codium tests job 132651658143 (wholly visible):
+  `CODIUM_CI_BASE: origin/release-finish`; "Run the Codium test files" 01:08:42 to 01:10:37, "Codium: 119/120 test
+  files passed", failed file `packages/web/test/model-plan-gateway-hooks.test.ts` with the same ReferenceError at
+  `api/_lib/cloud-agents-run-token.ts:57`; the exerciser's exactly four review-memory MISS lines and "summary pass=359
+  fail=0 skip=0 missing=4 extra=0"; "Check generated client" passed. The eleven typecheck jobs, the relay, ops Worker
+  and Docker image jobs passed; Hosted tests and the hosted typecheck matrix were skipped. Receipt run 43661511343 is
+  not green under the lane rule; its browser receipts stand on job 132651657817 alone.
+- **Ran locally (15 Nov 2026).** Only reading and git: `git fetch`, `git merge-base --is-ancestor`, `git diff`,
+  `git log -S`, `git blame`, `git ls-files`, the log tallies (`python3 -I` scripts over saved job logs), and, through
+  `vector-serial`, `packages/engine` `bun test --timeout 30000 test/compliance/upstream-free.test.ts` after writing
+  (it scans every tracked file's working-tree text) and `git diff --check` (clean), both run again after the last
+  edits with the same results. The scan's case ("tracked paths and binary contents keep the upstream holder only in
+  license notices", `:68`) passed; the file gave 11 pass, 1 fail, the failure being `:148` ("a GitHub token does not
+  take the default model from an OpenAI key": default provider `amazon-bedrock`, not `openai`), which reads this
+  machine's provider environment and is unrelated to Markdown (For the lead, item 7); the same file passed 12/0 on the
+  merge ref (engine (linux, shard 4/4) 132574289024). No other test or typecheck ran while writing: no package
+  changed. The full turbo typecheck and the api tree typecheck run before the push.
+- **Only in CI.** Every receipt above (Vector Codium runs 43659654730 and 43661511343, test.yml run 43636452606,
+  typecheck.yml 43659657077). This package's own CI is the Vector Codium dispatch on `codium-finish` after its push
+  (the same `base` and the four receipt specs), then typecheck.yml on the same ref. That Vector Codium run cannot be
+  green under the lane rule while the gateway-hooks cycle stands (For the lead, item 1): its Codium tests job is
+  expected to stop at the same "Codium: 119/120" on `packages/web/test/model-plan-gateway-hooks.test.ts`, beside the
+  exerciser's four review-memory MISS lines. So this package's CI is not green, for that recorded reason; a dated
+  follow-up line at the end of this section gives the post-push run and job ids and what their logs show.
+- **For the lead.**
+  1. The gateway-hooks import cycle makes every lane Codium tests run red ("Codium: 119/120"; jobs 132645886182 and
+     132651658143). `packages/web/test/model-plan-gateway-hooks.test.ts` loads `api/_lib/model-plan-gateway-hooks.ts`,
+     whose `:5` imports `cloud-agents-ledger.ts`, which imports (`:4`) `cloud-agents-entitlement.ts` → (`:1`)
+     `codium-cloud-agents.ts` → (`:4`) `codium-entitlements.ts` → (`:17`) `model-plan-account.ts` → (`:47`)
+     `codium-perks.ts` → (`:7`) `model-plan-models.ts` → (`:6`) `model-plan-caller.ts` → (`:7`)
+     `cloud-agents-run-token.ts`, whose `:9` imports `METER_EPOCH_PATTERN` back from `cloud-agents-ledger.ts` and uses
+     it at module top level (`:57`) while the ledger is still initializing (the constant is defined at its `:43`). The
+     import at `model-plan-caller.ts:7` that closes the cycle came in with cb9221de ("feat(github): probe real service
+     dependencies without inference", 12 Nov), found by `git log -S` and `git blame`. A temporal-dead-zone error in a
+     single-file run follows from import order, so it is deterministic and not a flake. The files are the GitHub-agent
+     lane's and model-plan files; any fix touching `api/_lib/model-plan-caller.ts` is a model-plan-* edit, so the lead
+     assigns the fix package. This package does not fix it, and no lane Vector Codium run can be green until it lands.
+  2. `prompt.test.ts`'s "running task tool preserves metadata after tool-call transition" failed on Linux on the merge
+     ref (job 132574288967) and passed on Windows (132574289128). It is not on the flake list; it belongs to the PR #33
+     CI lanes and keeps B02 to B03 and B05 open.
+  3. Engine (linux) shards 2/4 and 3/4 hit their 30-minute step limit on the merge ref (132574288967, 132574288925), so
+     45 engine files, `tool/task.test.ts` among them, have no Linux result there (PR #33 CI lanes).
+  4. The app `memory-brain-model` and `memory-workflow-model` suites are shown by no visible log; a log that shows them
+     (or a lane run that selects them) is needed to close B02 to B03.
+  5. The four `/experimental/review-memory` MISS lines (VectorScope). They are fixed on `release-finish` by 0f6fce89 and
+     225905e2 (`review-memory-scenarios.ts`), which reach this lane only when #33 merges and main is merged in; this
+     package does not merge `release-finish`.
+  6. `release-finish` dbfca832 ("shard the Codium test files over four jobs", with aee5584c rewrapping one of its
+     comments) rewrites `.github/workflows/vector-codium.yml`, `packages/cloud/src/codium-ci-tests.ts` and
+     `packages/cloud/src/workflow-compliance.test.ts`, the same three files CI0 changed, and that tree has no dispatch
+     inputs (its `workflow_dispatch:` takes none). Merging main into `codium-finish` after #33 merges will conflict in
+     those files; the resolution must keep both the shard matrix and the `base` and `browser_specs` inputs with their
+     env-only wiring and tests.
+  7. `packages/engine/test/compliance/upstream-free.test.ts:148` ("a GitHub token does not take the default model from
+     an OpenAI key") is not hermetic. It sets only `GITHUB_TOKEN` and `OPENAI_API_KEY` (`:151-152`), while `Env`'s state
+     starts from `...process.env` (`packages/engine/src/env/index.ts:26`), so any other provider variable on the host
+     reaches `Provider.use.defaultModel()` (`:155`). Run locally here it picked `amazon-bedrock`, not `openai` (the file
+     11 pass, 1 fail); it passed in CI (12/0, engine (linux, shard 4/4) job 132574289024). It should clear the other
+     provider variables or run with an isolated `Env`. The file is outside this lane; this package does not fix it.
+- Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
