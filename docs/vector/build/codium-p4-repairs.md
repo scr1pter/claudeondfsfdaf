@@ -811,6 +811,49 @@ separate task: in `sanitizeLegacy`, after `taskMetadata`, redact the string fiel
 P4c's attempt to queue it as a task suggestion timed out without returning a task id, so the hand-off stays open with
 the lead.
 
+**Status, 15 Nov 2026 (Codium finish F44): P4 finding F44 closed.** `sanitizeLegacy`
+(`packages/engine/src/cli/cmd/export.ts:171`) now rebuilds `info.metadata` key by key (`:192-205`). `metadata.subagent`
+still goes through `taskMetadata` first, so F43 is unchanged, and the result is then filtered by an allow-list,
+`LIFECYCLE` (`:301`, walked by `redactLifecycle` at `:392`), which covers every field of `SubagentRecord`
+(`packages/engine/src/agent/subagent-kind.ts:100-189`; the `:50-82` cited above is stale).
+
+- **Kept as they are:** enums, ids, counts, timestamps, budgets and the slot wording, as scalars only. An object or
+  list a crafted archive puts under one of these fields is redacted as `subagent-field`.
+- **Redacted with `redact()`**, each with its own label and each array element alike: `title`, `resultSummary`,
+  `reason`, `error`, `successCriteria[]`, `ownedPaths[]`, `dependsOn[]`, `resultRef`, `batchID`, `notification.text`,
+  `mailbox[].text` and `mailbox[].sender`, `waiting.summary`, the workflow run's `title`, a workflow agent's `stage`,
+  `phase`, `item`, `key` and `node`, `fork.point` and `fork.from`, the isolation `branch`, `merged[]`, `skipped[]`,
+  `conflicts[]` and `error`, and each budget scope's `stopped.message`.
+- **Replaced whole with the `data()` marker:** `workflow.progress` and `structured.schema`.
+- **Keys the allow-list does not name** (a newer version's field, a pre-I19 `isolation.directory`, a crafted archive's
+  key): a string or object is redacted as `subagent-field`, while a number, boolean or null stays.
+- **Every other metadata key:** each string at any depth is redacted as `session-metadata` (`redactStrings`, `:408`).
+  Keys, numbers, booleans and null are kept.
+
+`run()`'s choice of what to print in the local format moved, unchanged, into the exported `localArchive`
+(`export.ts:513-516`), so a test can run the unsanitized branch. Each field keeps its type, so
+`SubagentLifecycle.read` still accepts a sanitized record. Unsanitized exports, import, the help text and the portable
+path are unchanged. `sanitizePublic` receives a `PublicSession.Archive`, which carries no metadata. Regression tests
+are in `packages/engine/test/cli/export-sanitize.test.ts`, in the new describe block "sanitizeLegacy lifecycle text":
+
+- "a lifecycle record's text never reaches a sanitized export, while its status and timestamps remain";
+- "a workflow agent's stage, phase, item, key and node are redacted";
+- "fields the allow-list does not name are redacted, whether a newer version, an older one or a client wrote them";
+- "an object or list under a kept field is redacted, since only a crafted archive holds one there";
+- "a session's own metadata loses its strings and keeps its numbers without a lifecycle record";
+- "an unsanitized export keeps the lifecycle text" (it runs `localArchive`, not the CLI; see the deviations section);
+- "the portable archive carries no session metadata".
+
+The F43 case's `title` and `unrelated.label` now expect redaction markers. Its token assertions are unchanged.
+
+- **Old source:** 11 pass, 8 fail (the four F43 cases on the two markers, and the first four new cases; the T1 leak
+  check listed all 27 private strings).
+- **Now:** 20 pass, 0 fail, after the review fixes. Before the fix for kept fields, the new "an object or list"
+  case failed alone, with all five of its strings leaked.
+
+Readings, mutations, the review fixes and the local and CI-only runs are in `codium-deviations.md`, "Codium finish:
+F44 sanitized lifecycle text (15 Nov 2026)". CI ids follow in a dated line.
+
 **F45. Token provenance is trusted only from the engine.** Not confirmed.
 
 - No serialized flag promotes a row: `sessionRow` writes both flags false whatever the event says
@@ -1528,3 +1571,7 @@ No code changed. F6, F28, F44 and O1 to O9 are not changed by this package.
 **Status, 15 Nov 2026 (Codium finish F6).** P4 finding F6 is closed (dated line under it): this build reads a stored
 cost kind it does not know as `"unknown"` and checks each budget scope on its own, with no schema change. F28, F44 and
 O1 to O9 are not changed by this package.
+
+**Status, 15 Nov 2026 (Codium finish F44).** P4 finding F44 is closed (dated line under it): a sanitized legacy export
+now redacts the lifecycle record's text through an allow-list, and redacts every string in the session's other
+metadata. F43's token stripping is unchanged. F28 and O1 to O9 are not changed by this package.

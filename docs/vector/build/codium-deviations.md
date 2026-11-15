@@ -3255,3 +3255,286 @@ under two minutes), but the run is not green under the lane rule, because of the
   `packages/core/src/review/local-result.ts:26` decodes a retained result's cost kind with its own closed literal. Both
   are recorded readings, not changed; each is a package of its own if the lead wants downgrade tolerance there.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
+
+## Codium finish: F44 sanitized lifecycle text (15 Nov 2026)
+
+- **Why.** This section closes two things without editing them:
+  - P4 finding F44 (`codium-p4-repairs.md`, the F44 paragraph);
+  - the "Privacy hand-off to the lead (F44), open" bullet of "P4 review decisions (8 Nov 2026)" above.
+  It also answers label plan §3.7 and D-2 (a raw `vector export` is a backup; `--sanitize` output is not), and the
+  `--sanitize` help text, "redact sensitive transcript and file data" (`packages/engine/src/cli/cmd/export.ts:429`).
+  At `0ee486e3`, `sanitizeLegacy` spread `metadata.subagent` through `taskMetadata`, which strips aggregate tokens
+  (F43) and nothing else. So every text field of the lifecycle record, and every other metadata key, was printed as
+  stored.
+- **Change.** One source file, `packages/engine/src/cli/cmd/export.ts`.
+  - It imports `isRecord` from `@/util/record`, as `cli/cmd/run.ts:43` does.
+  - In `sanitizeLegacy` (`:171`), `info.metadata` is rebuilt key by key (`:192-205`):
+    - `subagent` becomes `redactLifecycle(LIFECYCLE, id, taskMetadata(value))`;
+    - every other key becomes `redactStrings("session-metadata", id, value)`.
+  - The allow-list is `LIFECYCLE` (`:301`), with `BUDGET` and `SCOPE` (`:288-300`). It is walked by `redactLifecycle`
+    (`:392`). `redactStrings` is at `:408`. These sit below `withoutTokens`, which is the AGENTS "Complex Logic" layout.
+  - A session without metadata still gains no `metadata` key.
+  - Metadata without a `subagent` key is now redacted too. Before, it passed through `...info` unchanged.
+  - In the review fixes below, `run()`'s choice of what to print in the local format moved, unchanged, into the
+    exported `localArchive` (`:513-516`, called at `:505`): a native archive encoded, a legacy one as exported or
+    sanitized.
+  - Unchanged: `sanitizeLegacy`'s signature, what the unsanitized output prints (`: local`, `:515`), the native
+    encode, `sanitizePublic` (`:518`), the rest of `run()`, import, the help text (so `help-snapshots.test.ts` is
+    unaffected), `SessionArchive`, the schema, the SDK, openapi and the generated client. No generator ran. No flag or
+    setting was added.
+- **How the rule works.** A rule is `true`, a label, or a nested rule.
+  - `true` keeps a scalar field as it is: a string, number, boolean or null. An object or list under it takes the
+    `subagent-field` label (review fixes, below).
+  - A label redacts the field: a string with `redact()` (`:16`), an object with `data()` (`:20`), and each array
+    element alike, with `-<i>` added to the id.
+  - A nested rule applies field by field, to an object or to each object of an array.
+  - A key the rule does not name takes the `subagent-field` label. Its string or object is redacted. A number, boolean
+    or null under it stays. R5 records that residual.
+  - A value of the wrong shape under a nested rule, such as a string where an object belongs, is redacted the same way.
+  - `Object.hasOwn` makes a key like `constructor` take the default label and not a prototype member.
+  - The walkers copy and never mutate: the source archive is unchanged, and the tests pin that.
+- **R1, labels and what is kept.** These are the brief's "distinct kind labels".
+  - Redacted as strings:
+    - `subagent-title`, `subagent-batch`, `subagent-owned-path`, `subagent-depends-on`, `subagent-success-criterion`,
+      `subagent-result-ref`, `subagent-result-summary`, `subagent-reason` and `subagent-error`;
+    - `subagent-notification`, `subagent-mailbox-sender`, `subagent-mailbox-text` and `subagent-waiting-summary`;
+    - `subagent-workflow-title`, and `subagent-workflow-stage`, `-phase`, `-item`, `-key` and `-node`;
+    - `subagent-fork-point` and `subagent-fork-from`;
+    - `subagent-isolation-branch`, `-merged`, `-skipped`, `-conflict` and `-error`;
+    - `subagent-stop-message`.
+  - Replaced with the `data()` marker: `subagent-workflow-progress` and `subagent-structured-schema`.
+  - Kept: `kind`, `agent`, `custom`, `status`, `background` and the model ids and variant.
+  - Kept: the timestamps (`startedAt`, `completedAt`, `notification.claimedAt`, mailbox `createdAt` and `deliveredAt`,
+    `interruption.*`, `waiting.since`, `expiresAt` and `notedAt`, `stop.at` and `reports.at`).
+  - Kept: the counts and budgets (`batchIndex`, `attempt`, `usage.cost`, `toolUses`, `steps`, `unpricedSteps` and
+    `codiumSteps`, `budget`, and each scope's numbers, `kind`, `costKind` and `stopped.reason`).
+  - Kept: the engine ids (`parentSessionID`, `parentMessageID`, `callID`, `runtimeID`, `conversationID`,
+    `rootSessionID`, `requestID`, notification `launchID` and `messageID`, mailbox `id`, `waiting.requestID`, scope ids,
+    the workflow agent's `runID`, `fork.callID` and `structured.schemaHash`).
+  - Kept: `effort`, `modelSource`, `owner`, `stop.by`, `mailbox[].delivery` and `from`, `fork.warm`, and the isolation
+    `mode`, `state` and counts.
+  - Fields the brief lists are redacted even where the engine writes an id:
+    - `batchID` is `${sessionID}:${callID ?? messageID}` (`packages/engine/src/tool/task.ts:1283`);
+    - `fork.point` and `fork.from` are message ids (`tool/task.ts:1308`, `:1523`);
+    - the mailbox sender is a task or session id.
+  - So a batch scope's `id` keeps the same value that `batchID` loses. That duplicates an id. It does not leak text.
+- **R2, objects.** `workflow.progress` and `structured.schema` are replaced whole with the `data()` marker. Their leaf
+  strings are not walked.
+  - A JSON schema's property names, and the progress record's stage ids and keys, are text held in keys.
+  - `data()` is how this file already treats every free-form object: text, reasoning and tool metadata, and tool input.
+  - `SubagentLifecycle.read` still accepts both, since `progress` and `schema` are `Record<string, unknown>` there
+    (`packages/engine/src/tool/subagent-lifecycle.ts:173-178` and `:208-230`). T1 asserts it.
+- **R3, the session's other metadata keys.**
+  - Each string at any depth is redacted as `session-metadata`, with id `-<i>` for each array element. Keys, numbers,
+    booleans and null are kept.
+  - The hand-off offered a second option: replace the whole value with `data("session-metadata", ...)`. It was
+    considered and rejected, for two reasons. The string walk keeps numeric root fields, such as F43's root
+    `usage.tokens` 7 and 8, which the F43 case pins. It also keeps the metadata's shape for an import.
+  - Residual: the names of a client's own keys stay.
+  - Engine-written root keys lose their string values too: `vector.kind` and `vector.parentSessionId`, which
+    `packages/engine/src/task/limits.ts:179` and `:711-712` read, and VectorScope's `vectorscopeLocalRun` record
+    (`packages/engine/src/review/local-run.ts:30`). So a sanitized export imported elsewhere no longer counts as a
+    parallel-agent root, and its local review record no longer decodes. A sanitized export is not a backup (D-2), so
+    this is the brief's choice, and is recorded here.
+- **R4, judgement calls.**
+  - `isolation.directory` is not in the type (`subagent-kind.ts:187`, I19), but a record written before I19 can hold
+    it. The default rule redacts it, and T3 pins that.
+  - `slotReason` is kept. It is only ever the engine constants `SLOT_REASON` (`packages/engine/src/task/limits.ts:50`)
+    and `LAUNCHING_REASON` (`tool/task.ts:106`).
+  - Each scope's `stopped.message` is redacted. Either choice was open, and this is the stricter one. `stopMessage`
+    (`packages/core/src/spend-guard.ts:220-249`) is engine wording, but its loop branch names the looping tool, which
+    can be a user-named MCP tool. `stopped.reason` keeps what stopped it, and a string marker still decodes in
+    `Task.BudgetScope` and `DelegatedScope`.
+- **R5, who writes the record, and the residuals.**
+  - Clients set top-level metadata only. `PATCH /session/:id` goes through `SubagentLifecycle.setPublicMetadata`
+    (`httpapi/handlers/session.ts:299`, then `subagent-lifecycle.ts:402-415`). That call keeps the stored `subagent`
+    record and ignores the client's copy (F46).
+  - So the record is engine-written. The exceptions are an imported archive, which can be crafted, and a record from
+    an older or newer version. That is why the allow-list goes by key and not by who wrote the value.
+  - A kept field keeps a scalar whatever it says. Each one the engine writes is an enum, id, number, timestamp or
+    engine constant. So a string a crafted archive puts under one, such as free text under `status`, `agent`,
+    `callID` or `slotReason`, stays. An object or list under a kept field is redacted (review fixes, below).
+  - Numbers, booleans and null under a key the rule does not name are kept. So a numeric aggregate that a future
+    version adds outside `taskMetadata`'s list would survive. `taskMetadata` (`cli/cmd/run/usage-output.ts:24-55`)
+    stays the only guard for token figures, here and in run JSON (`toolForOutput`). Mutation m5 shows this: without
+    it, `usage.total` 987686 and `tokensOwnOnly` survive while `usage.tokens` becomes a marker.
+  - An alternative, dropping unknown numbers inside `usage`, was not taken. It needs a per-object default
+    in the rule. A new aggregate field would also need adding to `taskMetadata` for run JSON anyway.
+- **R6, the portable path.** It is pinned with a native fixture as well as a legacy one.
+  - `export.ts:495` sends `--public`, and `--sanitize` on a native archive, through `shares.preview` and then
+    `sanitizePublic`.
+  - `publicArchive` (`packages/core/src/share/archive.ts:118`) builds only `version`, `engine`, `title` and
+    `messages` (`:239-244`), decoded with `Schema.decodeUnknownSync(PublicSession.Archive)`
+    (`packages/schema/src/public-session.ts:74-80`).
+  - A native session's `Session.Info` (`packages/schema/src/session.ts:30-65`) has no metadata field at all.
+  - T6 decodes a small native archive whose input `info` carries the lifecycle record. It asserts that the decoded
+    `info` has no `metadata` key, and that the legacy and native portable archives have exactly those four keys and
+    no private string. No change was needed there.
+- **R7, the one existing assertion that changed.** The F43 case "a lifecycle record's aggregate tokens never reach a
+  sanitized export: %s" (`export-sanitize.test.ts:348-373`) pinned `title: "child"` and `unrelated.label: "kept"` in
+  its `toEqual`. That is the text F44 must remove.
+  - They now expect `[redacted:subagent-title:ses_export]` and `[redacted:session-metadata:ses_export]`.
+  - Every token assertion is unchanged: `987654`, `987686`, `tokensOwnOnly`, `info.tokens` and the unchanged source.
+  - This is how the brief's "existing F43 cases still pass unchanged" is read: their token assertions pass unchanged,
+    and the exact expectation is tightened, not loosened.
+- **R8, unsanitized output and import.** T5 runs `localArchive` (`export.ts:513-516`), which `run()` prints for an
+  export in the local format (`:505`). Without `--sanitize` it returns the decoded legacy archive itself, with the whole
+  record and every private string. With `--sanitize` it returns none of those strings, and the archive it read is
+  unchanged.
+  - Before the review fixes, T5 only checked the decoded archive and that `sanitizeLegacy` leaves it unchanged. It did
+    not run the branch, so a change that sanitized the unsanitized branch would still have passed.
+  - T5 is still a unit test. It does not run `run()`'s portable or local choice (`:495`) or its stdout write.
+  - The CLI round trip in `packages/engine/test/cli/import.test.ts` starts `vector serve`, so it is not run locally.
+    Its sanitized-export case (`:224`) checks only the exit code and the privacy marker. It runs only in the lead's
+    test.yml. No more is claimed. A CLI-level assertion there is For the lead item 3.
+- **Plan review.** Before the build, a review of the plan raised eleven points. All were accepted and none was
+  rejected. Each answer is recorded where it applies:
+  - the numbers, booleans and null kept under a key the rule does not name (R5);
+  - who writes the lifecycle record (R5);
+  - a pre-I19 `isolation.directory` (R4, pinned by T3);
+  - that T5 is a unit-level stand-in (R8);
+  - a native fixture for the portable path (R6);
+  - whole-object assertions with no cast: every T1-T4 assertion is a `toEqual` or `toMatchObject` on the whole metadata
+    object, with no cast, and engine typecheck passed on the test file;
+  - the privacy gaps outside the lifecycle record (For the lead item 1);
+  - redacting or keeping `stopped.message` (R4);
+  - what the CI receipt is ("Only in CI");
+  - the engine-written root keys that lose their strings (R3);
+  - formatting: prettier ran from the local install (`./node_modules/.bin/prettier`, a node script, through
+    `vector-serial` except for the first `--write` of the test file). Nothing was fetched.
+- **Tests** (`packages/engine/test/cli/export-sanitize.test.ts`), written before the source change. The new fixtures:
+  - `TEXT` holds 27 private strings, one for each text field, plus a client string. Each appears once in the archive.
+  - `steered()` builds a full `SubagentRecord` after a user steer, with usage tokens 987654 and total 987686, beside a
+    root `parentSessionId` and a client `note`.
+  - `leaked()` lists the `TEXT` values found in a value's JSON.
+
+  The new describe block is "sanitizeLegacy lifecycle text":
+  - T1 (`:421`): "a lifecycle record's text never reaches a sanitized export, while its status and timestamps remain".
+    It checks for no leaked string, and no 987654 or 987686. Its exact `toEqual` covers every kept field and every
+    marker. `SubagentLifecycle.read` still accepts the record, and the source is unchanged.
+  - T2 (`:565`): the workflow agent variant.
+  - T3 (`:617`): unnamed keys, a pre-I19 `isolation.directory`, and extra keys inside `notification` and `model`.
+    `futureCount` 5 is kept.
+  - T7 (`:656`), added in the review fixes: "an object or list under a kept field is redacted, since only a crafted
+    archive holds one there".
+  - T4 (`:693`): metadata with no `subagent` key, including `vector.kind`. It also checks that no `subagent` key is
+    added.
+  - T5 (`:718`): R8.
+  - T6 (`:730`): R6.
+
+  Results:
+  - **Old source** (tests changed, source not): 11 pass, 8 fail. The failures were the four F43 cases on the two
+    markers, and T1 to T4; T1's leak check listed all 27 strings. T5 and T6 passed before and after.
+  - **New source:** 19 pass, 0 fail, 99 `expect()` calls.
+  - **Mutations,** each restored by an edit:
+
+    | Mutation | Pass | Fail | Failing cases |
+    | --- | --- | --- | --- |
+    | m1, `title: true` | 14 | 5 | the four F43 cases, T1 |
+    | m2, unnamed keys kept | 18 | 1 | T3 |
+    | m3, other metadata passed through | 13 | 6 | the four F43 cases on `unrelated.label`, T1, T4 |
+    | m4, a labelled object walked leaf by leaf instead of `data()` | 17 | 2 | T1, T3 |
+    | m5, no `taskMetadata` | 14 | 5 | the four F43 cases, T1 on 987686 (see R5) |
+    | m6, `stopped.message` kept | 18 | 1 | T1 |
+
+  - After the restores and a final comment-only edit to the rule's comment: 19 pass, 0 fail again.
+- **Ran locally.** Each run went through `vector-serial`, from `packages/engine`:
+  - `bun test --timeout 30000 test/cli/export-sanitize.test.ts`: red, green, the six mutations, green twice more.
+  - `bun typecheck`, twice: it passed.
+  - `prettier --check` on both `.ts` files passed, and `git diff --check` is clean.
+  - `git diff --stat origin/codium-finish -- packages/schema packages/sdk packages/client/src/generated
+    packages/client/src/generated-effect packages/web/public/config.json` is empty.
+  - Not run in this build step, which neither commits nor pushes: the full `bun turbo typecheck --concurrency=2` and
+    the api-tree `bun typecheck --project ../../tsconfig.json`. Both are pre-push steps.
+  - Not run locally: `test/cli/import.test.ts`, which starts `vector serve`.
+- **Only in CI.**
+  - The Vector Codium dispatch on `codium-finish` with `base="origin/release-finish"` and no `browser_specs`. The
+    Codium tests job selects the changed `export-sanitize.test.ts`. Its receipt is that file in the picker list plus
+    the "Codium: N/N test files passed" summary. The per-file line is cited only if the visible log tail shows it.
+  - Green means every job passes except "Run HttpApi exerciser gates", which may show exactly the 4
+    `/experimental/review-memory` MISS lines and no FAIL. That log must be re-read before the run is called green.
+  - typecheck.yml on the same ref.
+  - No vector-hosted-ci.yml run, since no hosted file changed.
+  - No CI id exists yet. A dated line under F44 and in this section adds the run and job ids. If no later lane commit
+    is planned, a `docs(codium)` record commit carries them.
+- **Review fixes (15 Nov 2026).** A review of this package raised six non-blocking findings. Two pairs repeat each
+  other, so there are four issues: what a kept field may hold, T5 not running the unsanitized branch, the record's
+  "three things" and its unexplained references, and one stale line number. All four were fixed. One optional step,
+  narrowing `slotReason`, was not taken, and one suggestion, a CLI-level check, is For the lead item 3.
+  - **A kept field keeps only a scalar.** Before, a `true` rule returned any value, so an object or list a crafted
+    archive put under `status`, `slotReason`, `callID`, `isolation.mode` or `reports.at` was printed as it was. Now
+    `redactLifecycle` (`export.ts:392-394`) sends an object or array under a `true` rule to the `subagent-field`
+    label:
+    - an object becomes the `data()` marker;
+    - each element of an array is redacted alike: a string with `redact()`, an object with `data()`, and a number,
+      boolean or null kept.
+    - So `reports.at`, the engine's list of numbers, is unchanged. No `true` field the engine writes holds an object or
+      list (`subagent-kind.ts:100-189`, `Task.Isolation` in `packages/schema/src/task.ts:89-101`, `RunBudget.Info`), so
+      a real record sanitizes exactly as before. T1's exact `toEqual` still passes.
+    - Both findings offered this. One redacted every non-scalar; the other redacted only plain objects and kept arrays
+      of primitives. The first was taken: it also redacts a list of strings, and keeps `reports.at`'s numbers.
+    - A string under a kept field still stays (R5).
+  - **`slotReason` is not narrowed to the two engine constants.** That optional step was not taken.
+    `LAUNCHING_REASON` lives in `packages/engine/src/tool/task.ts:106`. So the check would either import the task tool
+    module into the export command, or move the constant out of this package's two files. It would also close one
+    kept string, while `status`, `agent`, `callID` and the other kept fields keep theirs. R5 records the residual.
+  - **T5 now runs the unsanitized branch.** `run()`'s local-format choice moved, unchanged, into the exported
+    `localArchive` (`export.ts:513-516`; `run()` calls it at `:505`). T5 asserts that `localArchive(source)` and
+    `localArchive(source, false)` return the archive itself (`toBe`), with all 27 strings. It also asserts that
+    `localArchive(source, true)` returns none of them, and that the source is unchanged. A CLI-level check in
+    `import.test.ts` is For the lead item 3.
+  - **Record fixes.**
+    - "three things" became "two things".
+    - The plan review's numbered points are now described in words.
+    - The planning note's report on F6's CI is replaced with the jobs and log this package read (For the lead item 2).
+    - The `...msg.info` spread is cited at `:232`.
+    - Every `export.ts` and test line number in this section, and in F44's dated line, was refreshed after the edit.
+  - **Tests.** T7 (`export-sanitize.test.ts:656`) puts an object under `status`, `slotReason` and `isolation.mode`, a
+    string and a number under `callID`, and an object among `reports.at`'s numbers. It checks that no string leaks and
+    that each value gets its marker. It also checks that `reports.at`'s 35, `callID`'s 7, `isolation.state` and `files`,
+    and `startedAt` stay.
+    - Before the source fix (T7 added, `redactLifecycle` unchanged): 19 pass, 1 fail. T7 failed, and its leak check
+      listed all five strings.
+    - After: 20 pass, 0 fail, 104 `expect()` calls, twice.
+    - Mutation m7, `localArchive` always sanitizing: 19 pass, 1 fail (T5).
+    - Mutation m8, a `true` rule returning any value: 19 pass, 1 fail (T7).
+    - Each mutation was restored from a copy, and the restored file was diffed against that copy.
+    - T5 now imports `localArchive`, so this test file no longer loads on the pre-F44 source. The old-source red run
+      above was taken before that import existed.
+  - **Ran locally,** through `vector-serial` from `packages/engine`: the test file (red, green, m7, m8, green),
+    `bun typecheck` (passed), `prettier --check` on both `.ts` files (passed) and `git diff --check` (clean). The full
+    turbo typecheck and the api-tree typecheck are pre-push steps, not run in this fix step. Nothing else changed in
+    "Only in CI".
+- **For the lead.** These are not fixed here.
+  1. **F44b, in the same function: `sanitizeLegacy` still passes these through.**
+     - The assistant message's `error` (`packages/schema/src/v1/session.ts:504`) and `structured` answer (`:530`),
+       through the spread at `export.ts:250`.
+     - The tool error state's `error` text (`export.ts:127-131` spreads `part.state`).
+     - Retry parts (the API error's message, response body, headers and metadata) and any other unhandled part type,
+       whole, through the `default` branch (`:164-165`).
+     - The user message's `format` JSON schema, through `...msg.info` (`:232`).
+     - `info.path`, the relative sub-directory (`session.ts:615`), through `const info = { ...data.info }`
+       (`export.ts:181`).
+     - `info.share`, with the share URL (`session.ts:637`).
+     - `info.permission`, whose rule patterns can hold paths (`session.ts:649`).
+     - `info.workspaceID` (`session.ts:613`).
+
+     Each is a privacy reading of `--sanitize` outside F44's lifecycle scope.
+  2. **F6's CI receipt is missing from the records.** F6's Vector Codium run 43674652525, on `5f19b0c9`, completed with
+     conclusion failure (`get_workflow_run`). This package's review fixes read its jobs (`list_workflow_jobs`) and the
+     failing job's log tail (`get_job_logs`, 140 lines):
+     - Every job succeeded except "Codium tests" (job 132692043010). "Hosted services / Hosted tests" and the hosted
+       typecheck matrix were skipped, as the lane's `services_only` call skips them.
+     - In job 132692043010, "Run the Codium test files" and "Check generated client" succeeded. Only "Run HttpApi
+       exerciser gates" failed.
+     - That step's visible tail shows no FAIL line and exactly the four baseline MISS lines:
+       `DELETE /experimental/review-memory/previews/{previewId}`, `GET /experimental/review-memory`,
+       `POST /experimental/review-memory/confirm` and `POST /experimental/review-memory/prepare`. Its summary is
+       `pass=359 fail=0 skip=0 missing=4 extra=0`.
+
+     By the lane's baseline rule the run counts as green. F6's dated CI line is still not in `codium-p4-repairs.md` or
+     in its deviations section. This package does not add it.
+  3. **A CLI-level export check.** T5 runs `localArchive`, not the CLI. `packages/engine/test/cli/import.test.ts`
+     could assert that a plain `vector export` output contains a child's title and mailbox text, and a `--sanitize`
+     output does not. It starts `vector serve`, so it runs only in CI. It is left for the lead or a later package.
+- Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { SessionArchive } from "@vectordevai/core/share/archive"
-import { sanitizeLegacy } from "../../src/cli/cmd/export"
+import { localArchive, sanitizeLegacy } from "../../src/cli/cmd/export"
+import { SubagentLifecycle } from "../../src/tool/subagent-lifecycle"
 
 const tokens = (input: number) => ({ input, output: 20, reasoning: 3, cache: { read: 4, write: 5 } })
 
@@ -97,6 +98,162 @@ function lifecycle(proof: { tokensOwnOnly?: boolean }) {
     unrelated: { label: "kept", usage: { tokens: 8 } },
   }
 }
+
+// Text the user, a model or a client put in a child's lifecycle record. Each value appears once in the archive, so a
+// leak names its field.
+const TEXT = {
+  title: "Audit the payments module for the March incident",
+  resultSummary: "The ledger flush races the refund writer",
+  reason: "Stopped after the refund table looked corrupt",
+  error: "Provider said the account for alice was suspended",
+  criterionA: "Every refund row has a matching ledger row",
+  criterionB: "No migration touches the invoices table",
+  ownedPath: "src/payments/ledger-owned.ts",
+  dependsOn: "task-depends-on-schema-audit",
+  resultRef: "/home/alice/.vector/output/child-result.txt",
+  batchID: "batch-for-the-refund-audit",
+  notification: "Child finished: the refund writer needs a lock",
+  steer: "Steer: look at the refund table before the ledger",
+  sender: "sender-named-in-a-crafted-archive",
+  waiting: "Asks whether it may read the production dump",
+  workflowTitle: "Nightly refund reconciliation workflow",
+  progress: "Stage reading the refund exports",
+  schema: "The refund audit verdict for the finance team",
+  forkPoint: "fork-point-from-a-crafted-archive",
+  forkFrom: "fork-from-from-a-crafted-archive",
+  branch: "vector/refund-audit-branch",
+  merged: "src/payments/merged-refunds.ts",
+  skipped: "src/payments/skipped-refunds.ts",
+  conflict: "src/payments/conflicting-refunds.ts",
+  isolationError: "Merge failed on the refund writer",
+  stopMessage: "Paused a repeating loop: `refund_lookup` returned the same result",
+  delegatedStop: "Subagent spend ceiling reached for the refund audit",
+  client: "A client's note about the refund customer",
+}
+
+const BUDGET = { usd: 2, steps: 40, warnAt: 0.8, unpricedSteps: 5 }
+
+// A child's whole lifecycle record (SubagentRecord) after a user steer, beside a client's own metadata keys.
+function steered() {
+  return {
+    subagent: {
+      kind: "subagent",
+      agent: "general",
+      custom: false,
+      title: TEXT.title,
+      parentSessionID: "ses_parent",
+      parentMessageID: "msg_parent",
+      callID: "call_launch",
+      batchIndex: 1,
+      batchID: TEXT.batchID,
+      attempt: 2,
+      runtimeID: "6f1c2a9e-0b7d-4c1e-9a55-3f0d2b7c8e41",
+      ownedPaths: [TEXT.ownedPath],
+      dependsOn: [TEXT.dependsOn],
+      successCriteria: [TEXT.criterionA, TEXT.criterionB],
+      resultRef: TEXT.resultRef,
+      resultSummary: TEXT.resultSummary,
+      reason: TEXT.reason,
+      notification: {
+        text: TEXT.notification,
+        state: "completed",
+        launchID: "launch_1",
+        messageID: "msg_claim",
+        claimedAt: 40,
+      },
+      budgetScopes: [
+        {
+          kind: "child",
+          id: "ses_child",
+          budget: BUDGET,
+          spentUsd: 0.5,
+          steps: 3,
+          unpricedSteps: 0,
+          codiumSteps: 1,
+          costKind: "priced",
+          stopped: { reason: "loop", message: TEXT.stopMessage },
+        },
+      ],
+      budget: BUDGET,
+      mailbox: [
+        {
+          id: "mail_1",
+          sender: TEXT.sender,
+          text: TEXT.steer,
+          delivery: "steer",
+          createdAt: 20,
+          deliveredAt: 21,
+          from: "user",
+        },
+      ],
+      model: { providerID: "lmstudio", modelID: "test-model", variant: "high" },
+      background: true,
+      status: "completed",
+      startedAt: 10,
+      completedAt: 50,
+      usage: {
+        cost: 0.04,
+        tokens: tokens(987654),
+        total: 987686,
+        toolUses: 2,
+        steps: 3,
+        unpricedSteps: 1,
+        codiumSteps: 1,
+      },
+      error: TEXT.error,
+      conversationID: "ses_parent",
+      rootSessionID: "ses_root",
+      requestID: "req_1",
+      effort: "high",
+      modelSource: "call",
+      fork: { point: TEXT.forkPoint, callID: "call_fork", from: TEXT.forkFrom, warm: true },
+      structured: {
+        schema: { type: "object", description: TEXT.schema },
+        schemaHash: "hash_1",
+        attempts: 1,
+        valid: true,
+      },
+      delegatedScope: {
+        id: "req_1",
+        budget: BUDGET,
+        spentUsd: 0.25,
+        steps: 2,
+        unpricedSteps: 0,
+        codiumSteps: 0,
+        stopped: { reason: "cap", message: TEXT.delegatedStop },
+      },
+      owner: { pid: 4242, boot: 7 },
+      interruption: { at: 30, cause: "crash", reportedAt: 31, resumedAt: 32, dismissedAt: 33 },
+      waiting: { kind: "question", requestID: "que_1", since: 25, expiresAt: 60, notedAt: 26, summary: TEXT.waiting },
+      stop: { by: "user", at: 45 },
+      reports: { at: [35, 36], wakes: 1 },
+      slotReason: "Waiting for a free subagent slot",
+      isolation: {
+        mode: "worktree",
+        state: "changed",
+        branch: TEXT.branch,
+        files: 2,
+        additions: 9,
+        deletions: 4,
+        merged: [TEXT.merged],
+        skipped: [TEXT.skipped],
+        conflicts: [TEXT.conflict],
+        error: TEXT.isolationError,
+      },
+      workflow: {
+        role: "run",
+        title: TEXT.workflowTitle,
+        revision: 3,
+        quiet: false,
+        progress: { stages: [{ id: "stage_1", title: TEXT.progress, done: 1 }] },
+      },
+    },
+    parentSessionId: "ses_parent",
+    note: { text: TEXT.client, count: 3 },
+  }
+}
+
+const leaked = (value: unknown) => Object.values(TEXT).filter((text) => JSON.stringify(value).includes(text))
 
 describe("sanitizeLegacy Codium usage", () => {
   test("current mixed archives keep partitioned own totals and omit Codium message and step tokens", () => {
@@ -199,13 +356,13 @@ describe("sanitizeLegacy Codium usage", () => {
     const sanitized = sanitizeLegacy(source)
     expect(sanitized.info.metadata).toEqual({
       subagent: {
-        title: "child",
+        title: "[redacted:subagent-title:ses_export]",
         agent: "general",
         status: "completed",
         usage: { cost: 0.04, toolUses: 2, steps: 3, codiumSteps: 1 },
       },
       usage: { tokens: 7 },
-      unrelated: { label: "kept", usage: { tokens: 8 } },
+      unrelated: { label: "[redacted:session-metadata:ses_export]", usage: { tokens: 8 } },
     })
     expect(JSON.stringify(sanitized)).not.toContain("987654")
     expect(JSON.stringify(sanitized)).not.toContain("987686")
@@ -258,4 +415,345 @@ test("unknown proof and missing message identity omit figures without inventing 
   expect(output.messages[0]?.parts[0]).not.toHaveProperty("tokens")
   expect(output.messages[1]?.info).toHaveProperty("tokens")
   expect(JSON.stringify(raw)).toBe(before)
+})
+
+describe("sanitizeLegacy lifecycle text", () => {
+  test("a lifecycle record's text never reaches a sanitized export, while its status and timestamps remain", () => {
+    const source = archive({ metadata: steered() })
+    const before = structuredClone(source)
+    const sanitized = sanitizeLegacy(source)
+    expect(leaked(sanitized)).toEqual([])
+    expect(JSON.stringify(sanitized)).not.toContain("987654")
+    expect(JSON.stringify(sanitized)).not.toContain("987686")
+    expect(sanitized.info.metadata).toEqual({
+      subagent: {
+        kind: "subagent",
+        agent: "general",
+        custom: false,
+        title: "[redacted:subagent-title:ses_export]",
+        parentSessionID: "ses_parent",
+        parentMessageID: "msg_parent",
+        callID: "call_launch",
+        batchIndex: 1,
+        batchID: "[redacted:subagent-batch:ses_export]",
+        attempt: 2,
+        runtimeID: "6f1c2a9e-0b7d-4c1e-9a55-3f0d2b7c8e41",
+        ownedPaths: ["[redacted:subagent-owned-path:ses_export-0]"],
+        dependsOn: ["[redacted:subagent-depends-on:ses_export-0]"],
+        successCriteria: [
+          "[redacted:subagent-success-criterion:ses_export-0]",
+          "[redacted:subagent-success-criterion:ses_export-1]",
+        ],
+        resultRef: "[redacted:subagent-result-ref:ses_export]",
+        resultSummary: "[redacted:subagent-result-summary:ses_export]",
+        reason: "[redacted:subagent-reason:ses_export]",
+        notification: {
+          text: "[redacted:subagent-notification:ses_export]",
+          state: "completed",
+          launchID: "launch_1",
+          messageID: "msg_claim",
+          claimedAt: 40,
+        },
+        budgetScopes: [
+          {
+            kind: "child",
+            id: "ses_child",
+            budget: BUDGET,
+            spentUsd: 0.5,
+            steps: 3,
+            unpricedSteps: 0,
+            codiumSteps: 1,
+            costKind: "priced",
+            stopped: { reason: "loop", message: "[redacted:subagent-stop-message:ses_export-0]" },
+          },
+        ],
+        budget: BUDGET,
+        mailbox: [
+          {
+            id: "mail_1",
+            sender: "[redacted:subagent-mailbox-sender:ses_export-0]",
+            text: "[redacted:subagent-mailbox-text:ses_export-0]",
+            delivery: "steer",
+            createdAt: 20,
+            deliveredAt: 21,
+            from: "user",
+          },
+        ],
+        model: { providerID: "lmstudio", modelID: "test-model", variant: "high" },
+        background: true,
+        status: "completed",
+        startedAt: 10,
+        completedAt: 50,
+        usage: { cost: 0.04, toolUses: 2, steps: 3, unpricedSteps: 1, codiumSteps: 1 },
+        error: "[redacted:subagent-error:ses_export]",
+        conversationID: "ses_parent",
+        rootSessionID: "ses_root",
+        requestID: "req_1",
+        effort: "high",
+        modelSource: "call",
+        fork: {
+          point: "[redacted:subagent-fork-point:ses_export]",
+          callID: "call_fork",
+          from: "[redacted:subagent-fork-from:ses_export]",
+          warm: true,
+        },
+        structured: {
+          schema: { redacted: "subagent-structured-schema:ses_export" },
+          schemaHash: "hash_1",
+          attempts: 1,
+          valid: true,
+        },
+        delegatedScope: {
+          id: "req_1",
+          budget: BUDGET,
+          spentUsd: 0.25,
+          steps: 2,
+          unpricedSteps: 0,
+          codiumSteps: 0,
+          stopped: { reason: "cap", message: "[redacted:subagent-stop-message:ses_export]" },
+        },
+        owner: { pid: 4242, boot: 7 },
+        interruption: { at: 30, cause: "crash", reportedAt: 31, resumedAt: 32, dismissedAt: 33 },
+        waiting: {
+          kind: "question",
+          requestID: "que_1",
+          since: 25,
+          expiresAt: 60,
+          notedAt: 26,
+          summary: "[redacted:subagent-waiting-summary:ses_export]",
+        },
+        stop: { by: "user", at: 45 },
+        reports: { at: [35, 36], wakes: 1 },
+        slotReason: "Waiting for a free subagent slot",
+        isolation: {
+          mode: "worktree",
+          state: "changed",
+          branch: "[redacted:subagent-isolation-branch:ses_export]",
+          files: 2,
+          additions: 9,
+          deletions: 4,
+          merged: ["[redacted:subagent-isolation-merged:ses_export-0]"],
+          skipped: ["[redacted:subagent-isolation-skipped:ses_export-0]"],
+          conflicts: ["[redacted:subagent-isolation-conflict:ses_export-0]"],
+          error: "[redacted:subagent-isolation-error:ses_export]",
+        },
+        workflow: {
+          role: "run",
+          title: "[redacted:subagent-workflow-title:ses_export]",
+          revision: 3,
+          quiet: false,
+          progress: { redacted: "subagent-workflow-progress:ses_export" },
+        },
+      },
+      parentSessionId: "[redacted:session-metadata:ses_export]",
+      note: { text: "[redacted:session-metadata:ses_export]", count: 3 },
+    })
+    // Each field keeps its type, so the record still reads as a lifecycle record after an import.
+    expect(SubagentLifecycle.read({ metadata: sanitized.info.metadata })).toMatchObject({
+      status: "completed",
+      startedAt: 10,
+      completedAt: 50,
+      mailbox: [{ delivery: "steer", createdAt: 20 }],
+      notification: { state: "completed", launchID: "launch_1" },
+      structured: { schemaHash: "hash_1", attempts: 1 },
+      waiting: { kind: "question", since: 25 },
+      workflow: { role: "run", revision: 3 },
+    })
+    expect(source).toEqual(before)
+  })
+
+  test("a workflow agent's stage, phase, item, key and node are redacted", () => {
+    const text = [
+      "Stage for the refund agent",
+      "Phase for the refund agent",
+      "Item for the refund agent",
+      "key-for-the-refund-agent",
+      "Node for the refund agent",
+    ]
+    const sanitized = sanitizeLegacy(
+      archive({
+        metadata: {
+          subagent: {
+            ...steered().subagent,
+            workflow: {
+              role: "agent",
+              runID: "wfr_1",
+              stage: text[0],
+              phase: text[1],
+              item: text[2],
+              key: text[3],
+              node: text[4],
+              round: 2,
+              verifier: true,
+              final: false,
+              verified: true,
+              output: "structured",
+            },
+          },
+        },
+      }),
+    )
+    expect(text.filter((value) => JSON.stringify(sanitized).includes(value))).toEqual([])
+    expect(sanitized.info.metadata).toMatchObject({
+      subagent: {
+        workflow: {
+          role: "agent",
+          runID: "wfr_1",
+          stage: "[redacted:subagent-workflow-stage:ses_export]",
+          phase: "[redacted:subagent-workflow-phase:ses_export]",
+          item: "[redacted:subagent-workflow-item:ses_export]",
+          key: "[redacted:subagent-workflow-key:ses_export]",
+          node: "[redacted:subagent-workflow-node:ses_export]",
+          round: 2,
+          verifier: true,
+          final: false,
+          verified: true,
+          output: "structured",
+        },
+      },
+    })
+  })
+
+  test("fields the allow-list does not name are redacted, whether a newer version, an older one or a client wrote them", () => {
+    const record = steered().subagent
+    const text = [
+      "A newer version's note about the refund",
+      "A newer version's object label",
+      "An extra notification string",
+      "A model note a client added",
+      "/home/alice/.vector/worktrees/refund",
+    ]
+    const sanitized = sanitizeLegacy(
+      archive({
+        metadata: {
+          subagent: {
+            ...record,
+            futureNote: text[0],
+            futureObject: { label: text[1], n: 1 },
+            futureCount: 5,
+            notification: { ...record.notification, extra: text[2] },
+            model: { ...record.model, note: text[3] },
+            // A record written before I19 can still hold the isolation's absolute directory.
+            isolation: { ...record.isolation, directory: text[4] },
+          },
+        },
+      }),
+    )
+    expect(text.filter((value) => JSON.stringify(sanitized).includes(value))).toEqual([])
+    expect(sanitized.info.metadata).toMatchObject({
+      subagent: {
+        futureNote: "[redacted:subagent-field:ses_export]",
+        futureObject: { redacted: "subagent-field:ses_export" },
+        // The allow-list redacts text. A number under an unnamed key stays; taskMetadata guards token figures (F43).
+        futureCount: 5,
+        notification: { extra: "[redacted:subagent-field:ses_export]", state: "completed" },
+        model: { note: "[redacted:subagent-field:ses_export]", modelID: "test-model" },
+        isolation: { directory: "[redacted:subagent-field:ses_export]", mode: "worktree", files: 2 },
+      },
+    })
+  })
+
+  test("an object or list under a kept field is redacted, since only a crafted archive holds one there", () => {
+    const record = steered().subagent
+    const text = [
+      "A note a crafted archive hid under status",
+      "A label a crafted archive hid under slotReason",
+      "A string a crafted archive listed under callID",
+      "A note a crafted archive hid under the isolation mode",
+      "A note a crafted archive listed among the report times",
+    ]
+    const sanitized = sanitizeLegacy(
+      archive({
+        metadata: {
+          subagent: {
+            ...record,
+            status: { note: text[0] },
+            slotReason: { label: text[1], count: 1 },
+            callID: [text[2], 7],
+            isolation: { ...record.isolation, mode: { note: text[3] } },
+            reports: { at: [35, { note: text[4] }], wakes: 1 },
+          },
+        },
+      }),
+    )
+    expect(text.filter((value) => JSON.stringify(sanitized).includes(value))).toEqual([])
+    expect(sanitized.info.metadata).toMatchObject({
+      subagent: {
+        status: { redacted: "subagent-field:ses_export" },
+        slotReason: { redacted: "subagent-field:ses_export" },
+        callID: ["[redacted:subagent-field:ses_export-0]", 7],
+        isolation: { mode: { redacted: "subagent-field:ses_export" }, state: "changed", files: 2 },
+        // A list of numbers under a kept field, the engine's own shape for reports.at, keeps its numbers.
+        reports: { at: [35, { redacted: "subagent-field:ses_export-1" }], wakes: 1 },
+        startedAt: 10,
+      },
+    })
+  })
+
+  test("a session's own metadata loses its strings and keeps its numbers without a lifecycle record", () => {
+    const sanitized = sanitizeLegacy(
+      archive({
+        metadata: {
+          note: "A client's private note",
+          count: 2,
+          flags: { background: true, empty: null },
+          ids: ["client-private-id"],
+          vector: { kind: "parallel-agent", parentSessionId: "ses_parent" },
+        },
+      }),
+    )
+    expect(sanitized.info.metadata).toEqual({
+      note: "[redacted:session-metadata:ses_export]",
+      count: 2,
+      flags: { background: true, empty: null },
+      ids: ["[redacted:session-metadata:ses_export-0]"],
+      vector: {
+        kind: "[redacted:session-metadata:ses_export]",
+        parentSessionId: "[redacted:session-metadata:ses_export]",
+      },
+    })
+    expect(sanitized.info.metadata).not.toHaveProperty("subagent")
+  })
+
+  test("an unsanitized export keeps the lifecycle text", () => {
+    // run() prints localArchive's result for a legacy session, so without --sanitize it prints the archive as exported.
+    const source = archive({ metadata: steered() })
+    expect(source.info.metadata).toEqual(steered())
+    expect(localArchive(source)).toBe(source)
+    expect(localArchive(source, false)).toBe(source)
+    expect(leaked(localArchive(source, false))).toEqual(Object.values(TEXT))
+    // With --sanitize the same branch prints none of it, and the archive it read is unchanged.
+    expect(leaked(localArchive(source, true))).toEqual([])
+    expect(leaked(source)).toEqual(Object.values(TEXT))
+  })
+
+  test("the portable archive carries no session metadata", () => {
+    const native = Schema.decodeUnknownSync(SessionArchive.Native)({
+      format: "vector-session",
+      version: 1,
+      engine: "v2",
+      info: {
+        id: "ses_native",
+        projectID: "project_export",
+        title: "Native session title",
+        cost: 0,
+        tokens: tokens(1),
+        time: { created: 1, updated: 2 },
+        location: { directory: "/private/repo" },
+        metadata: steered(),
+      },
+      messages: [],
+    })
+    // A native session has no metadata field, so a native archive cannot carry one.
+    expect("metadata" in native.info).toBe(false)
+    const portable = [
+      SessionArchive.publicArchive(archive({ metadata: steered() })),
+      SessionArchive.publicArchive(native),
+    ]
+    expect(portable.map((value) => Object.keys(value).sort())).toEqual([
+      ["engine", "messages", "title", "version"],
+      ["engine", "messages", "title", "version"],
+    ])
+    expect(leaked(portable)).toEqual([])
+  })
 })
