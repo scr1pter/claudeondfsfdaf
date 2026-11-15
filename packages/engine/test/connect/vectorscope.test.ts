@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect, Exit, Layer, Option } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
+import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Global } from "@vectordevai/core/global"
@@ -34,6 +35,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
+import { InstanceStore } from "@/project/instance-store"
 import { ReviewGit } from "@/review/git"
 import { ReviewModel, type ResolvedModel } from "@/review/model"
 import { Review } from "@/review/run"
@@ -43,7 +45,7 @@ import { Session } from "@/session/session"
 import { SessionSummary } from "@/session/summary"
 import type { TaskPromptOps } from "@/tool/task"
 import type { Tool } from "@/tool/tool"
-import { disposeAllInstances, TestInstance, trustWorkspace } from "../fixture/fixture"
+import { disposeAllInstances, requireInstance, TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -201,6 +203,7 @@ const it = testEffect(
       RuntimeFlags.node,
       Config.node,
       Git.node,
+      CrossSpawnSpawner.node,
     ]),
     [[RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true })]],
   ),
@@ -1638,6 +1641,111 @@ describe("whether VectorScope can review", () => {
         expect(calls).toHaveLength(0)
       }),
     instance,
+  )
+})
+
+// A project reached through a link. The instance store opens the real folder, so a link to the project or to a folder
+// above it changes nothing. A worktree kept as written does not: TaskIsolation.loadWork loads a task worktree under the
+// data folder that way, and that folder may pass through a link. ConnectGit.use refuses such a worktree, so VectorScope
+// lists itself unavailable there, and the hub refuses its review with the same words before any model is checked.
+describe("a project opened through a link", () => {
+  const supported = process.platform === "linux" ? it.instance : it.instance.skip
+  const LINKED = "Open this project through its real folder path to use connected reviews."
+
+  // A repository at <outer>/project with src/list.ts committed and then changed, and a link to it or to <outer>.
+  const linked = (to: "folder" | "parent") =>
+    Effect.gen(function* () {
+      reset()
+      const outer = yield* tmpdirScoped()
+      const real = path.join(outer, "project")
+      yield* write(real, {
+        "vector.json": JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...instance.config }),
+        "src/list.ts": LIST,
+      })
+      yield* git(real, "init", "-q")
+      yield* git(real, "config", "core.fsmonitor", "false")
+      yield* git(real, "config", "commit.gpgsign", "false")
+      yield* git(real, "config", "user.email", "test@vector.test")
+      yield* git(real, "config", "user.name", "Test")
+      yield* git(real, "add", "-A")
+      yield* git(real, "commit", "-q", "-m", "base")
+      yield* write(real, { "src/list.ts": LIST_CHANGED })
+      yield* trust(real)
+      const link = path.join(yield* tmpdirScoped(), "link")
+      yield* Effect.promise(() => fs.symlink(to === "folder" ? real : outer, link, "dir"))
+      return { real, opened: to === "folder" ? link : path.join(link, "project") }
+    })
+
+  const requesterIn = Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const requester = yield* sessions.create({ title: "Requester" })
+    yield* say(requester.id, "review my changes")
+    return { sessions, hub: yield* ConnectHub.Service, requester }
+  })
+
+  for (const to of ["folder", "parent"] as const)
+    supported(
+      `opened through a link to its ${to === "folder" ? "folder" : "parent folder"}, the instance is the real folder, VectorScope lists ready and the review runs`,
+      () =>
+        Effect.gen(function* () {
+          const f = yield* linked(to)
+          const store = yield* InstanceStore.Service
+          yield* store.provide(
+            { directory: f.opened },
+            Effect.gen(function* () {
+              const ctx = yield* requireInstance
+              expect([ctx.directory, ctx.worktree]).toEqual([f.real, f.real])
+              const { hub, requester } = yield* requesterIn
+              const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+              expect(listed?.state, listed?.reason).toBe("ready")
+              const run = yield* hub.run({
+                request: review(requester.id, ctx.directory),
+                call: { ...asker(), promptOps: recorder().ops },
+              })
+              expect(run.result?.state, run.result?.summary).toBe("completed")
+              expect(calls).toHaveLength(1)
+              expect(calls[0]!.files.map((file) => file.path)).toEqual(["src/list.ts"])
+              expect(calls[0]!.parentID).toBe(requester.id)
+            }),
+          )
+        }),
+      instance,
+      60_000,
+    )
+
+  supported(
+    "an instance whose worktree is a link, as a task worktree under a linked data folder opens, lists VectorScope unavailable, and the hub refuses its review with the same reason",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* requireInstance
+        const f = yield* linked("folder")
+        const store = yield* InstanceStore.Service
+        yield* store.provide(
+          { directory: f.opened, worktree: f.opened, project: home.project },
+          Effect.gen(function* () {
+            const ctx = yield* requireInstance
+            expect([ctx.directory, ctx.worktree]).toEqual([f.real, f.opened])
+            const { sessions, hub, requester } = yield* requesterIn
+            const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+            expect(listed?.state).toBe("unavailable")
+            expect(listed?.reason).toBe(LINKED)
+            const { ops, prompts } = recorder()
+            const { asks, ask } = asker()
+            const run = yield* hub.run({ request: review(requester.id, ctx.directory), call: { ask, promptOps: ops } })
+            expect(run.result?.state).toBe("refused")
+            expect(run.result?.refusal).toBe("unavailable")
+            expect(run.result?.verdict).toBe("not-reviewed")
+            expect(run.result?.summary).toContain(LINKED)
+            expect(resolved).toEqual([])
+            expect(calls).toEqual([])
+            expect(prompts).toEqual([])
+            expect(asks).toEqual([])
+            expect(yield* sessions.children(requester.id)).toEqual([])
+          }),
+        )
+      }),
+    instance,
+    60_000,
   )
 })
 

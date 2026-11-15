@@ -715,3 +715,103 @@ Source: `connect-finish` at `8e547175`. This package changes `packages/engine/sr
     - connected.test.ts: 6 pass, 25 expect() calls. agent-dashboard-model.test.ts: 41 pass, 103 expect() calls.
     - `bun typecheck` passed in packages/engine and packages/app. The full typecheck (`TURBO_CACHE_DIR=/home/user/wt/cn/.turbo/cache bun turbo typecheck --concurrency=2`) passed, 27 of 27 tasks; turbo replayed 24 of them from the worktree's local cache.
   - *CI:* none is claimed. The Linux engine shard of test.yml is the authority for the Linux-gated cases.
+
+## 2026-11-15 — C2 remainder: projects opened through a link (CN-06)
+
+Source: `connect-finish` at `fc0ec0c3` (CN-05). This package changes `packages/engine/src/connect/git.ts`, `packages/engine/src/connect/adapters/vectorscope.ts` and one constant in `packages/core/src/review/model-evidence.ts`. Its tests are in `packages/engine/test/connect/vectorscope.test.ts` and `packages/engine/test/connect/git.test.ts`. It also updates this log, connected-workspace-handoff.md and the spec's status line. It changes no `hub.ts`, route, ledger, schema, generated file, flag, workflow, public page, `review/**` logic or task isolation code. The only new exports are `ConnectGit.LINKED` and `ConnectGit.canonical`. The package was built uncommitted and landed through the lane's commit gate as `fix(connect): report symlinked project paths honestly`.
+
+- **Confirm first.** The review finding (connect:correctness-security #2) says `ConnectGit.use` refuses when `realpath(directory) !== path.resolve(directory)` (`connect/git.ts:319-320` at `fc0ec0c3`), while VectorScope's `describe()` reports ready on Linux. The tests were written first and run against the `fc0ec0c3` sources.
+  - *The instance directory is canonical whenever its folder exists at load.* InstanceStore `load`, `reload` and `withFresh` all run `FSUtil.resolve` first (`project/instance-store.ts:161`, `:210`, `:353`). That is `realpathSync`, which falls back to the path as written only on ENOENT (core `fs-util.ts:228-236`). The HTTP middleware (`server/routes/instance/httpapi/middleware/instance-context.ts:31`), the CLI (`cli/effect-cmd.ts:88`) and the TUI all load through the store.
+  - *`ConfigPaths.canonicalScope` is not what makes it canonical.* It runs only with the flag on (`config/config.ts:1914`), and it canonicalises a copy of the scope for config discovery and trust (`config/paths.ts:13-24`). `InstanceContext` stays as it was, so `ctx.worktree` keeps whatever the store was given.
+  - *A discovered worktree is canonical too.* It is Git's `--show-toplevel`, run from the real folder (core `git.ts:188-204`). With Git 2.43.0, toplevel prints the real path when run through a link.
+  - *Every connect caller sends the instance's own directory.* That covers `tool/connect.ts:206` and `:270`, and `packages/engine/src/connect/owner.ts:347`, `:428`, `:437`, `:476` and `:631` (each from `InstanceState.context`). So the finding's scenario, a project opened through a link, never reaches the equality check. The vectorscope cases "opened through a link to its folder" and "… to its parent folder" passed at `fc0ec0c3`: the instance is the real folder, VectorScope lists ready, and the review completes.
+  - *The real mismatch is a worktree kept as written.* `TaskIsolation.loadWork` loads `{ directory: record.directory, worktree: record.directory, project }` (`task/isolation.ts:1415`). `record.directory` is under `Global.Path.data` (`:274`), and that data folder may pass through a link (the comment at `:657`). The store canonicalises only the directory, so `ctx.worktree` stays lexical. In that instance `describe()` said ready, while `use()` refused through core `metadataHead`, which refuses a root that is not its own realpath (`read-only-git.ts:1103-1107`). The refusal used the generic "This review's Git reads cannot be inspected safely, so Vector stopped it." At `fc0ec0c3`, the vectorscope case "an instance whose worktree is a link …" failed because the member was `ready`, and the git case failed at its second row because the refusal was generic.
+  - *Why the fix was built.* The brief's stop condition, that instance directories are always canonical, holds for the directory but not for the worktree. The brief's "Otherwise" covers "the instance directory or worktree". Its "Done when" asks that the member state match what a review would do, and in this instance it did not. So the worktree half is in scope, and section 2 of the plan was built rather than stopping at a test-only commit.
+- **What changed.**
+  - *`connect/git.ts`.* `LINKED` (:305) holds the brief's sentence. `canonical(...folders)` (:311) realpaths each folder and compares it with `path.resolve`; it rejects when a folder is missing. In `use()` (:337), when the root is the instance's worktree (no task root) and it is not its own real path, the review is refused as `unavailable` with `LINKED`. This happens before `active()` and before any Git read. A `directory` that is not its own real path keeps the generic refusal (:333), and so does the hub's verified task root. The `catch` (:359) passes a `Connect.Refusal` through and maps anything else to the generic refusal, as before. The refusal conditions are unchanged, because core already refused a non-canonical root. Only the wording changes, and only for that one case.
+  - *`adapters/vectorscope.ts` `describe()`* (:380-381). After the Linux check, VectorScope is listed `unavailable` with `LINKED` when `ctx.directory` or the root (`ctx.worktree`, or the directory for a non-Git instance) is not its own real path. The check runs before `plan()`, so no model is resolved. It uses `Effect.tryPromise`, so a folder that has gone fails as a typed error into the existing `catchCause`, which gives the generic "Connect could not check VectorScope's review model." (plan critique point 10).
+  - *The hub needed no change.* Its gate (`hub.ts:922-927`) turns that state into "VectorScope is not ready: Open this project through its real folder path to use connected reviews.". It does so before the `connect` question, any model resolution or ConnectGit.
+  - *The pin.* `REVIEW_PIPELINE_SOURCES` is now `99d748c262992c83`, the digest core `test/review/model-evidence.test.ts` printed. The old digest passed with the `fc0ec0c3` adapter source, so the pin was green before this change. `REVIEW_PIPELINE_REVISION` stays 4, because `describe()` decides whether a review can start, not what a review finds or posts. This is an ownership deviation under the rule in "CI repair after CN-04": spec §7.1 gives core `src/review/**` to VectorScope, and this is the one edit the pin asks for from whoever changes a pinned source. The commit body and the PR description name this re-pin as required by core `test/review/model-evidence.test.ts`, say that `REVIEW_PIPELINE_REVISION` stays 4, and ask the VectorScope owner to acknowledge the deviation and decide whether the revision goes up. The edit stays limited to the digest constant.
+- **What it closes.** The symlinked-path part of C2 (review connect:correctness-security #2; v2-complete-plan §4.1 F4/C2 and §5 step 12), on Linux. With the platform part fixed on 2026-11-14, C2 is closed on Linux for instance reviews; a `task`-target review under a linked data folder is still refused generically (unscheduled, Observed (1)). Following CN-01's practice, the plan is not edited.
+- **Decisions.**
+  1. *Links are never resolved and admitted.* Read rules match paths as written, so admitting the resolved folder would widen them; that needs its own design. Mutation M7 shows the tests catch it.
+  2. *The new wording appears only for the stable shape* (plan critique point 1). The store opens an instance at its real folder, so when `use()` sees a non-canonical instance `directory`, the folder was swapped after it loaded. directory-live.test.ts's `retarget()` does exactly that during consent. Telling the user to open "its real folder path" there would point them at the swapped-in checkout. So that case keeps the generic refusal, and so does the hub's verified task root. The tests are git row 1 with M9, and git row 3 with M5.
+  3. *For a task-worktree instance the advice cannot be acted on* (plan critique point 2). The reachable case is a TaskIsolation work instance whose worktree lies under a data folder reached through a link, for example a linked home or `$XDG_DATA_HOME`. The user never opened that folder, and reopening the project does not help, because the cause is the linked data folder. The brief sets the reason's text, so `describe()` and `use()` use it as given, and the member state and the refusal still match. A reason that names the data folder is an unscheduled follow-up for the lead (Observed (4)).
+  4. *`describe()`'s directory half is defence in depth.* No InstanceStore path gives a non-canonical directory for a folder that exists at load, so M3 (checking only the root) survives.
+  5. *The "parent folder" row builds its own parent* (plan critique point 6). The repository is made inside a dedicated `tmpdirScoped()` folder, and that folder is linked, not the shared temp root.
+  6. *No directory-live assertion was added* (plan critique point 1's option). One was tried: in "replacing the selected canonical directory during consent cannot authorize another checkout", the summary must not contain the `LINKED` wording. A probe showed that the case ends `failed`, refusal `not-allowed`, with the directory ledger's "The directory review result could not be saved within its receipt limits." That happened both with the fix and under M9, so no ConnectGit wording ever reaches that summary. The assertion could never fail, so it was removed, and directory-live.test.ts is unchanged. Git row 1 tests `use()`'s wording for a swapped folder directly.
+- **Plan critique.** All ten points were taken.
+  - Point 1 (major) narrowed the `use()` wording (Decision 2). In git row 1, `use(link)` under a canonical instance expects the generic refusal, and row 2 expects `LINKED`. M9 was added. The optional directory-live assertion was tried and dropped (Decision 6).
+  - Point 2 (major): Decision 3, and the `use()` comment now separates the hub's verified task root from a task-worktree instance.
+  - Point 3: `test/server/httpapi-connect.test.ts` and `test/connect/loop.test.ts` joined the regression list. `test/cli/connected.test.ts` only formats results (`formatConnectedResult`) and never goes through the hub, so it was not run.
+  - Point 4: the canonicalScope and ENOENT points are in Confirm first.
+  - Point 5: `connect/owner.ts` is cited by its full path.
+  - Point 6: Decision 5.
+  - Point 7: git row 3 maps `gitCommonDirectory: metadata.commonDirectory` and `tip: metadata.head`. It also calls `use(test.directory, …, root)`, so the canonical directory isolates the task-root branch.
+  - Point 8: decided in Confirm first.
+  - Point 9: Observed (2) is marked as read from code.
+  - Point 10: `Effect.tryPromise`.
+- **Observed and unscheduled.**
+  1. A `task`-target review whose task worktree lies under a linked data folder is still refused with the generic message. The hub sends `placed.directory` (`hub.ts:1332`), and `describe()` runs in the requester's instance, so it cannot see the task's worktree.
+  2. *Read from code, not run.* A non-Git instance (worktree `/`) lists VectorScope by its model state, because `describe()` plans at `ctx.directory`. `ConnectGit.use` refuses it at `connect/git.ts:328` (`root === "/"`). The member state and a review would then differ in the same way this package fixes, but no test confirms it. Suggested follow-up for the lead, outside CN-06: a test for a non-Git instance and, if it confirms the mismatch, `describe()` returning unavailable when `ctx.worktree === "/"`.
+  3. The read-deny alias gap (`cf2373c4`, integration-runtime-boundaries.md) stays open. CN-06 neither resolves nor admits a link, so it does not close the gap.
+  4. A clearer reason for the task-worktree instance (Decision 3).
+  5. The swapped-folder directory review above is reported as "could not be saved within its receipt limits". That is a ledger message, and it does not say the folder changed. CN-06 does not touch that path. It sits next to C6's ledger work (CN-08, CN-09) but is not scheduled there.
+- **Held.** Q1 and Q6 stay open. Every flag stays off. Off Linux, `describe()` still reports the platform reason first, and the new cases skip.
+- **Mutations.** They ran on `connect/git.ts` sha256 `458e3f6dcb76d2e9ec430f3665631d2517759fa82d5d94d262c5800753542277` and `adapters/vectorscope.ts` `5bcbea70d5ae53ec429536a375439707f004b9d7d9d0870c5753ea3bbf94f342`. After review round one `connect/git.ts` is `222c5734d50d8fb426e42d930059df074c0c1040ac2f2d2a611f1e3588c05cc8`; only `canonical()`'s body changed, its result is the same for every input, and the mutations were not re-run on it (the git and vectorscope files were, in Receipts). `adapters/vectorscope.ts` is unchanged. Each mutation ran with `-t` on the named block or case. The saved source was then copied back, and `sha256sum -c` passed after every one (logs in `mut/`). The vectorscope link block holds rows (a) folder, (a) parent and (b). The git case holds rows 1 to 3, then the `entered` and control checks.
+
+    | Mutation | Result |
+    | --- | --- |
+    | M1: no `describe()` check | Fails vectorscope (b), where the member is `ready` |
+    | M2: `describe()` checks only the directory | Fails vectorscope (b) |
+    | M3: `describe()` checks only the root | Survives: the directory half is defence in depth (Decision 4) |
+    | M4: generic wording for an instance worktree | Fails git row 2 |
+    | M5: `LINKED` for the hub's task root too | Fails git row 3 |
+    | M6: `catch: () => refusal()` restored | Fails git row 2 |
+    | M7: resolve and admit (no `realpath` equality check) | Fails git row 1, where the body ran and the message is `undefined` |
+    | M8: `use()` checks the directory, not the root | Fails git row 2 |
+    | M9: `LINKED` for a non-canonical directory | Fails git row 1. It survives the dropped directory-live assertion (Decision 6) |
+- **Review round one.** The package review raised seven findings, none blocking.
+  1. *Taken.* `canonical()` compared through an index into a second array and needed `folders[index]!`. It now compares inside the map, `(await Promise.all(folders.map(async (folder) => (await realpath(folder)) === path.resolve(folder)))).every(Boolean)`, so the `no-unnecessary-type-assertion` warning on it is gone. The function grew by one line, so the later `connect/git.ts` lines moved down by one, and the citations in this entry and the handoff follow.
+  2. *Kept, with a reason.* The link block's `const { hub, requester } = yield* requesterIn` and `const { sessions, hub, requester } = yield* requesterIn` stay. They follow the file's own pattern for its setup helper, `const { directory, hub, requester } = yield* setup()` (`vectorscope.test.ts:366`, `:551`, `:754` and about twenty more), and the `recorder()` and `asker()` destructuring beside them. Switching this one block to dot access would make it the odd one out.
+  3. *Taken (two findings).* The `model-evidence.ts` re-pin stays, limited to the digest constant. The pin paragraph above now says what the commit body and the PR description must say about it.
+  4. *Taken as advised.* The non-Git instance stays out of CN-06. Observed (2) now carries the suggested follow-up.
+  5. *Taken.* "C2 is closed on Linux" overstated the fix. What it closes, the handoff bullet and the spec's status line now say C2 is closed on Linux for instance reviews, and that a `task`-target review under a linked data folder is still refused generically (unscheduled).
+  6. *Taken.* Receipts now say which cases need an unprivileged uid.
+- **Receipts.** Every `bun` command ran through `/home/user/.tools/vector-serial`, one test file at a time, with `--timeout 30000`. Engine files ran under `/tmp/vector-v2/connect/as-ci.sh`, which gives a private mount namespace, uid 1000, `CI=true` and Git 2.43.0. Logs are in `/tmp/vector-v2/connect/cn06/`. The vectorscope cases "opened through a link to its folder" and "… to its parent folder" expect a completed review, so they need an unprivileged uid, as CI runs. Run as root without the wrapper, ReadOnlyGit will not run under uid 0 (core `read-only-git.ts:42` and `:506`), so both are refused with the generic message. That is the environment, not a regression.
+  - *Confirm first, against the `fc0ec0c3` sources.* The vectorscope link block gave 2 pass and 1 fail: (b)'s member was `ready`. The git case gave 1 fail, because row 2 received the generic refusal; rows 1 and 3 already matched.
+  - *After the fix:*
+    - The link block: 3 pass.
+    - `test/connect/vectorscope.test.ts` in full: 40 pass, 1 skip, 0 fail, 392 expect() calls, 264.6 s. The skip is the off-Linux case.
+    - `test/connect/git.test.ts` in full: 12 pass, 0 fail, 126 expect() calls, 66.1 s.
+    - Core `test/review/model-evidence.test.ts`: 30 pass after the re-pin. Before the re-pin it gave 1 fail, printing the digest. With the `fc0ec0c3` adapter it passed on the old digest.
+  - *Regressions, one file each, through the wrapper:*
+    - 14 pass: `worktree-target.test.ts` (task roots).
+    - 13 pass: `fix.test.ts`.
+    - 7 pass: `directory-live.test.ts`. It ran once with the dropped assertion, and the file is now as at `fc0ec0c3`.
+    - 12 pass: `background.test.ts`.
+    - 22 pass: `after-run.test.ts`.
+    - 2 pass: `loop.test.ts`.
+    - 10 pass: `test/server/httpapi-connect.test.ts`, the production adapter assembly.
+    - 19 pass: `directory.test.ts`.
+    - 8 pass: `command.test.ts`.
+    - 3 pass: `context.test.ts`.
+    - `hub.test.ts`: 47 pass, 1 fail. The failure is "MCP servers in the registry > missing snapshot capability lists configuration without probing MCP" (`hub.test.ts:1745`), which listed only `mcp:remote`. It fails the same way under the wrapper with the `fc0ec0c3` sources, and it passes on the CN-06 sources when run without the wrapper. So it comes from the wrapper's environment, not from this change, and no VectorScope code is on its path.
+  - *Static checks:*
+    - `bun typecheck` passed in packages/engine and packages/core.
+    - `prettier --check` passed on the five code files, and `git diff --check` is clean.
+    - oxlint on the four engine files gave 0 errors and 94 warnings. Three of them were on changed lines, all `no-unnecessary-type-assertion` on the `!` index pattern the neighbouring code uses (`connect/git.ts:313`, `vectorscope.test.ts:1707-1708`). Review round one removed the `connect/git.ts` one (below).
+    - The full typecheck (`TURBO_CACHE_DIR=/home/user/wt/cn/.turbo/cache bun turbo typecheck --concurrency=2`) passed, 27 of 27 tasks, 25 of them from the worktree's local cache.
+  - *After review round one* (`connect/git.ts` `222c5734…`; logs in `/tmp/vector-v2/connect/cn06/round1/`):
+    - `test/connect/git.test.ts` in full, through the wrapper: 12 pass, 0 fail, 126 expect() calls, 83.0 s.
+    - `test/connect/vectorscope.test.ts` in full, through the wrapper: 40 pass, 1 skip, 0 fail, 392 expect() calls, 227.3 s.
+    - Core `test/review/model-evidence.test.ts`: 30 pass, 0 fail, on the `99d748c262992c83` pin. `connect/git.ts` is not a pinned source, and `adapters/vectorscope.ts` did not change in this round.
+    - `bun typecheck` passed in packages/engine.
+    - oxlint on the four engine files: 0 errors and 93 warnings. The two left on changed lines are `vectorscope.test.ts:1707-1708`, the `calls[0]!` pattern the file uses throughout.
+    - `prettier --check` passed on `connect/git.ts`, and `git diff --check` is clean.
+  - *Commit gate* (the same `connect/git.ts` and `adapters/vectorscope.ts` hashes as round one; logs in `/tmp/vector-v2/connect/cn06/gate/`):
+    - `test/connect/git.test.ts` in full, through the wrapper: 12 pass, 0 fail, 126 expect() calls, 99.1 s.
+    - `test/connect/vectorscope.test.ts` in full, through the wrapper: 40 pass, 1 skip, 0 fail, 392 expect() calls, 245.8 s.
+    - Core `test/review/model-evidence.test.ts`: 30 pass, 0 fail.
+    - `bun typecheck` passed in packages/engine and packages/core. The full typecheck passed, 27 of 27 tasks, 26 of them from the worktree's local cache.
+  - *CI:* none is claimed. The Linux engine shard of test.yml is the authority for the Linux-gated cases.

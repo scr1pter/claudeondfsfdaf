@@ -14,6 +14,7 @@ import { ConnectHub } from "@/connect/hub"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
 import { ConnectGit } from "@/connect/git"
 import { Config } from "@/config/config"
+import { InstanceRef } from "@/effect/instance-ref"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
@@ -23,7 +24,7 @@ import { Session } from "@/session/session"
 import { MessageID, PartID } from "@/session/schema"
 import { SessionSummary } from "@/session/summary"
 import type { TaskPromptOps } from "@/tool/task"
-import { disposeAllInstances, TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
+import { disposeAllInstances, requireInstance, TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
 import { ownerReviewModel } from "../fixture/review-model"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
@@ -806,4 +807,53 @@ local(
       expect(models).toBe(1)
     }),
   { git: true },
+)
+
+local(
+  "an instance worktree reached through a link is refused with what to do before any Git read, and a swapped folder or a task's worktree keeps the generic refusal",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const instance = yield* requireInstance
+      const LINKED = "Open this project through its real folder path to use connected reviews."
+      const link = path.join(yield* tmpdirScoped(), "project")
+      yield* Effect.promise(() => fs.symlink(test.directory, link, "dir"))
+      let entered = 0
+      const enter = () =>
+        Effect.sync(() => {
+          entered++
+        })
+      const message = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.exit,
+          Effect.map((exit) => {
+            const error = exit._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined
+            return error instanceof Error ? error.message : undefined
+          }),
+        )
+      const metadata = yield* Effect.promise(() => ReadOnlyGit.metadataHead(test.directory))
+      const task = {
+        directory: link,
+        gitDirectory: metadata.gitDirectory,
+        gitCommonDirectory: metadata.commonDirectory,
+        tip: metadata.head,
+      }
+      expect([
+        // The instance store opened the real folder, so a folder that is a link now was swapped after it loaded.
+        yield* message(ConnectGit.use(link, enter)),
+        // A worktree kept as written, as a task worktree under a linked data folder is.
+        yield* message(
+          ConnectGit.use(test.directory, enter).pipe(
+            Effect.provideService(InstanceRef, { ...instance, worktree: link }),
+          ),
+        ),
+        // The hub's verified task root: reopening the project would not change it.
+        yield* message(ConnectGit.withTask(task, (root) => ConnectGit.use(test.directory, enter, root))),
+      ]).toEqual([REFUSED, LINKED, REFUSED])
+      expect(entered).toBe(0)
+      yield* ConnectGit.use(test.directory, (selected) => selected.check().pipe(Effect.andThen(enter())))
+      expect(entered).toBe(1)
+    }),
+  { git: true },
+  60_000,
 )

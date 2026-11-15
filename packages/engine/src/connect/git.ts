@@ -301,6 +301,19 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
   return { git, check, failed: () => blocked }
 }
 
+/** VectorScope's member reason and a review's refusal when an instance's worktree is reached through a link. */
+export const LINKED = "Open this project through its real folder path to use connected reviews."
+
+/**
+ * Whether each folder is its own real path. Connect never resolves a link to read at the folder behind it: read rules
+ * match paths as written, so admitting the resolved folder would widen them. Rejects when a folder is missing.
+ */
+export async function canonical(...folders: string[]) {
+  return (await Promise.all(folders.map(async (folder) => (await realpath(folder)) === path.resolve(folder)))).every(
+    Boolean,
+  )
+}
+
 /** Only the admitted instance or the hub's live verified-task capability supplies the root. */
 export const use = <A, E, R>(
   directory: string,
@@ -318,6 +331,10 @@ export const use = <A, E, R>(
       try: async () => {
         const admitted = await realpath(directory)
         requireRead(admitted === path.resolve(directory))
+        // An instance loads at its real folder, so a folder that is a link now was swapped since and gets the generic
+        // refusal. Its worktree may be kept as written (a task worktree under a linked data folder), which core refuses
+        // below; say why first. The hub's verified task root keeps the generic refusal.
+        if (!placed && !(await canonical(root))) throw new Connect.Refusal({ code: "unavailable", message: LINKED })
         requireRead(active())
         const metadata = await ReadOnlyGit.metadataHead(root)
         if (placed)
@@ -339,7 +356,7 @@ export const use = <A, E, R>(
         }
         return { repository, selected: selected(repository, admitted, active) }
       },
-      catch: () => refusal(),
+      catch: (error) => (error instanceof Connect.Refusal ? error : refusal()),
     })
     return yield* Effect.acquireUseRelease(
       acquire,
