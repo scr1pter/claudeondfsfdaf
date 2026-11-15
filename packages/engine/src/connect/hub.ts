@@ -9,7 +9,6 @@ import { ConnectFrame } from "@vectordevai/core/connect/frame"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
@@ -1661,7 +1660,6 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
 
       const members: Interface["members"] = Effect.fn("ConnectHub.members")(function* (input) {
         const state = yield* InstanceState.get(ledger)
-        const ctx = yield* InstanceState.context
         const described = yield* Effect.forEach(adapters, describeSafely)
         const local = (yield* config.localPolicy()).enabled
         const agentList = yield* agents.list()
@@ -1680,7 +1678,6 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             entry && typeof entry === "object" && "type" in entry && entry.type === "remote" ? [name] : [],
           ),
         )
-        const githubAgent = yield* Effect.promise(() => isFile(path.join(ctx.worktree, WORKFLOW_FILE)))
         const tasks = input?.sessionID
           ? yield* desktop
               .list({ sessionID: input.sessionID, descendants: true })
@@ -1698,7 +1695,6 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           mcp: status,
           remoteMcp,
           ...(input?.tools ? { tools: input.tools } : {}),
-          githubAgent,
           ...(tasks ? { desktop: { workspaces: active("workspace:"), swarm: active("swarm:") } } : {}),
           local,
         })
@@ -2189,12 +2185,6 @@ async function exists(target: string) {
 async function isDirectory(target: string) {
   return stat(target)
     .then((info) => info.isDirectory())
-    .catch(() => false)
-}
-
-async function isFile(target: string) {
-  return stat(target)
-    .then((info) => info.isFile())
     .catch(() => false)
 }
 

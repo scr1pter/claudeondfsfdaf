@@ -9,7 +9,8 @@ import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 // in the HTTP view, and a few facts about this directory) and this file turns them into one list. Nothing here keeps
 // a copy, calls a model or reaches the network. Members that already have a tool are listed with that tool as their
 // way in; only members with no tool take hand-offs through connect (VectorScope, through its adapter). Hands is listed
-// by its own list-only adapter, with its tool as its way in.
+// by its own list-only adapter, with its tool as its way in, and the GitHub agent by its own list-only adapter
+// (connect/adapters/github-agent.ts) from this repository's workflow file, with nothing to reach.
 
 type MemberInput = Connect.Member
 
@@ -53,8 +54,6 @@ export interface Sources {
   readonly remoteMcp?: ReadonlySet<string>
   /** `ToolRegistry.ids()`, in the HTTP view only. Without it, members reached through a tool are left out. */
   readonly tools?: readonly string[]
-  /** Whether this repository has the GitHub agent's workflow file. */
-  readonly githubAgent?: boolean
   /** Desktop work going now for a session, from DesktopTasks. */
   readonly desktop?: { readonly workspaces: number; readonly swarm: number }
   /** Vector Local is on. */
@@ -131,7 +130,6 @@ export function compose(sources: Sources): Connect.Member[] {
     ...Object.entries(sources.mcp).map(([name, status]) =>
       mcpMember(name, status, sources.remoteMcp?.has(name) === true),
     ),
-    githubAgentMember(sources.githubAgent === true),
   ]
   const seen = new Set<string>()
   return candidates.flatMap((candidate) => {
@@ -314,21 +312,6 @@ function mcpMember(name: string, source: McpSource, remote: boolean): MemberInpu
   // MCP refuses a server Vector Local does not allow with this reason, so it reads as off.
   if (source.error.startsWith("Off in Vector Local")) return { ...base, state: "off", reason: words(source.error, 500) }
   return { ...base, state: "unavailable", reason: words(source.error || "It could not connect.", 500) }
-}
-
-function githubAgentMember(installed: boolean): MemberInput {
-  const base = {
-    id: "github-agent",
-    kind: "agent" as const,
-    title: "@vector on GitHub",
-    summary: "Answers @vector on pull requests from your own GitHub Actions. Connect never posts to GitHub.",
-    owner: "vector-at-mention" as const,
-    place: "your-cloud" as const,
-    reach: "none" as const,
-  }
-  return installed
-    ? { ...base, state: "ready" }
-    : { ...base, state: "not-installed", reason: "Not set up in this repository (.github/workflows/vector.yml)." }
 }
 
 function clip(value: string, max: number) {

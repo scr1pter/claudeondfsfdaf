@@ -1672,12 +1672,13 @@ describe("members", () => {
       expect(byID.get("agent:build")?.reach).toBe("ui")
       expect(byID.get("research")?.reach).toBe("research")
       expect(byID.get("tasks")?.state).toBe("ready")
-      // The hub under test is built over fakes (nodeWith), so Hands' adapter is not listed here
-      // (test/connect/hands.test.ts lists it), and its tool never becomes a plain tool row.
+      // The hub under test is built over fakes (nodeWith), so neither Hands' adapter nor the GitHub agent's is listed
+      // here (test/connect/hands.test.ts and github-agent.test.ts list them), and Hands' tool never becomes a plain
+      // tool row. The GitHub agent has no other source.
       expect(byID.has("computer")).toBe(false)
       expect(byID.has("tool:computer")).toBe(false)
       expect(byID.get("browser")?.state).toBe("unavailable")
-      expect(byID.get("github-agent")?.state).toBe("not-installed")
+      expect(byID.has("github-agent")).toBe(false)
       expect(byID.get("tool:read")?.reach).toBe("read")
       // Without the tool ids (outside the HTTP view), members reached through a tool are left out.
       const untooled = yield* hub.members()
@@ -1699,13 +1700,22 @@ describe("members", () => {
         state: "ready",
         reach: "computer",
       }
+      const github: Connect.Member = {
+        id: "github-agent",
+        kind: "agent",
+        title: "@vector on GitHub",
+        summary: "",
+        owner: "vector-at-mention",
+        place: "your-cloud",
+        state: "ready",
+        reach: "none",
+      }
       const sources = {
-        adapters: [member("vectorscope", ["read"], { sendsTo: "provider:openai" }), member("other"), hands],
+        adapters: [member("vectorscope", ["read"], { sendsTo: "provider:openai" }), member("other"), hands, github],
         agents: [],
         skills: [],
         workflows: [{ name: "ship", title: "Ship", issues: [{ message: "bad stage" }] }],
         mcp: { remote: { status: "failed", error: "Off in Vector Local: not listed" }, docs: { status: "connected" } },
-        githubAgent: true,
         local: true,
       } satisfies ConnectMembers.Sources
       const list = ConnectMembers.compose({ ...sources, tools: ["vector_cloud", "computer"] })
