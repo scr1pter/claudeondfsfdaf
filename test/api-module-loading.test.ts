@@ -51,6 +51,9 @@ test("fresh Node ESM callers, run tokens and readiness initialize in either impo
     "api/_lib/cloud-agents-entitlement.ts",
     "api/_lib/model-plan-models.ts",
     "api/_lib/cloud-agents-readiness.ts",
+    // The ledger reaches the run token (entitlement -> ... -> model-plan-caller) before its own consts are set.
+    "api/_lib/cloud-agents-ledger.ts",
+    "api/_lib/model-plan-gateway-hooks.ts",
   ]
   const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-import-"))
   try {

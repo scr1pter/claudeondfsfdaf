@@ -3121,3 +3121,15 @@ under two minutes), but the run is not green under the lane rule, because of the
      11 pass, 1 fail); it passed in CI (12/0, engine (linux, shard 4/4) job 132574289024). It should clear the other
      provider variables or run with an isolated `Env`. The file is outside this lane; this package does not fix it.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
+- 15 Nov 2026, post-push CI and For the lead item 1. Vector Codium run 43665227929 (codium-finish 7c479924): Codium
+  tests job 132662998717 stopped at "Codium: 119/120" on `packages/web/test/model-plan-gateway-hooks.test.ts` with the
+  recorded ReferenceError, and its exerciser step showed only the four review-memory MISS lines (pass=359 fail=0);
+  every other job passed, Codium browser specs job 132662998928 among them. typecheck.yml run 43665230627 passed. The
+  same ReferenceError fails `model-plan-gateway-hooks.test.ts` and `cloud-agents-ledger.test.ts` on `release-finish`
+  (Vector Codium run 43656784344, Codium tests (shard 3/4) job 132636969121), so it is not this lane's and main, which
+  has neither `cloud-agents-ledger.ts` nor `cloud-agents-run-token.ts`, cannot show it. The lane's CI check before F6
+  fixed it in a separate fix(api) commit without a `model-plan-*` edit: `cloud-agents-run-token.ts` now reads
+  `METER_EPOCH_PATTERN` inside the claim filter at decode time instead of passing it to `Schema.isPattern` at module
+  top level, and `test/api-module-loading.test.ts` adds `cloud-agents-ledger.ts` and `model-plan-gateway-hooks.ts` to
+  its fresh Node ESM entries (the ledger-first order failed with that ReferenceError before the change). The same
+  two-file change is needed on `release-finish`; the lead decides whether it goes there first.

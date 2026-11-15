@@ -54,7 +54,9 @@ const Claims = Schema.Struct({
   gen: Schema.Number.check(Schema.makeFilter((value: number) => Number.isSafeInteger(value) && value >= 1)),
   src: Schema.Literals(["github-comment", "github-dispatch", "github-schedule"]),
   pur: Schema.Literals(["task", "review", "scheduled"]),
-  epoch: Schema.String.check(Schema.isPattern(METER_EPOCH_PATTERN)),
+  // Read at decode time, not here: importing the ledger first reaches this module (entitlement -> ... ->
+  // model-plan-caller) while the ledger's consts are still uninitialized.
+  epoch: Schema.String.check(Schema.makeFilter((value: string) => METER_EPOCH_PATTERN.test(value))),
   dl: Time,
   exp: Time,
   iat: Time,
