@@ -1,6 +1,11 @@
 # Vector Hands continuation checkpoint
 
-**14 November diagnostic candidate:** helper `1.0.17` retains the immutable UIA timeout observation and adds closed substages for actual ARM64 inventory, affinity-plan and listener-health failures. The exact `1.0.16` x64 Stop pass is preserved separately; these diagnostics are not a functional fix or ARM64 qualification. The measured `1.0.15` Mac lock remains enforced and unchanged; fresh exact-source native/package and Mac identity qualification are required. See [the diagnostic scope and remaining gates](./hands-uia-timeout-diagnostic.md). Earlier receipts below retain their exact baseline scope.
+**14 November Windows diagnostic candidate, merged at helper 1.0.15 (HF-1):** the native-stop-fix diagnostics do two things:
+
+- they keep the first UIA phase observed at a timeout immutable, for `stop-root-retired` / `core_failure:no_ui_tree` (`8e792a72`, with the sentinel fix in `503418a1`);
+- they add 20 closed substages for the ARM64 failures (`a0fbfa3b`): apps-list request, reply, decode and target; 13 affinity-plan stages; and input-health context, target and ready.
+
+They change no predicate, budget, retry or authority, they are not a functional fix or ARM64 qualification, and they establish no root cause. The merged source reports helper `1.0.15` with a new Windows-only source digest, which is not yet observed in CI. No measured macOS input file differs from `0ee486e3`, whose mac-build job `132574657008` passed the enforced `1.0.15` lock; macOS sources and the lock file are unchanged, and lock confirmation at the merged source waits for the lane's final full `test.yml`. `1.0.16` and `1.0.17` in the diagnostic note are historical native-stop-fix labels. The exact `503418a1` x64 Stop pass is preserved at its own source. Fresh exact-source Windows x64/ARM64 native evidence is pending (HF-4). See [the diagnostic scope and remaining gates](./hands-uia-timeout-diagnostic.md) and [HF-1](#hf-1--native-stop-fix-merged-at-helper-1015-15-november-2026). Earlier receipts below retain their exact baseline scope.
 
 The build contract is [hands-build-spec.md](./hands-build-spec.md). Read [hands-deviations.md](./hands-deviations.md) before continuing. Work only on `hands`, implement one work package at a time in the contract's order, and push each package. Do not merge or push to `main`.
 
@@ -1693,3 +1698,44 @@ The observed guardian-observation stage is reached only after the guarded MOVE r
 The next reviewed opt-in diagnostic records only a weak low32 marker-correlation boolean when its strict candidate predicate matches. It never creates DOWN/UP/order/release debt or changes the original full64 injected receipt requirement. The private result code and appended stage bring the closed stage catalog to 172; four new native groups remain unexecuted at this checkpoint. Candidate local report checks passed 45 tests / 28,211 assertions; source checks passed 19 / 174. The signature-observer candidate separately passed 20 tests / 131 assertions and typechecking, with signer reuse being prepared and actual PowerShell 5 verification still pending. These local checks and candidates are not native fixes. W9 proposal `20202293` remains owner-pending and unimplemented; final packaging, native Stop, owner-device and release gates stay open.
 
 Final signature-observer source validation, after signer reuse and explicit environment/deadline profiles, passed verifier 21 tests / 151 assertions and signer 9 / 80. Four focused workflow tests passed with 543 assertions, desktop typechecking passed, and formatting of all changed TypeScript/workflow files passed. The verifier retains its five-second observation bound; signing retains its filtered observation environment and ten-second bound. No signing command ran locally. The hosted diagnostic now requires the actual built unsigned helper to pass this same hidden PowerShell observer before runtime checks; that new check remains unexecuted here. Earlier full-file Bash failures remain recorded.
+
+## HF-1 — native-stop-fix merged at helper 1.0.15 (15 November 2026)
+
+Lane `hands-finish` starts from `release-finish` `0ee486e3412c29512022d369325a3747b567d090`, the PR #33 head when the lane opened. HF-1 folds in the native-stop-fix Windows diagnostics without changing any measured macOS input. The [deviation entry](./hands-deviations.md#hf-1--windows-only-diagnostics-keep-helper-1015) records why helper `1.0.15` is kept.
+
+**Merge.** The HF-1 merge commit `6179bd42835ae279d019f8c4669ca576e3489678` (tree `0ea5f29310f3cf74ad6736483d54880f93ddaed1`) has first parent `0ee486e3` and second parent `a0fbfa3b16b65c0def4459d83892ee1f09c71daa`, the `origin/native-stop-fix` tip (merge-base `f830e3fd`). It is a `--no-ff` merge, with no rebase or cherry-pick, of six commits: `8e792a72`, `503418a1`, `d3d39430`, `78f1a459`, merge `8d99c2bb` and `a0fbfa3b`. Before merging, `git merge-tree --write-tree` exited 0 in every case checked:
+
+- against `0ee486e3`, tree `0ea5f29310f3cf74ad6736483d54880f93ddaed1`;
+- against the then-current `origin/release-finish` `cf2373c4`, which already contains the CI-fix lane's pushed commits, tree `69ea41345d1b37cc617c2f34be035d1aaeae21cb`;
+- against `origin/main` `58f85edc` (PR #33 not merged), tree `c94a4ffb3355cf5975071c7f4d9af85826dd89d7`;
+- against the local review-fixes ref `dcd781d0`, which has no remote branch, tree `9fe89e7fe15e728f91f4577d4b40a7288be18d3f`.
+
+None of the 13 commits from `0ee486e3` to `cf2373c4` touches `test.yml` or `computer-workflow.test.ts`. The merge tree equals the predicted `0ea5f293…`. It brings 16 files (+412/−31): the `test.yml` macos-measure mode, both Hands ledgers, the new [diagnostic note](./hands-uia-timeout-diagnostic.md), `identity.json`, seven Windows native sources and tests, `computer-helper-selftest-windows.ts` (`WINDOWS_NATIVE_STAGES` grows from 199 to 219 stages) and three desktop script tests. The merge commit is an intermediate tree at helper `1.0.17` and is not a qualifying CI source; only the follow-up restore commit is.
+
+**Restore.** The follow-up commit restores `packages/desktop/native/computer-helper/identity.json` byte for byte from `0ee486e3`, at helper `1.0.15`. `macos/identity.lock.json` is untouched. Invariant 2, the `git diff --stat 0ee486e3` over `macos/`, `identity.json`, `blocklist.json`, the channel `icon.icns` files and the nine `COMPUTER_HELPER_BUILD_INPUTS`, listed only `identity.json` for the merge tree and prints nothing for the restored tree. `0ee486e3`'s mac-build job `132574657008` (run `43636452606`) passed both `Enforce the measured production identity lock` and `Require the measured macOS helper version and toolchain for this channel`. No measured macOS input file differs from that source. The same commit rewrites the merged top blocks of this checkpoint and the deviations log, and the header, provenance, measurement-route and ARM64-scope sections of the diagnostic note: the candidate is helper `1.0.15` with a new Windows-only source digest, and `1.0.16`/`1.0.17` are historical native-stop-fix labels. Every recorded count, run, job, artifact and hash is kept as written.
+
+**Diagnostic scope.** The merged diagnostics are:
+
+- (a) the first UIA phase seen at a timeout is kept immutable, for `stop-root-retired` / `core_failure:no_ui_tree` (`8e792a72`, with the sentinel fix in `503418a1`);
+- (b) 20 closed substages (`a0fbfa3b`): `apps-list-request`, `-reply`, `-decode` and `-target`; 13 `affinity-plan-*` stages; and `input-health-context`, `-target` and `-ready`.
+
+They change no predicate, 50/750 ms budget, retry, retirement, input authority or skip policy. No root cause is established for the staged Stop failure or for the ARM64 `apps-running-target`, `capture-affinity-exclusion` and `input-listener-health` rows.
+
+**Measurement route.** The merged `computer-helper-macos-measure` caller in `test.yml` (`d3d39430`/`78f1a459`, merge `8d99c2bb`) is kept as tooling for a future Mac measurement and was not dispatched. It requires every other mode off and carries only `contents:read`/`actions:read`, no secrets and no continue-on-error. Direct dispatch of `computer-helper.yml` is still unavailable: its workflow metadata request returned HTTP 404 on 15 November 2026, because the file is not on `main` (`58f85edc`). It may become dispatchable after PR #33 merges; the lane keeps the registered `test.yml` route.
+
+**Local checks.** Bun 1.3.14 ran under the serial lock, one file per command from `packages/desktop`, each with `bun --no-env-file test --timeout 30000`:
+
+- `computer-overlay-smoke-source.test.ts`: 19 passed / 0 failed, 191 assertions;
+- `computer-overlay-smoke-report.test.ts`: 45 / 0, 28,211 assertions;
+- `computer-helper-selftest.test.ts`: 49 / 0, 1,219 assertions;
+- `computer-workflow.test.ts`: 34 / 0, 3,905 assertions;
+- `build-computer-helper.test.ts`: 19 / 0, 237 assertions;
+- `verify-computer-helper-windows.test.ts`: 22 / 0, 164 assertions;
+- `computer-helper-identity.test.ts`, which strictly decodes the real `identity.json`: 11 / 0, 470 assertions;
+- extra: `computer-overlay-smoke-native-catalog.test.ts` 4 / 0 (33 assertions), `computer-helper-windows-diagnostics.test.ts` 9 / 0 (280), `verify-computer-helper.test.ts` 17 / 0 (90) and `computer-helper-sign.test.ts` 21 passed / 1 skipped (297; the skip needs macOS and a codesign identity).
+
+No test required a version bump for the Windows-only edits. Desktop `bun typecheck` exited 0, and the full-tree `bun turbo typecheck --concurrency=2` passed 27 of 27 tasks. `git diff --check` passed. Prettier passes on the diagnostic note. On the two ledgers, `prettier --check` reports the same findings as at `0ee486e3` (older tables, list spacing and an indented block: 123 changed lines in this checkpoint, 20 in the deviations log), and the HF-1 edits add none. No native, Electron, browser or input run happened locally. The new C++ groups in `overlay_driver_tests.cpp` and `privileged_self_test_tests.cpp` run only in CI.
+
+**Deferred.** Windows x64 and ARM64 results at this source will come from the post-push `test.yml` dispatch with `computer_helper=true` and `computer_helper_target=windows`, which HF-4 records. Mac lock confirmation at the merged source comes from the lane's final full `test.yml`. Every owner gate stays open: production signing and notarization, the Clean Mac and Windows 11 device checklists, Reset, and publication. HF-1 gives no release, signing or device credit.
+
+HF-1 leaves the stale lane-routing text for the lane's follow-up docs package, which runs after this merge so it cannot conflict with the merged top blocks: the "Work only on `hands` ... Do not merge or push to `main`" paragraph directly below this checkpoint's top block, the `hands-handoff.md` header (missing anchor and "Main `0dcbb8e2` integration is in progress"), the previews `43154306544`, `43552031298` and `43560764334` missing from `hands-release-artifacts.md`, and the "Do not merge `hands` into `main`" sentence in `owner-actions/hands-release.md`.
