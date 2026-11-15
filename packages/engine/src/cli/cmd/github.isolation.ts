@@ -136,10 +136,13 @@ const FAILURE_STAGES = {
         "parent-canonical",
         "mount-present",
         "mount-device",
+        // Checked after every other mask predicate; see keeper_searchable in entry.py.
+        "keeper-search",
       ].map((step) => `prepare-mask-${mask}-${step}`),
       ...(mask === "home" || mask === "host-temp" ? [`prepare-mask-${mask}-target-mode`] : []),
     ]),
     "prepare-images",
+    "prepare-keeper-search-checkout",
     "prepare-record",
     "prepare-keeper-start",
     "prepare-keeper-wait",

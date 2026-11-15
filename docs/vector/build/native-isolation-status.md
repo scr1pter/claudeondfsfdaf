@@ -227,3 +227,39 @@ failure would classify as `no-marker`. That gap fails closed and is left for a l
 package. An `eacces` result would confirm the errno only, not which ancestor of the
 hosted temporary root blocks the keeper. No production activation is authorized by this
 document.
+
+## Keeper search admission, 15 November 2026
+
+The bounded lane dispatch `43660129312` (job `132647364562`, head `597dbcc9`) closed with
+`prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created`:
+bubblewrap could not build the parents of the hosted temporary root as the keeper and
+got `EACCES`. The keeper runs as `vector-agent` with no supplementary groups in a user
+namespace that maps only its own uid and gid, so its namespace capabilities override
+permissions only on its own inodes; Root- and runner-owned ancestors are searchable only
+through their one selected mode class.
+
+Admission now refuses such a geometry before any construction, with fixed labels only:
+`prepare-mask-<label>-keeper-search` when a strict ancestor of a mask is not searchable
+by the keeper (checked after every other mask predicate, from the parent metadata those
+predicates already admitted), and `prepare-keeper-search-checkout` when the container
+ancestry of the checkout and scratch binds is not (checked after every other
+pre-construction predicate). No path, mode, owner or group leaves the private log.
+Nothing is relaxed: geometry the keeper's mode bits allow is admitted as before, no
+`chmod` is added, and `MASKS` and the keeper argv are unchanged.
+
+This adds to, and does not change, the 15 November keeper product, which stays 97 logs
+and 582 stages. The mask admission product grows from 68 to 73 stages (the TypeScript
+per-mask entries from 57 to 62), plus the one container-ancestry stage, checked
+consistently in `entry.py`, the CI-only Python fixture (40 tests) and the native
+TypeScript decoder and its test file `github.isolation.test.ts` (33 tests, 2 new). Both
+native build switches and `FLOOR` remain false, and native commands registered with
+`OwnedProcess` remain refused before launch.
+
+The expected hosted label for the next bounded diagnostic cell is
+`prepare-mask-host-temp-keeper-search`. It would confirm at admission that `/` and
+`/home` are searchable by the keeper and that `/home/runner` or `/home/runner/work` is
+not. Which of those two blocks remains unproven; the planned `/home/runner` mask does not
+depend on it, but a narrower `/home/runner/work` mask would need a per-ancestor witness
+first. ACLs and mandatory access control are not modelled, and the hosted run is the
+authority. The run and its result are logged in `native-qualify-notes.md`. No production
+activation is authorized by this document.

@@ -1425,6 +1425,7 @@ def supported_mask_sources(uid, gid, namespace, pins):
     # These labels are fixed metadata categories, never path strings supplied by a caller.
     labels = {"/home/vector-agent":"home", "/tmp":"tmp", "/var/tmp":"var-tmp", "/run":"run", HOST_TEMP:"host-temp"}
     records = []
+    searches = []
     for target in MASKS:
         label = labels[target]
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-stat"
@@ -1455,6 +1456,7 @@ def supported_mask_sources(uid, gid, namespace, pins):
             require(not item.st_mode & 0o022)
             _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-canonical"
             require(os.path.realpath(parent) == str(parent))
+            searches.append((label, item))
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-mount-present"
         containing = [row for row in mounts if beneath(target, row["target"])]
         require(containing)
@@ -1488,7 +1490,25 @@ def supported_mask_sources(uid, gid, namespace, pins):
     require_capture_closure(result, mounts)
     refuse_mask_aliases(result, mounts)
     validate_source_view(os.getpid(), identity(os.getpid(), 0)["start"], result, pins["sources"])
+    # bwrap makes every mask's parents as the keeper (mkdir_with_parents) before it mounts the mask, so a parent the
+    # keeper cannot search fails construction as bwrap-destination-<label>-eacces. Refuse it here, after every other
+    # mask predicate, from the parent metadata those predicates already admitted.
+    for label, item in searches:
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-keeper-search"
+        require(keeper_searchable(item.st_mode, item.st_uid, item.st_gid, uid, gid))
     return result
+
+
+def keeper_searchable(mode, owner, group, uid, gid):
+    # The keeper runs as uid:gid with no supplementary groups (setpriv --clear-groups) in a user namespace that maps
+    # only uid and gid. Its namespace capabilities override DAC only on an inode whose owner and group are both mapped
+    # (the keeper's own); any other inode, Root's and the runner's included, is searchable only through the one class
+    # the kernel selects: owner, else group, else other. ACLs are not read; the keeper's construction stays the authority.
+    require(integer(uid) and integer(gid) and type(mode) is int and 0 <= mode <= 0o177777 and
+            all(type(value) is int and 0 <= value <= 9007199254740991 for value in (owner, group)))
+    if owner == uid and group == gid:
+        return True
+    return (mode & (0o100 if owner == uid else 0o010 if group == gid else 0o001)) != 0
 
 
 def validate_source_view(pid, start, records, original_pins=None):
@@ -1696,6 +1716,11 @@ def prepare_in_capture(uid, gid, container, namespace, pins):
     _DIAGNOSTIC_STAGE = "prepare-images"
     state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images(),
              "maskSources": masks}
+    # bwrap resolves the checkout and scratch binds and the --chdir as the keeper too. validate_spec pins both directly
+    # under the container, so they share one strict ancestry; check it after every existing pre-construction predicate.
+    _DIAGNOSTIC_STAGE = "prepare-keeper-search-checkout"
+    require(all(keeper_searchable(item.st_mode, item.st_uid, item.st_gid, uid, gid)
+                for item in (os.lstat(parent) for parent in pathlib.Path(stage).parents)))
     # The durable process-crash record precedes directory/child ownership. No power-loss claim is made.
     _DIAGNOSTIC_STAGE = "prepare-record"
     write_json(PRIVATE, state, 0o600)

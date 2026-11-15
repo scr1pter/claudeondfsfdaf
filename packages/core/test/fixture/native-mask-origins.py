@@ -28,7 +28,7 @@ PURE = {
     "filesystem", "json_digest", "digest_value", "mask_records", "mount_field", "mount_path", "parse_mount_table",
     "beneath", "hidden", "refuse_mask_aliases", "require_private_mounts", "require_known_mask_origins",
     "require_capture_closure", "keeper_log_stage", "keeper_environment", "keeper_log_classification",
-    "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage",
+    "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage", "keeper_searchable",
 }
 CONSTANTS = {"HOST_TEMP", "MASKS"}
 SELECTED = [node for node in TREE.body if
@@ -751,7 +751,152 @@ class KeeperDiagnosticTests(unittest.TestCase):
                 NATIVE["keeper_failure_stage"](*values)
 
 
+# The keeper is vector-agent with its own user group; the runner is 1001:1001 and 118 is a foreign group (docker).
+KEEPER = (1002, 1002)
+MASK_STEPS = ("target-stat", "target-type", "target-canonical", "target-owner", "target-mode", "parent-stat",
+              "parent-type", "parent-owner", "parent-mode", "parent-canonical", "mount-present", "mount-device",
+              "keeper-search")
+MASK_LITERALS = tuple("prepare-mask-" + step for step in (
+    "os-chain", "os-open", "os-stat", "os-read", "os-decode", "os-version", "runner-lookup", "runner-identity",
+    "mount-table", "origins", "aliases"))
+
+
+def stage_assignments(function):
+    return sorted((node for node in ast.walk(FUNCTIONS[function]) if isinstance(node, ast.Assign) and
+                   any(isinstance(target, ast.Name) and target.id == "_DIAGNOSTIC_STAGE" for target in node.targets)),
+                  key=lambda node: node.lineno)
+
+
+class KeeperSearchTests(unittest.TestCase):
+    def test_unsearchable_ancestors_are_refused(self):
+        for mode, owner, group in (
+            (0o750, 1001, 1001),  # A runner home created with HOME_MODE 0750.
+            (0o750, 1001, 118),
+            (0o710, 1001, 1001),  # A group-only grant to a gid the keeper does not hold.
+            (0o770, 0, 0),
+            (0o700, 0, 0),
+            (0o766, 0, 0),  # Other may read but not search.
+            (0o701, 1001, 1002),  # The group class is selected and has no search bit; other's bit never applies.
+            (0o071, 1002, 1001),  # The owner class is selected; the gid is unmapped, so no capability override.
+        ):
+            with self.subTest(mode=oct(mode), owner=owner, group=group):
+                self.assertIs(NATIVE["keeper_searchable"](stat.S_IFDIR | mode, owner, group, *KEEPER), False)
+
+    def test_searchable_ancestors_are_admitted(self):
+        for mode, owner, group in (
+            (0o755, 0, 0),
+            (stat.S_ISVTX | 0o777, 0, 0),  # /tmp
+            (0o700, 1002, 1002),
+            (0o000, 1002, 1002),  # Both ids are mapped, so the namespace capability override applies.
+            (0o711, 1001, 1001),  # Search through other only.
+            (0o750, 1001, 1002),  # A group grant to the keeper gid.
+            (0o100, 1002, 1001),  # Owner bits with a foreign gid.
+        ):
+            with self.subTest(mode=oct(mode), owner=owner, group=group):
+                self.assertIs(NATIVE["keeper_searchable"](stat.S_IFDIR | mode, owner, group, *KEEPER), True)
+
+    def test_inputs_are_strict_non_negative_integers_and_the_keeper_is_never_root(self):
+        valid = (stat.S_IFDIR | 0o755, 0, 0, *KEEPER)
+        self.assertIs(NATIVE["keeper_searchable"](*valid), True)
+        for index in range(len(valid)):
+            for value in (None, True, False, "755", -1, 1.0):
+                with self.subTest(index=index, value=value), self.assertRaises(RuntimeError):
+                    NATIVE["keeper_searchable"](*valid[:index], value, *valid[index + 1:])
+        # mode is bounded as an st_mode value, and owner and group by integer()'s upper bound; each bound is inclusive.
+        for index, value in ((0, 0o200000), (1, 9007199254740992), (2, 9007199254740992)):
+            with self.subTest(index=index, value=value), self.assertRaises(RuntimeError):
+                NATIVE["keeper_searchable"](*valid[:index], value, *valid[index + 1:])
+        self.assertIs(NATIVE["keeper_searchable"](0o177777, 9007199254740991, 9007199254740991, *KEEPER), True)
+        for uid, gid in ((0, 1002), (1002, 0), (0, 0), (9007199254740992, 1002), (1002, 9007199254740992)):
+            with self.subTest(uid=uid, gid=gid), self.assertRaises(RuntimeError):
+                NATIVE["keeper_searchable"](stat.S_IFDIR | 0o700, 0, 0, uid, gid)
+
+
 class SourceStructureTests(unittest.TestCase):
+    def test_keeper_search_runs_after_every_mask_predicate_and_before_construction(self):
+        def statements(source):
+            return [ast.dump(node) for node in ast.parse(source).body]
+
+        sources = FUNCTIONS["supported_mask_sources"]
+        self.assertEqual([ast.dump(node) for node in sources.body[-3:]], statements(
+            "validate_source_view(os.getpid(), identity(os.getpid(), 0)['start'], result, pins['sources'])\n"
+            "for label, item in searches:\n"
+            "    _DIAGNOSTIC_STAGE = f'prepare-mask-{label}-keeper-search'\n"
+            "    require(keeper_searchable(item.st_mode, item.st_uid, item.st_gid, uid, gid))\n"
+            "return result\n"))
+        loop = next(index for index, node in enumerate(sources.body) if isinstance(node, ast.For) and
+                    ast.unparse(node.iter) == "MASKS")
+        self.assertEqual([ast.dump(node) for node in sources.body[loop - 2:loop]],
+                         statements("records = []\nsearches = []\n"))
+        parents = [node for node in sources.body[loop].body if isinstance(node, ast.For) and
+                   ast.unparse(node.iter) == "pathlib.Path(target).parents"]
+        self.assertEqual(len(parents), 1)
+        self.assertEqual(ast.dump(parents[0].body[-1]), statements("searches.append((label, item))")[0])
+        self.assertEqual([node.value.values[-1].value for node in parents[0].body if isinstance(node, ast.Assign)
+                          and ast.unparse(node.targets[0]) == "_DIAGNOSTIC_STAGE"],
+                         ["-parent-stat", "-parent-type", "-parent-owner", "-parent-mode", "-parent-canonical"])
+        self.assertEqual(sum(isinstance(node, ast.Name) and node.id == "searches" for node in ast.walk(sources)), 3)
+        prepare = FUNCTIONS["prepare_in_capture"]
+        masks = next(index for index, node in enumerate(prepare.body) if
+                     ast.dump(node) == statements("masks = supported_mask_sources(uid, gid, namespace, pins)")[0])
+        self.assertEqual(ast.dump(prepare.body[masks + 1]), statements("_DIAGNOSTIC_STAGE = 'prepare-images'")[0])
+        self.assertIn("runtime_images", {ast.unparse(node.func) for node in ast.walk(prepare.body[masks + 2])
+                                         if isinstance(node, ast.Call)})
+        self.assertEqual([ast.dump(node) for node in prepare.body[masks + 3:masks + 6]], statements(
+            "_DIAGNOSTIC_STAGE = 'prepare-keeper-search-checkout'\n"
+            "require(all(keeper_searchable(item.st_mode, item.st_uid, item.st_gid, uid, gid)\n"
+            "            for item in (os.lstat(parent) for parent in pathlib.Path(stage).parents)))\n"
+            "_DIAGNOSTIC_STAGE = 'prepare-record'\n"))
+        search = calls("prepare_in_capture", "keeper_searchable")
+        self.assertEqual(len(search), 1)
+        for construction in ("write_json", "os.mkdir", "os.chown", "subprocess.Popen"):
+            self.assertLess(search[0].lineno, min(call.lineno for call in calls("prepare_in_capture", construction)))
+        self.assertLess(calls("prepare_in_capture", "supported_mask_sources")[0].lineno, search[0].lineno)
+        self.assertEqual([name for name in FUNCTIONS if calls(name, "keeper_searchable")],
+                         ["supported_mask_sources", "prepare_in_capture"])
+        self.assertEqual(len(calls("supported_mask_sources", "keeper_searchable")), 1)
+
+    def test_mask_admission_stages_are_one_closed_fixed_product(self):
+        assignments = stage_assignments("supported_mask_sources")
+        literals = [node.value.value for node in assignments if isinstance(node.value, ast.Constant)]
+        formatted = [node for node in assignments if isinstance(node.value, ast.JoinedStr)]
+        self.assertEqual(len(literals) + len(formatted), len(assignments))
+        self.assertEqual(tuple(literals), MASK_LITERALS)
+        steps = []
+        for node in formatted:
+            head, label, tail = node.value.values
+            self.assertTrue(isinstance(head, ast.Constant) and head.value == "prepare-mask-")
+            self.assertTrue(isinstance(label, ast.FormattedValue) and label.conversion == -1 and
+                            label.format_spec is None and ast.unparse(label.value) == "label")
+            self.assertTrue(isinstance(tail, ast.Constant) and tail.value.startswith("-"))
+            steps.append(tail.value[1:])
+        self.assertEqual(len(steps), 14)
+        self.assertEqual(set(steps), set(MASK_STEPS))
+        self.assertEqual(len(set(steps)), 13)
+        parent = {child: node for node in ast.walk(FUNCTIONS["supported_mask_sources"])
+                  for child in ast.iter_child_nodes(node)}
+        modes = [node for node in formatted if node.value.values[-1].value == "-target-mode"]
+        self.assertEqual([ast.unparse(parent[node].test) for node in modes],
+                         ["target == '/home/vector-agent'", "target == HOST_TEMP"])
+        self.assertTrue(all(node in parent[node].body for node in modes))
+        labels = next(node.value for node in ast.walk(FUNCTIONS["supported_mask_sources"]) if
+                      isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "labels")
+        self.assertEqual([ast.unparse(key) for key in labels.keys],
+                         ["'/home/vector-agent'", "'/tmp'", "'/var/tmp'", "'/run'", "HOST_TEMP"])
+        self.assertEqual(tuple(NATIVE["HOST_TEMP"] if isinstance(key, ast.Name) else key.value for key in labels.keys),
+                         MASKS)
+        names = [ast.literal_eval(value) for value in labels.values]
+        self.assertEqual(names, ["home", "tmp", "var-tmp", "run", "host-temp"])
+        product = {*MASK_LITERALS, *(f"prepare-mask-{name}-{step}" for name in names for step in MASK_STEPS
+                                     if step != "target-mode" or name in ("home", "host-temp"))}
+        self.assertEqual(len(product), 73)
+        self.assertEqual([node.value.value for node in stage_assignments("prepare_in_capture")], [
+            "prepare-input", "prepare-masks", "prepare-images", "prepare-keeper-search-checkout", "prepare-record",
+            "prepare-keeper-start", "prepare-keeper-wait", "prepare-keeper-identity", "prepare-namespaces",
+            "prepare-mounts", "prepare-mask-proof", "prepare-endpoint", "prepare-broker-start", "prepare-broker-ready",
+            "prepare-broker-adopt", "prepare-broker-mask-proof", "prepare-publish",
+        ])
+
     def test_only_allowlisted_pure_definitions_are_executed(self):
         self.assertEqual({node.name for node in SELECTED if isinstance(node, ast.FunctionDef)}, PURE)
         self.assertFalse(any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in SELECTED))
@@ -938,7 +1083,7 @@ class SourceStructureTests(unittest.TestCase):
         forbidden = {"capture_mount_namespace", "supported_mask_sources", "validate_source_view", "validate_masks",
                      "mount_table", "parse_mount_table", "refuse_mask_aliases", "require_known_mask_origins",
                      "require_capture_closure", "wait_keeper", "read_keeper_diagnostic", "keeper_log_classification",
-                     "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage"}
+                     "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage", "keeper_searchable"}
         for function in ("cleanup", "read_state", "mask_records"):
             for name in forbidden:
                 self.assertFalse(calls(function, name), (function, name))

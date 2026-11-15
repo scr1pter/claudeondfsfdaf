@@ -371,6 +371,135 @@ test("keeper destination errno causes decode only as a closed suffix of a fixed 
     expect(GithubIsolation.failureMetadata(new Error("private keeper stderr", { cause: refused }))).toBeUndefined()
   }
 })
+test("keeper search admission stages decode only as fixed mask and checkout labels", () => {
+  // The predicted hosted cause: admission refuses the hosted temporary root before any keeper starts.
+  const entry: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    stage: "prepare-mask-host-temp-keeper-search",
+    class: "RuntimeError",
+    errno: null,
+    exit: null,
+  }
+  const control: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "control",
+    stage: "native-prepare",
+    class: "CalledProcessError",
+    exit: 125,
+  }
+  const transport: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+    exit: 1,
+  }
+  expect(
+    GithubIsolation.decodeFailureRecords(Buffer.concat([failureBytes(entry), failureBytes(control)]), "prepare"),
+  ).toEqual([entry, control])
+  const cause: GithubIsolation.FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [transport, entry, control],
+  }
+  expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause }))).toEqual(cause)
+  const stages = [
+    ...["home", "tmp", "var-tmp", "run", "host-temp"].map((mask) => `prepare-mask-${mask}-keeper-search`),
+    "prepare-keeper-search-checkout",
+  ]
+  for (const stage of stages) {
+    const decoded = { ...entry, stage }
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(decoded), "prepare")).toEqual([decoded])
+    const accepted: GithubIsolation.FailureCause = {
+      v: 1,
+      event: "native-control-failure",
+      records: [transport, decoded],
+    }
+    expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause: accepted }))).toEqual(accepted)
+    for (const origin of ["control", "client", "transport"])
+      expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...decoded, origin }), "prepare")).toEqual([])
+  }
+  for (const stage of [
+    "prepare-mask-keeper-search",
+    "prepare-mask-guest-keeper-search",
+    "prepare-mask-/home/runner-keeper-search",
+    "prepare-mask-host-temp-keeper-search-eacces",
+    "prepare-mask-host-temp-keeper-search-runner-home",
+    "prepare-mask-host-temp-keeper-search-runner-work",
+    "prepare-mask-host-temp-keeper-search:0750",
+    "prepare-mask-host-temp-keeper-search\nprivate-value",
+    "prepare-mask-host-temp-keeper-search\u0000",
+    "prepare-mask-host-temp-keeper",
+    "prepare-mask-host-temp-search",
+    "prepare-mask-host-temp-parent-search",
+    "prepare-mask-home-keeper-search-checkout",
+    "prepare-keeper-search",
+    "prepare-keeper-search-stage",
+    "prepare-keeper-search-scratch",
+    "prepare-keeper-search-container",
+    "prepare-keeper-search-host-temp",
+    "prepare-keeper-search-checkout-eacces",
+    "Prepare-mask-host-temp-keeper-search",
+    "prepare-keeper-child-exit-log-keeper-search-info-child-created",
+  ]) {
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+    const refused: GithubIsolation.FailureCause = {
+      v: 1,
+      event: "native-control-failure",
+      records: [transport, { ...entry, stage }],
+    }
+    expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause: refused }))).toBeUndefined()
+  }
+})
+test("every fixed entry stage in the native source decodes", async () => {
+  // Guard-unit never runs this decoder, and a Python/TypeScript vocabulary mismatch drops every decoded record.
+  const source = await Bun.file(path.join(import.meta.dir, "../../../core/src/process-isolation/linux/entry.py")).text()
+  const assignments = [...source.matchAll(/_DIAGNOSTIC_STAGE = (.*)$/gm)].map((match) => match[1])
+  const literals = assignments.flatMap((value) => /^"([a-z0-9-]+)"$/.exec(value)?.[1] ?? [])
+  const steps = assignments.flatMap((value) => /^f"prepare-mask-\{label\}-([a-z-]+)"$/.exec(value)?.[1] ?? [])
+  const builders = assignments.filter((value) => value.startsWith("keeper_failure_stage("))
+  // Every assignment has one of the three closed shapes, so nothing below can pass on an empty parse.
+  expect(literals.length + steps.length + builders.length).toBe(assignments.length)
+  expect(literals).toContain("prepare-keeper-search-checkout")
+  expect(steps).toContain("keeper-search")
+  expect(builders.length).toBeGreaterThan(0)
+  // The labels dict maps each mask target expression (a string literal or HOST_TEMP) to its fixed label.
+  const keyed = new Map(
+    [...(/^\s*labels = \{(.*)\}$/m.exec(source)?.[1] ?? "").matchAll(/([^\s,][^,]*?):"([a-z-]+)"/g)].map(
+      (match) => [match[1], match[2]] as const,
+    ),
+  )
+  const labels = [...keyed.values()]
+  expect(labels).toEqual(["home", "tmp", "var-tmp", "run", "host-temp"])
+  // Each mask step's labels come from the source as well, never from a restated rule: a step assigned directly in a
+  // loop body belongs to every mask, and one assigned in an `if/elif target == ...` branch belongs to that branch's
+  // mask only (today target-mode, for home and host-temp). Any other enclosing block leaves the step unresolved.
+  const lines = source.split("\n")
+  const product = lines.flatMap((line, index) => {
+    const step = /^\s*_DIAGNOSTIC_STAGE = f"prepare-mask-\{label\}-([a-z-]+)"$/.exec(line)?.[1]
+    if (step === undefined) return []
+    const block =
+      lines.slice(0, index).findLast((row) => row.trim() !== "" && row.search(/\S/) < line.search(/\S/)) ?? ""
+    const target = /^\s*(?:el)?if target == (.+):$/.exec(block)?.[1]
+    const owners = /^\s*for /.test(block) ? labels : [target === undefined ? undefined : keyed.get(target)]
+    return owners.map((label) => (label === undefined ? undefined : `prepare-mask-${label}-${step}`))
+  })
+  expect(lines.filter((line) => /^\s*_DIAGNOSTIC_STAGE = f"prepare-mask-/.test(line)).length).toBe(steps.length)
+  expect(product).not.toContain(undefined)
+  const decodes = (stage: string) => {
+    const operation = stage.startsWith("cleanup-") ? "cleanup" : "prepare"
+    const record = { ...failureRecord(), operation, stage, class: "RuntimeError" as const, errno: null, exit: null }
+    return GithubIsolation.decodeFailureRecords(failureBytes(record), operation).length === 1
+  }
+  expect(literals.filter((stage) => !decodes(stage))).toEqual([])
+  // Within this candidate set the decoder accepts exactly the source's mask product.
+  const candidates = [...labels, "guest", "host", "temp", "runner"].flatMap((label) =>
+    [...new Set(steps), "nested", "keeper", "search", "parent-search", "keeper-search-eacces"].map(
+      (step) => `prepare-mask-${label}-${step}`,
+    ),
+  )
+  expect(new Set<string | undefined>(candidates.filter(decodes))).toEqual(new Set(product))
+})
 test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
   const ordinary = failureRecord()
   for (const value of [
