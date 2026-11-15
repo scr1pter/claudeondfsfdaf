@@ -12,6 +12,9 @@ erasure, Codium records and keys, erase marker, usage counts, identity deletion.
 part also blocks the Codium-record and key parts, retains the identity, and is retried through the existing tombstone
 backoff. The existing delayed-writer barriers remain: account revocation for cloud-agent storage and the permanent
 local account-closed marker for Everywhere. No billing or identity service is called by either service eraser.
+The follow-up check pass re-asserts the account revocation before it erases again, and stops at stage `revoke` when that
+write fails, because the cloud-agent eraser requires the live mark and a pass kept waiting on the workspace host can
+outlast the mark's 100-day expiry.
 
 Tests cover default registration and dependencies, each service failing and recovering through the actual deletion
 request/cron, feature-off erasure, and deadline refusal before another store call. The populated Everywhere erasure

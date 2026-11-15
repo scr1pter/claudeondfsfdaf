@@ -560,6 +560,15 @@ export async function checkAccountDeletion(account: string, options: DeletionOpt
   const token = await takeDeletionLease(account, DELETION_LEASE_MS, fetcher)
   if (!token) return { state: "busy" }
   try {
+    // The cloud-agents part needs the account's revocation mark, which lapses after 100 days. A pass that keeps failing
+    // (a workspace host that never reports its erase) can outlive it, so every pass writes the mark again first; the
+    // identity is already gone, so this only renews the fence (and repeats the best-effort relay kill). As in
+    // finishAccountDeletion, a failed write stops the pass at `revoke` before any part erases.
+    const revoked = await (options.revoke ?? ((id) => revokeAccountTokens(id, fetcher)))(account).catch(() => false)
+    if (revocationConfigured() && !revoked) {
+      record = await recordFailure(account, record, "revoke", [], fetcher, clock())
+      return { state: "pending", stage: "revoke", failed: [] }
+    }
     const result = await eraseAccountData(account, {
       fetcher,
       now: clock(),

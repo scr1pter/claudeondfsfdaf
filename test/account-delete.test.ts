@@ -7,6 +7,7 @@ import { __test, handleAccountDelete } from "../api/account/delete"
 import { handleAccountDeletions } from "../api/account/deletions"
 import { readEntitlement, requireEntitlement } from "../api/_lib/codium-entitlements"
 import {
+  checkAccountDeletion,
   DELETION_ALERT_AFTER,
   DELETION_RECHECK_MS,
   deletionRetryMs,
@@ -1374,6 +1375,31 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })
 
+  test("a follow-up pass stuck past the revocation mark's 100 days renews it, so the deletion can still finish", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    await seedEverything(w)
+    w.services.workspacesLeft = 1
+    expect((await deleteRoute(w)).status).toBe(200)
+    advance(w, DELETION_RECHECK_MS)
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    // The host keeps one workspace for longer than the mark lives; the passes keep failing on it alone.
+    for (let day = 0; day < 101; day++) {
+      advance(w, DAY)
+      expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    }
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      stage: "check",
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
+    w.services.workspacesLeft = 0
+    advance(w, DAY)
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
+  })
+
   test("the follow-up pass erases what a request already past its checks created after the erase", async () => {
     const w = deletionWorld()
     await seedEverything(w)
@@ -1460,5 +1486,56 @@ describe.skipIf(!valkeyURL)("the last part on a real Valkey (CI only)", () => {
       await client.send("DEL", [...erased, ...kept])
       client.close()
     }
+  })
+})
+
+describe("the follow-up pass re-asserts the account revocation before it erases (DP-2)", () => {
+  let restore = () => {}
+  beforeEach(() => {
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+  })
+  afterEach(() => {
+    restore()
+    setSystemTime()
+  })
+
+  test("a refused revocation write stops the pass at revoke, erases nothing and retries with the backoff", async () => {
+    const w = deletionWorld()
+    await seedEverything(w)
+    expect((await deleteRoute(w)).status).toBe(200)
+    expect(w.services.identities).toEqual([ACCOUNT])
+    advance(w, DELETION_RECHECK_MS)
+    const before = await readTombstone(ACCOUNT, w.fetcher)
+    expect(before?.identityAt).toBeDefined()
+    const relay = w.services.relay.length
+    const worker = w.services.worker.length
+    const workspaces = w.services.workspaces.length
+    expect(revocationConfigured()).toBe(true)
+
+    expect(
+      await checkAccountDeletion(ACCOUNT, {
+        fetcher: w.fetcher,
+        clock: w.clock,
+        revoke: async () => false,
+        forget: async () => true,
+      }),
+    ).toEqual({ state: "pending", stage: "revoke", failed: [] })
+    const after = await readTombstone(ACCOUNT, w.fetcher)
+    expect(after).toMatchObject({ stage: "revoke", attempts: before!.attempts + 1, identityAt: before!.identityAt })
+    expect(after?.failed).toBeUndefined()
+    expect(after?.checkedAt).toBeUndefined()
+    expect(w.fakes.store.zset(tombstonesDueKey()).get(ACCOUNT)).toBe(w.clock() + deletionRetryMs(after!.attempts))
+    // No part ran: no relay or Worker erase, and no close sent to the workspace host.
+    expect(w.services.relay.slice(relay).filter((path) => path.endsWith("/erase"))).toEqual([])
+    expect(w.services.worker.slice(worker).filter((path) => path.endsWith("/erase"))).toEqual([])
+    expect(w.services.workspaces.slice(workspaces)).toEqual([])
+    expect(w.services.identities).toEqual([ACCOUNT])
+
+    // The cron still routes it to the follow-up pass; once the write succeeds, the pass erases and finishes.
+    advance(w, deletionRetryMs(after!.attempts))
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.services.workspaces.slice(workspaces)).toEqual([ACCOUNT])
+    expect(w.services.relay.slice(relay).filter((path) => path.endsWith("/erase"))).toHaveLength(1)
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })
 })
