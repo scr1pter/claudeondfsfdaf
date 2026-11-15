@@ -97,6 +97,23 @@ codium defect. At `origin/self-evolving` `e0bfa00b`, `RunBudget.CostKind` is sti
 `budgetScopes`. It belongs to the self-evolving lane and owner step 9 (also in `codium-deviations.md`, "P4 review
 decisions (8 Nov 2026)").
 
+**Status, 15 Nov 2026 (Codium finish F6): P4 finding F6 closed.** Self-evolving is part of this tree (`e0bfa00b`,
+`0c1f1b52` and `d36a3607` are ancestors of `codium-finish` `31ddb43b`), so the fix lands here. `SubagentLifecycle.read()`
+(`packages/engine/src/tool/subagent-lifecycle.ts`, the `budgetScopes` field of the returned record) no longer decodes
+the stored array with `Schema.Array(Task.BudgetScope)`: it checks each scope on its own, and a string `costKind` this
+build does not know is read as `"unknown"` before the check, as WP1 reads an interruption cause. A malformed scope, or
+one whose `stopped.reason` is a stop reason this build does not know, drops alone; the others are kept.
+`RunBudget.CostKind`, `RunBudget.StopReason`, `Task.BudgetScope`, the SDK, openapi and the generated client are
+unchanged, and no generator ran. Regressions in `packages/engine/test/tool/subagent-lifecycle-read.test.ts`: "a cost
+kind a newer version added reads as unknown and keeps the other scope", "a malformed budget scope drops alone and
+keeps the others", and the existing "budgetScopes with an unknown kind is ignored and does not erase delegatedScope",
+whose `budgetScopes` assertion moves from undefined to exactly the run scope. Against the old source the file gave
+11 pass, 3 fail (each received `undefined`); now 14 pass, 0 fail. Readings, mutations and the local and CI-only runs
+are in `codium-deviations.md`, "Codium finish: F6 cost kind on read (15 Nov 2026)". Nothing remains of the owner step 9
+hand-off for this tree's reader, since self-evolving and codium are already combined here; engines 1.99.111 and older
+still drop the whole array on a newer kind, which is why the delegated scope stays out of `budgetScopes` (I29). CI ids
+follow in a dated line.
+
 ## A22 stamping and accounting
 
 **F7. The `SessionV1.Event.Updated` strip list might write back stale Codium counts.** Not confirmed. The handler
@@ -1507,3 +1524,7 @@ Open items, each recorded where it is owned:
 **Status, 15 Nov 2026 (Codium finish TB).** F63 and F64 are closed (dated lines under each): by the @vector lane's
 approved V19 evidence correction and the code and tests it describes, with CI receipts from test.yml run 43636452606.
 No code changed. F6, F28, F44 and O1 to O9 are not changed by this package.
+
+**Status, 15 Nov 2026 (Codium finish F6).** P4 finding F6 is closed (dated line under it): this build reads a stored
+cost kind it does not know as `"unknown"` and checks each budget scope on its own, with no schema change. F28, F44 and
+O1 to O9 are not changed by this package.

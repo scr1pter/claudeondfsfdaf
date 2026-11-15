@@ -3133,3 +3133,125 @@ under two minutes), but the run is not green under the lane rule, because of the
   top level, and `test/api-module-loading.test.ts` adds `cloud-agents-ledger.ts` and `model-plan-gateway-hooks.ts` to
   its fresh Node ESM entries (the ledger-first order failed with that ReferenceError before the change). The same
   two-file change is needed on `release-finish`; the lead decides whether it goes there first.
+
+## Codium finish: F6 cost kind on read (15 Nov 2026)
+
+- **Why.** P4 finding F6 (`codium-p4-repairs.md`, the F6 paragraph; not Everywhere's F6 in `v2-master-prompt.md`), the
+  F6 bullet of "P4 review decisions (8 Nov 2026)" above, which this section closes without editing, and label plan §6,
+  row "Downgrading the database" (`codium-label-plan.md:344`): the self-evolving branch should decode a persisted cost
+  kind it does not know as `"unknown"`, as WP1 does for interruption causes. Self-evolving is part of this tree
+  (`e0bfa00b`, `0c1f1b52` and `d36a3607` are ancestors of `codium-finish` `31ddb43b`), so F6 closes here.
+- **Change.** One source file, `packages/engine/src/tool/subagent-lifecycle.ts`. `read()` (`:279`) dropped its
+  `Schema.decodeUnknownOption(Schema.Array(Task.BudgetScope))(value.budgetScopes)` (old `:299`, consumed at old `:317`).
+  The `budgetScopes` field (`:316-328`) now maps a stored array scope by scope through the existing `decoded()` helper
+  (`:232`), after replacing a string `costKind` that `Schema.is(RunBudget.CostKind)` rejects with `"unknown"`. The
+  callback parameter is typed `unknown`, so no `any` flows from `Array.isArray`. `read()`'s signature and
+  `SubagentRecord.budgetScopes` (`packages/engine/src/agent/subagent-kind.ts:129`) are unchanged. `RunBudget.CostKind`
+  (`packages/schema/src/run-budget.ts:26`), `RunBudget.StopReason` (`:17`), `Task.BudgetScope`
+  (`packages/schema/src/task.ts:37-48`), the SDK, openapi, `src/generated`, `src/generated-effect` and `config.json` are
+  unchanged, so no generator ran. No flag or setting.
+- **R1, which strings are mapped.** Only a string `costKind` this build does not know becomes `"unknown"`. An absent
+  `costKind` stays absent, so a 1.99.111 scope never gains `"unknown"`. A non-string `costKind` (a number, `null`) is
+  malformed and drops its scope; the malformed test covers `7` and `null`.
+- **R2, malformed scopes drop alone.** A scope with no `id`, no `spentUsd`, a non-finite number, a `budget` that fails
+  `RunBudget.Info`, a `kind` outside run, batch and child (for example `"delegated"`), or a non-object entry is dropped
+  and its siblings are kept; this answers the brief's "say which": the good scope is kept, not the old all-or-nothing.
+  A `budgetScopes` value that is not an array still reads as undefined. An array whose every entry fails reads as `[]`,
+  as `mailbox` does, and the malformed test pins both edges. `[]` is already a normal stored value, since `scopeFields()`
+  (`:710`) stores `budgetScopes: []` for a delegated-only record (`subagent-lifecycle-read.test.ts:66-68`). The one
+  visible difference: `packages/engine/src/task/manager.ts:478-480` passes a settled task's `current.budgetScopes` into
+  `Task.Info`, so a stored array whose every scope is corrupt now lists as `budgetScopes: []` where the old reading left
+  the field out, which is the value an active delegated-only task already lists (`:479`). In-engine consumers treat the
+  two alike (`notify.ts:401` `.some` is false for both).
+- **R3, unknown stop reasons.** A `stopped.reason` this build does not know still drops that scope. `RunBudget.StopReason`
+  has no `"unknown"` value, adding one would change the schema, the SDK and openapi, and the contract names no fallback.
+  As before, a dropped stopped scope is invisible to `notify.ts` `launchStopped` (`:401-403`), so a launch a newer
+  version stopped for a new reason can still wake its parent; keeping the stop would need a StopReason fallback, which
+  is a schema change outside this package. The old all-or-nothing decode behaved the same way, so this is not a
+  regression.
+- **R4, the WP1 test whose assertion changed.** `subagent-lifecycle-read.test.ts:143` ("budgetScopes with an unknown
+  kind is ignored and does not erase delegatedScope") implements `multiagent-parity-spec.md:1547`. That line is read as
+  "the scope with the unknown kind is ignored", not "the whole array is ignored", so its `budgetScopes` assertion moves
+  from `toBeUndefined()` to exactly `[run]` (`:161`): a stricter exact value, not a looser one; the name and the
+  `delegatedScope` assertion are unchanged. `multiagent-parity-spec.md:410` ("Older engines decode ... with
+  `Schema.Array(Task.BudgetScope)`, and one unknown kind would drop every scope") describes 1.99.111-and-earlier engines,
+  which this change does not alter, so it stays true, and I29 (`:181-185`) still holds: the delegated scope stays out of
+  `budgetScopes` (`scopeFields()`), because those older engines still drop the whole array. Only this build's reader
+  becomes per-scope.
+- **R5, write-back.** `write()` (`:385`) stores `merge(read(info), patch)` (`:396`), so once this build updates a record a
+  newer kind is stored as `"unknown"` and malformed scopes leave storage. Interruption causes and every other checked
+  field already behave this way, and it loses strictly less than the old source, which wrote every scope away. The
+  residue is one-way: a downgrade followed by an upgrade keeps the scope but stores its kind as `"unknown"` for good,
+  which reads as cost unknown and never as priced, plan or Codium. Keeping the original string would need a schema
+  change, which this package does not make.
+- **R6, consumers of the read value.** `packages/engine/src/task/notify.ts:395-406` (`launchStopped`) reads through
+  `read()`; a true there marks the note as not waking the parent (`:568-575`), so keeping more scopes can only hold a
+  wake the old reading would have sent, never add one. `packages/engine/src/task/manager.ts:333` and `:478-480` (settled
+  tasks keep `current.budgetScopes`) and `:674` (desktop-mirrored rows) pass the value into `Task.Info`, whose encode
+  accepts `"unknown"`. No first-party UI reads a stored scope's `costKind`, and no spend decision does: the guard keeps
+  its ledger in memory and is never restored from records.
+- **R7, other readers grepped, none changed.** Each reads fresh values, or reads stored data without a schema decode,
+  so an unknown kind fails safe:
+  - `packages/engine/src/task/manager.ts:478-479` writes `scopeFields(guard.scopes())` and `:446` writes a fresh
+    `costKind: "unknown"`; `packages/engine/src/tool/task.ts:1955` clears `budgetScopes` on resume; their reads go
+    through `read()`.
+  - `packages/core/src/spend-guard.ts` is an in-memory ledger; its kinds come from `costKindOf` (`:40`) and its
+    `SessionStatusEvent.Spend` publishes (`:698`, `:712`) carry fresh values. `Spend.costKind`
+    (`packages/schema/src/session-status-event.ts:66`) is a live bus event, and `packages/engine/src/server/routes/
+    instance/httpapi/groups/memory.ts:565,606` are response schemas for fresh values.
+  - `packages/core/src/brain/sql.ts:403` `cost_kinds` is a drizzle JSON column typed with `$type` only and never decoded.
+    `packages/core/src/brain/workflow.ts:343-349` prices a run only if every counted kind is `"priced"` and gives Codium
+    units only if every kind is `"codium"`, and `:586-611` counts an unknown key as a non-Codium kind, so an unknown key
+    fails safe. `packages/core/src/brain/knowledge.ts:7145` (`historyDetail`) compares a stored receipt's
+    `detail.costKind` with `"codium"` as a raw string. Brain files are shared with VectorScope and none drops data, so
+    they are untouched.
+  - `packages/core/src/codium-usage.ts:18` (`taskText`) compares `Task.Info.costKind` strings; an unknown kind falls into
+    its "cost unknown" or default branches.
+  - `packages/desktop/src/main/run-usage.ts:31` decodes `RunBudget.Snapshot` from the bundled engine: no skew (label plan
+    §6).
+- **Tests.** `packages/engine/test/tool/subagent-lifecycle-read.test.ts`, written before the source change:
+  - new "a cost kind a newer version added reads as unknown and keeps the other scope" (`:166`): a codium run scope and
+    a child scope with `costKind: "future-kind"` and a cap stop read back as both, the second with `costKind: "unknown"`
+    and every other field intact;
+  - new "a malformed budget scope drops alone and keeps the others" (`:193`): a batch scope with no `costKind` beside
+    child scopes with no `id`, no `spentUsd`, a NaN `spentUsd`, `budget: { usd: 0 }`, `costKind: 7`, `costKind: null`
+    and `stopped.reason: "drift"`, plus `"scope"` and `null`, reads back as exactly the batch scope, still with no
+    `costKind`; `[null, { kind: "run" }]` and `[{ kind: "delegated", id: "x" }, null]` read as `[]` (R2), and a
+    non-array `budgetScopes` reads as undefined;
+  - changed `:143` (R4).
+  - Red against the old source (tests changed, source not): 11 pass, 3 fail, each failure receiving `undefined`. Green
+    now: 14 pass, 0 fail. Mutations, each restored by an edit: m1, no `costKind` mapping: 13 pass, 1 fail (the
+    cost-kind case); m2, mapping every non-known kind including absent and non-string ones: 12 pass, 2 fail (`:143`, whose
+    run scope gained `"unknown"`, and the malformed case); m3, the old whole-array decode: 11 pass, 3 fail; m4, added
+    with the review fixes, an array whose every scope fails read as undefined: 13 pass, 1 fail (the malformed case, at
+    its first `[]` assertion, received `undefined`).
+  - After the review fixes (the two `[]` assertions, the shorter source comment, these records), the read file gave
+    14 pass, 0 fail again, and `test/tool/subagent-lifecycle.test.ts` 18 pass, 0 fail; `bun typecheck` in
+    `packages/engine` and `prettier --check` on both `.ts` files passed. `task.test.ts`, `task-manage.test.ts` and the
+    `prompt.test.ts` case were not re-run: the source change since those runs is the comment only.
+- **Ran locally**, each through `vector-serial`, one file at a time from `packages/engine` with `--timeout 30000`:
+  `test/tool/subagent-lifecycle-read.test.ts` (14/0), `test/tool/subagent-lifecycle.test.ts` (18/0),
+  `test/tool/task.test.ts` (161/0; its stopped-scope launch cases go through `read()`), `test/tool/task-manage.test.ts`
+  (52/0; `:1198` checks `budgetScopes` visibility), and `test/session/prompt.test.ts` filtered with `-t` to "legacy
+  accounting keeps a late background batch charge on its launch run after a new root run" (1/0; its `:6176` checks the
+  scopes stored after `write()` equal the guard's exactly), not the whole file. `bun typecheck` in `packages/engine`
+  passed. `prettier --check` on the two changed `.ts` files passed after `prettier --write` of the test file, and
+  `git diff --check` is clean. After the records were written, `test/compliance/upstream-free.test.ts` gave 11 pass,
+  1 fail, the failure being `:148` ("a GitHub token does not take the default model from an OpenAI key"), the
+  host-environment failure already recorded as For the lead item 7 of "Codium finish: Track B receipts and P4 closings
+  (15 Nov 2026)", unrelated to this change. `git diff --stat origin/codium-finish -- packages/schema packages/sdk
+  packages/client/src/generated packages/client/src/generated-effect packages/web/public/config.json` is empty. Only
+  the read test is selected by the lane picker (changed since the base); the other four are local-only until the
+  lead's end-of-lane test.yml.
+- **Only in CI.** The Vector Codium dispatch on `codium-finish` (the Codium tests job selects the changed
+  `subagent-lifecycle-read.test.ts`; its required receipt is that file in the picker list plus the "Codium: N/N test files
+  passed" summary, and its per-file line is cited only if the visible log tail shows it), the HttpApi exerciser,
+  `check:generated`, and typecheck.yml on the same ref. No vector-hosted-ci.yml run: no hosted file changed. Not
+  committed or pushed by this package's build step, so no CI id exists yet; a dated line follows.
+- **For the lead.** The desktop task-bridge store (`packages/engine/src/task/desktop.ts:24-33`, decoded at `:100`)
+  decodes stored `Task.Info` rows, `costKind` and `budgetScopes` among them, with the closed literals; it is a 75-second
+  lease snapshot (`:36`) the desktop rewrites, desktop and engine ship together, `Task.Info`'s closed status, source and
+  billing literals would fail the same way, and a failed read returns `invalid` with a reconnect message. VectorScope's
+  `packages/core/src/review/local-result.ts:26` decodes a retained result's cost kind with its own closed literal. Both
+  are recorded readings, not changed; each is a package of its own if the lead wants downgrade tolerance there.
+- Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
