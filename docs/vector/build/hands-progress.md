@@ -1739,3 +1739,54 @@ No test required a version bump for the Windows-only edits. Desktop `bun typeche
 **Deferred.** Windows x64 and ARM64 results at this source will come from the post-push `test.yml` dispatch with `computer_helper=true` and `computer_helper_target=windows`, which HF-4 records. Mac lock confirmation at the merged source comes from the lane's final full `test.yml`. Every owner gate stays open: production signing and notarization, the Clean Mac and Windows 11 device checklists, Reset, and publication. HF-1 gives no release, signing or device credit.
 
 HF-1 leaves the stale lane-routing text for the lane's follow-up docs package, which runs after this merge so it cannot conflict with the merged top blocks: the "Work only on `hands` ... Do not merge or push to `main`" paragraph directly below this checkpoint's top block, the `hands-handoff.md` header (missing anchor and "Main `0dcbb8e2` integration is in progress"), the previews `43154306544`, `43552031298` and `43560764334` missing from `hands-release-artifacts.md`, and the "Do not merge `hands` into `main`" sentence in `owner-actions/hands-release.md`.
+
+## HF-2 — MCP and PTY isolation-order tests (15 November 2026)
+
+HF-2 starts at `acd0c9bb` on `hands-finish`, after the HF-1 merge `6179bd42` and its restore. It adds the PTY and MCP halves of spawn-review tests S6-5 and S6-7 and answers the §4.2 "Not checked" item in [v2-spawn-review.md](./v2-spawn-review.md). It is test-only: no file under `packages/*/src` changed, including `engine/src/mcp/index.ts`, `engine/src/mcp/stdio.ts`, `core/src/pty.ts` and `core/src/process-isolation.ts`. C5 (`core/pty.ts:240-242`), C6 (`mcp/index.ts:485-488`), C7 and C8 (`renderer-status.ts:15`) were already resolved and are unchanged. The [deviation entry](./hands-deviations.md#hf-2--isolation-order-tests-ask-the-launch-floor-and-use-its-loader-guard) records the corrected premises and the choices below.
+
+**§4.2 answer.** `localTransport` (`engine/mcp/stdio.ts:13`) runs `ProcessIsolation.launch` inside `Effect.promise` (`mcp/index.ts:489`), so a launch-floor refusal is a defect inside `connectLocal`. `MCP.create`'s `Effect.catchCause` (`:553-559`) re-interrupts a cause that holds only interrupts and turns every other cause into `{ status: "failed", error: message }`. The new MCP regression case proves it, so no MCP code changed.
+
+**New files.**
+
+- `packages/engine/test/fixture/mcp-required-isolation.ts` is a child fixture that calls `ProcessIsolation.requireIsolation()` at load. It builds the real MCP layer as `test/mcp/isolation.test.ts` does: `TestConfig`, a mocked `McpAuth`, a trusted workspace, the real spawner and a Node stdio server that writes a marker before its handshake. It uses no fake transport and no module mock. Its four cases are:
+  - **S6-7, inherited and loader environments.** Under `computer: { enabled: false }`, `python3 <instance>/computer_control_mcp.py <marker>` ends as `{ status: "failed", error: <the policy's text> }`. That text contains neither `ProcessIsolation.REFUSAL`, `/usr/bin/bwrap`, `--die-with-parent` nor the floor's own message, there is no client, and the marker never appears. The loader variant first asserts that the launch floor refuses the same argv and environment.
+  - **An allowed command follows ProcessIsolation's own launch decision.** Where `launch` refuses the Node server (off Linux), the status is failed with exactly that message, there is no client or marker, and the fixture prints `MCP_REQUIRED_ISOLATION_LAUNCH=refused`. Where it plans plainly (Linux while `FLOOR` is false), nothing starts and the fixture prints `=planned`.
+  - **The §4.2 regression.** With a loader environment, startup and a second `connect` both end as failed with the floor's message, with no client, no tools and no marker, and no defect escapes.
+- `packages/engine/test/mcp/computer-policy-isolation.test.ts` is the parent. It runs `bun test --timeout 30000 ./test/fixture/mcp-required-isolation.ts` from `packages/engine`, kills the child at 50 s, allows 60 s, and expects exit 0, `4 pass`, ` 0 fail` and a `MCP_REQUIRED_ISOLATION_LAUNCH=planned|refused` line. It has no platform gate.
+- `packages/core/test/pty/pty-required-isolation.test.ts` respawns itself with `VECTOR_TEST_PTY_REQUIRED_ISOLATION=1` and reuses `pty-session.test.ts`'s layer (`Pty` and `EventV2` with a mocked `Config` and a fixed `Location`). Its child cases, both `it.live`, start a terminal whose environment sets `LD_PRELOAD=refused-test-loader`:
+  - **Control.** A passing `beforeSpawn` is followed by the floor's own refusal. The order is `["before-spawn"]`, `pty.list()` is empty and there is no marker.
+  - **S6-5.** A `beforeSpawn` that dies reports its own message, which is neither REFUSAL nor the floor's message. The order is `["before-spawn"]`, `pty.list()` is empty and there is no marker.
+  - The parent case is skipped on Windows, as every PTY suite is, and in its own child process. It is a gated top-level `test.skipIf`, not an `else` branch.
+
+**Which branch each host takes.**
+
+- **This sandbox and test.yml Linux.** Only the loader variant of S6-7 decides the order. The allowed command takes the `planned` branch, the §4.2 refusal is the loader guard, and the PTY test runs in the Linux unit lane.
+- **test.yml Windows engine shards.** Both S6-7 variants decide the order. The allowed command takes the `refused` branch with REFUSAL, the §4.2 refusal is still the loader guard, and the PTY test is skipped.
+- test.yml has no macOS unit or engine lane.
+
+**Mutation checks.** Each was a temporary edit, reverted at once with `git checkout`; `git diff --stat HEAD -- 'packages/*/src'` printed nothing afterwards.
+
+- Running `ProcessIsolation.launch` before `beforeSpawn` in `pty.ts` failed both PTY child cases. S6-5 received the loader message, and the control case recorded no recheck.
+- Moving the MCP policy check after `localTransport` failed only the loader S6-7 variant (3 passed, 1 failed).
+- Making `MCP.create`'s `catchCause` re-raise every cause as a defect failed only the §4.2 case (3 passed, 1 failed).
+
+**Local checks.** Bun 1.3.14 ran under the serial lock, one file per command, each with `bun test --timeout 30000`, with `TMPDIR`, `XDG_*` and `VECTOR_TEST_HOME` under `/tmp/vector-v2/hands/hf2/`.
+
+- From `packages/engine`:
+  - `test/mcp/computer-policy.test.ts`: 25 passed / 0 failed, 161 assertions;
+  - `test/mcp/isolation.test.ts`: 4 / 0, 21 assertions;
+  - `test/mcp/lifecycle.test.ts`: 42 / 0, 139 assertions;
+  - the new `test/mcp/computer-policy-isolation.test.ts`: 1 / 0, 4 assertions, with the child printing `planned`;
+  - the fixture run directly as `./test/fixture/mcp-required-isolation.ts`: 4 / 0, 19 assertions. The bare form `test/fixture/mcp-required-isolation.ts` exits 1 with "did not match any test files", because Bun reads it as a name filter.
+- From `packages/core`:
+  - `test/pty/pty-session.test.ts`: 9 / 0, 36 assertions;
+  - the new `test/pty/pty-required-isolation.test.ts`: 1 / 0, 3 assertions. Its child mode, run directly with `VECTOR_TEST_PTY_REQUIRED_ISOLATION=1`, gave 2 passed / 1 skipped (the parent case) / 0 failed, 10 assertions.
+
+The first engine `bun typecheck` failed on the fixture: `toEqual` rejected a `status` widened to `string`, which `bun test` does not check. The fix was `"failed" as const`, after which engine `bun typecheck` exited 0. Core `bun typecheck` exited 0, and the full tree `bun turbo typecheck --concurrency=2` passed 27 of 27 tasks. Prettier `--check` passes on the three new files. `git diff --check` passes, and `git diff --stat HEAD -- 'packages/*/src'` prints nothing. The three-way merge of `v2-spawn-review.md` with `origin/review-fixes` (`1433d105`) and with `origin/release-finish` (`cf2373c4`), both from merge-base `0ee486e3`, is clean. Neither branch touches this record or the deviations log after that base. On this record and the deviations log, Prettier reports the same findings as at `acd0c9bb` (123 and 20 changed lines), and the HF-2 edits add none. On `v2-spawn-review.md` it reports 86 changed lines, the same as at `acd0c9bb`. All of them are in tables that were already unaligned at `acd0c9bb`, including the S6 table whose S6-5 and S6-7 rows HF-2 extends.
+
+**Deferred.**
+
+- **Windows results.** These cover the MCP parent's `refused` branch, the inherited-environment S6-7 variant deciding the order, and the first run of the `./`-relative fixture path on Windows. test.yml runs on push only for `main` and `v2`, so a push to `hands-finish` starts nothing. After the HF-2 commit is pushed, the route is a `test.yml` dispatch on ref `hands-finish` with default inputs; with no exclusive input set, `unit` (`test.yml:548`), `engine-linux` (`:745`) and `engine-windows` (`:797`) all run. If the lane PR opens first, its `pull_request` run supplies the same lanes. The Windows result is pending, with no run id yet. On Linux the allowed-command case takes the `planned` branch and makes no assertion of its own, so Bun counts it as a pass with zero assertions and the parent accepts either line. HF-2 is not described as fully validated until HF-4, or the lane PR's `test.yml` run, records a Windows engine-shard log showing `MCP_REQUIRED_ISOLATION_LAUNCH=refused`.
+- **Platform gaps.** There is no macOS lane, and the Windows PTY half is not run because of the PTY suites' gate.
+- **Other lanes.** The shell halves of S6-5 (background and foreground shells) stay with the spawn test lanes; on Windows `ShellJobs.isolationRefusal` refuses before the recheck. The optional second recheck (C1), SPAWN-1/2/3 and S4-3/S4-5 also stay with their lanes.
+- **This record.** The top block of this checkpoint is unchanged; it stays with the lane's follow-up docs package.
