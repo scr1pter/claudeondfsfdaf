@@ -1198,3 +1198,100 @@ Source: `connect-finish` at `6f3a78ad`. This repair changes one constant in `pac
 - **Fix.** `REVIEW_PIPELINE_SOURCES` is now `935a21d2165f9d29`. `REVIEW_PIPELINE_REVISION` stays 4. The hub.ts changes decide whether a directory-review request key is bound, replayed, tombstoned or stopped, and when a queued job is released. They do not change what a review reads, finds or posts, and the extracted helpers keep the same checks. This is the same ownership deviation as CN-06 and CN-07: spec §7.1 gives core `src/review/**` to VectorScope, so the VectorScope owner should acknowledge it and may still decide to bump the revision. It needs the lead's acceptance.
 - **Not this branch's.** Shard 1's `docs-config-reference.test.ts` ("company computer policy samples decode and state their minimum engine version", `toContain("1.99.112")` at :46) and shard 3/4's `cloud-agents-ledger.test.ts` and `model-plan-gateway-hooks.test.ts` (`ReferenceError: Cannot access 'METER_EPOCH_PATTERN' before initialization` at `api/_lib/cloud-agents-run-token.ts:57`) are inherited from release-finish `cf2373c4`, as in every CI check since CN-04. Their fixes are on their owning lanes.
 - **Receipts.** `test/review/model-evidence.test.ts` from packages/core: 30 pass, 0 fail, 393 expect() calls. `bun typecheck` passed in packages/core. The full-tree typecheck is run before the push. *CI:* none is claimed; the dispatched Vector Codium run's shard 1 is the authority.
+
+## 2026-11-15 — C6c: the app recovers from a consumed directory review key (CN-10)
+
+Source: `connect-finish` at `be1eef43`. This package changes four app files in `packages/app/src/features/connect/`: `client.ts`, `directory-review-reservation.ts`, `directory-review-controller.ts` and `directory-review.tsx`. Its tests are in `client.test.ts`, `directory-review-controller.test.ts` and `directory-review-reservation.test.ts`, plus one new case in `packages/app/e2e/regression/directory-review.spec.ts`. It changes no route, public schema, SDK or generated file, flag, workflow or engine file, and nothing was regenerated: CN-08 already added `pending` and `consumed` to `ConnectApiError` and to the regenerated SDK type (`packages/sdk/js/src/v2/gen/types.gen.ts:4705-4707`). With Connect off, `DirectoryReview` mounts no controller, because it needs `capabilities().connections`, which is `flags.experimentalConnect` (engine `server/routes/instance/httpapi/handlers/experimental.ts:370`). So nothing here reads, posts or writes storage.
+
+- **What it closes.** The app half of review connect:correctness-security #6's failing scenario: "the app keeps the key in sessionStorage and only offers 'Retry review start', which answers pending forever". That is v2-complete-plan §4.1 C6 **B**. With CN-08 (keys reconcile to bound or consumed) and CN-09 (settled keys are pruned), C6 is closed except for the Known limits those two entries record and the Held items below, including the replay-window item CN-09 asked for. As in CN-01, the plan and review-findings files are not edited.
+- **Confirm first.** C1 and C2 (controller) and R1 (reservation) were written before any fix and run against `be1eef43`'s sources. All three failed:
+  - C1 failed at the discard count (expected 1, received 0);
+  - C2 failed because there was no `admissionAnswer`;
+  - R1 failed because sessionStorage still held the first key after the engine answered `consumed`.
+  At `be1eef43`, every start failure went down one path (`directory-review-controller.ts:207-214`): `admissionUncertain` stayed true and the message was generic. So a consumed key kept "Retry review start", which answered `consumed` for good, and "Review with VectorScope" stayed disabled. The reservation removed its key only in `confirm()`.
+- **How the SDK error reaches the app.** `features/connect/client.ts` `directoryReview` passes `{ throwOnError: true, signal }`. `createVectorClient` installs `wrapClientError` (`packages/sdk/js/src/v2/client.ts:92`). With `throwOnError`, that interceptor (`packages/sdk/js/src/error-interceptor.ts:13-43`) throws `new Error(message, { cause: { body, status } })`. Its `message` prefers `body.data.message`, then `body.message`, then `body.name`, and falls back to the request URL and status (`describe`, `:45`). A fetch failure is rethrown as-is, with no such cause.
+- **What changed.**
+  - *`client.ts`.* `directoryReviewAnswer(error)` (`:68`) returns `{ code: "pending" | "consumed", message }` only for an `Error` whose `cause` has `status === 400` and an object `body` with one of those two codes and a non-empty string `body.message`. Anything else returns `undefined`: another status, another code, an empty or missing message, a non-Error, or a fetch failure. It reads `cause.body.message`, never `error.message`, so the request URL fallback is never shown as the engine's words. The type `DirectoryReviewAnswer` (`:62`) narrows the generated `ConnectApiError["code"]` with `Extract`, so a renamed engine code fails the app typecheck.
+  - *`directory-review-reservation.ts`.* `confirm` and the new `discard` (`:66`, `:68`) share one `clear` (`:31`). It throws "The saved review request changed." unless storage still holds this view's exact captured raw marker; otherwise it removes the key and forgets the retained request. So a marker another view wrote stays. `discard` first treats an empty slot (`getItem(key) === null`, `:70`) as already cleared: another view in the same tab confirmed or discarded the same raw key, so nothing is left to protect. It forgets the retained request and returns. `confirm` keeps its strict check. The next `hold(false)` mints a new key. `hold`, `pending`, `request` and the strict 3-field stored format are unchanged.
+  - *`directory-review-controller.ts`.*
+    - `DirectoryReviewState.admissionAnswer` (`:25`) holds the engine's answer for the saved key. It is a separate field because `read()` clears `error` on every owner read (`:115`, `:128`), and `start()` always refreshes after the POST (`:235`).
+    - The `admission` input requires `discard` (`:65`).
+    - The busy update at the start of `start()` clears `admissionAnswer` (`:186`).
+    - The start failure handler (`:219-247`):
+      1. returns at once when the view is no longer current, so a stale answer never discards, just as a stale successful POST never confirms;
+      2. on `pending`, keeps the key, sets `admissionUncertain` and stores the answer;
+      3. on any other failure except `consumed`, keeps today's generic path;
+      4. on `consumed`, calls `discard()` inside a `try` that wraps only that call (`:235-242`), like the `held` IIFE before the POST. It then stores the answer and sets `admissionUncertain` to whether the discard was refused (`:245`). A refused discard (another view replaced the marker, or storage threw) keeps the key held and `admissionUncertain` true, but the engine's answer is still kept for the card. There is no chained `.catch` after the handler, so a fault in `update()` or `changed` there still rejects `start()`, as before CN-10.
+    - `read()` drops a `consumed` answer once another view's run replaces it (`:126-137`): when the shown run is live, or is not the run that was shown when the answer arrived. `consumedRun` (`:83`) records that run's id in the consumed branch (`:244`). So the message stays beside the finished run it was answered beside, and goes for good once a live run or a newer run appears, even if that newer run is first seen already done. A refused discard keeps its answer, because its held guidance still applies.
+    - Nothing calls `start()` on its own. The existing guards already refuse `start(true)` once `admissionUncertain` is false, so a consumed key can never be retried. A new key is minted only inside the person's next `start()` click (`hold(false)` → `requestKey()`).
+    - `bound` is unchanged: a 200 replay goes through `.then` → `confirm()`.
+  - *`directory-review.tsx`.*
+    - `changed` passes `admissionAnswer` explicitly (`:110`), as it already does for `run` and `permission`. Otherwise the store's shallow merge would keep a previous controller's answer. The unavailable reset clears it too (`:94`).
+    - On `consumed`, the card shows the engine's message while no live run is shown (`:227-229`), and the primary button reads "Start a new review" (`:268-272`). It is the same button and the same `controller?.start()`.
+    - On `pending`, the engine's message takes the place of the generic "The review start is unconfirmed…" paragraph inside the Retry block (`:232-236`). "Retry review start" is unchanged and is still shown only while `admissionUncertain` is true, so it stays on `pending` and disappears on `consumed`.
+    - On a `consumed` answer whose discard was refused, the Retry block keeps the engine's message above it and shows "This view can no longer track its saved review request. Reopen the workspace to continue." in place of the generic paragraph (`:235`). It hides "Retry review start" (`:239`), because that retry can only fail at `hold(true)`. Reopening captures whatever marker is saved now. The primary button stays disabled while `admissionUncertain` is true.
+- **Decisions.**
+  - A separate `admissionAnswer` field, not `error`, because owner reads clear `error`.
+  - The primary button is relabelled for the consumed case. There is no second button.
+  - Only a typed 400 `pending` or `consumed` answer is acted on, and everything else keeps the key held, as before. That includes `invalid`, `forbidden`, a 5xx, a body with an unknown or missing code or message, and a fetch failure.
+  - Strings stay hard-coded English, as everywhere in these files. The i18n parity test checks only two command keys and stays green.
+  - The plan's six-code `Record<ConnectApiError["code"], true>` was dropped, as the critique suggested. The one caller acts only on `pending` and `consumed`, so the helper narrows to those two.
+  - The critique's R3 point was right and option (a) was taken. The reservation test R3 checks behaviour only after a consumed answer whose discard is refused: the replacement marker is unchanged, `admissionUncertain` is true, `admissionAnswer` is the engine's `consumed` answer (review round one), and `start()` and `start(true)` send no further POST. The plan's hoisted `UNTRACKED` literal was not added. The "cannot be tracked safely" text R3 also checks comes from the later `start(true)`, whose hold failure returns before any refresh. A message in `error` set in the failure handler would be wiped by the refresh that follows, which is why the held guidance hangs off `admissionAnswer`.
+- **Held.**
+  - *CN-09's replay-window request is not built.* CN-09's entry asked that "CN-10's recovery should treat a key older than the replay window as possibly new". CN-10 does not do this. An age would change the strict 3-field marker that `read()` checks (`Object.keys(value).length !== 3`), and the brief scoped this package to the three engine answers. The risk is concrete. After the engine prunes a settled key (after `REPLAY_MS`, 24 hours, while its directory or the ledger is full, or after `RETENTION_MS`, 30 days), a retried key is a new request and can start a second review, which may be billed. A retry is always an explicit click, and the engine asks for consent under its policy, but a saved `connect_model` approval can skip that ask. Follow-up, unscheduled: a `savedAt` field in the marker, read in both the old and new shapes, so an old key can be shown as possibly new before a retry.
+  - The bound-but-unreplayable answer is `invalid` ("This request key is consumed, but its original owned run is unavailable. No new review was started.", `engine/src/connect/owner.ts:429-433`), so the app keeps that key held for good. Its words say consumed, but the app acts only on the typed code. Changing that engine answer is out of scope (CN-08 Held).
+  - The bound-refused replay inconsistency (first 400 `invalid`, retry 200 `refused`) stays as CN-08 recorded it. In the app, the 200 replay confirms and shows the refused result.
+  - A first start refused with `forbidden` or `invalid` keeps its key until one explicit retry answers `consumed`, which CN-08 makes the retry's answer. That retry then clears the key and offers "Start a new review".
+  - A second mounted view that captured the same raw marker, and retries after another view discarded or confirmed it, stays blocked ("cannot be tracked safely" from `hold(true)`) until it remounts. That is the same behaviour `confirm()` already had. Since review round one, a second view whose own POST answers `consumed` after the slot was emptied recovers: `discard` sees no marker, and the view offers "Start a new review" (R5).
+  - `start(true)` called directly on a consumed answer whose discard was refused clears the answer at its busy update and then fails at `hold(true)`, so the generic uncertain text returns. The card hides Retry in that state, so this is reachable only from code (R3 does it on purpose).
+  - A run selected by a stored `runID` is read with `get` alone, as before CN-10. So once a finished run is shown, a run another view starts later is not listed until this view reselects (a start or a remount), and a consumed message shown beside that finished run stays until then.
+  - While `pending`, if a later owner read finds the bound run, the pending message and Retry stay until a click, as today's Retry block does.
+  - Q6 neutral: this uses only the existing `POST /experimental/connect/review` route and the file ledger. Flags stay off, and Q1 stays open.
+- **Deferred verification.** The new e2e case, "a consumed review key is cleared and only an explicit new start sends a fresh key" (`directory-review.spec.ts:317`), was not run locally (rules), and no CI run is claimed for it. It runs in `connect-app-validation.yml` (push to `main` or `workflow_dispatch`; `--retries 0`) and in test.yml's app e2e job on a pull request (`bun --cwd packages/app test:e2e`, retries 2 in CI). A push to `connect-finish` alone runs neither. After this package's push, dispatch `connect-app-validation.yml` on `connect-finish` and record the run here; until then it is deferred, with no CI run. Its flow:
+  1. a lost POST;
+  2. Retry answers 400 `pending`: the engine's message shows, Retry stays enabled, and one marker is saved;
+  3. Retry answers 400 `consumed`: the engine's message shows, Retry is gone, "Start a new review" is enabled, and no `connect.directory-admission.` key is left;
+  4. a Refresh and a `connect.run.updated` event send no POST, and the three bodies are identical;
+  5. "Start a new review" sends a fourth body with a new UUID and the same target and background, the card shows "Review in progress", and no marker is left.
+  `bun run typecheck:e2e` (static tsgo, no Playwright) passes.
+- **Receipts.** All from `packages/app`, through `/home/user/.tools/vector-serial`, one file at a time with `--timeout 30000`.
+  - `src/features/connect/directory-review-controller.test.ts`: 27 pass, 0 fail, 151 expect() calls. That is 13 at `be1eef43`, plus C1, C2, C3 and six C4 cases, plus five from review round one: C5 (a refused discard keeps the key held and the engine's answer, also beside a live run listed later), C6 (the answer stays beside the finished run it was answered beside), two C7 cases (another view's later running or done run replaces the answer for good) and C8 (a consumed retry beside another view's live run leaves only that run).
+  - `src/features/connect/directory-review-reservation.test.ts`: 9 pass, 0 fail, 83 expect() calls. That is 4 at `be1eef43`, plus R1 to R4, plus R5 from review round one: two views hold the same key, both retries answer `consumed`, the second discard finds the slot empty, both views offer a new start, and the second view's click sends a fresh key. R3 now also asserts the kept `consumed` answer, and R4 now asserts that `discard` on an empty slot is a no-op that mints nothing.
+  - `src/features/connect/client.test.ts`: 6 pass, 0 fail, 31 expect() calls. That is 5 at `be1eef43`, plus one.
+  - `src/i18n/parity.test.ts`: 1 pass, 0 fail, 68 expect() calls.
+  - Mutations, each run against all three connect test files and restored from a saved copy, verified with `sha256sum -c`:
+
+    | Mutation | Caught by |
+    | --- | --- |
+    | `consumed` handled as the generic failure | C1, R1 |
+    | `discard` does not remove the key | R1, R3, R4 |
+    | `discard` skips the exact-raw check | R3, R4 |
+    | `consumed` starts again automatically, once | C1, R1 |
+    | the same, without a bound (an automatic retry loop) | R1. The controller file hangs instead: its fakes answer only in microtasks, so the loop starves the 30 s test timer. The run was stopped by `timeout 120`. |
+    | `directoryReviewAnswer` ignores the status | C4 (a consumed code on another status), and the client case |
+    | `pending` also discards | C2, R2 |
+    | a stale answer discards (no `current()` check) | C3 |
+    | the message read from `error.message`, with the body-message check removed | C4 (a consumed answer without a message), and the client case |
+    | only the returned message taken from `error.message` | the client case, through its `data.message` body. Before that assertion was added, this mutant was equivalent for the engine's real body shape. |
+    | the busy update keeps `admissionAnswer` | C1, C2, R1, R2 |
+
+  - After the mutation runs, the five early returns in `directoryReviewAnswer` became `return undefined`, which clears oxlint's `consistent-return`. Behaviour is identical, and all three connect files were rerun with the counts above.
+  - Review round one mutations, run the same way against the controller and reservation test files and restored from `/tmp/vector-v2/connect/cn10-mut/` with `sha256sum -c`:
+
+    | Mutation | Caught by |
+    | --- | --- |
+    | `discard` throws on an empty slot (the round-one fix reverted) | R4, R5 |
+    | a refused discard drops the engine's answer | C5, R3 |
+    | the `discard` `try` removed, so a refusal escapes the handler | C5, R3 |
+    | `read()` never drops a consumed answer | both C7 cases, C8 |
+    | dropped only for a live run | C7 (done) |
+    | dropped only for another run | C8 |
+    | dropped while the discard was refused | C5 |
+    | `consumedRun` never recorded | C6 |
+
+  - Static checks, rerun after review round one:
+    - `bun typecheck` passed in packages/app, and `bun run typecheck:e2e` passed.
+    - `prettier --check` passed on the eight changed code files, and `git diff --check` is clean.
+    - oxlint gave 0 errors and 11 warnings on the eight files, the same 11 as `be1eef43`'s versions of them: `no-unmodified-loop-condition` in the controller, `consistent-return` in the reservation's `read` and in `NativeDirectoryReview`, and eight `no-unnecessary-type-assertion` in client.test.ts's existing cases.
+    - The full-tree typecheck is run before the push.
+  - *CI:* none is claimed.

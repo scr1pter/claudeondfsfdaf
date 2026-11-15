@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
-import { createConnectClient } from "./client"
+import { createConnectClient, directoryReviewAnswer } from "./client"
 import { reviewRun, sessionID } from "./test-fixture"
 
 test("registry reads retain each selected project's model destination", async () => {
@@ -118,4 +118,43 @@ test("directory review preserves the captured authenticated checkout and decodes
     target: { kind: "branch", base: "a".repeat(40) },
     background: true,
   })
+})
+
+test("engine refusals keep their typed code and message; other failures are unknown", async () => {
+  const consumed = {
+    code: "consumed" as const,
+    message: "This review start did not complete and no review ran. Start a new review.",
+  }
+  const pending = {
+    code: "pending" as const,
+    message: "This review start is not confirmed yet. Retry it shortly; a retry never starts a second review.",
+  }
+  const start = (fetch: (request: Request) => Promise<Response>) =>
+    createConnectClient(createVectorClient({ baseUrl: "http://engine.test", fetch })).directoryReview({
+      requestKey: "41b41bdc-cb6b-4c96-98d2-f0bad73db1c2",
+      target: { kind: "branch", base: "a".repeat(40) },
+      background: true,
+    })
+  const answer = (body: unknown, status = 400) =>
+    start(async () => Response.json(body, { status })).catch(directoryReviewAnswer)
+  expect(await answer(consumed)).toEqual(consumed)
+  expect(await answer(pending)).toEqual(pending)
+  expect(await answer({ ...consumed, data: { message: "SDK wrapper text" } })).toEqual(consumed)
+  // The SDK falls back to the request URL when the body has no message; that is never shown as the engine's words.
+  await expect(start(async () => Response.json({ code: "consumed", message: "" }, { status: 400 }))).rejects.toThrow(
+    "http://engine.test",
+  )
+  expect(await answer({ code: "consumed", message: "" })).toBeUndefined()
+  expect(await answer({ code: "consumed" })).toBeUndefined()
+  expect(await answer(consumed, 403)).toBeUndefined()
+  expect(await answer(consumed, 500)).toBeUndefined()
+  expect(await answer({ code: "invalid", message: "The review input is invalid." })).toBeUndefined()
+  expect(await answer({ code: "other", message: "Something else happened." })).toBeUndefined()
+  expect(await answer("consumed")).toBeUndefined()
+  expect(
+    await start(async () => {
+      throw new TypeError("fetch failed")
+    }).catch(directoryReviewAnswer),
+  ).toBeUndefined()
+  expect(directoryReviewAnswer({ message: "Not an error", cause: { status: 400, body: consumed } })).toBeUndefined()
 })
