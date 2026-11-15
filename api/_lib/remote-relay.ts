@@ -13,6 +13,7 @@ import { ApiError } from "./http.js"
  *   revoke-device {account, device}            one device closed and refused for good
  *   erase {account}                            everything the account's object holds (P5)
  *   flags {kill}                               the Worker's kill flag (the owner's `remote` switch)
+ *   job-offer {account, offer}                 the API's signed job offer to every live computer, never a phone (R-C1)
  *
  * The relay's address is VECTOR_REMOTE_RELAY_URL, its `wss://` origin; tickets connect to `<origin>/v1/connect` and the
  * internal calls go to the same host over https. This module imports nothing that reads the plan, so account
@@ -27,7 +28,15 @@ const RELAY_ANSWER_BYTES = 64 * 1024
 export const RELAY_DEVICE_ID = /^[A-Za-z0-9_-]{21}[AQgw]$/
 const ACCOUNT = /^[\x21-\x7e]{1,128}$/
 
-export type RelayAction = "kill" | "suspend" | "presence" | "devices" | "revoke-device" | "erase" | "flags"
+export type RelayAction =
+  | "kill"
+  | "suspend"
+  | "presence"
+  | "devices"
+  | "revoke-device"
+  | "erase"
+  | "flags"
+  | "job-offer"
 export type RelaySuspendReason = "paused" | "frozen" | "owner"
 export type RelayAddress = { socket: string; internal: URL }
 

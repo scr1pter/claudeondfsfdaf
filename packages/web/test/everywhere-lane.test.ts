@@ -297,6 +297,11 @@ describe("the lane's shape", () => {
       "api/_lib/revocation.ts",
       "api/_lib/codium-switches.ts",
       "api/_lib/codium-tombstone.ts",
+      "api/_lib/codium-limits.ts",
+      "api/_lib/codium-snapshot.ts",
+      "api/_lib/remote-config.ts",
+      "api/_lib/remote-relay.ts",
+      "packages/schema/src/codium-copy.ts",
       "packages/desktop/src/main/github-auth.ts",
       "packages/desktop/src/main/github-api.ts",
     ]

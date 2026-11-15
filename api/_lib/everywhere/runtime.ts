@@ -1,5 +1,6 @@
 import { readConfig, type EverywhereConfig } from "./config.js"
 import { codiumAccountAuthority } from "./adapters/account.js"
+import { createRemotePorts } from "./adapters/remote.js"
 import { createJobEvents } from "./events.js"
 import type { JobsContext } from "./jobs.js"
 import type { Platforms } from "./platform.js"
@@ -12,9 +13,15 @@ import { createJiraAdapter } from "./jira/adapter.js"
 import { createJiraRoutes } from "./jira/a2a.js"
 import { everywhereStore } from "./store.js"
 
-/** Unwired services remain unavailable; account guards use the actual deletion key. */
-export function productionPorts(config: EverywhereConfig = readConfig()) {
-  return { ...safePorts(config), accountAuthority: codiumAccountAuthority }
+/**
+ * Unwired services remain unavailable; account guards use the actual deletion key. The laptop route's presence, offer
+ * and plan check (VE-20, adapters/remote.ts) join only once the feature is on and offers can be signed; until then this
+ * is safePorts exactly, with no new read.
+ */
+export function productionPorts(config: EverywhereConfig = readConfig(), fetcher?: typeof fetch) {
+  const ports = { ...safePorts(config), accountAuthority: codiumAccountAuthority }
+  if (!config.enabled || !config.offer) return ports
+  return { ...ports, ...createRemotePorts({ config, fetcher }) }
 }
 
 export function productionPlatformDeps() {

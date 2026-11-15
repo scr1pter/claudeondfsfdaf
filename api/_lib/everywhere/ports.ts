@@ -53,8 +53,10 @@ export type Ports = {
 }
 
 /**
- * Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk. It is also the
- * only grant: Codium's `everywhere` perk only lists (EV-08) until a plan check replaces or joins the allowlist here.
+ * Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk, and under these
+ * ports it is the only grant. productionPorts (runtime.ts) replaces presence, offer and perk with the relay adapter
+ * (adapters/remote.ts, EV-09) once the flag and the offer key are set; its read-only plan check joins the allowlist for
+ * `everywhere` only once the laptop route is wired and the owner lists the perk.
  */
 export function safePorts(config: EverywhereConfig = readConfig()): Ports {
   return {

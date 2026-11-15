@@ -1645,3 +1645,263 @@ time, `--timeout 30000`:
 Committed as `feat(codium): add the unlisted everywhere perk to every paid
 plan`; the push and the run ids are recorded in "EV-08 push receipts" in the
 follow-up docs commit.
+
+## EV-09: relay adapter, presence, offers and the plan check (2026-11-15)
+
+Base: HEAD `3443cfa3` (EV-08), equal to `origin/everywhere-finish`. `git
+fetch origin release-finish main everywhere-finish codium-finish
+review-fixes brain-transport` found release-finish still at `cf2373c4`
+(already merged; no merge needed), main `58f85edc` (not merged; PR #33 is
+not in), codium-finish `420e729f`, review-fixes `1433d105` and
+brain-transport `8f742520`. Preconditions: EV-05 `8caf62cb`, EV-06
+`411317d8`, EV-07 `bd34820c` and EV-08 `3443cfa3` are all ancestors of
+HEAD (`git merge-base --is-ancestor`). The cross-lane diff over the EV-09
+paths and the modules the adapter and its tests import (listed in the
+deviations entry) was empty for codium-finish, main and brain-transport;
+review-fixes touches only vector-everywhere.yml and everywhere-lane.test.ts
+in hunks separate from EV-09's, and a `git merge-tree` of the working tree
+(as a scratch commit, no ref moved) with review-fixes and with
+brain-transport is clean. With codium-finish it conflicts in three files
+EV-09 does not touch, exactly as HEAD already does. The changes are in the
+working tree, not committed. A second fetch at the end found brain-transport
+at `a89fe7a0` (every other tip unchanged); its diff over the same paths is
+still empty, and the merge probe was repeated with the four lane documents
+included: clean with review-fixes (which also edits
+api/_lib/everywhere/erase.ts for DP-1 and spec.md:879 for FIT-5, neither
+touched by EV-09) and with brain-transport `a89fe7a0`.
+
+Files changed (line numbers after EV-09):
+
+- api/_lib/remote-relay.ts: `job-offer {account, offer}` in the header list
+  (:16); `RelayAction` gains `"job-offer"` (:31-39, prettier's one member
+  per line).
+- api/_lib/everywhere/adapters/remote.ts (new, 100 lines):
+  `createRemotePorts` (:27-80) with `remoteCaps` (:36-50), `presence`
+  (:53-62), `offer` (:63-69) and `perk` (:70-78); `planListsEverywhere`
+  (:90-100).
+- api/_lib/everywhere/runtime.ts: the import (:3); `productionPorts(config,
+  fetcher?)` (:16-25) adds the adapter only with `config.enabled` and
+  `config.offer`.
+- api/_lib/everywhere/ports.ts:55-60 and api/_lib/everywhere/config.ts
+  (:48-52, :230-234, :239-246): comments only; `LAPTOP_ROUTE_WIRED` stays
+  `false`.
+- .github/workflows/vector-everywhere.yml:55-59 and
+  packages/web/test/everywhere-lane.test.ts:300-304: api/_lib/codium-limits.ts,
+  codium-snapshot.ts, remote-config.ts, remote-relay.ts and
+  packages/schema/src/codium-copy.ts in the paths and the `helpers` list.
+- packages/web/test/everywhere-remote-adapter.test.ts (new): the relay
+  Worker (`handleRequest` over packages/relay/test/fakes.ts) served by
+  `Bun.serve` on 127.0.0.1, the Codium fakes' store, the fetch guard, a new
+  fetcher per adapter (Codium's 30-s switch cache is per fetcher). Cases:
+  presence (VE-20) :187 online only with Remote on, configured and in the
+  plan, counting computers; :200 the `remote` switch off (and corrupt, and
+  unreadable) is offline while relayPresence says online (E10); :222 each
+  of four Remote settings removed is `not-configured` and the offer is
+  `unavailable`, with no relay call; :243 twelve not-in-plan cases (no
+  snapshot, `none`, paused, frozen, ended, renewing past its grace, active
+  past period end plus grace, another account's, the other Stripe mode, no
+  `remote` caps, 0 computers, an unreadable snapshot) with no relay call and
+  no Remote perk, and a non-UUID account with no store read; :329 renewing
+  and active inside the grace are in the plan; :342 parity with Codium's
+  `includes` on every plan; :354 unreachable on 502, a non-JSON 200, a
+  refused connection, a TimeoutError and a wrong internal secret (401);
+  :383 the relay's kill flag; :395 a suspension through the API's own
+  `relaySuspend`; :410 a stored suspension a live computer still meets. Offers (R-C1): :429 one call, both computers get one
+  `0x02` frame with sixteen zero device bytes and the offer's text, the
+  phone none; :444 delivered 0 is `unavailable`; :454 a 429 (seeded
+  `offers` meta), a 400 and a refused connection each after exactly one
+  call. The
+  everywhere perk: :475 the allowlist with no store read and nothing else
+  while the gate is closed (not wired; wired but unlisted; listed with model
+  plans off); :497 wired and listed, a paid plan joins, frozen, none and
+  unknown do not; :516 `perks-off` with `everywhere`, the `codium` switch
+  `off` and either read failing take it away again, without touching the
+  allowlist or `perk("remote")`; :551 the Slack `repo` word's `maySponsor` follows the same
+  rule. productionPorts: :590 flag off, flag without the offer key, and the
+  offer key without the flag are safePorts with `codiumAccountAuthority`,
+  with no relay call and no store command; :628 with both it uses the
+  adapter. Routing: :648 an online computer gets the offer, verifies it
+  against the pinned key, claims it after the first 2-s poll, and
+  `routeJob` answers `laptop` well inside `TIMING.offerWindowMs`, with
+  progress `finding` then `laptop` and exactly one `presence` and one
+  `job-offer` call.
+- test/remote-relay-contract.test.ts: describe "job offers between the API
+  and the relay (R-C1, EV-09)" (:121): :147 `relayCall("job-offer")` with a
+  `signOffer` offer reaches the account's computer through the Worker byte
+  for byte; :162 the longest offer `OFFER_PATTERN` allows is accepted
+  (`{delivered: 1}`). Cast-free (no listed typecheck covers root test/; a
+  scratch `tsgo` run over the file reported only the pre-existing error at
+  :111).
+- Docs: vector-everywhere-deviations.md (the EV-09 entry),
+  vector-everywhere-spec.md (dated notes after the EV-06 note in §2, after
+  the §3.4 table, after §6.1's EV-08 note, below the phase-3 table for
+  VE-20, under R-C1 and under R-C7), vector-everywhere-handoff.md (a "Relay
+  adapter" status bullet, CI pending; dated notes on the EV-06 bullet and on
+  the "everywhere perk's runtime check" item; a new "Left open" item for
+  the relay-outage refusal), this file.
+
+No env var, flag, route, dependency, install or generated file. Nothing
+becomes reachable on vectordev.ai. No test calls a real host.
+
+Checks (each through `vector-serial`, one file per run, `--timeout 30000`;
+packages/web from its directory, root files from test/):
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-remote-adapter.test.ts (new) | 17 pass, 0 fail, 162 assertions |
+| test/remote-relay-contract.test.ts, HEAD and after | 7/0/20 and 9/0/28 |
+| packages/web test/everywhere-lane.test.ts, HEAD and after | 13/0/149 and 13/0/149 |
+| Regressions, packages/web, HEAD and after, identical | everywhere-router 9/0/37; everywhere-config 24/0/219; everywhere-intake 8/0/68; everywhere-slack-events 12/0/94; everywhere-github 17/0/137; everywhere-slack-render 10/0/51; everywhere-linear-render 11/0/74; everywhere-jira-render 6/0/48; everywhere-identity 39 pass 4 skip/0/243; everywhere-authority 20 pass 7 skip/0/225; everywhere-switch 16/0/89; everywhere-offer 16/0/60; codium-public 14/0/102 (local receipt only) |
+| Regressions, root (from test/), HEAD and after, identical | remote-ticket-api 29/0/261; api-module-loading 2/0/10 (the new import graph) |
+| packages/relay test/internal.test.ts, HEAD and after | 24/0/245 |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` (astro check; now also checks the relay sources and fakes the new test imports) | 0 errors, 0 warnings, 411 hints (unchanged) |
+| packages/schema and packages/relay `bun typecheck` | exit 0 each |
+| Full `bun turbo typecheck --concurrency=2` | exit 0, 27 of 27 tasks (22 cached) |
+| Prettier drift (lines prettier would change), HEAD and after | remote-relay.ts 0 and 0; runtime.ts 0 and 0; everywhere-lane.test.ts 0 and 0; remote-relay-contract.test.ts 0 and 0; ports.ts 15 and 15; config.ts 14 and 14; the two new files 0 |
+
+Mutations: /tmp/vector-v2/everywhere/ev09-mut/run.sh applies one textual
+change, runs the named file through the lock, then restores adapters/remote.ts,
+runtime.ts and vector-everywhere.yml from saved copies; `restored-ok`
+(`sha256sum -c` against pre.sha) after every mutation and at the end
+(results.txt). Every mutation turned at least one case red:
+
+| Mutation | Result (adapter test unless named) | Red cases |
+| --- | --- | --- |
+| M1: no switch check | 16/1 | :185 |
+| M2: no `remoteConfigured` in presence | 16/1 | :207 |
+| M3: no plan check in presence | 16/1 | :228 |
+| M4: presence rethrows relay errors | 16/1 | :339 |
+| M5: `delivered >= 0` | 15/2 | :373, :402 |
+| M6a: the offer retried once on failure | 16/1 | :412 |
+| M6b: the offer sent twice | 11/6 | :373, :387, :402, :412, :555, :575 |
+| M7: the allowlist ignored | 13/4 | :437, :478, :555, :575 |
+| M8: the plan ignored for `everywhere` | 15/2 | :459, :478 |
+| M9: `requireUsableSnapshot` skipped | 15/2 | :228, :459 |
+| M10: `>= 0` computers in the plan read | 16/1 | :228 |
+| M11: productionPorts always uses the adapter | 16/1 | :517 |
+| M12: productionPorts ignores `config.offer` | 16/1 | :517 |
+| M13: codium-snapshot.ts dropped from the workflow paths | everywhere-lane 12/1 | "the paths cover every everywhere zone and the main helpers that code imports" |
+| M14: the plan gate ignores `wired` | 14/3 | :437, :478, :555 |
+| M15: the plan gate ignores the owner's listing | 16/1 | :437 |
+| M16: the offer skips `remoteConfigured` | 16/1 | :207 |
+| M17: the active-past-grace rule dropped | 16/1 | :228 |
+
+Commit gate: not run in this step. The changes stay in the working tree for
+the lead's commit (`feat(everywhere): offer jobs to online computers through
+the relay adapter`, staging api/_lib/remote-relay.ts,
+api/_lib/everywhere/adapters/remote.ts, api/_lib/everywhere/runtime.ts,
+api/_lib/everywhere/ports.ts, api/_lib/everywhere/config.ts,
+.github/workflows/vector-everywhere.yml,
+packages/web/test/everywhere-remote-adapter.test.ts,
+packages/web/test/everywhere-lane.test.ts, test/remote-relay-contract.test.ts
+and the four lane documents explicitly; the body says no generated file was
+regenerated). Before the push: repeat the cross-lane diff, `git fetch origin
+everywhere-finish`, the full `bun turbo typecheck --concurrency=2`.
+
+Deferred:
+
+- After the push, dispatch on `everywhere-finish`: vector-everywhere.yml
+  (the new adapter test, everywhere-lane and the typechecks),
+  vector-hosted-ci.yml (root test/, including remote-relay-contract,
+  remote-ticket-api and api-module-loading, and the relay's tests) and
+  typecheck.yml. Never vector-codium.yml before PR #33 is merged here. Then,
+  in one docs commit, add "## EV-09 push receipts" here and mark the handoff
+  bullet "CI green" with the run ids. The EV-08 push receipts are also still
+  missing here; the lead may fold them into the same docs commit.
+- codium-public.test.ts runs in no lane workflow until vector-codium.yml is
+  used after PR #33; its receipt is the local run above.
+- Follow-ups recorded in the handoff's "Left open by the repairs": the
+  relay-outage refusal (`unreachable` counts as not configured); listing
+  `everywhere` still waits for `LAPTOP_ROUTE_WIRED` (VE-21, EV-11).
+- Request to Codium: annotate codium-a39-remote-relay-notes.md and
+  codium-a40-remote-api-notes.md with `job-offer`.
+- Owner: set the offer signing key only after the Worker deploy and a
+  desktop release with EV-11. VE-50: real Worker presence and offers.
+
+### EV-09 review fixes (2026-11-15)
+
+Seven non-blocking findings; dispositions in the deviations entry ("Review
+findings"). Not committed: the changes stay in the working tree with the
+rest of EV-09.
+
+- api/_lib/everywhere/adapters/remote.ts: `perk` returns false for a
+  non-UUID account before any read (:71-72); `planListsEverywhere(wired,
+  fetcher)` (:90-100) also reads Codium's `codium` switch and `perks-off`
+  (codium-switches.ts `readSwitch` and `readDisabledSet`), only once the
+  wiring and the environment listing hold, and a failed read is false.
+- packages/web/test/everywhere-remote-adapter.test.ts: `refusing()`
+  replaces both stopped-server ports; new cases :395, :410 and :516 (above);
+  :497's non-UUID check uses new ports, so the early return, not Codium's
+  cache, is what keeps the store untouched.
+- test/remote-relay-contract.test.ts:131-137: the environment restore uses
+  `continue`, not `else`.
+- Lane documents: the EV-09 deviations entry ((c), (j), (k), (l), the
+  owner notes and "Review findings"), the handoff's relay adapter bullet,
+  the spec's §3.4 EV-09 note, this file.
+
+Checks (each through `vector-serial`, one file per run, `--timeout 30000`):
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-remote-adapter.test.ts | 20 pass, 0 fail, 185 assertions |
+| test/remote-relay-contract.test.ts (from test/) | 9/0/28 |
+| test/api-module-loading.test.ts (from test/) | 2/0/10 |
+| packages/web everywhere-lane | 13/0/149 |
+| Regressions, packages/web | everywhere-router 9/0/37; everywhere-intake 8/0/68; everywhere-slack-events 12/0/94; everywhere-identity 39 pass 4 skip/0/243; everywhere-config 24/0/219 |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` | 0 errors, 0 warnings, 411 hints (unchanged) |
+| Prettier `--check` on the three changed code files | clean (the adapter test after `--write`) |
+
+Mutations (each applied by hand to adapters/remote.ts, the adapter test
+run, then the saved copy restored and compared with `cmp`):
+
+| Mutation | Result | Red case |
+| --- | --- | --- |
+| M18: `perks-off` ignored | 19/1 | :516 |
+| M19: a failed listing read reads true | 19/1 | :516 |
+| M20: the `codium` switch ignored | 19/1 | :516 |
+| M21: no early return for a non-UUID account | 19/1 | :497 |
+
+Merge probe, repeated (review finding on vector-everywhere.yml): after
+`git fetch origin release-finish main everywhere-finish review-fixes
+brain-transport codium-finish` the tips were release-finish `cf2373c4`,
+main `58f85edc`, everywhere-finish `3443cfa3` (= HEAD), review-fixes
+`1433d105`, brain-transport `a89fe7a0` and codium-finish `420e729f`. A
+scratch commit of the whole working tree (a temporary index under
+/tmp/vector-v2/everywhere/, `commit-tree`, no ref moved), lane documents
+included, merges cleanly (`git merge-tree --write-tree`, exit 0) with
+review-fixes `1433d105` and brain-transport `a89fe7a0`; with codium-finish
+it conflicts only in vector-codium.yml, packages/cloud/src/codium-ci-tests.ts
+and workflow-compliance.test.ts, as HEAD already does. The commit step
+repeats the probe against whatever review-fixes tip is current then and
+records its SHA here.
+
+### EV-09 commit gate (2026-11-15)
+
+`git fetch origin release-finish main everywhere-finish review-fixes
+brain-transport codium-finish` found release-finish `cf2373c4` (already
+merged), main `58f85edc` (PR #33 not on it) and everywhere-finish equal to
+HEAD `3443cfa3`. Only the EV-09 paths named above and the four lane
+documents were in the working tree, with the two new files the only
+untracked ones. The merge probe was repeated (a scratch commit of the
+working tree from a temporary index under /tmp/vector-v2/everywhere/, no
+ref moved): `git merge-tree --write-tree` exits 0 with review-fixes
+`1433d105` and brain-transport `a89fe7a0`. Re-run through `vector-serial`,
+one file at a time, `--timeout 30000`:
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-remote-adapter.test.ts | 20 pass, 0 fail, 185 assertions |
+| packages/web test/everywhere-lane.test.ts | 13 pass, 0 fail, 149 assertions |
+| packages/web test/everywhere-router.test.ts | 9 pass, 0 fail, 37 assertions |
+| root test/remote-relay-contract.test.ts (from test/) | 9 pass, 0 fail, 28 assertions |
+| root test/api-module-loading.test.ts (from test/) | 2 pass, 0 fail, 10 assertions |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` | 0 errors, 0 warnings, 411 hints |
+| Full `bun turbo typecheck --concurrency=2` | exit 0, 27 of 27 tasks (25 cached) |
+
+Committed as `feat(everywhere): add the Remote relay adapter for presence
+and offers` (the brief's title, in place of the working title above); the
+push and the run ids are recorded in "EV-09 push receipts" in the follow-up
+docs commit.

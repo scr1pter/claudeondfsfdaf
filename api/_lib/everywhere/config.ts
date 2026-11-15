@@ -46,8 +46,9 @@ export type EverywhereConfig = {
   /** Platforms listed in VECTOR_EVERYWHERE_PLATFORMS whose own settings are present; empty while the feature is off. */
   readonly platforms: ReadonlySet<PlatformId>
   /**
-   * Vector accounts the router admits as sponsors (3.4 step 3); empty means nobody. Lowercase. Codium's `everywhere`
-   * perk only lists (EV-08), so this stays the router's only sponsor check until a plan check is wired.
+   * Vector accounts the router admits as sponsors (3.4 step 3); empty means nobody. Lowercase. The only sponsor check
+   * until the plan joins it: the relay adapter's plan check (adapters/remote.ts, EV-09) grants `everywhere` beside this
+   * list only once the laptop route is wired and the owner lists the perk.
    */
   readonly allowAccounts: ReadonlySet<string>
   /** The data key ring, current key first; empty while the feature is off. */
@@ -228,18 +229,19 @@ export function platformOn(config: EverywhereConfig, platform: PlatformId): bool
 
 /**
  * Whether a sponsor is listed in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS: the router's only sponsor check (3.4 step 3) until
- * a plan check is wired, because Codium's `everywhere` perk only lists (EV-08).
+ * the relay adapter's plan check joins it (adapters/remote.ts, EV-09), once the laptop route is wired and the owner
+ * lists Codium's `everywhere` perk.
  */
 export function sponsorListed(config: EverywhereConfig, account: string): boolean {
   return ACCOUNT_ID_PATTERN.test(account) && config.allowAccounts.has(account.toLowerCase())
 }
 
 /**
- * Whether production can run a paying customer's job. False while productionPorts (runtime.ts) keeps safePorts'
- * presence, offer and Remote perk stubs (VE-20, VE-21) and router step 3 admits sponsors only through
- * VECTOR_EVERYWHERE_ALLOW_ACCOUNTS, with no plan check (R-C7's runtime half). The package that wires both sets it true.
- * It lives here, not in runtime.ts, because Codium's listing imports this module and runtime.ts builds the platform
- * routes when it loads.
+ * Whether production can run a paying customer's job. VE-20 and the plan check are built (EV-09): with the flag and the
+ * offer key set, productionPorts (runtime.ts) uses the relay adapter (adapters/remote.ts), whose plan check joins the
+ * allowlist only while this is true. It stays false because no desktop decodes an offer or pins `OFFER_KEYS` yet
+ * (VE-21, EV-11); the package that wires that sets it true. It lives here, not in runtime.ts, because Codium's listing
+ * imports this module and runtime.ts builds the platform routes when it loads.
  */
 export const LAPTOP_ROUTE_WIRED: boolean = false
 
