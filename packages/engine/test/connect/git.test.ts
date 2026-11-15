@@ -393,6 +393,18 @@ local(
             [["rev-parse", "--show-toplevel"], f.metadata.directory + "\n"],
             [["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"], f.head + "\n"],
             [["rev-parse", "--verify", "--quiet", "--end-of-options", `${f.head}^{commit}`], f.head + "\n"],
+            // mergeBase()'s commitOf with an abbreviated, uppercase base, since CN-04. The prefix runs to a letter, so
+            // uppercasing changes it.
+            [
+              [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                `${f.head.slice(0, Math.max(7, f.head.search(/[a-f]/) + 1)).toUpperCase()}^{commit}`,
+              ],
+              f.head + "\n",
+            ],
             [["diff", ...NAMES, f.head, "--"], "src/probe.ts\0"],
             [["diff", "--cached", ...NAMES, f.head, "--"], ""],
             [["diff", ...NAMES, f.head, f.head, "--"], ""],

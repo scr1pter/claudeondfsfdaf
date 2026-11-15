@@ -1260,6 +1260,10 @@ export interface Repository {
 
 export type Read =
   | { readonly kind: "status"; readonly untracked?: "normal" | "no" | "all" }
+  /** HEAD or an object id answered like `rev-parse --verify --quiet <revision>^{commit}`. A missing full id of either
+   * case gives code 1 and no bytes. A short id of 7 to 39 digits of either case answers only through the one object in
+   * the private snapshot with that prefix. It refuses when a ref has its spelling, when no object or several have the
+   * prefix, and when that object peels to no commit. */
   | { readonly kind: "resolve"; readonly revision: string }
   | { readonly kind: "merge-base"; readonly left: string; readonly right: string }
   | {
@@ -1649,6 +1653,48 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         "--dst-prefix=b/",
       ]
       const run = (query: string[], input?: Buffer) => commands.command(context, [...args, ...query], input)
+      // Only a regex-checked object id reaches this, and only the private snapshot answers for it.
+      const peel = (oid: string) => run(["rev-parse", "--verify", "--quiet", "--end-of-options", oid + "^{commit}"])
+      // Every place rev-parse looks a name up, in Git's order. Only a branch, remote-tracking branch or tag may
+      // answer. A second match, or one anywhere else, refuses where Git would warn or resolve something else.
+      const named = async (name: string) => {
+        const places = [
+          name,
+          ...["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"].map((prefix) => prefix + name),
+          `refs/remotes/${name}/HEAD`,
+        ]
+        const answers = (place: string, index: number) =>
+          index < places.length - 1 && /^refs\/(heads|remotes|tags)\//.test(place)
+        const loose: { place: string; oid: string }[] = []
+        const shadowed = new Set<string>()
+        // Loose names before packed-refs, as Git reads them, so a concurrent pack cannot hide a reference.
+        for (const [index, place] of places.entries())
+          for (const store of git === common ? [commonHandle] : [commonHandle, gitHandle]) {
+            const entry = await looseEntry(store, place, context)
+            if (entry === "shadowed" && store === commonHandle) shadowed.add(place)
+            if (!entry || entry === "shadowed") continue
+            try {
+              // A linked worktree's own Git directory holds only per-worktree refs and pseudo-refs for Git, and none
+              // of those may answer. Git never reads a branch or tag there, so a file of that shape refuses too.
+              requireValue(
+                store !== gitHandle && answers(place, index),
+                "the reference name resolves outside branches and tags",
+              )
+              loose.push({ place, oid: metadataLine(await readOpened(entry, 4096, context)) })
+            } finally {
+              await releaseResource(context, entry)
+            }
+          }
+        const packed = await packedRefs(commonHandle, context)
+        return places.flatMap((place, index): { place: string; oid: string; peeled?: string }[] => {
+          const values = loose.filter((entry) => entry.place === place)
+          if (values.length > 0 || shadowed.has(place)) return values
+          const value = packedReference(packed, place)
+          if (!value) return []
+          requireValue(answers(place, index), "the reference name resolves outside branches and tags")
+          return [{ place, ...value }]
+        })
+      }
       switch (operation.kind) {
         case "status":
           requireValue(
@@ -1662,14 +1708,39 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             `--untracked-files=${operation.untracked ?? "all"}`,
             "--ignore-submodules=all",
           ])
-        case "resolve":
-          return run([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "--end-of-options",
-            revision(operation.revision) + "^{commit}",
-          ])
+        case "resolve": {
+          const given = operation.revision
+          // Git reads an object id's digits in either case; HEAD has none to lowercase.
+          const id = typeof given === "string" && /^[0-9a-f]{7,40}$/i.test(given) ? given.toLowerCase() : undefined
+          if (id === undefined || id.length === 40) return peel(revision(id ?? given))
+          // Below 40 digits Git reads a ref of this exact spelling before a short object id. Refs are live, and a base
+          // must not move with one, so a short id that any ref spells refuses instead of answering through the ref.
+          // Only the checked lowercase digits reach Git.
+          requireValue(
+            (await named(given)).length === 0,
+            "the short object id is also a reference name; pass the full commit",
+          )
+          const listed = await run(["rev-parse", `--disambiguate=${id}`])
+          const text = listed.bytes.toString("utf8")
+          const candidates = text.split("\n").slice(0, -1)
+          requireValue(
+            listed.code === 0 &&
+              /^(?:[0-9a-f]{40}\n)*$/.test(text) &&
+              candidates.every((candidate) => candidate.startsWith(id)),
+            "the private object listing is malformed",
+          )
+          requireValue(
+            candidates.length > 0,
+            "no object in the private snapshot has that short id; fetch or pass a full commit",
+          )
+          requireValue(candidates.length === 1, "the short object id is ambiguous; pass more digits")
+          const peeled = await peel(candidates[0])
+          requireValue(
+            peeled.code === 0 && /^[0-9a-f]{40}\n$/.test(peeled.bytes.toString("utf8")),
+            "the short object id does not name a commit",
+          )
+          return peeled
+        }
         case "merge-base":
           return run(["merge-base", revision(operation.left), revision(operation.right)])
         case "diff":
@@ -1844,44 +1915,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
               referenceName(name),
             "the reference name is unsupported",
           )
-          // Every place rev-parse looks a name up, in Git's order. Only a branch, remote-tracking branch or tag may
-          // answer. A second match, or one anywhere else, refuses where Git would warn or resolve something else.
-          const places = [
-            name,
-            ...["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"].map((prefix) => prefix + name),
-            `refs/remotes/${name}/HEAD`,
-          ]
-          const answers = (place: string, index: number) =>
-            index < places.length - 1 && /^refs\/(heads|remotes|tags)\//.test(place)
-          const loose: { place: string; oid: string }[] = []
-          const shadowed = new Set<string>()
-          // Loose names before packed-refs, as Git reads them, so a concurrent pack cannot hide a reference.
-          for (const [index, place] of places.entries())
-            for (const store of git === common ? [commonHandle] : [commonHandle, gitHandle]) {
-              const entry = await looseEntry(store, place, context)
-              if (entry === "shadowed" && store === commonHandle) shadowed.add(place)
-              if (!entry || entry === "shadowed") continue
-              try {
-                // A linked worktree's own Git directory holds only per-worktree refs and pseudo-refs for Git, and none
-                // of those may answer. Git never reads a branch or tag there, so a file of that shape refuses too.
-                requireValue(
-                  store !== gitHandle && answers(place, index),
-                  "the reference name resolves outside branches and tags",
-                )
-                loose.push({ place, oid: metadataLine(await readOpened(entry, 4096, context)) })
-              } finally {
-                await releaseResource(context, entry)
-              }
-            }
-          const packed = await packedRefs(commonHandle, context)
-          const found = places.flatMap((place, index) => {
-            const values = loose.filter((entry) => entry.place === place)
-            if (values.length > 0 || shadowed.has(place)) return values
-            const value = packedReference(packed, place)
-            if (!value) return []
-            requireValue(answers(place, index), "the reference name resolves outside branches and tags")
-            return [{ place, ...value }]
-          })
+          const found = await named(name)
           if (found.length === 0) {
             // With no ref of the name, rev-parse still reads a short object id or `git describe` output.
             requireValue(
@@ -1891,35 +1925,35 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             return { code: 1, bytes: Buffer.alloc(0) }
           }
           requireValue(found.length === 1, "the reference name is ambiguous")
-          const match: { place: string; oid: string; peeled?: string } = found[0]
+          const match = found[0]
           requireValue(/^[0-9a-f]{40}$/.test(match.oid), "symbolic or non-SHA1 reference is unsupported")
           // Only a regex-checked object id reaches Git, and only the private snapshot answers for it.
-          const type = async (oid: string) => {
-            const result = await run(["cat-file", "-t", oid])
-            requireValue(
-              result.code === 0,
-              "the reference's object is not in the private snapshot; fetch or pass a commit",
-            )
-            return result.bytes.toString("utf8")
-          }
-          if (match.peeled === undefined) {
-            const kind = await type(match.oid)
-            requireValue(kind !== "tag\n", "an annotated tag resolves only through its peeled packed line")
-            requireValue(kind === "commit\n", "the reference does not name a commit")
-            return { code: 0, bytes: Buffer.from(match.oid + "\n") }
-          }
-          // Git trusts a packed peel only after a tag and reads the tag object itself, so both must agree here.
+          const object = await run(["cat-file", "-t", match.oid])
           requireValue(
-            match.place.startsWith("refs/tags/") && (await type(match.oid)) === "tag\n",
+            object.code === 0,
+            "the reference's object is not in the private snapshot; fetch or pass a commit",
+          )
+          const kind = object.bytes.toString("utf8")
+          if (kind === "commit\n" && match.peeled === undefined)
+            return { code: 0, bytes: Buffer.from(match.oid + "\n") }
+          requireValue(
+            kind === "tag\n" || match.peeled === undefined,
             "a peeled packed line follows only an annotated tag",
           )
-          const tag = await run(["cat-file", "tag", match.oid])
+          requireValue(kind === "tag\n", "the reference does not name a commit")
+          // Git peels a tag object under any ref, but only a tag ref may hold one here. Git's own update-ref writes
+          // none under refs/heads/.
+          requireValue(match.place.startsWith("refs/tags/"), "only a tag reference may name an annotated tag")
+          // Git peels a loose or packed ref by reading its tag objects, never a packed peel line, so the private store
+          // peels it here. A peel line Git wrote names the same commit, so one that disagrees refuses.
+          const peeled = await peel(match.oid)
+          const text = peeled.bytes.toString("utf8")
+          requireValue(peeled.code === 0 && /^[0-9a-f]{40}\n$/.test(text), "the reference does not name a commit")
           requireValue(
-            tag.code === 0 && tag.bytes.toString("utf8").startsWith(`object ${match.peeled}\ntype commit\n`),
+            match.peeled === undefined || text === match.peeled + "\n",
             "the packed reference's peeled commit does not match its tag",
           )
-          requireValue((await type(match.peeled)) === "commit\n", "the reference does not name a commit")
-          return { code: 0, bytes: Buffer.from(match.peeled + "\n") }
+          return peeled
         }
         case "default-branch": {
           const entry = await looseEntry(commonHandle, "refs/remotes/origin/HEAD", context)
