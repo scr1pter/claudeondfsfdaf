@@ -8,8 +8,9 @@ import path from "node:path"
 // - every test whose path names Codium (Codium, model plans, model top-ups);
 // - every test file the branch added or changed since it left main.
 // Each file runs in its own Bun process from the package that owns it: a crash names its file, and one file's module
-// mocks cannot reach the next. With --shard=i/n the lane splits that selection over n jobs, each running its share. Browser specs (Playwright, packages/app/e2e) are picked by the same rule. The Stripe
-// test-mode checks in packages/web/e2e/codium run only in vector-codium-e2e.yml.
+// mocks cannot reach the next. With --shard=i/n the lane splits that selection over n jobs, each running its share.
+// Browser specs (Playwright, packages/app/e2e) are picked by the same rule. The Stripe test-mode checks in
+// packages/web/e2e/codium run only in vector-codium-e2e.yml.
 
 export const CODIUM_PATH = /codium|model[-_]?plans?|model[-_]?topups?/i
 
