@@ -421,3 +421,51 @@ Turning back on:
 
 - After the owner's deploy, Vercel's cron log shows 200 `{enabled: false}` every minute while off. That needs CRON_SECRET set in production (an owner action); without it every invocation answers 401.
 - At go-live (VE-50), a laptop that dies mid-job gets `lost` within about 6 minutes (`TIMING.leaseMs` 5 minutes plus one cron minute).
+
+## 2026-11-15, EV-05: relay presence honours the kill flag and the suspension (R-C4)
+
+Spec §11 R-C4 (:844) and §5 E10 (:564). The prerequisite for VE-20's presence port. Line numbers are after this package.
+
+### What changed
+
+- **presence() is async** (packages/relay/src/account-relay.ts:729-746). It answers `{online: false, computers: [], viewers, reason: "killed"}` while REMOTE_FLAGS `kill` is `"1"` or cannot be read (`killed()` at :929 already fails closed), and `reason: "suspended"` while meta `suspended` exists. The flag is read first, as connect and refresh read it. `viewers` stays the live phone count. With no flag and no suspension the answer is byte-identical to before: `{online, computers, viewers}` with no `reason` key.
+- **The internal case awaits it** (:668-669, `return answer(await this.presence())`), still inside the try/finally that runs `settle(now)`.
+- Nothing else in the relay changed: index.ts, protocol.ts, the e2e smoke, sweep, alarm, refresh, `devices` and the exports are as they were. api/_lib/remote-relay.ts is untouched: `relayPresence` (:151-164) reads only `online`, `computers` and `viewers` and rebuilds the object, so it drops `reason`, and `isComputerOnline` (:171-178) is unchanged.
+
+### Why it matters
+
+An idle computer with no viewer stays connected while the Durable Object hibernates. No alarm runs (the alarm is armed only while a phone is attached), and refresh() checks the flag only when the computer refreshes. So after the owner's `remote` switch set the kill flag, presence still reported that computer online. The first test reproduces exactly that state (an open socket, no alarm) and now answers offline.
+
+### Deviations
+
+- **Object only, not "the Worker and the object".** R-C4 says "`presence` in the Worker and the object checks `killed()`". EV-05 checks in the object only: the object reads the same REMOTE_FLAGS binding, and the Worker forwards presence unchanged, so one check answers both the routed call and a direct one. A Worker check would add a second KV read without changing any answer, and the brief says to change nothing else in the relay. The tests send the API's signed call through the real Worker (`handleRequest`), so the routed path is what they pin; the second case also pins that the whole call makes exactly one KV read.
+- **The `reason` field is optional and outside the contract.** `relayPresence` drops it, so VE-20 must map offline to its port's own `remote-off` and not rely on it. It exists so the tests (and a relay log reader) can tell the explicit checks apart from sweep's closes.
+- **The brief's "suspended: offline even with a connected computer socket" cannot be reached.** suspend() closes every live socket (:724-725), internal() runs `sweep(now)` before the switch (:661), and sweep closes every socket while the suspension is stored (:479-481); connect refuses while suspended (standing(), :230). So no entry point lets a live computer meet a stored suspension, and the explicit suspended check is defence in depth that changes only `reason`, never `online`. The suspension case asserts the computer's close code `REMOTE_PAUSED` right after the suspend call to make that visible, then proves the check by its `reason` (mutation M2).
+
+### Not changed (recorded, not fixed)
+
+- **Presence closes nothing.** An idle computer connected before the kill keeps its socket until its next refresh, a phone arriving (which arms the alarm), a reconnect (the Worker refuses it) or `computerTicketMaxAgeMs`. That is existing behaviour. Mutation M4 (presence closes sockets when killed) turns the first two cases red, so the tests pin the current behaviour, which is the hibernating idle case R-C4 is about. It is not a contract: closing sockets on the flag may be added later on purpose (by Codium or EV-06), and that change would update those assertions.
+- **EV-06 must check the flag itself before it delivers an offer.** Because presence closes nothing, that still-open socket is a live path to the computer while Remote is killed (or, should a socket ever outlive a suspension, suspended). The Worker's internal() route never reads the kill flag for internal actions; only connect() does (index.ts:61). So EV-06's job-offer path, in the Worker or the object, must call `killed()` (failing closed) and check the `suspended` meta before it delivers an offer, and must not rely on presence alone.
+- **Two other relay answers still follow open sockets while the flag is set.** The internal `devices` action (deviceList, :748-749) sets each device's `online` from live sockets without reading the flag; Settings shows it through `relayDevices` (api/_lib/remote-ticket.ts, remote-meter.ts). The phone's control message `t: "presence"` (:357-361) and the peers announce (:533) still list a connected computer to a connected phone. VE-20 must use `presence` only, never `devices[].online` or the phone's peers list, as a presence source.
+- **E10 still stands.** The router keeps its own `readSwitch("remote")` and `remoteConfigured()` checks, because the flag is a copy of the switch that can lag it: `syncRelayKillFlag` answers `"failed"` without undoing the switch (api/_lib/remote-relay.ts:271-281, codium-owner-api.ts:151), and the owner can set the flag directly. Presence still does not read the switch itself.
+
+### Coordination
+
+- **A Codium-area file.** packages/relay/\*\* is in spec §6.4's Codium row (:652), and R-C4 is a request to Codium. The spec's binding rule (:10, never edit a file on the "Do not touch" list) and the handoff's owner rule (:156) are not edited; EV-05 builds R-C4 in this lane under the lead's brief, as EV-04 did vercel.json (this log, EV-04, "A Codium-area file"). At EV-05's working-tree check, `git diff --stat origin/release-finish...origin/codium-finish -- packages/relay` and the same for `origin/review-fixes` and `origin/main` (also for api/_lib/remote-relay.ts) were all empty; the commit step repeats both lane checks right before the push.
+- **Request to Codium (or the lead).** Codium's relay notes (docs/vector/build/codium-a39-remote-relay-notes.md:11, the Internal API row) and §4.17's presence entry point describe `presence {account}` without the kill and suspension behaviour or the optional `reason`. Those documents are Codium's, so EV-05 does not edit them; they should be annotated with R-C4's behaviour.
+- **The Worker deploy is owner-gated.** Production is unchanged until the owner deploys the relay Worker. Even then nothing consumes presence until VE-20, and `isComputerOnline` already treats offline as "not available".
+
+### Decisions
+
+- **The check order (flag before suspension) is deliberately not pinned.** Both answer offline; only `reason` differs when both hold, and no caller reads it.
+- **One KV read per presence call** (the second and fourth cases pin it). Presence is called once per routing decision.
+- **One `reason` computation** (account-relay.ts:738-739): the flag is read first and on every call, then the suspension, and a single offline return carries whichever holds.
+- **presence() awaits inside internal().** The KV read opens the Durable Object's input gate between `sweep(now)` (:661) and `settle(now)`, so other events can interleave there. That follows the pattern `flags()` already uses in the same block (`return await this.flags(body)`); `settle` uses the `now` captured before the switch, and nothing between sweep and settle depends on presence() being atomic.
+- **Critique points taken:** the unreachable suspended case stated here and asserted by its close code; M4 and the first case worded as current behaviour, not a promise; the `devices` and phone peers gap above; both owner-rule citations; the request to annotate Codium's notes; prettier run through `vector-serial`; a fresh `Harness` per case, imported as a value. None was rejected.
+- **Review findings taken (round one, all non-blocking):** the single `reason` computation above; the standing() citation; the EV-06 delivery check under "Not changed"; the await note above; and, in the suspension case, an unreadable flag on top of a stored suspension asserted offline without pinning which `reason` wins. The finding that the suspended branch is proven only by `reason` (no live socket can meet a stored suspension) needed no change and is kept as recorded under "Deviations": the brief's "suspended: offline even with a connected computer socket" case is replaced by the `REMOTE_PAUSED` close-code assertion plus the `reason` check. None was rejected. The six mutations were rebuilt against the new code and re-run with the same results (progress log, EV-05).
+
+### Deferred verification
+
+- The CI relay smoke's "presence sees the computer online" (e2e/relay-smoke.ts:219) now runs through `killed()`'s KV read inside the object on Cloudflare's local runtime, so a broken read there would turn it red. vector-hosted-ci.yml's relay job runs it with the wrangler dry run.
+- A smoke check of presence while the flag is set is left for EV-06, which edits the smoke for job-offer anyway.
+- After the owner deploys the Worker, VE-50 should confirm that presence answers offline while the `remote` switch is off.

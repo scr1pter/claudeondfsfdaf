@@ -3,6 +3,7 @@ import { AccountRelay } from "../src/account-relay"
 import { handleRequest } from "../src/index"
 import { INTERNAL_HEADERS, internalCanonical, sha256Hex, signInternal, verifyInternalSignature } from "../src/internal"
 import { utf8 } from "../src/bytes"
+import { CLOSE } from "../src/protocol"
 import { accountHandle } from "../src/ticket"
 import {
   ACCOUNT,
@@ -12,6 +13,7 @@ import {
   FakeKV,
   FakeNamespace,
   FakeRuntime,
+  Harness,
   type FakeState,
   ticketKeys,
 } from "./fakes"
@@ -237,5 +239,101 @@ describe("internal routes", () => {
     expect(kv.values.has("kill")).toBe(false)
     expect(new Set(namespace.calls.map((entry) => entry.name))).toEqual(new Set(["control"]))
     expect((await call("flags", { kill: "yes" })).status).toBe(400)
+  })
+})
+
+describe("presence honours the kill flag and the suspension (R-C4)", () => {
+  // The API's signed presence call through the real Worker to the account's object, the path relayPresence takes.
+  async function presence(h: Harness) {
+    const body = JSON.stringify({ account: ACCOUNT })
+    const signed = await signInternal(INTERNAL_SECRET, { method: "POST", path: PATH, body, now: h.clock.now })
+    const response = await handleRequest(
+      new Request(`https://relay.example${PATH}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...signed },
+        body,
+      }),
+      h.env,
+      h.runtime,
+    )
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+  }
+
+  test("the kill flag: no computer is online while an idle computer's socket is still open", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer({ name: "Studio" })
+    h.kv.values.set("kill", "1")
+    expect(await presence(h)).toEqual({
+      status: 200,
+      body: { online: false, computers: [], viewers: 0, reason: "killed" },
+    })
+    // The scenario's precondition: the socket is still open and, with no viewer, no alarm runs, so this is the
+    // hibernating idle computer that meets the flag only at its next refresh. Before R-C4 presence said online here.
+    expect(computer.socket.readyState).toBe(1)
+    expect(computer.socket.closed).toBeUndefined()
+    expect(h.state.alarm).toBeNull()
+    h.kv.values.delete("kill")
+    expect((await presence(h)).body).toEqual({
+      online: true,
+      computers: [{ device: computer.dev, name: "Studio" }],
+      viewers: 0,
+    })
+  })
+
+  test("an unreadable kill flag counts as set", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer({ name: "Studio" })
+    await h.phone()
+    h.kv.failing = true
+    const reads = h.kv.reads
+    expect(await presence(h)).toEqual({
+      status: 200,
+      body: { online: false, computers: [], viewers: 1, reason: "killed" },
+    })
+    // The object reads the flag once; the Worker's internal route reads none.
+    expect(h.kv.reads).toBe(reads + 1)
+    expect(computer.socket.closed).toBeUndefined()
+  })
+
+  test("a suspended account: offline with the suspension as the reason, until it is lifted", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer({ name: "Studio" })
+    const at = h.clock.now
+    expect((await h.internal("suspend", { account: ACCOUNT, suspended: true, reason: "owner", at })).status).toBe(200)
+    // The suspend route closes every socket (and the internal path's sweep closes any left while the suspension is
+    // stored, and connect refuses one), so a live computer cannot meet a stored suspension. The `reason` is what
+    // tells the explicit check apart from those closes.
+    expect(computer.socket.closed?.code).toBe(CLOSE.REMOTE_PAUSED)
+    expect(await presence(h)).toEqual({
+      status: 200,
+      body: { online: false, computers: [], viewers: 0, reason: "suspended" },
+    })
+    // An unreadable flag on top of the suspension is offline too; which reason wins is not pinned.
+    h.kv.failing = true
+    expect((await presence(h)).body.online).toBe(false)
+    h.kv.failing = false
+    expect((await h.internal("suspend", { account: ACCOUNT, suspended: false, at: at + 1 })).status).toBe(200)
+    const again = await h.computer({ name: "Studio", dev: computer.dev })
+    expect(again.socket.closed).toBeUndefined()
+    expect((await presence(h)).body).toEqual({
+      online: true,
+      computers: [{ device: computer.dev, name: "Studio" }],
+      viewers: 0,
+    })
+  })
+
+  test("with no flag and no suspension, presence is unchanged", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer({ name: "Studio" })
+    await h.phone()
+    const reads = h.kv.reads
+    expect(await presence(h)).toEqual({
+      status: 200,
+      body: { online: true, computers: [{ device: computer.dev, name: "Studio" }], viewers: 1 },
+    })
+    expect(h.kv.reads).toBe(reads + 1)
+    await h.disconnect(computer.socket)
+    // Offline for want of a computer carries no reason.
+    expect((await presence(h)).body).toEqual({ online: false, computers: [], viewers: 1 })
   })
 })

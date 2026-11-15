@@ -26,13 +26,13 @@ here.
 | C4, a Linear refresh can break the install | Delivered | api/_lib/everywhere/linear/credentials.ts:95-97 (the rotated pair is saved as `verification: "pending"` before `viewer`) | none |
 | C5, ledger release in `finally` | Delivered (everywhere-runner-delivery.md) | everywhere-runner.ts:334-336 (release in try/catch, `active.delete` in `finally`); recovery releases in `finally` at :360-362 (`recover()` at :354) | none |
 | C6, a 1 MB cap on the whole stream buffer | Delivered (everywhere-runner-delivery.md) | packages/desktop/src/main/everywhere-engine.ts:75 (2-MiB response cap), :111 (8-MiB per-event cap), :121 (pending-buffer bound) | none |
-| C7, the GitHub status lock is never released | Delivered by EV-02 (CI pending) | At 0ee486e3: api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`). Lines at EV-02's change: status.ts:20-26 (a `randomUUID` token, 120 s), :31 (the job is read under the lock), :36-37 (the `jobStatusEdited` throttle, progress only), :50 (set after the platform write, before the reference write), :53 (`swapValue` release in `finally`); keys.ts:168 (`jobStatusEdited`); tests packages/web/test/everywhere-github.test.ts:186-441 (the gate and fixture helpers at :186-227, then nine cases from :229, the token case at :282) | EV-02's dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml) after the push |
-| C8, `bodySha256` is optional | Delivered by EV-02 (CI pending) | At 0ee486e3: packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash). Lines at EV-02's change: everywhere.ts:680 (required for `issues`), the JSDoc at :420-423; adapter.ts unchanged (:82 answers 400 before any write); everywhere-github.ts:39-43 (issues by the hash alone); tests packages/schema/test/everywhere.test.ts:568, packages/desktop/src/main/everywhere-github.test.ts:103 (issues by the hash) and :82 (spec 4.1's comment rule pinned) | EV-02's dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml) after the push |
-| C test gap, the runner abort matrix | Covered by EV-03 (CI pending) | Existing cases, one line lower after EV-03's import: packages/desktop/src/main/everywhere-runner.test.ts:297, :306, :325-359, :361-417, :420, :462, :489, :506. EV-03's cases: :538 (a lost acknowledgement of a `held` result, the regression for the fix at everywhere-runner.ts:320), :566 (`stop`/`lost` on `pushing`), :611 (actual HTTP 404/409 on `pushing`), :654 (a heartbeat `stop` before push admission), :690 (a switch `stop` during an admitted push), :747 (`stop`/`lost`/404/409 heartbeats during an admitted push, publication settle refused). Two points wait for the lead (deviations log, EV-03) | EV-03's dispatches (vector-everywhere.yml, typecheck.yml) after the push |
+| C7, the GitHub status lock is never released | Delivered by EV-02 (`c46a6598`); CI green: vector-everywhere 43668358969, typecheck 43668370110, vector-hosted-ci 43675737368 (at `9426c945`, which contains EV-02) | At 0ee486e3: api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`). Lines at EV-02's change: status.ts:20-26 (a `randomUUID` token, 120 s), :31 (the job is read under the lock), :36-37 (the `jobStatusEdited` throttle, progress only), :50 (set after the platform write, before the reference write), :53 (`swapValue` release in `finally`); keys.ts:168 (`jobStatusEdited`); tests packages/web/test/everywhere-github.test.ts:186-441 (the gate and fixture helpers at :186-227, then nine cases from :229, the token case at :282) | none |
+| C8, `bodySha256` is optional | Delivered by EV-02 (`c46a6598`); CI green: vector-everywhere 43668358969, typecheck 43668370110, vector-hosted-ci 43675737368 (at `9426c945`; it runs packages/schema test/everywhere.test.ts) | At 0ee486e3: packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash). Lines at EV-02's change: everywhere.ts:680 (required for `issues`), the JSDoc at :420-423; adapter.ts unchanged (:82 answers 400 before any write); everywhere-github.ts:39-43 (issues by the hash alone); tests packages/schema/test/everywhere.test.ts:568, packages/desktop/src/main/everywhere-github.test.ts:103 (issues by the hash) and :82 (spec 4.1's comment rule pinned) | none |
+| C test gap, the runner abort matrix | Covered by EV-03 (`9426c945`); CI green: vector-everywhere 43675734861, typecheck 43675742876 | Existing cases, one line lower after EV-03's import: packages/desktop/src/main/everywhere-runner.test.ts:297, :306, :325-359, :361-417, :420, :462, :489, :506. EV-03's cases: :538 (a lost acknowledgement of a `held` result, the regression for the fix at everywhere-runner.ts:320), :566 (`stop`/`lost` on `pushing`), :611 (actual HTTP 404/409 on `pushing`), :654 (a heartbeat `stop` before push admission), :690 (a switch `stop` during an admitted push), :747 (`stop`/`lost`/404/409 heartbeats during an admitted push, publication settle refused). Two points wait for the lead (deviations log, EV-03) | the two lead points only |
 | F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`) |
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
 | F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
-| F4, erase registration and the sweep cron | Registration done; cron added by EV-04 (working tree, CI pending), runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | EV-04's commit and dispatches (vector-everywhere.yml, typecheck.yml). Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap) |
+| F4, erase registration and the sweep cron | Done: registration, and the cron by EV-04 (`dbf9bca1`); CI green: vector-everywhere 43678721793, vector-hosted-ci 43678724007, typecheck 43678728633. The cron runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap) |
 | F5, an engine test imports desktop | Accepted; deviation entry | packages/engine/test/everywhere/unattended-session.test.ts:9 | done in EV-01 |
 | F6, a second keep-awake owner | Open (unwired) | packages/desktop/src/main/everywhere-awake.ts:2-13 calls `start`/`stop` itself; the shared blocker is keep-awake.ts:394 (`setDesktopWorkBlocker`) and :453 (`whileDesktopWorks`), set at index.ts:640-651 | EV-18 |
 | `75532fc36` (not a finding) | Account authority wired | api/_lib/everywhere/runtime.ts:16-18 (`productionPorts` returns `codiumAccountAuthority`); adapters/account.ts:2 (`tombstoneKey`), :7-13 | none |
@@ -846,3 +846,162 @@ Deferred:
 - Request to review-fixes (FIT-4): `vercel.json` in vector-everywhere.yml's
   `pull_request` paths.
 - Owner: CRON_SECRET in production, and the deploy that starts the cron.
+
+## EV-04 push receipts (recorded 2026-11-15)
+
+At `dbf9bca1` (EV-04, pushed), all workflow_dispatch on `everywhere-finish`,
+read with the GitHub tools on 2026-11-15 (during EV-05). Observed conclusions
+only; nothing was re-run.
+
+- vector-everywhere 43678721793: success. This was EV-04's last "done when"
+  item.
+- vector-hosted-ci 43678724007: success (it runs the root vercel.json tests).
+- typecheck 43678728633: success.
+- vector-at-mention 43678726338: failure, 1 of 10 jobs: 132704485451,
+  "sandbox (codium, success, bun)", at "Run the unprivileged probe" (then
+  "Observe the synthetic probe report" and "Assert isolation, crash
+  protection and cleanup"). The same inherited @vector probe step as EV-01,
+  EV-02 and EV-03; not a lane file, and not re-run. The other nine jobs
+  succeeded.
+
+With these, the Tier B table above marks F4 done and drops "CI pending" from
+the C7, C8 and C test gap rows (C7 and C8 by vector-everywhere 43668358969 and
+vector-hosted-ci 43675737368; the C test gap by vector-everywhere
+43675734861).
+
+## EV-05: relay presence honours the kill flag and suspension (2026-11-15)
+
+Base: HEAD `dbf9bca1` (EV-04, pushed), equal to `origin/everywhere-finish`.
+`git fetch origin release-finish main everywhere-finish` found
+`release-finish` still at `cf2373c4`, already merged (`5733ceea`), so no merge
+was needed. `git diff --stat origin/release-finish...origin/codium-finish`
+(`2924d94b`), `...origin/review-fixes` (`1433d105`) and `...origin/main`, each
+limited to packages/relay and api/_lib/remote-relay.ts, were empty: no other
+lane touches the relay. EV-05 depends on no review-fixes commit and no
+brain-transport work. The changes are in the working tree, not committed.
+
+Files changed:
+
+- packages/relay/src/account-relay.ts: the internal `presence` case awaits
+  (:668-669); presence() is a private async method with its JSDoc
+  (:729-746) that answers offline with `reason: "killed"` while the kill flag
+  is set or unreadable and `reason: "suspended"` while the account is
+  suspended. No export, type, constant, route or other method changed.
+- packages/relay/test/internal.test.ts: `CLOSE` (:6) and `Harness` (:16)
+  imported as values; one describe, "presence honours the kill flag and the
+  suspension (R-C4)" (:245), with a `presence(h)` helper (:247) that sends the
+  API's signed call through the real Worker (`handleRequest`) to the
+  object, used by all four cases, each on a fresh `Harness`:
+  - :262 the kill flag: offline with `reason: "killed"` while an idle
+    computer's socket is still open and no alarm is armed; online again once
+    the flag is deleted;
+  - :283 an unreadable flag (`FakeKV.failing`) counts as set, with the live
+    phone counted in `viewers`, exactly one KV read for the whole call, and
+    the computer's socket not closed;
+  - :298 a suspension: the suspend call closes the computer with
+    `REMOTE_PAUSED`, presence answers offline with `reason: "suspended"`,
+    an unreadable flag on top of the suspension is offline too (which
+    `reason` wins is not pinned), and after lifting it and reconnecting the
+    same device presence is online;
+  - :325 no flag and no suspension: the exact earlier shape with no `reason`
+    key and one KV read, then offline with no `reason` after the computer
+    disconnects.
+- Docs: vector-everywhere-deviations.md (the EV-05 entry),
+  vector-everywhere-spec.md (dated notes at §2 :100, E10 :565 and R-C4 :845),
+  vector-everywhere-handoff.md (a "Current gates" bullet; the abort-matrix
+  and sweep-cron bullets marked CI green with their run ids; the owner's
+  rules unchanged), this file (the Tier B rows, the EV-04 receipts and this
+  entry). v2-notes/v2-complete-plan.md and Codium's relay notes are not
+  edited.
+
+No new env var, flag, route, dependency, generated file, install or API
+shape. Nothing becomes reachable on vectordev.ai. No test calls a real host:
+only packages/relay/test/fakes.ts and the in-memory Worker.
+
+Checks (each through `vector-serial`, one file per run):
+
+| Check | Result |
+| --- | --- |
+| packages/relay test/internal.test.ts at HEAD (planning baseline) | 11 pass, 0 fail, 47 assertions |
+| packages/relay test/internal.test.ts with EV-05 | 15 pass, 0 fail, 64 assertions (65 after review round one) |
+| packages/relay test/relay.test.ts (its exact presence `toEqual` and the hibernation case) | 14 pass, 0 fail, 73 assertions (the same as the baseline) |
+| packages/relay test/idle.test.ts | 12 pass, 0 fail, 50 assertions |
+| packages/relay test/routing.test.ts | 9 pass, 0 fail, 51 assertions |
+| packages/relay test/limits.test.ts | 13 pass, 0 fail, 43 assertions |
+| packages/relay test/fair-use.test.ts | 8 pass, 0 fail, 36 assertions |
+| packages/relay test/ticket.test.ts | 9 pass, 0 fail, 63 assertions |
+| packages/relay test/source.test.ts (no Bun or Node module and no logging in src/) | 7 pass, 0 fail, 87 assertions |
+| root test/remote-ticket-api.test.ts (the real relay in memory; its isComputerOnline case) | 29 pass, 0 fail, 261 assertions (the same as the baseline) |
+| root test/remote-relay-contract.test.ts | 7 pass, 0 fail, 20 assertions |
+| packages/relay `bun typecheck` (tsgo; src, test and e2e) | exit 0 |
+| prettier --check on account-relay.ts and internal.test.ts | clean |
+| Diff guards | no personal path or email address; no added line over 120 columns; only the six files above changed |
+| wrangler dry run and `bun run smoke` | not run locally (the smoke starts `wrangler dev --local`, a dev-server class of process); vector-hosted-ci.yml's relay job runs both |
+
+Mutations: each is a patch under /tmp/vector-v2/everywhere/ev05-mut/, applied
+with `git apply`, internal.test.ts run alone, then `git apply -R`; the SHA-256
+of account-relay.ts matched pre.sha after every run.
+
+| Mutation | Result | Red cases |
+| --- | --- | --- |
+| M1: no kill-flag line | 12 pass, 3 fail | :262, :283, and :325 (no KV read: "Expected: 1, Received: 0") |
+| M2: no suspension line | 14 pass, 1 fail | :298 (`reason` missing) |
+| M3: `killed()`'s catch returns false | 14 pass, 1 fail | :283 |
+| M4: presence closes live sockets with `RELAY_OFF` when killed | 13 pass, 2 fail | :262 (readyState), :283 (closed). Pins current behaviour, not a contract (deviations log, EV-05) |
+| M5: the normal answer gains `reason: "online"` | 12 pass, 3 fail | :262, :298, :325 |
+| M6: `viewers: 0` in the offline answers | 14 pass, 1 fail | :283 |
+
+The check order (flag before suspension) is deliberately not pinned.
+
+Review round one (2026-11-15, six non-blocking findings, all taken; the
+deviations log's EV-05 "Decisions" lists them):
+
+- account-relay.ts:738-739: presence() computes one `reason` (the flag read
+  first and on every call, then the suspension) and has a single offline
+  return. Same answers, same line count, so the line numbers above stand.
+- internal.test.ts: the suspension case (:298) gains an unreadable flag on
+  top of the stored suspension, asserted offline without pinning `reason`;
+  the last case moves from :321 to :325.
+- Deviations log: the standing() citation (:230); the EV-06 delivery check
+  under "Not changed"; the await note and the single `reason` under
+  "Decisions".
+- Re-run after the fixes, each through `vector-serial`, one file per run:
+  packages/relay test/internal.test.ts 15 pass, 0 fail, 65 assertions;
+  test/relay.test.ts 14 pass, 0 fail, 73 assertions; root
+  test/remote-ticket-api.test.ts 29 pass, 0 fail, 261 assertions;
+  packages/relay `bun typecheck` exit 0; prettier --check on both files
+  clean.
+- Mutations rebuilt against the new presence() under
+  /tmp/vector-v2/everywhere/ev05-mut-r1/ (M1 drops the `killed()` term, M2
+  the suspension term, M4 drops sockets when `reason` is `killed`, M6
+  answers `viewers: 0`; M3 and M5 as before), the same apply, run, revert
+  and SHA-256 check: results identical to the table above (M1 12/3, M2 14/1,
+  M3 14/1, M4 13/2, M5 12/3, M6 14/1, the same red cases).
+
+Deferred:
+
+- EV-05's commit (one commit, the six explicit paths, the trailers checked
+  with `git log -1 --format=%B | tail -3`); its body says that it also
+  records EV-04's receipts and closes the F4, C7, C8 and C test gap rows, so
+  a reviewer sees why docs outside the relay change. Right before the push,
+  repeat the codium-finish and review-fixes diff checks for packages/relay,
+  then the full turbo typecheck and the push.
+- Then the dispatches on `everywhere-finish`: vector-hosted-ci.yml (only
+  while no vector-codium run is in progress; they share a concurrency group)
+  and typecheck.yml. Never vector-codium.yml. EV-05 is done once
+  vector-hosted-ci is green (relay tests, relay typecheck, wrangler dry run
+  and local smoke); record the run ids in the next entry.
+- Owner: deploy the relay Worker. VE-50: confirm presence answers offline
+  while the `remote` switch is off.
+- VE-20 must use `presence` only: the relay `devices` list
+  (`devices[].online`) and the phone's peers list still follow open sockets
+  while the flag is set.
+- EV-06: the job-offer path (the Worker or the object) must call `killed()`
+  and check the `suspended` meta before it delivers an offer, and must not
+  rely on presence alone. Presence closes nothing, so an idle computer that
+  connected before the kill still has an open socket, and the Worker's
+  internal() route never reads the kill flag (only connect() does,
+  index.ts:61).
+- Request to Codium (or the lead): annotate
+  docs/vector/build/codium-a39-remote-relay-notes.md:11 and §4.17's presence
+  entry point with R-C4's behaviour and the optional `reason`.

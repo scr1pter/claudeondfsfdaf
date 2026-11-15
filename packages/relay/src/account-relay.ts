@@ -666,7 +666,7 @@ export class AccountRelay {
         case "suspend":
           return this.suspend(body)
         case "presence":
-          return answer(this.presence())
+          return answer(await this.presence())
         case "devices":
           return answer(this.deviceList(now))
         case "revoke-device":
@@ -726,13 +726,22 @@ export class AccountRelay {
     return answer({ applied: true, suspended: true, closed: sockets.length })
   }
 
-  /** The presence query behind `isComputerOnline(account)` (§4.17). */
-  private presence() {
+  /**
+   * The presence query behind `isComputerOnline(account)` (§4.17). No computer counts as online while the kill flag is
+   * set (a flag that cannot be read counts as set) or the account is suspended (R-C4): an idle computer with no viewer
+   * stays connected while the object hibernates and meets the flag only at its next refresh, so an open socket alone
+   * does not mean Remote is on. The flag is read first, as connect and refresh read it; `reason` says which, and a
+   * normal answer has none.
+   */
+  private async presence() {
+    const viewers = this.live("phone").length
+    const reason = (await this.killed()) ? "killed" : this.meta<Suspension>("suspended") ? "suspended" : undefined
+    if (reason) return { online: false, computers: [], viewers, reason }
     const computers = this.peers("computer")
     return {
       online: computers.length > 0,
       computers: computers.map((peer) => ({ device: peer.device, ...(peer.name ? { name: peer.name } : {}) })),
-      viewers: this.live("phone").length,
+      viewers,
     }
   }
 
