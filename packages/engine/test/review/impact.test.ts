@@ -7,8 +7,9 @@ import { pathToFileURL } from "url"
 import { Effect } from "effect"
 import { BrainCode } from "@vectordevai/core/brain/code"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import type { ImpactSlice } from "@vectordevai/core/review/impact"
-import { impactBlock } from "@vectordevai/core/review/prompt"
+import { fnv1a64 } from "@vectordevai/core/review/fingerprint"
+import { IMPACT_LIMITS, IMPACT_TIERS, type ImpactSlice } from "@vectordevai/core/review/impact"
+import { IMPACT_TIER_CAPS, impactBlock } from "@vectordevai/core/review/prompt"
 import { Git } from "../../src/git"
 import { ReviewImpact } from "../../src/review/impact"
 import { ReviewSource } from "../../src/review/source"
@@ -72,6 +73,14 @@ function invariants(slice: ImpactSlice) {
   // Impact incompleteness is context, never coverage (VS-38 item 7).
   for (const key of ["complete", "coverage", "unreviewed", "reviewed"]) expect(Object.hasOwn(slice, key)).toBe(false)
 }
+
+// A digest of a slice with its timings and git's version zeroed, and of the block it renders. VS-37c changed tier b
+// for Go only, so the slices of these tests, which change no Go file or pack no tiers, stay byte-identical: each
+// digest was printed at 0ee486e3, before VS-37c's edit, beside the structural assertions that say what moved.
+const golden = (slice: ImpactSlice) =>
+  fnv1a64(
+    JSON.stringify({ block: impactBlock(slice), slice: { ...slice, ms: 0, grepMs: 0, parseMs: 0, gitVersion: "" } }),
+  )
 
 // The real Git service, with every command it runs recorded: what a build read, never what it would have read.
 const recorded = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -299,6 +308,7 @@ describe("ReviewImpact.build", () => {
       expect(slice.tests).toEqual(["pkg/store/store_test.go"])
       // Ruby has no grammar: its names come from BrainCode.symbols and its call sites from a whole-word match.
       expect(slice.unsupported).toEqual(["lib/parser.rb", "lib/runner.rb"])
+      expect(golden(slice)).toBe("31afa5449acfe50d")
       invariants(slice)
     }),
   )
@@ -530,6 +540,7 @@ describe("ReviewImpact.build in tiers", () => {
         [`${base}:src/util.ts`, `${head}:src/a.ts`, `${head}:src/util.ts`].toSorted(),
       )
       expect(impactBlock(slice)).not.toContain("untrusted_enclosing_scope")
+      expect(golden(slice)).toBe("39f8cb80ed7fa76d")
       invariants(slice)
       // The same build twice is the same slice, timings aside.
       const again = (yield* build({ directory: dir, base, head, files })).slice
@@ -580,6 +591,7 @@ describe("ReviewImpact.build in tiers", () => {
       expect(tiered.shown).toContain(`${head}:src/math.ts`)
       expect(tiered.shown).not.toContain(`${head}:src/other.ts`)
       expect(impactBlock(slice)).toContain("<untrusted_outbound_signature ")
+      expect(golden(slice)).toBe("cdb1f993d3b60353")
       invariants(slice)
     }),
   )
@@ -638,6 +650,8 @@ describe("ReviewImpact.build in tiers", () => {
         ignored: (file) => file === "src/skip.ts",
       })
       expect(called.slice.tiers?.dropped.targets).toContain("ignored:src/skip.ts")
+      expect(golden(slice)).toBe("527a2f7d547fee08")
+      expect(golden(called.slice)).toBe("527a2f7d547fee08")
       invariants(slice)
     }),
   )
@@ -663,6 +677,8 @@ describe("ReviewImpact.build in tiers", () => {
       const { slice } = yield* build({ directory: dir, base, head, files, packing: {}, ignore: ["src/math.ts"] })
       expect(slice.outbound).toEqual([])
       expect(slice.tiers?.dropped.targets).toEqual(["ignored:src/math.ts"])
+      expect(golden(open.slice)).toBe("af2be5135922b11e")
+      expect(golden(slice)).toBe("02f4aebe08f76411")
       invariants(slice)
     }),
   )
@@ -685,6 +701,7 @@ describe("ReviewImpact.build in tiers", () => {
       expect(impactBlock(slice)).toContain(
         "Context fell back (1 changed file in a language Vector does not parse: no enclosing scope; 1 changed file or definition over the size limit: no enclosing scope). Open the files yourself.",
       )
+      expect(golden(slice)).toBe("e4540592fa4558b4")
       invariants(slice)
     }),
   )
@@ -717,6 +734,492 @@ describe("ReviewImpact.build in tiers", () => {
       // Target reads never mark the slice incomplete: with a generous box the tiered slice is complete.
       const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
       expect(slice.incomplete).toBeUndefined()
+    }),
+  )
+})
+
+// VS-37c: tier b also looks the names an added Go line uses up in the other Go files of its folder, which no import
+// names. No sibling file mentions the changed name (Provision), so no other stage reads one: every read of a sibling
+// below is tier b's.
+const handlerGo = (body: string) =>
+  [
+    "package proxy",
+    "",
+    'import "fmt"',
+    "",
+    "// Handler proxies requests to its upstreams.",
+    "type Handler struct {",
+    "\tUpstreams []*Upstream",
+    "}",
+    "",
+    "func (h *Handler) Provision() error {",
+    "\tfor _, upstream := range h.Upstreams {",
+    body,
+    "\t}",
+    "\treturn nil",
+    "}",
+    "",
+  ].join("\n")
+const dialing = (condition: string) =>
+  handlerGo([`\t\tif ${condition} {`, '\t\t\treturn fmt.Errorf("no dial address")', "\t\t}"].join("\n"))
+const HOSTS_GO =
+  "package proxy\n\n// Upstream is one backend.\ntype Upstream struct {\n\tDial      string\n\tLookupSRV string\n}\n"
+const goStruct = (pkg: string, name: string, field: string) =>
+  `package ${pkg}\n\ntype ${name} struct {\n\t${field}\n}\n`
+const goRepo = (dir: string, base: Record<string, string>, head: Record<string, string>) =>
+  Effect.gen(function* () {
+    const from = yield* commit(dir, "base", { "go.mod": "module example.com/app\n", ...base })
+    const to = yield* commit(dir, "head", head)
+    const files = yield* ReviewSource.prDiff({ directory: dir, mergeBase: from, head: to })
+    return { base: from, head: to, files }
+  })
+// A change to Provision whose added line reads `upstream.Dial`, a field of Upstream in hosts.go. The test file, the
+// subfolder, the other folder and the Markdown file each declare or mention a Dial of their own.
+const goFixture = (dir: string, extra: Record<string, string> = {}, head: Record<string, string> = {}) =>
+  goRepo(
+    dir,
+    {
+      "proxy/handler.go": handlerGo("\t\t_ = upstream"),
+      "proxy/hosts.go": HOSTS_GO,
+      "proxy/hosts_test.go": goStruct("proxy", "fakeUpstream", "Dial string"),
+      "proxy/sub/deep.go": goStruct("sub", "Deep", "Dial string"),
+      "other/x.go": goStruct("other", "X", "Dial string"),
+      "proxy/notes.md": "Dial notes\n",
+      ...extra,
+    },
+    { "proxy/handler.go": dialing('upstream.Dial == ""'), ...head },
+  )
+const DIAL = {
+  path: "proxy/hosts.go",
+  name: "Upstream.Dial",
+  kind: "field",
+  start: 5,
+  end: 5,
+  signature: "Dial string",
+  usedIn: "proxy/handler.go:12",
+}
+
+describe("ReviewImpact.build in tiers: same-package Go (VS-37c)", () => {
+  it.live("a field of a type declared in another file of the package is packed from the head tree-ish", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* goFixture(dir)
+      // A later commit and the working tree (a fork review's merge-base checkout) hold more of the package.
+      yield* commit(dir, "later", { "proxy/later.go": goStruct("proxy", "Later", "Dial string") })
+      yield* git(dir, "checkout", "-q", base)
+      yield* write(dir, { "proxy/local.go": goStruct("proxy", "Local", "Dial string") })
+      const tiered = yield* recorded(build({ directory: dir, base, head, files, packing: {} }))
+      const slice = tiered.result.slice
+      // At 0ee486e3, before VS-37c, this build read only the changed file and packed nothing in tier b: outbound [],
+      // tiers.shown.b [], no read of proxy/hosts.go.
+      expect(slice.outbound).toEqual([DIAL])
+      expect(slice.tiers?.shown.b).toEqual(["proxy/hosts.go:5-5"])
+      expect(slice.locations).toContain("proxy/hosts.go:5")
+      expect(slice.tiers?.dropped.targets).toEqual([])
+      expect(slice.fallback).toEqual([])
+      expect(impactBlock(slice)).toContain(
+        '<untrusted_outbound_signature path="proxy/hosts.go" line="5" kind="field" symbol="Upstream.Dial" used_in="proxy/handler.go:12">\nDial string\n</untrusted_outbound_signature>',
+      )
+      // The sibling is read once, at head; nothing outside the folder's own Go files of the head tree is read.
+      expect(tiered.shown.toSorted()).toEqual(
+        [`${base}:proxy/handler.go`, `${head}:proxy/handler.go`, `${head}:proxy/hosts.go`].toSorted(),
+      )
+      const tree = new Set((yield* git(dir, "ls-tree", "-r", "--name-only", head)).split("\n"))
+      for (const entry of tiered.shown)
+        expect(
+          entry === `${base}:proxy/handler.go` ||
+            (entry.startsWith(`${head}:`) && tree.has(entry.slice(head.length + 1))),
+        ).toBe(true)
+      invariants(slice)
+    }),
+  )
+
+  it.live("packing unset, or tiers without b, reads no sibling", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* goFixture(dir)
+      const plain = yield* recorded(build({ directory: dir, base, head, files }))
+      for (const key of ["scopes", "outbound", "fallback", "tiers"])
+        expect(Object.hasOwn(plain.result.slice, key)).toBe(false)
+      expect(plain.shown.toSorted()).toEqual([`${base}:proxy/handler.go`, `${head}:proxy/handler.go`].toSorted())
+      const off = yield* recorded(build({ directory: dir, base, head, files, packing: { tiers: ["a", "c"] } }))
+      expect(off.result.slice.outbound).toEqual([])
+      expect(off.shown).not.toContain(`${head}:proxy/hosts.go`)
+      invariants(off.result.slice)
+    }),
+  )
+
+  it.live("a changed test file also looks in the package's test files, never in an external test package", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* goFixture(
+        dir,
+        { "proxy/ext_test.go": goStruct("proxy_test", "extOnly", "Dial string") },
+        {
+          "proxy/handler_test.go":
+            "package proxy\n\nfunc matches(u *Upstream, f *fakeUpstream) bool {\n\treturn f.Dial == u.LookupSRV\n}\n",
+        },
+      )
+      const tiered = yield* recorded(build({ directory: dir, base, head, files, packing: {} }))
+      const slice = tiered.result.slice
+      expect(slice.outbound?.map((item) => `${item.path}:${item.start}:${item.name}:${item.usedIn}`)).toEqual([
+        "proxy/hosts.go:5:Upstream.Dial:proxy/handler.go:12",
+        "proxy/hosts.go:4:Upstream:proxy/handler_test.go:3",
+        "proxy/hosts_test.go:3:fakeUpstream:proxy/handler_test.go:3",
+        "proxy/hosts_test.go:4:fakeUpstream.Dial:proxy/handler_test.go:4",
+        "proxy/hosts.go:6:Upstream.LookupSRV:proxy/handler_test.go:4",
+      ])
+      // The external test package was read (it is in the folder) but declares nothing package proxy can use.
+      expect(tiered.shown).toContain(`${head}:proxy/ext_test.go`)
+      invariants(slice)
+    }),
+  )
+
+  it.live("an ignored or generated sibling is never shown, and an ignored one is never read", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* goFixture(dir, {
+        "proxy/skip.go": goStruct("proxy", "skipped", "Dial string"),
+        "proxy/gen.go": `// Code generated by stringer; DO NOT EDIT.\n\n${goStruct("proxy", "generated", "Dial string")}`,
+      })
+      const tiered = yield* recorded(
+        build({ directory: dir, base, head, files, packing: {}, ignore: ["proxy/skip.go"] }),
+      )
+      const slice = tiered.result.slice
+      expect(slice.outbound).toEqual([DIAL])
+      expect(slice.tiers?.dropped.targets).toEqual(["generated:proxy/gen.go", "ignored:proxy/skip.go"])
+      // Neither is a fallback the model is told about.
+      expect(slice.fallback).toEqual([])
+      // The generated file was read, to find its header, and is never shown to the model; the ignored one is not read.
+      expect(tiered.shown).toContain(`${head}:proxy/gen.go`)
+      expect(tiered.shown).not.toContain(`${head}:proxy/skip.go`)
+      expect(slice.locations.some((item) => item.startsWith("proxy/gen.go"))).toBe(false)
+      expect(impactBlock(slice)).not.toContain("proxy/gen.go")
+      expect(impactBlock(slice)).not.toContain("proxy/skip.go")
+      invariants(slice)
+    }),
+  )
+
+  const sum = (expression: string) => `package proxy\n\nfunc sum(v *All) int {\n\treturn ${expression}\n}\n`
+  const indexes = (count: number) => Array.from({ length: count }, (_, at) => String(at).padStart(2, "0"))
+
+  it.live(
+    "reads stop at the read cap and signatures at the outbound cap; a sibling past the read cap is cap:, no fallback",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* scopedTmpdir({ git: true })).path
+        const { base, head, files } = yield* goRepo(
+          dir,
+          {
+            "proxy/sum.go": sum("0"),
+            ...Object.fromEntries(
+              indexes(25).map((at) => [`proxy/t${at}.go`, goStruct("proxy", `T${at}`, `F${at} int`)]),
+            ),
+          },
+          {
+            "proxy/sum.go": sum(
+              indexes(25)
+                .map((at) => `v.F${at}`)
+                .join(" + "),
+            ),
+          },
+        )
+        // Tier b may spend the whole budget, so only the caps can stop it.
+        const packing = { shares: { a: 0, b: 1, c: 0 } }
+        const tiered = yield* recorded(build({ directory: dir, base, head, files, packing }))
+        const slice = tiered.result.slice
+        expect(tiered.shown.filter((entry) => /proxy\/t\d+\.go$/.test(entry))).toHaveLength(IMPACT_TIERS.targets)
+        expect(slice.tiers?.dropped.targets).toEqual(
+          indexes(25)
+            .slice(20)
+            .map((at) => `cap:proxy/t${at}.go`),
+        )
+        // A sibling is looked up on speculation, so one left unread is named for the eval record, never to the model.
+        expect(slice.fallback).toEqual([])
+        expect(impactBlock(slice)).not.toContain("Context fell back")
+        expect(slice.outbound?.map((item) => `${item.path}:${item.start}:${item.name}`)).toEqual(
+          indexes(IMPACT_TIER_CAPS.outbound).map((at) => `proxy/t${at}.go:4:T${at}.F${at}`),
+        )
+        expect(slice.tiers?.dropped.outbound).toEqual(
+          indexes(20)
+            .slice(10)
+            .map((at) => `proxy/t${at}.go:4`),
+        )
+        // Ten signatures spend a fraction of the budget tier b had, so the eleventh was left out by the count cap.
+        expect(slice.tiers?.tokens.b ?? Infinity).toBeLessThan(IMPACT_LIMITS.tokens / 4)
+        invariants(slice)
+      }),
+  )
+
+  it.live("with bare names alone, sibling reads stop once each is bound, and the rest are never named", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* goRepo(
+        dir,
+        {
+          "proxy/sum.go": sum("0"),
+          "proxy/a.go": "package proxy\n\nfunc newPool() int {\n\treturn 1\n}\n",
+          "proxy/b.go": "package proxy\n\nconst defaultSize = 4\n",
+          ...Object.fromEntries(
+            indexes(25).map((at) => [`proxy/c${at}.go`, goStruct("proxy", `C${at}`, `F${at} int`)]),
+          ),
+        },
+        { "proxy/sum.go": sum("newPool() + defaultSize") },
+      )
+      const tiered = yield* recorded(build({ directory: dir, base, head, files, packing: {} }))
+      const slice = tiered.result.slice
+      expect(slice.outbound?.map((item) => `${item.path}:${item.start}:${item.name}:${item.kind}`)).toEqual([
+        "proxy/b.go:3:defaultSize:variable",
+        "proxy/a.go:3:newPool:function",
+      ])
+      expect(
+        tiered.shown.filter((entry) => entry.startsWith(`${head}:proxy/`) && !entry.endsWith("sum.go")).toSorted(),
+      ).toEqual([`${head}:proxy/a.go`, `${head}:proxy/b.go`])
+      // Nothing was left to look up, so no sibling counts as unread.
+      expect(slice.tiers?.dropped.targets).toEqual([])
+      expect(slice.fallback).toEqual([])
+      invariants(slice)
+    }),
+  )
+
+  it.live("a member of a long doc-commented struct shows its own line; the struct's signature is cut at 240", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const note = (topic: string) =>
+        `\t// This paragraph documents ${topic} at a length that a real struct field may have.`
+      const hosts = [
+        "package proxy",
+        "",
+        "// Upstream is one backend, with every setting a request to it needs.",
+        "type Upstream struct {",
+        ...Array.from({ length: 8 }, (_, at) => note(`the dial address, part ${at + 1}`)),
+        '\tDial string `json:"dial,omitempty"`',
+        "",
+        note("service discovery"),
+        '\tLookupSRV string `json:"lookup_srv,omitempty"`',
+        "}",
+        "",
+      ].join("\n")
+      const { base, head, files } = yield* goFixture(
+        dir,
+        { "proxy/hosts.go": hosts },
+        { "proxy/handler.go": dialing('upstream.Dial == "" || upstream == (Upstream{})') },
+      )
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
+      const [field, holder] = slice.outbound ?? []
+      // The field the line reads is nine lines below its struct's first line, and its own line is what is shown.
+      expect(field).toMatchObject({
+        name: "Upstream.Dial",
+        kind: "field",
+        start: 13,
+        signature: 'Dial string `json:"dial,omitempty"`',
+      })
+      // The bare use of the type shows the parser's signature of the whole spec, which ends inside the comments.
+      expect(holder).toMatchObject({ name: "Upstream", kind: "struct", start: 4 })
+      expect(holder?.signature).toHaveLength(240)
+      expect(holder?.signature).not.toContain("Dial string")
+      invariants(slice)
+    }),
+  )
+
+  it.live("tier b's share closes the account: the signatures that do not fit are dropped in order", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      // Each field line collapses to about 230 characters, near the 240 a signature may hold.
+      const field = (at: string) => `G${at} string \`json:"g${at}" note:"${"x".repeat(200)}"\``
+      const { base, head, files } = yield* goRepo(
+        dir,
+        {
+          "proxy/sum.go": sum("0"),
+          ...Object.fromEntries(indexes(12).map((at) => [`proxy/g${at}.go`, goStruct("proxy", `G${at}`, field(at))])),
+        },
+        {
+          "proxy/sum.go": sum(
+            indexes(12)
+              .map((at) => `len(v.G${at})`)
+              .join(" + "),
+          ),
+        },
+      )
+      const packing = { tiers: ["b"], shares: { a: 0, b: 0.05, c: 0 } }
+      const { slice } = yield* build({ directory: dir, base, head, files, packing })
+      const packed = slice.outbound ?? []
+      expect(packed.length).toBeGreaterThan(0)
+      expect(packed.length).toBeLessThan(IMPACT_TIER_CAPS.outbound)
+      expect(packed.every((item) => item.signature === field(item.name.slice(-2)))).toBe(true)
+      expect([...packed.map((item) => `${item.path}:${item.start}`), ...(slice.tiers?.dropped.outbound ?? [])]).toEqual(
+        indexes(12).map((at) => `proxy/g${at}.go:4`),
+      )
+      expect(slice.tiers?.tokens.b ?? Infinity).toBeLessThanOrEqual(0.05 * IMPACT_LIMITS.tokens)
+      invariants(slice)
+    }),
+  )
+
+  it.live("a declaration the diff shows or tier a packs is not repeated, and a changed sibling is read once", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const fields = Array.from({ length: 6 }, (_, at) => `\tF${at + 1}        int`)
+      const hosts = (more: string[]) =>
+        [
+          "package proxy",
+          "",
+          "// Upstream is one backend.",
+          "type Upstream struct {",
+          "\tDial      string",
+          "\tLookupSRV string",
+          ...fields,
+          ...more,
+          "}",
+          "type Pool struct {",
+          "\tSize int",
+          "}",
+          ...Array.from({ length: 10 }, (_, at) => `// filler ${at}`),
+          "type Far struct {",
+          "\tName string",
+          "}",
+          "",
+        ].join("\n")
+      const { base, head, files } = yield* goFixture(
+        dir,
+        { "proxy/hosts.go": hosts([]) },
+        {
+          "proxy/hosts.go": hosts(["\tWeight    int"]),
+          "proxy/handler.go": dialing('upstream.Dial == "" || pool.Size == 0 || far.Name == ""'),
+        },
+      )
+      const tiered = yield* recorded(build({ directory: dir, base, head, files, packing: {} }))
+      const slice = tiered.result.slice
+      // Dial is inside Upstream's scope (tier a), and Size's line is in the diff's context: only Far's Name is new.
+      expect(slice.scopes?.map((scope) => `${scope.path}:${scope.name}:${scope.start}-${scope.end}`)).toContain(
+        "proxy/hosts.go:Upstream:4-14",
+      )
+      expect(slice.outbound).toEqual([
+        {
+          path: "proxy/hosts.go",
+          name: "Far.Name",
+          kind: "field",
+          start: 29,
+          end: 29,
+          signature: "Name string",
+          usedIn: "proxy/handler.go:12",
+        },
+      ])
+      // The changed sibling is read by the changed files' parse alone, never again by tier b.
+      expect(tiered.shown.filter((entry) => entry === `${head}:proxy/hosts.go`)).toHaveLength(1)
+      invariants(slice)
+    }),
+  )
+
+  it.live("imports go first: three imported packages of eight files fill the read cap, and the sibling is cap:", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const packages = ["a", "b", "c"]
+      const run = (expression: string) =>
+        [
+          "package svc",
+          "",
+          "import (",
+          ...packages.map((name) => `\t"example.com/app/pkg/${name}"`),
+          ")",
+          "",
+          "func Run(s *Server) int {",
+          `\treturn ${expression}`,
+          "}",
+          "",
+        ].join("\n")
+      const { base, head, files } = yield* goRepo(
+        dir,
+        {
+          "svc/run.go": run("0"),
+          "svc/server.go": goStruct("svc", "Server", "Port int"),
+          ...Object.fromEntries(
+            packages.flatMap((name) =>
+              Array.from({ length: 8 }, (_, at) => [
+                `pkg/${name}/${name}${at}.go`,
+                `package ${name}\n\nfunc ${name.toUpperCase()}${at}() int {\n\treturn ${at}\n}\n`,
+              ]),
+            ),
+          ),
+        },
+        { "svc/run.go": run("a.A0() + b.B0() + c.C0() + s.Port") },
+      )
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
+      expect(slice.tiers?.dropped.targets).toEqual([
+        "cap:pkg/c/c4.go",
+        "cap:pkg/c/c5.go",
+        "cap:pkg/c/c6.go",
+        "cap:pkg/c/c7.go",
+        "cap:svc/server.go",
+      ])
+      // The four import targets past the cap are a fallback the model is told; the sibling is not.
+      expect(slice.fallback).toEqual([{ kind: "b:over-cap", count: 4 }])
+      expect(slice.outbound?.map((item) => `${item.path}:${item.name}`)).toEqual([
+        "pkg/a/a0.go:A0",
+        "pkg/b/b0.go:B0",
+        "pkg/c/c0.go:C0",
+      ])
+      invariants(slice)
+    }),
+  )
+
+  it.live("an interface method is a member of its interface; a qualified embedded type declares no member", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const store = [
+        "package proxy",
+        "",
+        'import "io"',
+        "",
+        "// Store loads upstreams.",
+        "type Store interface {",
+        "\tio.Reader",
+        "\tLoad(key string) error",
+        "}",
+        "",
+      ].join("\n")
+      const { base, head, files } = yield* goFixture(
+        dir,
+        { "proxy/store.go": store },
+        { "proxy/handler.go": dialing("store.Load(key) != nil || store.Reader == nil || store.io == nil") },
+      )
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
+      // The real Go grammar reports Load inside Store's body; io and Reader qualify each other, so neither is one.
+      expect(slice.outbound).toEqual([
+        {
+          path: "proxy/store.go",
+          name: "Store.Load",
+          kind: "method",
+          start: 8,
+          end: 8,
+          signature: "Load(key string) error",
+          usedIn: "proxy/handler.go:12",
+        },
+      ])
+      invariants(slice)
+    }),
+  )
+
+  it.live("a time box that ends at any step leaves a sibling out, and never as a fallback", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* goFixture(dir)
+      for (const budgetMs of [0, 1, 20, 150]) {
+        const { slice } = yield* ReviewImpact.build({
+          directory: dir,
+          base,
+          head,
+          files,
+          context: 200_000,
+          budgetMs,
+          packing: {},
+        })
+        invariants(slice)
+        // hosts.go is tier b's only target: read and bound in time, or left out as time:, whichever step the box ends.
+        expect(slice.outbound).toBeDefined()
+        expect([[], [DIAL]]).toContainEqual(slice.outbound ?? [])
+        expect(slice.tiers?.dropped.targets.every((entry) => entry === "time:proxy/hosts.go")).toBe(true)
+        expect(slice.fallback?.filter((item) => item.kind.startsWith("b:"))).toEqual([])
+      }
     }),
   )
 })
@@ -923,6 +1426,29 @@ describe("partial clones", () => {
       const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
       expect(slice.tiers?.dropped.targets).toEqual(["missing:lib/helper.ts"])
       expect(slice.fallback).toContainEqual({ kind: "b:missing", count: 1 })
+      expect(slice.outbound).toEqual([])
+      expect(yield* missing(dir, head)).toBe(before)
+      expect(golden(slice)).toBe("5bdd419e45ebd1aa")
+      invariants(slice)
+    }),
+  )
+
+  it.live("a sibling a partial clone lacks is missing: and no fallback, never read, and nothing is fetched", () =>
+    Effect.gen(function* () {
+      const root = (yield* scopedTmpdir({ git: true })).path
+      yield* git(root, "config", "uploadpack.allowfilter", "true")
+      yield* git(root, "config", "uploadpack.allowanysha1inwant", "true")
+      const { base, head, files } = yield* goFixture(root)
+      const dir = path.join(root, "..", `${path.basename(root)}-go-sibling`)
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
+      yield* clone(root, dir, "--filter=blob:none", "--no-checkout")
+      // Checking out the changed file alone fetches its head blob; its siblings stay missing.
+      yield* git(dir, "checkout", head, "--", "proxy/handler.go")
+      const before = yield* missing(dir, head)
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
+      expect(slice.tiers?.dropped.targets).toEqual(["missing:proxy/hosts.go"])
+      // The changed file's base is tier a's fallback; the sibling, looked up on speculation, is none.
+      expect(slice.fallback).toEqual([{ kind: "a:missing", count: 1 }])
       expect(slice.outbound).toEqual([])
       expect(yield* missing(dir, head)).toBe(before)
       invariants(slice)

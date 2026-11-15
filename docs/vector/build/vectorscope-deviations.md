@@ -16003,3 +16003,391 @@ compatibility; older-binary session-only forget with the session row retained
 is not declared closed here. Actual merge, owner rollout, quality-evaluation and
 publication gates remain. No paid call, default enablement or complete memory
 activation follows from the source checkpoint.
+
+## 2026-11-15 · VS-37c Tier b for same-package Go references (SF-01)
+
+Addendum B §1.5 (VS-37c) and the `vectorscope-remaining.md` VS-37 row ("c Go
+same-package outbound signatures and cap/dedup/tree-only regression"), built on
+`scope-finish` at `0ee486e3` as lane package SF-01. It implements the SF-01 plan
+as corrected by its critique; where a critique point was taken in another form
+or declined, the reason is under "Critique points". The fixes for its code
+review are under "Review findings".
+
+- **Test first.** The new engine fixture (a Go package whose changed line in
+  `proxy/handler.go` reads `upstream.Dial`, a field of `Upstream` declared in
+  `proxy/hosts.go`) ran at `0ee486e3` before any source edit, in a run of the
+  whole engine `test/review/impact.test.ts` (24 pass, 0 fail). It printed
+  `outbound: []`, `tiers.shown.b: []`, `dropped.targets: []`, `fallback: []`,
+  and the only files shown were `proxy/handler.go` at base and head:
+  `proxy/hosts.go` was never read. That confirms the addendum's cause: core
+  `outboundUses` binds a name only to an import statement, and a Go file needs
+  no import to reach its package. The test did not pass unexpectedly, so step 2
+  went ahead.
+- **What landed.**
+  - **Core `review/impact.ts`** (pure, still reached only through the builder's
+    tier b). `OutboundUse.declaration?` (a use pinned to one definition). New
+    types `SamePackageLookup` and `SamePackageFile`. New exports
+    `samePackageLookups` and `samePackageUses`. Private helpers
+    `declarationsOf`, `goPackage` and `signatureLine`, and the constants
+    `GO_PREDECLARED` and `MEMBER_DECLARATION`. In `packTiers`, tier b gains two
+    changes. A pinned use takes exactly its declaration, exported or not, with
+    no barrel expansion. The uses comparator ends with the declaration's start.
+    Every unpinned use keeps the old filter and the old order.
+  - **Engine `review/impact.ts`** `readTargets`: the lookups, the sibling reads
+    and the pinned uses appended to `outboundUses`' uses. A read sibling's parse
+    is asked for the lookups' member names (an import target's parse still gets
+    `names: new Set()`). Changed siblings get an in-memory re-parse step of
+    their own. No other function changes, and nothing changes in `BuildInput`,
+    `ChangedFiles` or the git commands.
+  - `packages/core/src/review/model-evidence.ts` (the pin) and
+    `script/vectorscope-eval/README.md` (`tiers.dropped.targets` now also names
+    same-package Go files).
+- **How a lookup works.**
+  - For each changed Go file (not deleted or binary) that has a package clause,
+    `samePackageLookups` collects the names its added lines use. It skips
+    import lines and an import's name or members (`fmt`, `fmt.Errorf`). It also
+    skips names the file defines, a field or method the file declares itself on
+    an added line, and Go's predeclared identifiers (`nil`, `len`, `error`, …,
+    and `_`). A name right after `.` is a member and any other is bare, each
+    kept once at its first line.
+  - The siblings are the other `.go` files of the same folder at head,
+    `_test.go` files only when the changed file is a test. They never include a
+    subfolder, another folder, a non-Go file or the file itself. The tree is
+    walked once, and not at all when no changed file is Go.
+  - `samePackageUses` binds the names to siblings whose package clause equals
+    the changed file's, so an external `x_test` package or a `package main`
+    tool in the folder binds nothing.
+    - A bare name binds to a top-level function, type, variable or constant,
+      never to a method or to anything declared inside a function.
+    - A member binds to every method of that name, whatever the receiver. It
+      also binds to every top-level struct or interface that declares a field,
+      embedded type or interface method of that name. The declaration must be
+      the parser's reference at a declaration position, so array lengths,
+      func-type and interface-method parameters, method bodies, struct-literal
+      keys and local structs never count.
+  - Reads: siblings go after every import target, in sorted order, through the
+    same `plan` and `read` (`git show --no-textconv <head>:<path>`, the same
+    runner, lazy fetch off, inside the time box). They take the same ignore,
+    exclude, absent, missing, size, grammar and generated-header checks and
+    count against the same `IMPACT_TIERS.targets` read cap. They are read
+    `TARGET_CONCURRENCY` at a time.
+    - A sibling is a speculative lookup: it may declare nothing the change
+      uses. So one set aside (`cap:`, `missing:`, `large:`, `time:` and the
+      rest) is named in `tiers.dropped.targets` for the eval record, but never
+      counted as a `b:*` fallback, which the model is told to act on. Import
+      targets count as before.
+    - Reading stops when nothing is left to look up: no member use and every
+      bare name bound. A Go package declares a package-level name once,
+      build-tagged variants aside. A sibling skipped this way is never planned,
+      so it is never named. Any member use (`x.Name`, which nearly every Go
+      change has) keeps the reads going up to the read cap.
+    - A changed sibling takes its definitions from the changed files' parse,
+      as a changed import target does. It is then parsed again in memory for
+      the member names only. A timeout there is `time:`, and the sibling then
+      gives nothing, as a read past the time box would. Another refusal is
+      `unsupported:`, and its definitions still bind bare names.
+    - Each batch is bound (`samePackageUses`) right after its reads, so each
+      sibling is indexed once. Past the time box nothing more is bound: a
+      sibling read in time but bound after it is `time:` too.
+- **Critique points.**
+  1. _packTiers order._ Taken: the comparator ends with
+     `(x.declaration?.start ?? 0) - (y.declaration?.start ?? 0)`, so unpinned
+     uses sort exactly as before. A pinned twin of the reversal determinism
+     case has four holders of one member in one sibling plus an import use. It
+     gives the same JSON reversed, and the per-file cap keeps the same three.
+  2. _Read-cap starvation._ Imports go first, kept, so every import read is
+     unchanged. This is a known way recall is lost, not a rare edge. A Go
+     change whose added lines use three repository packages fills the 20 reads
+     (`BrainCode.resolve` returns up to 8 files a package), so every sibling is
+     `cap:` and tier b packs nothing same-package. The engine case "imports go
+     first" shows exactly this: the four import targets past the cap are
+     `b:over-cap` 4, and the sibling is `cap:` with no note (review finding 1).
+     `IMPACT_TIERS.targets`
+     now bounds two kinds of read. It stays an eval-only parameter under I-13
+     (value 20 unchanged, untuned); its comment says so.
+  3. _Member signature._ Option (b) was taken: a member packs its own line as
+     `Holder.Name`, kind `field` (or `method` in an interface), start and end
+     at that line. The line is whitespace-collapsed and capped at 240 like the
+     parser's signatures; a field line holds no value. It is built in core, so
+     `prompt.ts` and `promptsDigest` are untouched. On the holder's first or
+     last line (a one-line struct) the holder itself is packed. An engine case
+     with a long doc-commented struct records the evidence: the field packs at
+     its own line, nine lines below the struct. A bare use of the type in the
+     same case packs the parser's struct signature, which is exactly 240
+     characters and does not contain `Dial string`.
+     - On caddy (read-only, source reading only, no projection), the added
+       line reads `upstream.Dial`. `Upstream` starts at `hosts.go:65`, the
+       `Dial` field is at `:78` and the missed location is `:83`
+       (`LookupSRV`). `:83` is 18 lines from the struct start and 5 from the
+       field line, so neither design reaches it at line level. Only file-level
+       recall can count `hosts.go`.
+  4. _Seed-set golden._ The spec's golden over every non-Go seed case
+     (`41a64e5e`) is replaced by fixture goldens printed at `0ee486e3`.
+     Building slices over seed cases is a dataset projection, gated to the
+     benchmark agent and the owner.
+     - Goldens: `golden()` is fnv1a64 over the rendered block and the slice
+       with `ms`, `grepMs`, `parseMs` and `gitVersion` zeroed, which is every
+       timing field `ImpactSlice` has. It covers nine slices in seven existing
+       tests:
+       - the untiered Go test;
+       - packing unset (VS-25b's slice under `impact: graph`);
+       - "packs the changed definition whole";
+       - ignored, excluded or generated, both by glob and by callback;
+       - the changed target, open and ignored;
+       - the fallback note;
+       - the tier b partial-clone case.
+     - Without a golden: the time-box test, which depends on timing. The other
+       existing tests are untiered and never reach `readTargets`.
+  5. _Caps._ Split in two.
+     - The count case gives tier b the whole budget (`shares a 0, b 1, c 0`),
+       so only caps can stop it: 25 siblings, 20 read and 5 `cap:`, with no
+       fallback (review finding 1). Ten signatures pack (`t00`–`t09`), `t10`–`t19` go to
+       `dropped.outbound`, and tier b spends under a quarter of 6,000 tokens.
+     - The budget case gives `tiers ["b"]` a share of 0.05 with twelve fields
+       of about 230 characters. Fewer than ten pack, the rest are dropped in
+       order, and `tiers.tokens.b <= 0.05 × 6,000`.
+  6. _One-shot iterator._ `paths` is walked once (`Array.from`), and the
+     engine passes `blobs.keys()`. A core case uses a Map iterator with two
+     changed Go files in different folders.
+  7. _Precision._ No guard was added. A core case records the effect: the
+     line `return errors.New(err.Error())` comes before `upstream.Dial` and
+     packs a sibling's `(*proxyError).Error` method first. Without type
+     inference, a common member name (`Error`, `String`, `Write`, `Done`)
+     binds to every sibling method or holder of that name. That can fill the
+     3-per-file and 10 caps before the real declaration and spend tokens that
+     VS-37's kill rule measures at equal tokens. A guard on locals assigned
+     from import-qualified calls needs data flow beyond this package, so it is
+     listed for later.
+  8. _Package clause._ Taken: `goPackage` reads the first clause after blank
+     lines and comments (build constraints included), and a sibling binds only
+     when its clause equals the changed file's. There is a core case and an
+     engine case (`proxy_test` read, never bound).
+  9. _Reads after resolution._ Early stop is taken for bare-only lookups. Any
+     member use (`x.Name`, which nearly every Go change has), or a bare name
+     that stays unbound (a local variable among them, which the builder cannot
+     tell from a package name), keeps the reads going up to the read cap. So a
+     Go change in a package of more than about 20 files reads 20 siblings even
+     when the first one declares the name. Those reads cost time inside the
+     box but no tokens: since review finding 1, a sibling set aside past the
+     cap is `cap:` in `tiers.dropped.targets` only, never a `b:over-cap` note.
+     The engine case "with bare names alone" shows two reads and no `cap:`
+     among 27 siblings.
+  10. _Changed-sibling re-parse._ Specified as above. It is a separate step
+      for changed siblings only, and the import-target branch of `round` is
+      unchanged. The timeout and refusal paths have no deterministic test:
+      the build's single time box cannot expire between the changed parse and
+      the re-parse on purpose. Nor can it between a batch's reads and its
+      binding; the engine time-box case asserts, for budgets of 0, 1, 20 and
+      150 ms, that the sibling is either bound or `time:`, never a fallback.
+  11. _Partial clone._ Added: in a blobless `--no-checkout` clone with only
+      `proxy/handler.go` checked out, `proxy/hosts.go` is
+      `missing:proxy/hosts.go`. Since review finding 1 that is no `b:missing`:
+      the fallback is tier a's `a:missing` 1, for the changed file's base. The
+      sibling is never read, and the missing-object count is unchanged.
+  12. _Fixture hazards._ No sibling mentions the changed name (`Provision`),
+      so no other stage reads one. The generated sibling is asserted read (in
+      `shown`), and it is absent from `outbound`, `locations` and the rendered
+      block.
+  13. _Push steps._ There is no push in this package. The commit phase must
+      run `git fetch origin scope-finish`, merge (never rebase), and
+      recompute `REVIEW_PIPELINE_SOURCES` if the merge touches a pinned file.
+      Then it runs the full TURBO typecheck and pushes fast-forward only
+      with `git push origin HEAD:scope-finish`.
+  14. _Opaque goldens._ Each digest sits beside the existing structural
+      assertions (`outbound`, `tiers.shown`, `dropped.targets`, `fallback`
+      with `toEqual`), so a CI failure says what moved. The Windows and macOS
+      runs of the goldens are deferred to CI.
+- **Review findings.** The package's code review found one blocking and five
+  non-blocking points. All six are fixed; none was declined.
+  1. _Speculative siblings counted as fallbacks_ (non-blocking). Taken in the
+     first form and widened from `cap:` to every reason. Once the import
+     targets are done (`phase.siblings`), `leave` still names a set-aside
+     sibling as `reason:path` but adds nothing to `fell`. Otherwise a large
+     package or a partial clone tells the model to open many files that may
+     declare nothing it uses. The cap and partial-clone cases now assert no
+     `b:*` fallback, and "imports go first" asserts `b:over-cap` 4 (the import
+     targets alone). A new engine time-box case asserts none at any budget.
+     Critique points 2, 5, 9 and 11 and the eval README say so.
+  2. _A sentence that would go stale_ (non-blocking). "Nothing is committed …"
+     is gone; the opening paragraph names the base commit.
+  3. _Struct literal keys_ (non-blocking). Reworded under "Other decisions and
+     limits". Keys are not skipped, for the reason given there.
+  4. _Interface methods through the real grammar_ (non-blocking). A new engine
+     case has `proxy/store.go` declare `type Store interface` with `io.Reader`
+     and `Load(key string) error` on lines of their own. The changed line uses
+     `store.Load(key)`, `store.Reader` and `store.io`. Outbound is exactly
+     `Store.Load`, kind `method`, at line 8.
+  5. _Folder grouping_ (non-blocking). `Map.groupBy` over the filtered paths.
+     The suggested spread (`[...(all.get(folder) ?? []), file]`) would copy a
+     folder's list for each of its files, quadratic in a large folder.
+  6. _Untrusted input outside the time box_ (blocking). Every step is now
+     near-linear in the files' sizes, and binding is inside the time box.
+     - `declarationsOf`'s body containment check is `insideBody`. The bodies
+       are sorted by start, each with the two furthest-reaching bodies up to
+       it, so each definition takes one binary search (n log n). The test is
+       exactly the old one.
+     - The declaration-position, member and qualifier checks read at most
+       `LOOKBACK` (256) UTF-16 units of the line before the name. `lookback`
+       leads a cut line with a NUL, so neither `^` nor a qualifier can start
+       at the cut. The qualifies-something check reads at most 256 units
+       after the name.
+     - `MEMBER_QUALIFIER` consumes a non-identifier boundary instead of using
+       a lookbehind, so each run of letters is scanned once. The lookbehind
+       form with `\p{…}` classes ran about 8 times slower under Bun: 1,057 ms
+       against 127 ms for 100,000 checks of 256 units.
+     - `samePackageLookups` checks a reference only when its member flag and
+       name are not yet a use. A use keeps its first line, so the result is
+       unchanged.
+     - `declarationsOf` checks at most `MEMBER_REFERENCES` (1,024) of a
+       sibling's references inside its top-level structs and interfaces, in
+       document order. It makes each line a signature once. It groups by name
+       with `Map.groupBy` and sorts each name once; before, it re-sorted a
+       name's whole list on every insert.
+     - `samePackageUses` walks siblings before uses, so only the siblings
+       with a file meet the uses, however large the folder.
+     - Engine `readTargets` binds each batch once, right after its reads.
+       Before, with no member sought, it re-indexed every read sibling before
+       each batch, and all of them again at the end. It checks the time box
+       before binding: past it, a batch read in time is `time:` and binds
+       nothing. A changed sibling whose re-parse times out gives nothing.
+       `look` walks the siblings by index instead of copying the rest for
+       each batch.
+     - The bounds cost recall in two places. A list or qualifier that starts
+       more than 256 units before a name is missed. A member declared after a
+       sibling's first 1,024 references inside its structs and interfaces is
+       missed; the core case asserts this with a later struct. Real Go files
+       stay well inside both, and every existing case is unchanged.
+     - Timings come from a scratch probe outside the repository
+       (`/tmp/vector-v2/scope/bench-same-package.ts`). It times the core
+       functions alone, under Bun 1.3.14 in this container, at 10,000 of
+       each:
+       - 10,000 one-line functions: 217 ms before, 28 ms after;
+       - 10,000 field references on one struct line: 607 ms before, 3 ms
+         after;
+       - 10,000 field lines of one struct: 1,055 ms before, 8 ms after;
+       - a changed line of 10,000 `a.Dial`: 6,163 ms before, 22 ms after.
+       At 100,000 of each, which is past the parser's 1 MiB cap, the same
+       four take 172, 17, 47 and 121 ms after the fix.
+     - A new core case, "a crafted sibling or changed line costs near-linear
+       time", keeps every file under 1 MiB. It has 100,000 names on one
+       struct line and a later struct, 30,000 one-line functions, 25,000
+       one-line methods of one name, and a changed line of 15,000 different
+       members, each after a 40-letter name. It asserts the lookups and uses,
+       and that the two calls take under 3,000 ms. The whole case takes about
+       250 ms here.
+- **Other decisions and limits.**
+  - Embedded types are members (`u.Host`), so a promoted field of an embedded
+    sibling type is not followed.
+  - A struct literal's key (`Upstream{Dial: …}`) reads as a bare name, so it
+    binds only to a same-named top-level declaration of a sibling: a false
+    positive when one exists. Keys are not skipped, because a map or array
+    literal's key may be a package constant (`map[Kind]int{Primary: 1}`,
+    `[...]string{Zero: "a"}`), which is a real use.
+  - An interface method (`Load(key string) error`) is a member of its
+    interface. A qualified embedded type (`io.Reader`) declares none: `io`
+    qualifies `Reader`, and `Reader` follows a `.`. An engine case drives the
+    real Go grammar through both.
+  - A selector split across lines reads as a bare name.
+  - A local that shadows a package-level name binds to that name.
+  - `importsOf` over-binds the last path segment of an aliased import, as it
+    did before this package.
+  - A packed struct and one of its packed fields can both appear, so one line
+    may show twice.
+  - Unexported declarations are packed only through pinned uses.
+- **Default and parity proof.**
+  - The builder is uncalled: only type imports reach the impact modules
+    (engine `eval.ts:73`, core `model-evidence.ts:20` and `prompt.ts:5`).
+  - With packing unset, `readTargets` never runs: the "packing unset" golden
+    is unchanged, and the new Go case shows no sibling read without packing
+    or with `tiers: ["a", "c"]`.
+  - With no Go change, `samePackageLookups` returns `[]` before touching
+    `paths`. A core case passes an iterable that throws if it is walked. Every
+    read, parse and use is then the same: the nine goldens match `0ee486e3`.
+  - The 59 existing core impact cases are unchanged and pass.
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `643ad6c25830b2b7` → `536d33409aa00033`
+  (`58c8af195665c532` before the review fixes).
+  `REVIEW_PIPELINE_REVISION` stays 4: no runner reaches the builder, and
+  nothing a review finds or posts changes. The connect-finish lane edits pinned
+  files, so the pin is recomputed after every merge of main (lead).
+- **Replay variant.** None changed. `engine:impact-graph` stays pending until
+  VS-25b wiring (addendum A §1a, as VS-36 and VS-37).
+- **Desktop half.** A documented difference, as for VS-36 and VS-25:
+  `ai-review.ts` builds no slice, and `variant.applied` stays false.
+- **Reads.** These are the reads tier b already makes, and nothing new is
+  read from the working tree or the base. The move to the ReviewGit view
+  (SF-18) and to `git cat-file --batch` (Q18, I-8 amendment) is not done here.
+- **Listed for later, not changed.**
+  - Java: package-private classes of a folder, already a `SAME_PACKAGE` family.
+  - Kotlin: no grammar.
+  - C#: namespaces are not bound to folders.
+  - Swift modules.
+  - Python namespace packages.
+  - Rust `mod` siblings.
+  - PHP namespaces.
+- **Tests actually run** (each alone from its package directory, through
+  `vector-serial`, `--timeout 30000`):
+  - At `0ee486e3`, source unedited: engine `test/review/impact.test.ts`, 24
+    pass, 0 fail (the test-first case and the golden prints).
+  - After the edits, the first time:
+    - core `test/review/impact.test.ts`: 66 pass, 0 fail (59 existing + 7 new);
+    - core `test/review/model-evidence.test.ts`: 29 pass, 1 fail with the old
+      pin (the expected digest print), then 30 pass, 0 fail;
+    - core `test/review/prompt.test.ts`: 47 pass, 0 fail;
+    - engine `test/review/impact.test.ts`: 34 pass, 0 fail (23 existing + 11
+      new);
+    - engine `test/review/parse.test.ts`: 59 pass, 0 fail.
+  - After the review fixes:
+    - core `test/review/impact.test.ts`: 67 pass, 0 fail (59 existing + 8 new);
+    - core `test/review/model-evidence.test.ts`: 29 pass, 1 fail with each
+      older pin (the expected digest print), then 30 pass, 0 fail;
+    - core `test/review/prompt.test.ts`: 47 pass, 0 fail;
+    - engine `test/review/impact.test.ts`: 36 pass, 0 fail (23 existing + 13
+      new); the nine goldens are unchanged;
+    - engine `test/review/parse.test.ts`: 59 pass, 0 fail.
+  - `bun typecheck` in `packages/core` and `packages/engine`, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`: clean, both
+    times.
+  - `oxlint`: 0 warnings, 0 errors. `prettier --check` is clean on the five
+    TypeScript files.
+  - Mutations, each caught and each restored:
+    - before the review, by core `impact.test.ts`: dropping the
+      declaration-position check (1 fail), the `_test.go` filter (2), the pin
+      filter (3), the declaration tiebreaker (1) and the package-clause check
+      (1);
+    - before the review, by engine `impact.test.ts`: dropping the `_test.go`
+      filter (5 fail), the package-clause check (1) and the changed-sibling
+      re-parse (1);
+    - for the review fixes, by core `impact.test.ts`'s crafted case: the
+      pairwise containment check (7.4 s against the 3 s bound) and the
+      per-insert sort by name (6.7 s). The whole-prefix declaration check
+      without the reference cap, and the whole-prefix qualifier check without
+      the repeat skip, were each still running when an outer `timeout 60`
+      killed them;
+    - for the review fixes, by engine `impact.test.ts`: counting siblings as
+      fallbacks (4 fail: the cap, imports-first, time-box and partial-clone
+      cases) and never recording bound names (1 fail: "with bare names
+      alone").
+  - At the commit, rerun on the final tree: core `test/review/impact.test.ts`
+    67 pass, `model-evidence.test.ts` 30 pass, `prompt.test.ts` 47 pass;
+    engine `test/review/impact.test.ts` 36 pass, `parse.test.ts` 59 pass; all
+    0 fail. `bun typecheck` in core and engine and the eval tsconfig clean.
+    The full TURBO typecheck (`--concurrency=2`): 27 of 27 tasks pass.
+  - Not run locally: the CI-only legs (Windows and macOS of `test.yml`).
+  - CI dispatched on `scope-finish` after the push: `typecheck.yml`,
+    `scope-directory-identity.yml`, `review-memory-fence.yml`,
+    `scope-app-validation.yml` and `vector-at-mention.yml`. `test.yml` (the
+    only workflow that runs the top-level eval tests and the Windows and macOS
+    legs) was not dispatched by this commit phase; the lead batches it with
+    the next runtime package. `review-http-regression` is not needed: no
+    review HttpApi group, handler or service changes.
+- **Not done.** The spec's Done line also asks for a caddy projection
+  re-measured at zero spend. That is a projection on a dataset case, so it goes
+  to the benchmark agent and is owner-gated. It is recorded as not done.
+- **Not claimed.** No recall or quality claim, no paid run, no default change
+  and no variant flip. VS-37's kill rule cannot decide with one cross-file
+  case. Q18 and Q45 stay open; `vectorscope-remaining.md:4-6` authorizes
+  reversible software only.
+- **Left to the lane's final package.** Refreshing `vectorscope-remaining.md`
+  (the VS-37 row's "c" item is now built in source) and
+  `vectorscope-continuation.md`, and the correcting entry for the stale
+  `:16000` sentence.

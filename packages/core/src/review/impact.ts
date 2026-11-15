@@ -2,7 +2,8 @@
 // the changed modules, ranked and packed into a bounded share of the context (contract §1.2 and §4 VS-25b; addendum A
 // VS-36 items 1, 2, 4 and 5 and VS-38 items 6 and 7). Nothing calls it yet: engine review/impact.ts builds a slice with
 // it, and no runner calls that before VS-25b wiring. VS-37a adds the three-tier packing (packTiers and its helpers),
-// reached only when the builder is given eval-only packing parameters; packSlice stays the VS-25b arm.
+// reached only when the builder is given eval-only packing parameters; packSlice stays the VS-25b arm. VS-37c adds tier
+// b's same-package Go lookups (samePackageLookups, samePackageUses), reached only through the builder's tier b.
 //
 // Deterministic and free of I/O, but Node-only: BrainCode reads paths with node:path (and, through BrainAnchor and
 // BrainDrift, imports node:crypto). prompt.ts and model-evidence.ts take only its types, so no renderer bundle gains a
@@ -134,7 +135,7 @@ export type ImpactRecord = Omit<ImpactSlice, "changed" | "dependents" | "locatio
 export const IMPACT_TIERS = Object.freeze({
   shares: Object.freeze({ a: 0.4, b: 0.15, c: 0.45 }),
   outboundPerFile: 3, // tier b signatures from one target file, a .d.ts or .pyi included
-  targets: 20, // files the builder reads for tier b, at most
+  targets: 20, // files the builder reads for tier b, at most: import targets first, then VS-37c's same-package Go files
   statementLines: 8, // a tier c window, at most
   importLines: 8, // import lines one scope shows, at most
 })
@@ -234,6 +235,27 @@ export interface OutboundUse {
   default: boolean
   original?: string
   targets: string[]
+  // VS-37c: a use no import binds, of a declaration in another Go file of the changed file's folder (targets[0], its
+  // only target). packTiers packs exactly this definition, exported or not; specifier is then "" and default false.
+  declaration?: Definition
+}
+
+// VS-37c: one changed Go file's same-package lookups for tier b (samePackageLookups): its package clause, the names
+// its added lines use that no import binds, each once as a bare name or as a member (`x.Name`, `f().Name`) at its
+// first line, and the other Go files of its folder at head that may declare them.
+export interface SamePackageLookup {
+  path: string
+  package: string
+  uses: { line: number; name: string; member: boolean }[]
+  siblings: string[]
+}
+
+// VS-37c: a sibling Go file as tier b read it: its text, its definitions, and the parser's references to the lookups'
+// member names, from which samePackageUses finds the fields and methods a struct or interface declares.
+export interface SamePackageFile {
+  text: string
+  definitions: readonly Definition[]
+  references: readonly SourceReference[]
 }
 
 // What packTiers did, for offline projections of the arms (addendum A §1a): the packing it used; which changed paths it
@@ -258,6 +280,30 @@ export interface ImpactTiers {
 }
 
 const SAME_PACKAGE: Record<string, string> = { go: "go", java: "jvm", kt: "jvm", kts: "jvm" }
+// VS-37c: Go's predeclared identifiers and the blank identifier, which a bare name is never looked up as (a package
+// that shadows one is missed).
+const GO_PREDECLARED = new Set(
+  (
+    "_ any append bool byte cap clear close comparable complex complex128 complex64 copy delete error false " +
+    "float32 float64 imag int int16 int32 int64 int8 iota len make max min new nil panic " +
+    "print println real recover rune string true uint uint16 uint32 uint64 uint8 uintptr"
+  ).split(" "),
+)
+// VS-37c: the text before a name that declares a member of the struct or interface around it: first on its line or
+// after `{` or `;`, alone, after other names of a list (`A, B int`) or after the `*` of an embedded pointer. An array
+// length (`[Size]byte`), a func-type parameter (`func(ctx int)`) or an interface method's parameter is never one.
+const MEMBER_DECLARATION = /(?:^|[{;])\s*(?:(?:[\p{L}_][\p{L}\p{Nd}_]*\s*,\s*)*|\*\s*)$/u
+// VS-37c: the identifier and `.` before a member (`fmt.` in `fmt.Errorf`). It starts at the line's start or after a
+// character no identifier holds, never inside a longer one or at lookback's cut, so a line of long names costs linear
+// time (a lookbehind would too, at several times the cost).
+const MEMBER_QUALIFIER = /(?:^|[^\p{L}\p{Nd}_\0])([\p{L}_][\p{L}\p{Nd}_]*)\s*\.\s*$/u
+// VS-37c: how much of a line the member and declaration checks read before a name, and after it, in UTF-16 units, so a
+// crafted line of many names costs time linear in its length, never quadratic. A list or a qualifier that starts
+// further back is missed.
+const LOOKBACK = 256
+// VS-37c: how many of a sibling's references to looked-up member names inside its top-level structs and interfaces are
+// checked as declarations, at most, in document order. A real file declares far fewer; a crafted one stays cheap.
+const MEMBER_REFERENCES = 1_024
 const C_SOURCES = new Set(["c", "cc", "cpp", "cxx", "m", "mm"])
 const C_HEADERS = new Set(["h", "hh", "hpp", "hxx"])
 // The definition kinds a VS-37a scope names as its header.
@@ -860,6 +906,136 @@ export function reexportTargets(input: {
 }
 
 /**
+ * Tier b's same-package lookups (VS-37c, addendum B §1.5): a Go file reaches the other files of its package without an
+ * import, so outboundUses binds nothing there. For each changed Go file (sorted; not deleted or binary) with a source
+ * and a package clause: the names its added lines use that no import binds, that it does not define (nor declare as
+ * a field or method of its own struct or interface) and that Go does not predeclare (GO_PREDECLARED), each once as a
+ * bare name and once as a member, at its first line in line and column order. A name right after a `.` is a member,
+ * skipped only when the identifier before the `.` names an import (`fmt.Errorf`, which outboundUses binds already);
+ * any other is bare. Each check reads at most LOOKBACK units of the line before the name, so the work is linear in the
+ * file however its lines are crafted. Its siblings are the other `.go` files of its folder among `paths` (the head
+ * tree, walked once), sorted, `_test.go` ones only for a changed `_test.go` file: never a subfolder, another folder,
+ * another kind of file or the file itself. No Go file changed: empty, before `paths` is read, so every other build
+ * does exactly what it did. A file with no such use or no sibling gives no lookup.
+ */
+export function samePackageLookups(input: {
+  files: readonly DiffFile[]
+  source: (path: string, side: Side) => TierSource | undefined
+  paths: Iterable<string>
+}): SamePackageLookup[] {
+  const changed = input.files
+    .filter((file) => !file.binary && file.status !== "deleted" && extension(file.path) === "go")
+    .map((file) => file.path)
+    .toSorted(compare)
+  if (!changed.length) return []
+  const wanted = new Set(changed.map(folderOf))
+  const folders = Map.groupBy(
+    Array.from(input.paths).filter((file) => extension(file) === "go" && wanted.has(folderOf(file))),
+    folderOf,
+  )
+  return changed.flatMap((file) => {
+    const source = input.source(file, "RIGHT")
+    const clause = source ? goPackage(source.text) : undefined
+    const test = file.endsWith("_test.go")
+    const siblings = [...new Set(folders.get(folderOf(file)) ?? [])]
+      .filter((item) => item !== file && (test || !item.endsWith("_test.go")))
+      .toSorted(compare)
+    if (!source || clause === undefined || !siblings.length) return []
+    const lines = source.text.split("\n")
+    const statements = importsOf(source.text, "go")
+    const onImports = new Set(statements.flatMap((statement) => span(statement.start, statement.end)))
+    const imported = new Set(statements.flatMap((statement) => [...statement.names]))
+    const defined = new Set(source.definitions.map((definition) => definition.name))
+    // A field or method an added line declares in the file's own struct or interface is not a use of anything.
+    const holders = new Set(source.definitions.filter((item) => item.kind === "struct" || item.kind === "interface"))
+    const owners = innermost(
+      source.definitions,
+      source.references.map((reference) => reference.line),
+    )
+    const uses = new Map<string, SamePackageLookup["uses"][number]>()
+    source.references
+      .filter((reference) => reference.kind !== "import" && !onImports.has(reference.line))
+      .toSorted((x, y) => x.line - y.line || x.column - y.column || compare(x.name, y.name))
+      .forEach((reference) => {
+        const before = lookback(lines[reference.line - 1] ?? "", reference.column)
+        const member = /\.\s*$/.test(before)
+        const key = `${member}\0${reference.name}`
+        // A use is kept at its first line, so a later reference to the same name adds nothing and is never checked.
+        if (uses.has(key)) return
+        const qualifier = member ? before.match(MEMBER_QUALIFIER)?.[1] : undefined
+        const owner = owners.get(reference.line)
+        if (member && qualifier !== undefined && imported.has(qualifier)) return
+        if (!member && (imported.has(reference.name) || defined.has(reference.name))) return
+        if (!member && GO_PREDECLARED.has(reference.name)) return
+        if (reference.kind === "value" && owner && holders.has(owner) && MEMBER_DECLARATION.test(before)) return
+        uses.set(key, { line: reference.line, name: reference.name, member })
+      })
+    return uses.size ? [{ path: file, package: clause, uses: [...uses.values()], siblings }] : []
+  })
+}
+
+/**
+ * Tier b's uses of same-package declarations (VS-37c): each lookup's uses bound to the declarations of its siblings
+ * whose package clause is the changed file's (an external `x_test` package or a `package main` tool in the folder is
+ * another package), each pinned to its declaration with the sibling as its only target. A bare name binds to a
+ * top-level function, type, variable or constant, never to a method or to anything declared inside a function. A
+ * member binds to every method of that name, whatever its receiver (nothing infers types), and to every top-level
+ * struct or interface that declares a field, an embedded type or a method of that name: the parser's reference to it
+ * inside the holder at a declaration position (MEMBER_DECLARATION) that qualifies nothing, so an array length, a
+ * func-type parameter, a method body or a composite literal's key is never one. Such a member is its own line, as
+ * `Holder.Name` (kind "field", or "method" in an interface), whitespace collapsed and at most 240 characters as the
+ * parser's signatures are (a field line holds no value), so a long doc-commented struct still shows the field the
+ * line uses; on the holder's first or last line (a one-line struct) it is the holder. A sibling is untrusted text, so
+ * its index is near-linear in its size (declarationsOf), and only the first MEMBER_REFERENCES of its references inside
+ * its structs and interfaces can declare a member. A sibling with no file (set aside, unread or past the time box)
+ * gives nothing. Sorted by path, line, name, bare before member, sibling, then the declaration's start.
+ */
+export function samePackageUses(input: {
+  lookups: readonly SamePackageLookup[]
+  file: (path: string) => SamePackageFile | undefined
+}): OutboundUse[] {
+  const indexes = new Map<string, ReturnType<typeof declarationsOf> | undefined>()
+  const indexOf = (path: string) => {
+    if (!indexes.has(path)) {
+      const file = input.file(path)
+      indexes.set(path, file ? declarationsOf(path, file) : undefined)
+    }
+    return indexes.get(path)
+  }
+  // Siblings first: only the few with a file meet the uses, however large the folder.
+  return input.lookups
+    .flatMap((lookup) =>
+      lookup.siblings.flatMap((sibling) => {
+        const index = indexOf(sibling)
+        if (!index || index.package !== lookup.package) return []
+        return lookup.uses.flatMap((use) =>
+          ((use.member ? index.members : index.names).get(use.name) ?? []).map(
+            (declaration): OutboundUse => ({
+              path: lookup.path,
+              line: use.line,
+              name: use.name,
+              specifier: "",
+              qualified: use.member,
+              default: false,
+              targets: [sibling],
+              declaration,
+            }),
+          ),
+        )
+      }),
+    )
+    .toSorted(
+      (x, y) =>
+        compare(x.path, y.path) ||
+        x.line - y.line ||
+        compare(x.name, y.name) ||
+        Number(x.qualified) - Number(y.qualified) ||
+        compare(x.targets[0] ?? "", y.targets[0] ?? "") ||
+        (x.declaration?.start ?? 0) - (y.declaration?.start ?? 0),
+    )
+}
+
+/**
  * VS-37a's three-tier packing of the slice (addendum A VS-37). Only a caller that passes `packing` reaches it (behind
  * `impact: "graph"`); packSlice stays the VS-25b arm. The budget is packSlice's, min(IMPACT_LIMITS.tokens, share ×
  * context) tokens at IMPACT_LIMITS.charsPerToken, after reserving the frame, the tests, the longest incomplete and
@@ -882,9 +1058,10 @@ export function reexportTargets(input: {
  * - **b.** For each use (outboundUses), in order, the exported definitions of its targets, and of what their barrels
  *   re-export, with the name it is exported as (the used name, or the original of a renamed import) as their name or
  *   alias, never "default" unless the use is a default import (`import x from`, `{ default as x }`), sorted by start.
- *   One already taken, changed, inside a packed scope, in a file shown whole or whose first line the diff shows is
- *   skipped. At most IMPACT_TIERS.outboundPerFile per target file and IMPACT_TIER_CAPS.outbound in all; the first that
- *   does not fit closes the account.
+ *   A use pinned to its declaration (VS-37c, samePackageUses) takes exactly that definition, exported or not, and no
+ *   barrel. One already taken, changed, inside a packed scope, in a file shown whole or whose first line the diff
+ *   shows is skipped. At most IMPACT_TIERS.outboundPerFile per target file and IMPACT_TIER_CAPS.outbound in all; the
+ *   first that does not fit closes the account.
  * - **c.** packSlice's call sites in packSlice's order. Top-k keeps the sites of the first k files (tier c off keeps
  *   none), and the rest go to tiers.dropped.rank. A site's window is its statement, clipped to the file and, past
  *   IMPACT_TIERS.statementLines, to that many lines from up to IMPACT_LIMITS.window lines before the site; with no
@@ -1188,20 +1365,24 @@ export function packTiers(input: {
           x.line - y.line ||
           compare(x.name, y.name) ||
           compare(x.specifier, y.specifier) ||
-          compare(x.targets.join("\0"), y.targets.join("\0")),
+          compare(x.targets.join("\0"), y.targets.join("\0")) ||
+          (x.declaration?.start ?? 0) - (y.declaration?.start ?? 0),
       )
       .flatMap((use) => {
         // A renamed import (`{ format as fmt }`) is looked up by the name it is exported as, never by its local name.
         const exported = use.original ?? use.name
         const byDefault = use.default || use.original === "default"
-        return expand(use.targets).flatMap((target) =>
-          (given.definitionsOf(target) ?? [])
+        // VS-37c: a use pinned to a same-package declaration takes exactly that definition, exported or not.
+        const pinned = use.declaration
+        return (pinned ? use.targets : expand(use.targets)).flatMap((target) =>
+          (pinned ? [pinned] : (given.definitionsOf(target) ?? []))
             .filter(
               (item) =>
-                item.exported &&
-                (item.name === exported ||
-                  (item.aliases ?? []).some((alias) => alias !== "default" && alias === exported) ||
-                  (byDefault && (item.aliases ?? []).includes("default"))),
+                pinned !== undefined ||
+                (item.exported &&
+                  (item.name === exported ||
+                    (item.aliases ?? []).some((alias) => alias !== "default" && alias === exported) ||
+                    (byDefault && (item.aliases ?? []).includes("default")))),
             )
             .toSorted((x, y) => x.start - y.start || compare(x.name, y.name))
             .flatMap((item) => {
@@ -1689,6 +1870,123 @@ function pythonSubmodules(text: string) {
       .filter((name) => /^[A-Za-z_]\w*$/.test(name))
       .map((name) => (from.endsWith(".") ? `${from}${name}` : `${from}.${name}`))
   })
+}
+
+// One sibling Go file's declarations for samePackageUses (VS-37c): its package clause, its top-level names, and its
+// members by name (methods, and the fields, embedded types and interface methods its top-level structs and interfaces
+// declare), each list sorted by start. The file is untrusted, so the work stays near-linear: n log n in its
+// definitions, linear in its references, of which at most MEMBER_REFERENCES inside its structs and interfaces are
+// checked as declarations, each reading at most LOOKBACK units of its line either side, and each line is made a
+// signature once.
+function declarationsOf(path: string, file: SamePackageFile) {
+  const lines = file.text.split("\n")
+  const local = insideBody(file.definitions)
+  const top = file.definitions.filter((item) => item.kind !== "method" && !local(item))
+  const holders = new Set(top.filter((item) => item.kind === "struct" || item.kind === "interface"))
+  const owners = innermost(
+    file.definitions,
+    file.references.map((reference) => reference.line),
+  )
+  const signatures = new Map<number, string>()
+  const signatureAt = (line: number) => {
+    if (!signatures.has(line)) signatures.set(line, signatureLine(lines[line - 1] ?? ""))
+    return signatures.get(line) ?? ""
+  }
+  const inHolder = (reference: SourceReference) => {
+    const holder = owners.get(reference.line)
+    return holder !== undefined && holders.has(holder) && (reference.kind === "value" || reference.kind === "type")
+  }
+  const members = file.references
+    .filter(inHolder)
+    .slice(0, MEMBER_REFERENCES)
+    .flatMap((reference): (readonly [string, Definition])[] => {
+      const holder = owners.get(reference.line)
+      const text = lines[reference.line - 1] ?? ""
+      const after = reference.column + reference.name.length
+      if (!holder || !MEMBER_DECLARATION.test(lookback(text, reference.column))) return []
+      if (/^\s*\./.test(text.slice(after, after + LOOKBACK))) return []
+      if (reference.line === holder.start || reference.line === holder.end) return [[reference.name, holder]]
+      return [
+        [
+          reference.name,
+          {
+            path,
+            side: "RIGHT",
+            name: `${holder.name}.${reference.name}`,
+            kind: holder.kind === "interface" ? "method" : "field",
+            start: reference.line,
+            end: reference.line,
+            exported: /^\p{Lu}/u.test(reference.name),
+            signature: signatureAt(reference.line),
+            container: holder.name,
+          },
+        ],
+      ]
+    })
+  // Grouped, then sorted once: the first of each start is kept, as entries come.
+  const byName = (entries: readonly (readonly [string, Definition])[]) =>
+    new Map(
+      [...Map.groupBy(entries, (entry) => entry[0])].map(([name, group]) => [
+        name,
+        group
+          .map((entry) => entry[1])
+          .toSorted((x, y) => x.start - y.start)
+          .filter((definition, index, all) => index === 0 || all[index - 1].start !== definition.start),
+      ]),
+    )
+  return {
+    package: goPackage(file.text),
+    names: byName(top.map((item) => [item.name, item] as const)),
+    members: byName([
+      ...file.definitions.filter((item) => item.kind === "method").map((item) => [item.name, item] as const),
+      ...members,
+    ]),
+  }
+}
+
+// Whether a definition sits inside a function or method body other than itself, for declarationsOf. The bodies are
+// sorted by start, each with the two furthest-reaching bodies up to it, so each ask is one binary search: a file of
+// many functions costs n log n, never n².
+function insideBody(definitions: readonly Definition[]) {
+  const bodies = definitions
+    .filter((item) => item.kind === "function" || item.kind === "method")
+    .toSorted((x, y) => x.start - y.start || y.end - x.end)
+  const starts = bodies.map((body) => body.start)
+  const reach = bodies.reduce<{ first?: Definition; second?: Definition }[]>((all, body) => {
+    const last = all.at(-1) ?? {}
+    // A body that reaches no further than the furthest so far competes for second place only.
+    const kept = last.first !== undefined && last.first.end >= body.end
+    const second = last.second !== undefined && last.second.end >= body.end ? last.second : body
+    all.push(kept ? { first: last.first, second } : { first: body, second: last.first })
+    return all
+  }, [])
+  return (item: Definition) => {
+    const furthest = reach[lowerBound(starts, item.start + 1) - 1]
+    const other = furthest?.first === item ? furthest.second : furthest?.first
+    return other !== undefined && item.end <= other.end
+  }
+}
+
+// The text before a column of a line that the member and declaration checks read: at most LOOKBACK units. A line cut
+// there is led by a NUL, which no identifier, space or separator matches, so no check takes the cut for a line start.
+function lookback(line: string, column: number) {
+  const from = Math.max(0, column - LOOKBACK)
+  return `${from ? "\0" : ""}${line.slice(from, column)}`
+}
+
+// A Go file's package clause, after the blank lines and comments (build constraints among them) before it.
+function goPackage(text: string) {
+  const lead = /(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*/y
+  lead.exec(text)
+  return /^package\s+([\p{L}_][\p{L}\p{Nd}_]*)/u.exec(text.slice(lead.lastIndex))?.[1]
+}
+
+// One source line as a signature, as the parser writes one: whitespace collapsed, at most 240 UTF-16 units, never cut
+// inside a surrogate pair.
+function signatureLine(raw: string) {
+  const flat = raw.replace(/\s+/g, " ").trim()
+  if (flat.length <= 240) return flat
+  return flat.slice(0, /[\uD800-\uDBFF]/.test(flat[239] ?? "") ? 239 : 240)
 }
 
 // The changed modules in a file's folder that share its package: Go with Go, Java and Kotlin with either. C# is not

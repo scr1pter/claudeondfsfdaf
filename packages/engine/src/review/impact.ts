@@ -14,7 +14,8 @@
 // confirmation parse for statements and, after confirmation, reads the files the changed lines' imports name, so
 // tier b's reads never take time from confirmation and never mark the slice incomplete. Without `packing` it builds
 // VS-25b's slice exactly as before. Nothing passes `packing` yet: the eval's variant parameters (addendum A §1) and
-// VS-25b wiring decide that.
+// VS-25b wiring decide that. VS-37c: tier b also reads, after those files and inside the same read cap, the other Go
+// files of a changed Go file's folder, for the declarations its added lines use without an import.
 
 import { Effect, Option, Stream } from "effect"
 import { Git } from "@/git"
@@ -36,6 +37,8 @@ import {
   packSlice,
   packTiers,
   reexportTargets,
+  samePackageLookups,
+  samePackageUses,
   selectDependents,
   wordHits,
   type Definition,
@@ -43,7 +46,9 @@ import {
   type ImpactIncomplete,
   type ImpactPackingInput,
   type ImpactSlice,
+  type OutboundUse,
   type Reference,
+  type SamePackageFile,
   type SourceReference,
   type TierSource,
 } from "@vectordevai/core/review/impact"
@@ -1067,6 +1072,11 @@ function changedReferences(
     }))
 }
 
+// A parsed reference as tier b's lookups take it.
+function sourceReference(reference: ReviewParse.ParsedReference): SourceReference {
+  return { name: reference.name, line: reference.line, column: reference.column, kind: reference.kind }
+}
+
 // One side of a changed file as tiers a and b read it, from the changed files' parse.
 function tierSource(changed: ChangedFiles) {
   return (path: string, side: Side): TierSource | undefined => {
@@ -1121,6 +1131,17 @@ function tiersOf(packed: ReturnType<typeof packTiers>): Partial<ImpactSlice> {
  * it aside, and a timeout counts as "b:over-cap". Set-aside targets go to tiers.dropped.targets as "reason:path", which
  * packTiers sorts (the reads finish in any order); ignored, excluded and generated ones are never named to the model.
  * `run` marks nothing incomplete.
+ *
+ * VS-37c: then the other Go files of each changed Go file's folder (core samePackageLookups), sorted, through the same
+ * checks and the same read (`git show --no-textconv` of the head tree-ish), counted against the same read cap after
+ * every import target, with no re-export hop. They are read TARGET_CONCURRENCY at a time and stop once nothing is
+ * left to look up (no member use, and every bare name bound), so a sibling never read for that reason is never named;
+ * any member use keeps them going up to the read cap. A sibling is looked up on speculation, so one set aside goes to
+ * tiers.dropped.targets as "reason:path" but never to a fallback the model is told. A read sibling's parse also keeps
+ * its references to the lookups' member names. A changed sibling's definitions come from the changed files' parse; its
+ * text is parsed again in memory for those member names only: a timeout there leaves it out ("time:"), and another
+ * refusal leaves its members out ("unsupported:"). Each batch is bound (core samePackageUses) right after its reads,
+ * and past the time box nothing more is: a batch read in time but bound after it is "time:" too. Nothing else is read.
  */
 const readTargets = Effect.fnUntraced(function* (
   run: Run,
@@ -1144,15 +1165,26 @@ const readTargets = Effect.fnUntraced(function* (
     lookup: input.lookup,
     workspace: input.workspace,
   })
+  const lookups = samePackageLookups({
+    files: input.files,
+    source: tierSource(input.changed),
+    paths: input.blobs.keys(),
+  })
+  const siblings = new Set(lookups.flatMap((lookup) => lookup.siblings))
+  const members = new Set(lookups.flatMap((lookup) => lookup.uses.flatMap((use) => (use.member ? [use.name] : []))))
+  const declared = new Map<string, SamePackageFile>()
   const definitions = new Map<string, readonly Definition[]>()
   const reexports = new Map<string, string[]>()
   const unread: string[] = []
   const fell = { "b:unsupported": new Set<string>(), "b:over-cap": new Set<string>(), "b:missing": new Set<string>() }
   const seen = new Set<string>()
   const reads = { count: 0 }
+  // Set once the import targets are done: a same-package sibling is looked up on speculation (it may declare nothing
+  // the change uses), so one set aside is named for the eval record but never counted as a fallback the model is told.
+  const phase = { siblings: false }
   const leave = (reason: string, target: string, kind?: keyof typeof fell) => {
     unread.push(`${reason}:${target}`)
-    if (kind) fell[kind].add(target)
+    if (kind && !phase.siblings) fell[kind].add(target)
     return "skip" as const
   }
   // The ignore globs go through classifyPath, the classifier's own matcher, so a glob means the same here as in the
@@ -1186,7 +1218,12 @@ const readTargets = Effect.fnUntraced(function* (
       if (shown.stdout.includes(0)) return leave("binary", target)
       const text = shown.text()
       if (hasGeneratedHeader(text)) return leave("generated", target)
-      const parsed = yield* ReviewParse.parse({ path: target, text, names: new Set(), deadline: input.deadline })
+      const parsed = yield* ReviewParse.parse({
+        path: target,
+        text,
+        names: siblings.has(target) ? members : new Set(),
+        deadline: input.deadline,
+      })
       if (!parsed.parsed)
         return parsed.because === "timeout"
           ? leave("time", target, "b:over-cap")
@@ -1195,6 +1232,12 @@ const readTargets = Effect.fnUntraced(function* (
         target,
         parsed.definitions.map((definition) => definitionOf(target, "RIGHT", definition)),
       )
+      if (siblings.has(target))
+        declared.set(target, {
+          text,
+          definitions: definitions.get(target) ?? [],
+          references: parsed.references.map(sourceReference),
+        })
       reexports.set(target, reexportTargets({ path: target, text, lookup: input.lookup, workspace: input.workspace }))
       return "read" as const
     })
@@ -1227,11 +1270,68 @@ const readTargets = Effect.fnUntraced(function* (
     found.uses.flatMap((use) => use.targets),
     0,
   )
+  const reparse = (target: string) =>
+    Effect.gen(function* () {
+      const text = input.changed.text(target, "RIGHT")
+      const own = definitions.get(target)
+      if (text === undefined || !own) return
+      const parsed = members.size
+        ? yield* ReviewParse.parse({ path: target, text, names: members, deadline: input.deadline })
+        : undefined
+      // Past the time box the sibling gives nothing, as a read past it would.
+      if (parsed && !parsed.parsed && parsed.because === "timeout") {
+        leave("time", target)
+        return
+      }
+      if (parsed && !parsed.parsed) leave("unsupported", target)
+      declared.set(target, {
+        text,
+        definitions: own,
+        references: parsed?.parsed ? parsed.references.map(sourceReference) : [],
+      })
+    })
+  // Each batch's siblings are bound once, after their reads: the uses they give, and the bare names they bind. Past the
+  // time box nothing more is bound, as nothing more is read, so a sibling read in time is `time:` too.
+  const same: OutboundUse[] = []
+  const bound = new Set<string>()
+  const bind = (batch: readonly string[]) => {
+    const fresh = new Set(batch.filter((target) => declared.has(target)))
+    if (!fresh.size) return
+    if (performance.now() >= input.deadline) {
+      fresh.forEach((target) => leave("time", target))
+      return
+    }
+    samePackageUses({ lookups, file: (path) => (fresh.has(path) ? declared.get(path) : undefined) }).forEach((use) => {
+      same.push(use)
+      bound.add(`${use.path}\0${use.name}`)
+    })
+  }
+  // A package declares a name once (build-tagged variants aside), so once every bare name is bound and no member is
+  // looked up, the other siblings add nothing.
+  const sought = lookups.some((lookup) => lookup.uses.some((use) => use.member))
+  const open = () =>
+    sought || lookups.some((lookup) => lookup.uses.some((use) => !bound.has(`${lookup.path}\0${use.name}`)))
+  const look = (targets: readonly string[], from: number): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      if (from >= targets.length || !open()) return
+      // Past the read cap nothing more is read, so the rest are set aside together.
+      const batch = targets.slice(from, reads.count >= IMPACT_TIERS.targets ? undefined : from + TARGET_CONCURRENCY)
+      yield* round(batch, IMPACT_LIMITS.reexportDepth)
+      yield* Effect.forEach(
+        batch.filter((target) => input.own.has(target) && !declared.has(target)),
+        reparse,
+        { discard: true },
+      )
+      bind(batch)
+      yield* look(targets, from + batch.length)
+    })
+  phase.siblings = true
+  yield* look([...siblings].toSorted(), 0)
   const fallback: ImpactFallback[] = (["b:unsupported", "b:over-cap", "b:missing"] as const).flatMap((kind) =>
     fell[kind].size ? [{ kind, count: fell[kind].size }] : [],
   )
   return {
-    uses: found.uses,
+    uses: [...found.uses, ...same],
     definitionsOf: (target: string) => definitions.get(target),
     reexports: (target: string) => reexports.get(target),
     unread,

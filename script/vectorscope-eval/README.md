@@ -587,10 +587,13 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     diff), `tokens` per tier, `shown` (the line ranges each tier's blocks
     show, so every arm's slice recall is measured on ranges), `external`
     (used imports that name no repository file) and `dropped` (per tier,
-    plus tier b's unread targets as `reason:path` and the call sites past
-    top-k). The scopes and outbound signatures themselves are code text, so
-    the record leaves them out. Once VS-25b wiring builds the slice in
-    `Review.run`, `context.locations` also gains the slice's locations.
+    plus tier b's unread targets as `reason:path`, since VS-37c also the
+    same-package Go files it looked declarations up in, and the call sites
+    past top-k). A same-package file is a speculative lookup, so one left
+    unread is named there but never counted in `fallback`. The scopes and
+    outbound signatures themselves are code text, so the record leaves them
+    out. Once VS-25b wiring builds the slice in `Review.run`,
+    `context.locations` also gains the slice's locations.
   - `utilisation`, typed for VS-49's slice utilisation (core `eval.ts`
     `SliceUtilisation`) and absent until the VS-49 wiring observer fills it
     from the passes' session events, at zero tokens. It enters no digest.
