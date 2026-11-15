@@ -228,24 +228,40 @@ test("with the feature on the sweep reads the switch once and stop ends live wor
   }
 })
 
-test("with the feature on the production switch reader reads `on` without any network call until R-C6", async () => {
-  // Codium's SWITCH_NAMES has no `everywhere` until R-C6, so this read makes no I/O; EV-07 updates this case then.
-  expect((SWITCH_NAMES as readonly string[]).includes("everywhere")).toBe(false)
-  const f = routerFixture()
-  const job = await f.create()
-  await offerJob(f.context(), job.jid)
-  await claimJob(f.context(), { account: f.account, jid: job.jid, device: f.computer })
-  const cronSecret = secret()
-  harness.mount({
-    "/sweep": createSweep({
-      config: () => ({ ...f.config, cronSecret }),
-      context: f.context,
-      platforms: () => ({ slack: f.adapter }),
-    }),
-  })
-  const answer = await harness.call("GET", "/sweep", { token: cronSecret })
-  expect([answer.status, answer.body]).toEqual([200, { ended: 0, posted: 0 }])
-  expect((await readJob(f.store, job.jid))?.state).toBe("claimed")
+test("with the feature on the production reader reads Codium's switch; unreadable, it ends live work", async () => {
+  // EV-07 (R-C6): Codium lists `everywhere`, so the production reader reads Codium's record. With no store settings
+  // persistentStore throws before any fetch, the switch reads `stop` (fail closed) and the sweep ends the live job.
+  expect(SWITCH_NAMES).toContain("everywhere")
+  const names = ["KV_REST_API_URL", "KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"] as const
+  const saved = names.map((name) => [name, process.env[name]] as const)
+  for (const name of names) delete process.env[name]
+  try {
+    expect([process.env.KV_REST_API_URL, process.env.UPSTASH_REDIS_REST_URL]).toEqual([undefined, undefined])
+    const f = routerFixture()
+    const job = await f.create()
+    await offerJob(f.context(), job.jid)
+    await claimJob(f.context(), { account: f.account, jid: job.jid, device: f.computer })
+    const cronSecret = secret()
+    harness.mount({
+      "/sweep": createSweep({
+        config: () => ({ ...f.config, cronSecret }),
+        context: f.context,
+        platforms: () => ({ slack: f.adapter }),
+      }),
+    })
+    const answer = await harness.call("GET", "/sweep", { token: cronSecret })
+    expect([answer.status, answer.body]).toEqual([200, { ended: 1, posted: 1 }])
+    expect((await readJob(f.store, job.jid))?.state).toBe("cancelled")
+    expect(f.calls.filter((call) => call.kind === "finish")).toHaveLength(1)
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) {
+        delete process.env[name]
+        continue
+      }
+      process.env[name] = value
+    }
+  }
 })
 
 test("vercel.json runs the sweep every minute, exactly once", async () => {

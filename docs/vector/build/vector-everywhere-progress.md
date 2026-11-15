@@ -1223,3 +1223,219 @@ Deferred:
   :882-883 and codium-build-spec.md :539, :801, which still say job-offer is
   reserved or answers 501. Optional: refuse offers once awake-hours are used
   up.
+
+## EV-07: Codium `everywhere` runtime switch (2026-11-15)
+
+Base: HEAD `411317d8` (EV-06, pushed), equal to `origin/everywhere-finish`.
+`git fetch origin release-finish main everywhere-finish codium-finish
+review-fixes` found `release-finish` still at `cf2373c4`, already merged
+(`git merge-base --is-ancestor` true), so no merge was needed; `main` is
+`58f85edc` and is not merged (PR #33 is not in). `git diff --stat
+origin/release-finish...origin/<b>` over the EV-07 paths (the five code
+files, the five test files, api/_lib/codium-owner-dashboard.ts and
+api/_lib/everywhere/switch.ts) was empty for codium-finish `2924d94b`,
+review-fixes `1433d105` and main. A second fetch at the end of the package
+found codium-finish at `265f4ea7` (the others unchanged), and the diff was
+still empty. EV-07 depends on no review-fixes commit and no brain-transport
+work. The changes are in the working tree, not committed.
+
+Files changed (line numbers after EV-07):
+
+- api/_lib/codium-switches.ts: `SWITCH_NAMES` gains `"everywhere"` last
+  (:7-17, wrapped by prettier); the `SwitchValue` comment (:19);
+  `VALUES.everywhere = ["on", "no-new", "stop"]` with a comment (:30-31);
+  `export const SWITCH_VALUES` (:33-34), a read-only alias of the private
+  `VALUES`, whose uses in writeSwitch and decode are unchanged.
+- packages/schema/src/codium-owner.ts:41: `RuntimeSwitch.name` gains
+  `"everywhere"`.
+- api/_lib/codium-owner-api.ts: imports `SWITCH_VALUES` (:8-15); `prepare()`
+  checks `SWITCH_VALUES[name]` (:102) in place of the hosted-only ternary.
+- packages/web/src/components/marketing/owner/CodiumOwner.tsx:
+  `SWITCHES.everywhere` (:37-40); On, No new and Stop for `hosted` and
+  `everywhere` (:895-898), under a comment (:894) that points at
+  SWITCH_VALUES (review round one).
+- api/_lib/everywhere/switch.ts, comments only: the header (:11-14), :22,
+  :54, and readRemoteSwitch's comment corrected (:63-66).
+- packages/web/test/everywhere-switch.test.ts: imports `SWITCH_NAMES` and
+  `SWITCH_VALUES` (:3); :46 retitled "with the env on and no Codium value it
+  is on"; the old "a switch Codium does not have yet" case is replaced by:
+  - :113 SWITCH_NAMES contains `everywhere`; `SWITCH_VALUES.everywhere` is
+    `["on", "no-new", "stop"]`;
+  - :118 an absent record reads `on`, from exactly one
+    `["GET", "vector:codium:test:switch:everywhere"]`;
+  - :125 `on`, `no-new` and `stop`, each stored as a JSON record and as the
+    legacy bare string, reach readEverywhereSwitch;
+  - :134 `off` (bare and as a JSON record with `offSince`), `maybe` and
+    `{broken` make the seam reject `CODIUM_SWITCH_UNAVAILABLE`, and
+    readEverywhereSwitch reads `stop`;
+  - :150 with the env off (no settings; the flag without a data key) it
+    reads `stop` whatever Codium holds (absent, on, no-new, stop), with no
+    store command;
+  - :171 (extended) a store outage also reads `stop` for `everywhere`.
+- packages/web/test/everywhere-sweep.test.ts:231: EV-04's tripwire replaced
+  by "with the feature on the production reader reads Codium's switch;
+  unreadable, it ends live work". It deletes the four KV variables and
+  restores them in `finally`, checks they are unset, then mounts createSweep
+  without `stopped`: 200 `{ended: 1, posted: 1}`, the job `cancelled`, one
+  `finish` call.
+- test/codium-switches.test.ts: imports `SWITCH_NAMES` and `SWITCH_VALUES`;
+  in "A11 audited runtime switches", :166 "R-C6: everywhere takes on, no-new
+  and stop, refuses off, and no other switch changes" (SWITCH_NAMES contains
+  `everywhere`; SWITCH_VALUES has a key per name; `everywhere` and `hosted`
+  are `["on", "no-new", "stop"]`; every other name is `["on", "off"]`,
+  computed over SWITCH_NAMES; a fresh seed reads `{value: "on", generation:
+  "default"}`; writes of no-new, stop and on each change and read back; `off`
+  is refused `CODIUM_SWITCH_INVALID`; the audit holds on>no-new, no-new>stop,
+  stop>on; a stored `off` reads `CODIUM_SWITCH_UNAVAILABLE`); in the Valkey
+  describe, :416 twenty parallel `stop` writes give one generation, one
+  change and ZCARD 1, a fresh read is `stop`, and `off` is refused with ZCARD
+  still 1.
+- test/codium-owner.test.ts: imports `readSwitch`, `SWITCH_NAMES`,
+  `switchAuditKey` and `switchKey`; :181 the owner sets `everywhere` to
+  no-new and then stop (each 200 `{accepted: true}` with no relay or worker
+  key, read back fresh), `off` answers 400 `CODIUM_OWNER_REQUEST` and the
+  value stays `stop`, `hosted` off and `remote` no-new still answer 400, the
+  switch audit holds 2, and the owner audit holds 4 rows both before and
+  after the three refused calls (review round one); :251 the dashboard
+  decodes with
+  `CodiumOwner.Dashboard`, lists exactly SWITCH_NAMES, and shows the stored
+  `everywhere` `stop` with its `changedAt`.
+- packages/web/src/components/marketing/owner/CodiumOwner.test.ts: imports
+  `SWITCH_NAMES` and `SWITCH_VALUES` (:8); a module-level `switchOptions`
+  reader (:116); :246 the `everywhere` select offers on, no-new (selected)
+  and stop; `remote` offers on and off; the "Everywhere" label and the
+  "Applies only while the Everywhere flag is set." detail are rendered;
+  :264 (review round one) every name in SWITCH_NAMES offers exactly
+  `SWITCH_VALUES[name]`, in order.
+- Docs: vector-everywhere-deviations.md (the EV-07 entry; dated notes under
+  :69, EV-04's "Until EV-07 lands" and its tripwire decision),
+  vector-everywhere-spec.md (dated notes under §3.2 step 3, the ports sketch
+  after :606's code block, Stage B and R-C6), vector-everywhere-handoff.md (a
+  dated clause on the sweep-cron bullet; a "Codium `everywhere` switch"
+  bullet, CI pending; the owner's rules unchanged), this file.
+  v2-notes/v2-complete-plan.md and Codium's documents are not edited.
+
+No new env var, flag, route, dependency, install or generated file (the
+codium-owner schema has no importer in packages/engine, client, sdk, core,
+app or desktop). Nothing new becomes reachable on vectordev.ai: the one new
+dashboard row is behind the owner's Google sign-in on the noindex owner page.
+No test calls a real host: only FakeStore, the Codium fakes and the fetch
+guard.
+
+Checks (each through `vector-serial`, one file per run):
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-switch.test.ts at HEAD (baseline) | 12 pass, 0 fail, 52 assertions |
+| packages/web test/everywhere-sweep.test.ts at HEAD | 11 pass, 0 fail, 97 assertions |
+| packages/web src/components/marketing/owner/CodiumOwner.test.ts at HEAD | 20 pass, 0 fail, 105 assertions |
+| root test/codium-switches.test.ts at HEAD (run from test/) | 17 pass, 2 skip (Valkey), 0 fail, 68 assertions |
+| root test/codium-owner.test.ts at HEAD | 34 pass, 1 skip, 0 fail, 137 assertions |
+| everywhere-switch.test.ts with EV-07 | 16 pass, 0 fail, 89 assertions |
+| everywhere-sweep.test.ts with EV-07 | 11 pass, 0 fail, 99 assertions |
+| CodiumOwner.test.ts with EV-07 | 21 pass, 0 fail, 109 assertions |
+| test/codium-switches.test.ts with EV-07 | 18 pass, 3 skip (Valkey), 0 fail, 83 assertions |
+| test/codium-switches.test.ts against a disposable loopback redis-server 7.0.15 (`VECTOR_TEST_REDIS_URL`), informational only: not the Valkey receipt, which is vector-hosted-ci's (Deferred) | 21 pass, 0 fail, 94 assertions |
+| test/codium-owner.test.ts with EV-07 | 36 pass, 1 skip, 0 fail, 149 assertions |
+| Regressions, root: remote-ticket-api, on-call, codium-founding, codium-vercel-spend | 29/0/261; 30 pass 1 skip/0/299; 24 pass 1 skip/0/215; 52 pass 4 skip/0/238 |
+| Regressions, packages/web: all 41 test/everywhere-*.test.ts files, one per run | every file 0 fail (jobs-api 22/0/226, router 9/0/37, intake 8/0/68, github 17/0/137, jobs 43 pass 9 skip/0/329; the rest in /tmp/vector-v2/everywhere/ev07/web-everywhere-rest.txt) |
+| packages/schema `bun typecheck` | exit 0 |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` (astro check, includes test/ and src/) | 0 errors, 0 warnings, 411 hints (none on an EV-07 line) |
+| Root test/ files | not typechecked by any lane check (the root tsconfig includes only api/**). A one-off tsgo run with a scratch tsconfig over the two root test files found one EV-07 error (`string` for `SwitchValue` at codium-owner.test.ts:183), fixed with `as const`; the one remaining error is HEAD's codium-owner.test.ts:522 (now :560), not EV-07's |
+| Prettier drift (lines prettier would change), HEAD and after | codium-switches.ts, codium-owner.ts, codium-owner-api.ts, CodiumOwner.tsx, switch.ts, test/codium-switches.test.ts, test/codium-owner.test.ts 0 and 0; CodiumOwner.test.ts 5 and 5; everywhere-switch.test.ts 6 and 6; everywhere-sweep.test.ts 42 and 42 (none added) |
+| Diff guards | no personal path or email address; no added line over 120 columns; only the ten code and test files and the four lane documents changed |
+
+Line numbers in this entry are after the review round-one fixes; the counts
+in the two tables are from the first run, before them (see "EV-07 review
+fixes, round one" below).
+
+Mutations: each a patch under /tmp/vector-v2/everywhere/ev07-mut/, applied
+with `git apply`, the affected files run alone, then `git apply -R`; the
+SHA-256 of the five code files matched pre.sha after every mutation, and the
+run ended `ALL-REVERTED` (results.txt).
+
+| Mutation | Result | Red cases |
+| --- | --- | --- |
+| M1: `everywhere: ["on", "off"]` | everywhere-switch 13/3; codium-switches 17/1; codium-owner 34/2 | :113, :125, :134; :166; :181, :251 |
+| M2: `everywhere` removed from SWITCH_NAMES | everywhere-switch 11/5; sweep 10/1; codium-switches 17/1; codium-owner 34/2 | :113, :118, :125, :134, :171; sweep :231; :166; :181, :251 |
+| M3: readEverywhereSwitch ignores Codium | everywhere-switch 10/6; sweep 10/1 | :50, :58, :118, :125, :134, :171; sweep :231 |
+| M4: no env check | everywhere-switch 13/3; sweep 11/0 | :35, :50, :150; the sweep answers off before any switch read, so it stays green, as expected |
+| M5: the hosted-only owner API ternary restored | codium-owner 35/1 | :181 |
+| M6: hosted-only options in the TSX | CodiumOwner.test.ts 20/1 | :246 |
+| M7: `RuntimeSwitch.name` without `everywhere` | codium-owner 34/2; CodiumOwner.test.ts 21/0 | :251 and the existing wire-shape case :236; the page test renders without decoding, so it stays green, as expected |
+
+Commit gate: not run in this step. The changes stay in the working tree for
+the lead's commit (`feat(codium): add the everywhere runtime switch with
+no-new and stop`, staging the fourteen paths explicitly; the body says no
+generated file was regenerated because nothing in packages/engine or
+packages/client imports the codium-owner schema). Before the push: repeat the
+cross-lane diff, `git fetch origin everywhere-finish`, the full
+`bun turbo typecheck --concurrency=2`.
+
+Deferred:
+
+- After the push, dispatch on `everywhere-finish`: vector-everywhere.yml
+  (everywhere-switch and everywhere-sweep), vector-hosted-ci.yml (the root
+  test/ suite with Valkey, schema) and typecheck.yml. Never vector-codium.yml.
+  vector-hosted-ci.yml and vector-codium.yml do not share a concurrency group
+  (vector-hosted-ci.yml:46, vector-codium.yml:22), but a second
+  vector-hosted-ci dispatch on the same ref cancels the first, so record its
+  run id before any re-dispatch. Then, in one docs commit, add "## EV-07 push
+  receipts" here and mark the handoff bullet "CI green" with the run ids.
+- CodiumOwner.test.ts runs in no lane workflow until vector-codium.yml is used
+  after PR #33; its receipt is the local run above.
+- Owner: deploy, then set the production `everywhere` switch. VE-50: `stop`
+  reaches a running laptop within about 2 minutes.
+- Request to Codium (or the lead): annotate MODEL-PLANS.md:244,
+  codium-build-spec.md:138 and :526, and owner-actions/codium-owner-guards.md:36
+  with `everywhere` (`on`, `no-new`, `stop`).
+- EV-08: do not map the `everywhere` perk to the `everywhere` switch, or
+  decide on purpose that `no-new` hides it (deviations log, EV-07).
+
+### EV-07 review fixes, round one (2026-11-15)
+
+Nine non-blocking findings. Taken: the owner-audit pin, the sweep test's
+`else`, the informational mark on the local redis row, the dashboard
+request to Codium, and a page pin plus comment in place of a shared value
+map. Rejected, with reasons in the deviations log ("2026-11-15, EV-07",
+"Review findings (round one)"): the shared schema map, freezing
+SWITCH_VALUES. The handoff's "CI pending" stays until the push receipts.
+
+Files changed in this round:
+
+- test/codium-owner.test.ts:181: after the two accepted calls the owner
+  audit (`ownerAuditKey()`) holds 4 rows, and still 4 after the three
+  refused calls.
+- packages/web/test/everywhere-sweep.test.ts:231: the `finally` restore uses
+  an early `continue`, with no `else`.
+- packages/web/src/components/marketing/owner/CodiumOwner.test.ts: the
+  option reader moves to module scope as `switchOptions` (:116), used by
+  :246 and the new :264, which renders every name in SWITCH_NAMES and
+  expects each select to offer exactly `SWITCH_VALUES[name]`.
+- packages/web/src/components/marketing/owner/CodiumOwner.tsx:894: a JSX
+  comment pointing at SWITCH_VALUES and the pinning test.
+- Docs: the deviations entry (the dashboard request, the round-one
+  decisions, the informational redis run, corrected line numbers), this
+  entry. No code file outside these two test files and the TSX comment
+  changed; api/_lib/codium-switches.ts and codium-owner-api.ts are as before
+  this round (their SHA-256 matched after each mutation).
+
+Checks (each through `vector-serial`, one file per run):
+
+| Check | Result |
+| --- | --- |
+| packages/web CodiumOwner.test.ts | 22 pass, 0 fail, 110 assertions |
+| root test/codium-owner.test.ts (run from test/) | 36 pass, 1 skip, 0 fail, 151 assertions |
+| packages/web test/everywhere-sweep.test.ts | 11 pass, 0 fail, 99 assertions |
+| packages/web `bun typecheck` (astro check) | 0 errors, 0 warnings, 411 hints (unchanged) |
+| Prettier drift, HEAD and after (lines prettier would change) | CodiumOwner.test.ts 2 and 2; everywhere-sweep.test.ts 8 and 8; CodiumOwner.tsx and test/codium-owner.test.ts 0 and 0 (none added) |
+| Diff guards | no added code line over 120 columns |
+
+Mutations (scratch copy under /tmp/vector-v2/everywhere/ev07-fix/, restored
+and SHA-256 checked after each):
+
+| Mutation | Result | Red case |
+| --- | --- | --- |
+| M8: `push: ["on", "no-new", "stop"]` in codium-switches.ts, page unchanged | CodiumOwner.test.ts 21/1 | :264 |
+| M9: codium-owner-api.ts audits "requested" before `prepare()` | codium-owner 35/1 | :181 |

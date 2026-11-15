@@ -5,7 +5,14 @@ import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
 import { codiumKey } from "./codium-keys.js"
 import { OWNER_AUDIT_SCRIPT } from "./codium-owner.js"
 import { readOwnerCodiumDashboard } from "./codium-owner-dashboard.js"
-import { SWITCH_NAMES, writeDisabledItem, writeSwitch, type SwitchName, type SwitchValue } from "./codium-switches.js"
+import {
+  SWITCH_NAMES,
+  SWITCH_VALUES,
+  writeDisabledItem,
+  writeSwitch,
+  type SwitchName,
+  type SwitchValue,
+} from "./codium-switches.js"
 import { ApiError, handleApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 import {
   clearModelPlanRisk,
@@ -92,7 +99,7 @@ function prepare(action: Exclude<CodiumOwnerAction, "dashboard">, raw: Record<st
         throw invalid()
     } else if (
       !(SWITCH_NAMES as readonly string[]).includes(raw.name) ||
-      !(raw.name === "hosted" ? ["on", "no-new", "stop"] : ["on", "off"]).includes(raw.value)
+      !SWITCH_VALUES[raw.name as SwitchName].some((value) => value === raw.value)
     )
       throw invalid()
   }

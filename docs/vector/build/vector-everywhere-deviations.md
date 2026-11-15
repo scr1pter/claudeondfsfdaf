@@ -67,6 +67,7 @@ Nothing in the contract was wrong about the code except one type rule (the last 
 - **The data key and sealing.** `VECTOR_EVERYWHERE_DATA_KEY` must decode to exactly 32 bytes (standard or URL-safe base64, padded or not). A shorter, longer or malformed value, or a placeholder whose bytes barely vary (fewer than 8 distinct values, such as all zeros), turns the feature off. The key id is the first 12 base64url characters of a SHA-256 of the key, so no extra variable is needed, and a later rotation only adds a second key to the ring (`open` already takes a ring; `seal` uses its first key). A sealed value is `ves1.<key id>.<iv>.<ciphertext and tag>`, all base64url, and is bound to a context (its store key) passed as associated data, so a sealed token copied into another record does not open there. `open` tells `unknown-key` from `tampered` and `malformed`, and refuses non-canonical base64url.
 - **Env reading.** `VECTOR_EVERYWHERE_ENABLED` is trimmed before it is compared with `true` (env editors add line ends). A secret shorter than 16 characters or with spaces in it counts as missing, which turns its platform off; the HMAC helpers also refuse such a secret themselves. Ids (`VECTOR_SLACK_APP_ID`, client ids, `VECTOR_JIRA_FORGE_APP_ID`) must be printable with no spaces, at most 200 characters. GitHub needs none of our secrets (the handoff's OIDC verifier is injected, VE-10 and VE-31), so listing it is enough. The offer key must be an Ed25519 PKCS#8 private key (`\n` escapes accepted) with a key id matching `OFFER_KEY_ID_PATTERN`; without both there are no offers, but the rest of the feature can run. `readConfig` also answers `problems`: the names of variables that are set but unusable or needed and missing, never their values. An explicit `false` is not a problem.
 - **The switch.** The environment gives only `on` or `stop`; `no-new` comes from Codium's switch once R-C6 adds it. The seam calls Codium's `readSwitch` only when Codium's `SWITCH_NAMES` lists `everywhere`, so it starts working with no change here. Codium's value can only make the switch stricter; Codium's `off`, an unknown value and an unreadable store all read `stop`. Codium's `remote` switch reads `on` or `stop` the same way, and `stop` when it cannot be read. `admits(state, "new" | "running")` is the one rule: `new` is a new trigger at the intake; `running` covers a claim of an offered or waiting job, reports, heartbeats, settles, the dispatch of an accepted job and the re-offer of a waiting one, which matches the phase P1a rule that a claim is final.
+  *2026-11-15 note (EV-07):* Codium's SWITCH_NAMES now lists `everywhere` with `on`, `no-new` and `stop` (R-C6), so the seam reads Codium's own record; switch.ts changed in comments only. See "2026-11-15, EV-07".
 - **The store guard.** `everywhereStore` refuses, before `persistentStore` sees it, any command outside a fixed list or touching a key that is not under `vector:everywhere:`, so this code can never read or write Codium's or anyone else's records. Every write names its TTL except the records 3.13 keeps until changed.
 - **Keys.** Every part is checked against its id's shape and account ids are written lowercase. Ids whose shape a platform or peer chooses (delivery ids, Forge token ids, A2A task ids) are kept when they match `[A-Za-z0-9._-]{1,128}` and otherwise replaced by `~` and their SHA-256, which no plain id contains. Platform user ids have one pattern per platform (Slack `[A-Z0-9]`, Linear UUIDs, Jira account ids with at most one colon, GitHub numbers), so `link:<installation>:<user>` stays unambiguous.
 - **The audit log is a sorted set by time**, not a list, so entries older than 90 days can be dropped by age. One Lua script adds the entry, drops entries older than 90 days, keeps the newest 1,000 and moves the log's expiry. An entry has exactly `id`, `at`, `event`, `platform`, `installation`, `jid`, `code`, `device`, `actor` and `userId`; any other field is refused. `code` comes from a closed list (refusal, decline, outcome, route, job state and ending codes, erase reasons, and `admin` for a re-install by a platform admin), so no free text can travel in it. Events add `uninstall` and `disconnect` to the contract's list.
@@ -402,6 +403,7 @@ Turning off:
 - **Graceful variant.** `no-new` until live jobs end, then `stop`, then unset the flag.
 - **Flag first.** Unsetting the flag first also stops all work, but the replies wait until the flag is on again, and they then say `lost` (above), or never post after 30 days.
 - **Until EV-07 lands** Codium has no `everywhere` switch (SWITCH_NAMES, codium-switches.ts:7), so the only way to turn off is to unset the flag, with the flag-first consequences. R-C6 is a G2-G4 prerequisite (spec :703); G1 (GitHub) does not list it, so for G1 the safe order does not exist until EV-07.
+  *2026-11-15 note (EV-07):* the switch now exists on everywhere-finish (`on`, `no-new`, `stop`), so the safe order above is available once the owner deploys a commit that contains EV-07. See "2026-11-15, EV-07".
 - **Both orders meet EV-03's open finding.** A publication settle answered 200 `stop` is not recorded (jobs-api.ts:296, :301) and the desktop clears its receipt, so the reply names no branch or PR. EV-04 does not build that follow-up; it stays open (deviations log, EV-03, "Finding left open").
 
 Turning back on:
@@ -414,6 +416,7 @@ Turning back on:
 - **The off body is `{enabled: false}`, not `{ended: 0, posted: 0}`,** so a cron log tells "off" from "nothing due" (mutation M4 pins it).
 - **Tests use the real `readConfig` for each off reading** (no settings; the flag without a data key; the flag `false`; a placeholder data key that `parseDataKey` refuses), not a hand-built config. The off case also mounts the real FakeStore and adapter with the production switch reader, so the unchanged `FakeStore.commands` count and job record are evidence alongside the throwing stubs.
 - **The production switch reader case is a deliberate tripwire for EV-07** (everywhere-sweep.test.ts:231). With the feature on it reads `on` with no I/O, under the fetch guard, only because Codium's SWITCH_NAMES has no `everywhere` (R-C6). Its first assertion is that SWITCH_NAMES lacks `everywhere`, so EV-07 fails on that named precondition, not on a cancelled job, and updates the case.
+  *2026-11-15 note (EV-07):* the tripwire fired as intended and is replaced: the case now asserts that the production reader reads Codium's switch and, with no store settings, reads `stop` and ends the live job. See "2026-11-15, EV-07".
 - **codium-configuration.test.ts is not edited** (brief, scope 4). It passes alone (11 pass) and stays green when the cron is removed (mutation M8).
 - **switch.ts gains one comment clause** (:13-14): while the flag is off the sweep answers `{enabled: false}` before reading the switch, so the cron expires no waiting job. switch.ts is outside the brief's file list; the change is a comment only, so a reader of switch.ts alone sees the EV-04 behaviour.
 
@@ -535,3 +538,101 @@ Spec §11 R-C1 (:843), §3.4 (the 20-second offer window), §5 E9 (:564) and E10
 
 - The CI smoke on workerd: binary delivery to the computer and not the phone, and presence and offers while the flag is set (vector-hosted-ci.yml's relay job, with the wrangler dry run).
 - A real desktop decode (EV-11), the API's call (EV-09), and VE-50 live after the owner deploys the Worker.
+
+## 2026-11-15, EV-07: Codium's `everywhere` runtime switch (R-C6)
+
+Spec §11 R-C6 (:850), §3.2 step 3 (:153) and §5 E10. Line numbers are after this package.
+
+### What changed
+
+- **Codium lists `everywhere`** (api/_lib/codium-switches.ts). `SWITCH_NAMES` gains `"everywhere"` last (:7-17; prettier now wraps the tuple). `VALUES.everywhere` is `["on", "no-new", "stop"]` (:30-31), mirroring `hosted`, with a one-line comment: `stop` also reaches running work, and Codium's `off` is not an `everywhere` value. The `SwitchValue` doc comment (:19) names both three-value switches. `SWITCH_VALUES` (:33-34) exports `VALUES` read-only for the owner API. `VALUES` stays private, and its two uses (writeSwitch, decode) are unchanged. Nothing else in the file changed: the absent default (`{value: "on", changedAt: 0, generation: "default"}`), `SWITCH_CACHE_MS` (30 s), the Lua scripts, `escalateHostedSwitch` (hosted only) and every other switch's values.
+- **The owner dashboard schema** (packages/schema/src/codium-owner.ts:41): `RuntimeSwitch.name` gains `"everywhere"`. `value` already had all four values. codium-owner-dashboard.ts maps SWITCH_NAMES (:46) and returns `CodiumOwner.Dashboard`, so the compiler keeps the two lists in step; it needed no edit.
+- **The owner API's value check** (api/_lib/codium-owner-api.ts:8-15, :102). `prepare()` now accepts exactly `SWITCH_VALUES[name]`, in place of the hand-coded `hosted ? [on, no-new, stop] : [on, off]`. The effect:
+  - `everywhere` takes `no-new` and `stop` from the owner page;
+  - `everywhere` `off` answers 400 `CODIUM_OWNER_REQUEST` before any audit row or write (test/codium-owner.test.ts:181 pins the owner audit at 4 rows and the switch audit at 2 after the refused calls);
+  - `hosted` and the on/off switches answer exactly as before.
+  `run()` needs nothing: `everywhere` has no relay or worker flag, so it returns `{}`.
+- **The owner page** (packages/web/src/components/marketing/owner/CodiumOwner.tsx). `SWITCHES.everywhere` (:37-40) is "Everywhere", with "Applies only while the Everywhere flag is set. No new refuses new jobs; Stop also ends running and waiting ones." The select offers On, No new and Stop for `hosted` and `everywhere` (:895-898), and On and Off for the rest; a comment (:894) points at SWITCH_VALUES.
+- **The seam, comments only** (api/_lib/everywhere/switch.ts):
+  - the header (:11-14) says Codium lists `everywhere` since EV-07 and an absent record reads `on`;
+  - `CodiumSwitches` (:22) says undefined is only for a name Codium omits;
+  - readEverywhereSwitch's comment (:54) drops "once it exists";
+  - readRemoteSwitch's comment (:63-66) is corrected: an absent record reads `on` (Codium's default, as the seam test already asserted), while an unreadable switch or an unlisted name reads `stop`.
+  `codiumSwitches`, `fromCodium`, `strictest`, `readEverywhereSwitch` and `readRemoteSwitch` are unchanged.
+
+### Behaviour
+
+- **The env flag still governs.** readEverywhereSwitch answers `stop` before any read while `config.enabled` is false (no flag, or the flag without a usable data key), whatever Codium holds. everywhere-switch.test.ts:150 checks that the store saw no command.
+- **Codium only makes it stricter.** With the flag on, the answer is `strictest("on", Codium's value)`: `on`, `no-new` or `stop`.
+- **Absent reads `on`.** With no stored record nothing changes until the owner writes one (:118: one GET of `vector:codium:<mode>:switch:everywhere`).
+- **Fail closed (E10).** Each of these makes Codium's `readSwitch` throw `CODIUM_SWITCH_UNAVAILABLE`, which the seam reads as `stop`: a stored `off` (bare or as a JSON record), an unknown value, a corrupt record, a store outage, and no store settings at all (:134, :171; everywhere-sweep.test.ts:231).
+- **The 30-second cache.** Codium caches each read for 30 s per fetcher and instance, so a change reaches every reader within about 30 s. EV-04's safe turn-off order now exists once the owner deploys a commit that contains EV-07: Codium's `everywhere` switch to `stop`, at least 2 minutes for a sweep under `stop`, then unset the flag.
+- **New reads in production.** These production readers now make one cached GET of Codium's `everywhere` key, and only while the flag is on: the intake and the GitHub handoff through safePorts (ports.ts:63), the jobs API (jobs-api.ts:150) and the sweep (sweep.ts:31). The router already read Codium's `remote` switch the same way. While the flag is off, as in production today, nothing new is read.
+
+### Deviations
+
+- **`VALUES` is exported as `SWITCH_VALUES`, not renamed** (critique, taken). The private `VALUES` and its two uses stay as they were, with one aliasing export next to it. The diff in this Codium-owned file is the roster, the values, the comment and the export.
+- **codium-owner-api.ts is edited, although the brief says it follows SWITCH_NAMES.** It follows SWITCH_NAMES for names only. Its value check was hand-coded to `hosted`, so without the edit the owner page would answer 400 to `everywhere` `no-new` and `stop`. It would also accept `off`, which writeSwitch then refuses with `CODIUM_SWITCH_INVALID`, after the "requested" owner audit row. The check now reads SWITCH_VALUES with one cast after the name check (`||` short-circuits once the name is unknown).
+- **switch.ts changes in comments only, and the seam is not simplified.** Dropping the SWITCH_NAMES guard in `codiumSwitches` (and its aliased import) was considered and rejected, because the brief says the seam needs no change. With the guard, a name Codium stops listing would read `on` for `everywhere` (and `stop` for `remote`). That is why three test files pin that SWITCH_NAMES contains `everywhere`: everywhere-switch.test.ts:113, everywhere-sweep.test.ts:231 and test/codium-switches.test.ts:166. The guard's `undefined` branch is now unreachable for both names in production; only the stub tests use it.
+- **EV-04's sweep tripwire is replaced.** everywhere-sweep.test.ts:231 was a deliberate tripwire for EV-07: it asserted that SWITCH_NAMES lacked `everywhere` and that the production reader read `on` with no I/O. The case now asserts that the production reader reads Codium's switch:
+  - it deletes the four KV variables, and restores them in `finally`, so persistentStore throws before any fetch;
+  - the switch reads `stop`;
+  - the sweep cancels the claimed job and posts its reply (`{ended: 1, posted: 1}`).
+  Deleting the variables makes the case independent of a developer's local KV settings (packages/web runs without `--no-env-file`), and the fetch guard stays clean.
+- **The roster is not pinned whole** (critique, taken). The tests pin only what R-C6 promises:
+  - SWITCH_NAMES contains `everywhere`;
+  - `SWITCH_VALUES.everywhere` is `["on", "no-new", "stop"]`, and `hosted` still is;
+  - every other listed name is still `["on", "off"]`, computed over SWITCH_NAMES minus those two;
+  - SWITCH_VALUES has a key for each listed name.
+  A switch Codium adds later breaks none of these, and no test compares `everywhere` with `hosted`.
+- **The owner label says the switch applies only with the flag** (critique, taken). While VECTOR_EVERYWHERE_ENABLED is off, the dashboard shows "Everywhere" as On ("Default setting.") although the effective state is `stop`, so the detail text says the switch applies only while the flag is set. This is owner-only text in the owner bundle, rendered only after the owner's Google sign-in on the noindex /owner/codium shell. It is not linked, listed or indexed, and it is not a public claim.
+- **A local real-Redis run, beyond the listed checks.** test/codium-switches.test.ts was also run once against a disposable loopback redis-server 7.0.15 (`VECTOR_TEST_REDIS_URL`, no persistence, stopped afterwards), so the new Valkey case ran locally too. That run is informational only, not the Valkey evidence: vector-hosted-ci's Valkey 7.2.14 job is the receipt, recorded with the push receipts.
+
+### Not changed (recorded)
+
+- **A corrupt record of any switch empties the dashboard's runtime controls.** codium-owner-dashboard.ts:46 reads every switch in one `Promise.all`, so one unreadable record (now `everywhere`'s too) leaves no switch rows. This is existing behaviour for every switch; the fix (settling each switch separately) is Codium's.
+- No other switch's names or values, `escalateHostedSwitch`, the perk map (codium-perks.ts:89) or the dashboard file.
+
+### Coordination
+
+- **Codium-area files.** Spec §6.4's Codium row lists api/_lib/codium-\*.ts and packages/schema/src/codium-\*.ts; CodiumOwner.tsx (A12), its test and test/codium-\*.test.ts are Codium's own. EV-07 builds R-C6 in this lane under the lead's brief, as EV-04 to EV-06 built R-C11, R-C4 and R-C1. Spec :10 and the handoff's owner rule are not edited. At EV-07's working-tree check, `git diff --stat origin/release-finish...origin/<b>` over the ten code and test paths, codium-owner-dashboard.ts and everywhere/switch.ts was empty for codium-finish `2924d94b`, review-fixes `1433d105` and main `58f85edc`. A second fetch at the end of the package found codium-finish at `265f4ea7`, and the diff was still empty. The commit step repeats it.
+- **No regeneration.** `git grep codium-owner` finds no importer in packages/engine, packages/client, packages/sdk, packages/core, packages/app or packages/desktop. The codium-owner schema is the hosted API's, not the engine HttpApi, so no generated file changes.
+- **Request to Codium (or the lead).** These switch lists still name `hosted` as the only three-value switch: docs/vector/MODEL-PLANS.md:244, codium-build-spec.md:138 and :526, and owner-actions/codium-owner-guards.md:36 (the `hosted` row; `everywhere` needs a row of its own). Each should get a dated one-line annotation pointing here ("2026-11-15, EV-07"): `everywhere` (`on`, `no-new`, `stop`) can only make VECTOR_EVERYWHERE_ENABLED stricter. The files are Codium's, so EV-07 does not edit them.
+- **Request to Codium: settle each switch on the dashboard separately** (review round one). codium-owner-dashboard.ts:46 reads every switch in one `Promise.all` inside `allSettled`, so one unreadable record (a corrupt or stored-`off` `everywhere` record makes decode throw `CODIUM_SWITCH_UNAVAILABLE`) empties the whole "Runtime controls" list. EV-07 widens that by one record, and an emergency could then hide the `hosted`, `sales` and `remote` controls with it. Codium's fix: settle each name in SWITCH_NAMES on its own (for example `Promise.allSettled` over SWITCH_NAMES), keep the readable rows and mark the unreadable ones. The file is Codium's, so EV-07 does not edit it.
+
+### Decisions
+
+- **Critique points taken:**
+  - the hosted-ci concurrency claim is dropped: vector-hosted-ci.yml:46 and vector-codium.yml:22 use different groups. Re-dispatching vector-hosted-ci on the same ref cancels the run in progress, so its run id is recorded before any re-dispatch;
+  - the sweep case controls the KV variables;
+  - the roster pins are narrowed;
+  - the owner label;
+  - the other stale comments in switch.ts (:22, :54, :63) are fixed, with dated notes on spec :606 and :696 and on this log's :69;
+  - root test/ code stays cast-free, because no listed typecheck covers root test/;
+  - VALUES stays private, with an export alias and one cast in the owner API;
+  - the handoff bullet gets its run ids after CI, with the push receipts;
+  - the EV-08 note below.
+  One point is partly rejected, under "Deferred verification".
+- **Tests read through Codium's real `readSwitch`**, over FakeStore (everywhere-switch.test.ts) and the Codium fakes (test/codium-\*.test.ts). Each read uses a fresh store, because Codium caches per fetcher for 30 s.
+
+### Deferred verification
+
+- The owner deploys a commit with EV-07 and sets the production `everywhere` switch (owner actions).
+- VE-50: `stop` set on the owner page reaches a running laptop within about 2 minutes (the 30-s cache, then a report or heartbeat answered `stop`), and waiting jobs end at the next sweep.
+- The new Valkey case runs in vector-hosted-ci.yml (the root test/ suite, with Valkey).
+- CodiumOwner.test.ts runs in no lane workflow until vector-codium.yml is used after PR #33 merges, so its receipt is local.
+- **A note for EV-08 (R-C7).** If the `everywhere` perk is mapped to the `everywhere` switch in codium-perks.ts `switches` (:89), listedPerks lists it only while that switch reads `on`, so under `no-new` the perk would drop out of the listing. EV-08 should either not map it or decide that `no-new` hides it on purpose, as `hosted`'s `no-new` hides `computer`. The critique's further claim, that running jobs could then fail their perk check, is rejected: listedPerks is display-only (codium-perks.ts:107), and requireEntitlement reads only the `codium` switch (codium-entitlements.ts:47).
+
+### Review findings (round one)
+
+- **Taken:**
+  - the refused `off` call is pinned not to audit: test/codium-owner.test.ts:181 checks that the owner audit holds 4 rows (requested and completed for each accepted call) both before and after the three refused calls. Auditing before validating turns it red (progress, EV-07 M9);
+  - the env restore in everywhere-sweep.test.ts:231 uses an early `continue` in place of `else`. useKv in test/lib/everywhere-store.ts keeps the same pre-existing pattern; it is not EV-07's;
+  - the local redis-server row in the progress receipts is marked informational only;
+  - the dashboard request above is added.
+- **The page keeps its own value list, now pinned to SWITCH_VALUES** (the two findings at CodiumOwner.tsx:894). A shared `RUNTIME_SWITCH_VALUES` map in packages/schema/src/codium-owner.ts, read by both the page and codium-switches.ts, was considered and not built. It would move Codium's write rules out of codium-switches.ts, against the decision above to keep `VALUES` private and the Codium diff small, in a file the codium-finish lane also edits. Returning each switch's values on the dashboard wire was rejected because it changes the owner contract. Instead:
+  - a comment at :894 points at SWITCH_VALUES;
+  - a new page case, CodiumOwner.test.ts:264, renders every name in SWITCH_NAMES and expects each select to offer exactly `SWITCH_VALUES[name]`, in order. A future three-value switch, or any other value change that the page misses, turns it red (progress, EV-07 M8).
+  A shared map remains open to Codium, as a follow-up to the requests above.
+- **SWITCH_VALUES is not frozen** (rejected). The export is typed `Readonly<Record<SwitchName, readonly SwitchValue[]>>`, so the compiler refuses any write, and a runtime write would need a cast. The only caller, the owner API, reads it. Freezing the record and each array would rewrite the `VALUES` block in Codium's file for a risk the types already block.
+- **The handoff bullet stays "CI pending" for now.** The push and the dispatches come after this step. The run ids replace "CI pending" in the docs commit with "## EV-07 push receipts", as Deferred in the progress entry plans.
