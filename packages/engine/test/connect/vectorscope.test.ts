@@ -1,9 +1,9 @@
 import { $ } from "bun"
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, spyOn } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer, Option } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
@@ -34,6 +34,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
+import { ReviewGit } from "@/review/git"
 import { ReviewModel, type ResolvedModel } from "@/review/model"
 import { Review } from "@/review/run"
 import { SessionPrompt } from "@/session/prompt"
@@ -72,6 +73,8 @@ const script: {
   outcome?: (input: Review.RunInput) => Partial<ReviewOutcome>
   /** Replaces the whole fake review. */
   run?: VectorScopeAdapter.Deps["runReview"]
+  /** Runs first inside the fake review, while the collector's context is still in place. */
+  observe?: (input: Review.RunInput) => Effect.Effect<void>
 } = { kinds: {}, user: "lmstudio/test-model" }
 const calls: Review.RunInput[] = []
 const outcomes: ReviewOutcome[] = []
@@ -84,6 +87,7 @@ const reset = () => {
   delete script.resolve
   delete script.outcome
   delete script.run
+  delete script.observe
   calls.length = 0
   outcomes.length = 0
   resolved.length = 0
@@ -146,6 +150,7 @@ const outcomeOf = (input: Review.RunInput, extra: Partial<ReviewOutcome> = {}): 
 const fakeRun: NonNullable<VectorScopeAdapter.Deps["runReview"]> = (input) =>
   Effect.gen(function* () {
     if (script.run) return yield* script.run(input)
+    if (script.observe) yield* script.observe(input)
     calls.push(input)
     const sessions = yield* Session.Service
     const prompts = yield* SessionPrompt.Service
@@ -583,6 +588,133 @@ describe("a review through connect", () => {
       }),
     instance,
   )
+
+  // Every Git.Interface member by name: a member added there fails typecheck here until it is spied below too.
+  const gitMembers: { readonly [K in keyof Git.Interface]: K } = {
+    run: "run",
+    branch: "branch",
+    prefix: "prefix",
+    defaultBranch: "defaultBranch",
+    hasHead: "hasHead",
+    mergeBase: "mergeBase",
+    show: "show",
+    status: "status",
+    diff: "diff",
+    stats: "stats",
+    patch: "patch",
+    patchAll: "patchAll",
+    patchUntracked: "patchUntracked",
+    statUntracked: "statUntracked",
+    applyPatch: "applyPatch",
+  }
+  const NAMES = "--name-only --no-renames --no-ext-diff --no-relative -z"
+  // Connect's check 1 (`changes()`) read by read, commits masked. No read names a file: the batch read's go on stdin.
+  const checkOne = (branch: boolean) => [
+    "rev-parse --show-toplevel",
+    "rev-parse --verify --quiet --end-of-options HEAD^{commit}",
+    ...(branch ? ["rev-parse --verify --quiet --end-of-options <sha>^{commit}", "merge-base <sha> <sha>"] : []),
+    `diff ${NAMES} <sha> --`,
+    `diff --cached ${NAMES} <sha> --`,
+    "ls-files --others --exclude-standard -z",
+    "ls-files --others -z -- :(icase).vector :(icase).gitattributes",
+    ...(branch ? [`diff ${NAMES} <sha> <sha> --`] : []),
+    "cat-file --batch --follow-symlinks",
+  ]
+
+  for (const row of [
+    { title: "a connect review's", branch: false },
+    { title: "a connect branch review's", branch: true },
+  ])
+    it.instance(
+      `${row.title} collector reads are answered by VectorScope's ReviewGit view, never by connect's own Git view`,
+      () =>
+        Effect.gen(function* () {
+          if (process.platform !== "linux") return yield* unsupportedGit
+          const { directory, hub, requester } = yield* setup({
+            "src/probe.ts": 'export function computeConnectProbe() { return "A" }\n',
+            "src/call.ts":
+              'import { computeConnectProbe } from "./probe"\nexport const value = computeConnectProbe()\n',
+          })
+          yield* write(directory, { "src/probe.ts": 'export function computeConnectProbe() { return "B" }\n' })
+          const target: Connect.Target = row.branch
+            ? { kind: "branch", base: yield* git(directory, "rev-parse", "HEAD") }
+            : { kind: "uncommitted" }
+          // A branch review covers the same two edits, committed on the branch.
+          if (row.branch) {
+            yield* git(directory, "checkout", "-q", "-b", "feature")
+            yield* git(directory, "commit", "-qam", "Change the probe and last()")
+          }
+          const layer = yield* Git.Service
+          const views: Git.Interface[] = []
+          const spies: { member: string; spy: { mock: { calls: readonly unknown[][] }; mockRestore: () => void } }[] =
+            []
+          yield* Effect.addFinalizer(() => Effect.sync(() => spies.forEach((item) => item.spy.mockRestore())))
+          const runs = () => spies.find((item) => item.member === "run")?.spy.mock.calls.length ?? 0
+          // Check 2 resolves the review model with connect's own Git view as Git.Service: after check 1 and before the
+          // review. From here on every call to any member of that view is recorded, and still answered by it.
+          script.resolve = (input) =>
+            Effect.gen(function* () {
+              const found = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+              if (found && found !== layer && !views.includes(found)) {
+                views.push(found)
+                for (const member of Object.values(gitMembers)) spies.push({ member, spy: spyOn(found, member) })
+              }
+              return modelOf(input.exact ?? input.config ?? script.user)
+            })
+          const inside: { view: boolean; fallback: boolean; separate: boolean }[] = []
+          const marks: number[] = []
+          script.observe = () =>
+            Effect.gen(function* () {
+              const current = yield* ReviewGit.Current
+              const found = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+              inside.push({
+                view: current !== undefined,
+                fallback: found !== undefined && views.includes(found),
+                separate: current?.client !== found,
+              })
+              marks.push(runs())
+            })
+          const run = yield* hub.run({
+            request: review(requester.id, directory, { target }),
+            call: { ...asker(), promptOps: recorder().ops },
+          })
+          expect(run.result?.state, run.result?.summary).toBe("completed")
+          expect(calls).toHaveLength(1)
+          expect(calls[0]!.files.map((file) => file.path).toSorted()).toEqual(["src/list.ts", "src/probe.ts"])
+          // The collector's grep, log and blame ran and were answered.
+          const related = calls[0]!.context.related ?? []
+          expect(related.flatMap((item) => item.hits.map((hit) => hit.path))).toContain("src/call.ts")
+          const history = (calls[0]!.context.history ?? []).map((entry) => entry.text).join("\n")
+          expect(history).toContain("Recent commits")
+          expect(history).toContain("Blame at the base")
+          // Inside the review, VectorScope's view is in place and is not connect's, which is only Git.Service there.
+          expect(inside).toEqual([{ view: true, fallback: true, separate: true }])
+          expect(views).toHaveLength(1)
+          expect(marks).toHaveLength(1)
+          // Connect's view saw only connect's own reads: check 1 again and, for a branch, where VectorScope keeps its
+          // state file, before the review; check 1 once more after it. Read for read, so a collector read that reached
+          // this view would show up even in a shape connect also uses (the quiet verify, merge-base, the git dir).
+          const reads = spies
+            .filter((item) => item.member === "run")
+            .flatMap((item) =>
+              item.spy.mock.calls.map((call) =>
+                Array.isArray(call[0])
+                  ? call[0].map((part: unknown) => String(part).replace(/[0-9a-f]{40}/g, "<sha>")).join(" ")
+                  : "",
+              ),
+            )
+          expect({ before: reads.slice(0, marks[0]), after: reads.slice(marks[0]) }).toEqual({
+            before: [...checkOne(row.branch), ...(row.branch ? ["rev-parse --absolute-git-dir"] : [])],
+            after: checkOne(row.branch),
+          })
+          // No other member was called, apart from the branch name stateFile() asks for once before a branch review.
+          const others = spies
+            .filter((item) => item.member !== "run" && item.spy.mock.calls.length > 0)
+            .map((item) => [item.member, item.spy.mock.calls.length])
+          expect(Object.fromEntries(others)).toEqual(row.branch ? { branch: 1 } : {})
+        }),
+      instance,
+    )
 
   it.instance(
     "a run with no prompt calls to build the helper handle from does not start",

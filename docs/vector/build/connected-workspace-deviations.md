@@ -283,3 +283,130 @@ Docs only. This entry opens the connect-finish lane on branch `connect-finish`, 
 - **Other lane rules.** Generated files change only through the generators, and only in packages that change a public schema (CN-08's error codes, CN-14's `Connect.Effect`). Tests use only fakes and local fixtures. `VECTOR_EXPERIMENTAL_CONNECT` stays off by default, and the lane does not change how it is read (PUB-7 belongs to the review-fixes lane).
 - **Review round.** A review of this package raised seven non-blocking findings, and all seven were taken. The checkpoint and the spec status line now name the `cf2373c4` read-deny alias gap. The status line lists CW-17's gated VectorScope dismissal consumer among the holds, names the remaining C2, C3, C5 and C6 work, gives the umbrella `VECTOR_EXPERIMENTAL` caveat, and points to the ownership note above. The ownership pre-check fetches each lane branch first and covers `hands-finish` for CN-11 and CN-12. The C4, F5/C11, C5 and F7 reading is recorded in the Decisions bullet with its code evidence. The C2 remainder cites only `connect/git.ts:318`.
 - **Receipts.** `git diff --check` was clean, and `git diff --numstat` shows only additions in the handoff and deviations files and three replaced lines in the spec. No package changed, so no test or package typecheck ran for this entry. The full typecheck (`bun turbo typecheck --concurrency=2`) passed locally before the push, 27 of 27 tasks. No CI is claimed for this change.
+
+## 2026-11-15 — CW-20 close-out: ReviewGit collector path pinned, ConnectGit narrowed (CN-02)
+
+Source: `connect-finish` at `0a06668b` (CN-01 on `0ee486e3`). This package changes `packages/engine/src/connect/git.ts`, `packages/engine/test/connect/git.test.ts`, `packages/engine/test/connect/vectorscope.test.ts` and three lane documents. It changes no route, ledger, schema, generated file, flag, workflow or public page. VectorScope's `review/**` is not edited, and no export is added there.
+
+- **What changed.**
+  - *The collector path is pinned first.* Two new Linux cases in vectorscope.test.ts, one loop with two rows, run the existing fake `Review.run` success path over an edit to `src/probe.ts`, which `src/call.ts` calls, and setup's edit to `src/list.ts`:
+    - "a connect review's collector reads are answered by VectorScope's ReviewGit view, never by connect's own Git view" reviews the two edits uncommitted;
+    - "a connect branch review's collector reads are answered by VectorScope's ReviewGit view, never by connect's own Git view" commits them on a `feature` branch and reviews it against the setup commit, so the collector's branch reads run too: in `cli/cmd/review.ts`, the base's `commitOf`, `localStatePath`, `ReviewSource.planRange` and `subjects`. `otherAuthors` runs only with `--checks`, and `ReviewSource.prDiff` only against a stored earlier review, so neither runs in this case; both are still pinned only by the refusal table in git.test.ts and the existing branch success cases.
+    - When check 2 resolves the review model, `Git.Service` is connect's view. Each case spies every member of that view. The members are listed by name in a `{ [K in keyof Git.Interface]: K }` map, so a member added to `Git.Interface` fails typecheck until it is spied too. The spies pass through, and a scope finalizer restores them. `views.length === 1` is a tripwire against wrapping the shared layer Git by mistake.
+    - Inside the fake review it records three things: `ReviewGit.Current` is in place, `Git.Service` there is connect's view, and the two are different objects. It also records how many `run` calls connect's view had answered by then.
+    - It asserts that the collector's grep, log and blame ran and were answered: `context.related` names `src/call.ts`, and `context.history` holds "Recent commits" and "Blame at the base".
+    - It asserts the `run` calls read for read, with each 40-hex commit masked as `<sha>` (no read names a file: the batch read's paths go on stdin). Before the review they are check 1's `changes()` again, and for a branch, `stateFile()`'s `rev-parse --absolute-git-dir`. After the review they are `changes()` once more. `changes()` is the top level, the quiet verify of `HEAD`, (for a branch) the quiet verify of the base and `merge-base`, the worktree and `--cached` name-only diffs, both untracked listings, (for a branch) the base-to-head name-only diff, and the batch read. The exact order and count mean a collector read in a shape connect also emits would still show up: the quiet verify (`cli/cmd/review.ts:991`), `merge-base` and the git directory.
+    - No other member is called, apart from the one `branch()` call `stateFile()` makes before a branch review. ConnectGit's `show()` and `mergeBase()` call the inner `run` closure, not the spied property, so they would appear only as `show` or `mergeBase` member calls. Neither was called.
+    - The first version of the uncommitted case passed against the unchanged `git.ts`, before any source edit. That confirms the brief's facts: the collector already read through ReviewGit, and narrowing only removes a parallel copy of its grammar. That version compared only the first two argv words and had no branch row; the review round below strengthened it.
+  - *The narrowed translator.* `query()` accepts only these shapes, each listed with the code that emits it:
+    - `cat-file --batch --follow-symlinks` with its stdin request, from `drifted()`. The stdin bounds are unchanged: 64 KiB, a UTF-8 round trip, no NUL, a trailing newline and one `HEAD` or 40-hex revision.
+    - `rev-parse --show-toplevel`, from `changes()`.
+    - `rev-parse --absolute-git-dir`, from `stateFile()`.
+    - `rev-parse --verify --quiet --end-of-options X^{commit}`, from `commitOf()`.
+    - `merge-base A B`, from `mergeBase()` and `ConnectGit.mergeBase`.
+    - `cat-file blob X`, from plan()'s settings read through `ConnectGit.show` and from `ledOutAt()`'s link target.
+    - The two `ls-files --others` listings and the three `--name-only` diffs, from `changes()`.
+    - `ls-tree -z R -- P`, from `ledOutAt()` (win32 only).
+  - *Removed shapes.* `status`; the `--unified=3|20` diffs; the `--no-index` added-file diff; `cat-file -s`; `cat-file -e` for a file or a `^{commit}`; the non-quiet `rev-parse --verify --end-of-options`; `rev-parse --is-shallow-repository`; `grep`; `rev-list --max-parents=0`; both `log` shapes; and `blame`. The `DIFF` constant and the `shallow` metadata field went with them.
+  - *What is unchanged.* Any other argv still refuses with the plain message and poisons `check()`, as before. requireRead, the run guards, the stdin bounds (64 KiB, 4096 chunks, 10 s), the `active()` re-check after each read, `check()`, every Git.Interface method, `use()` and `withTask()` are unchanged, and no export changed. `git.ts` is 314 lines, down from 355.
+  - *Type pin.* `Query` now has exactly these variants:
+    - `resolve`, `merge-base`, `untracked`, `batch-files` and `tree`, extracted from `ReadOnlyGit.Read`;
+    - a name-only `diff` (`names: true`, with no `context` or `files`);
+    - a blob-only `object` (`action: "blob"`);
+    - the metadata variant.
+
+    So `query()` cannot return a collector read without a type change. This is a compile-time pin on what the translator returns, not a runtime check.
+  - *git.test.ts.* Three cases are new or extended:
+    - New: "connect's own read shapes are answered from the admitted repository". Each kept shape returns its exact output. Then `show`, `mergeBase`, `branch` and `prefix` are called, and `check()` passes, so no row poisoned the view.
+    - New: "VectorScope's collector shapes refuse in connect's Git view and poison it". It covers 16 shapes, each in a fresh view. For each, the read fails, `check()` fails with "This review's Git reads cannot be inspected safely, so Vector stopped it." and the model step is never reached.
+    - Extended: the raw-execution case is renamed "…, unsafe paths and unknown argv without a live fallback". It now also refuses unknown and near-miss argv: `[]`, `rev-parse HEAD`, `merge-base --all`, `cat-file blob main:…`, `show` and `fetch`. It also refuses a batch read without its request, a stdin request on a non-batch read, and a batch request that names `main`.
+  - *The task-authority case.* Its live read moved from `status --porcelain --untracked-files=no --no-renames`, which now refuses, to the quiet `rev-parse --verify --end-of-options HEAD^{commit}`. It now also checks that the answer is the task tip. Its purpose is unchanged: the genuine task root is still exercised.
+- **What it closes.**
+  - The CW-20 remainder: handoff "CW-20 status" and the spec §6 VectorScope row.
+  - The Git half of review connect:fit #1 (F1).
+    - F1's fix bullet "delete `ConnectGit`'s translator" is superseded for the collector, which now reads only through ReviewGit. F1's failing scenario was a collector Git command that connect's list does not know, refusing every connect review. That no longer applies, because no collector read reaches ConnectGit.
+    - The bullet is not met as written: a narrowed translator remains for connect's own checks. Those checks need the stdin batch read, name-only diffs, `ls-tree` and the ignored-settings listing, and ReviewGit refuses all four. It refuses stdin at `review/git.ts:111`, and its `readOperation` grammar (:162-253) has none of the other three shapes. Adding them would edit VectorScope's `review/**`, which is do-not-touch under §7.1.
+  - This supersedes the `ConnectGit.query` part of v2-complete-plan §4.1's F1 row. Following CN-01's practice, the plan itself is not edited.
+- **Departures from the brief's Expected list.**
+  - *Dropped although listed.* Done requires no collector-only shape, and these four are collector-only:
+    - `rev-parse --is-shallow-repository` (only emitter: `review/context.ts:135`);
+    - the non-quiet `rev-parse --verify --end-of-options X^{commit}` (`review/source.ts:153`);
+    - `cat-file -s` (`review/source.ts:259`);
+    - `cat-file -e`, for a file or a `^{commit}` (`review/source.ts:63,125,215,297`).
+
+    The lead has to accept this departure explicitly, so the commit body and the PR description repeat these four shapes with their emitter lines.
+  - *Kept although nothing emits them through `run()` at `0ee486e3`:* `rev-parse --git-dir`, `--git-common-dir` and `--show-prefix`, and `symbolic-ref --quiet --short HEAD`. They echo the admitted binding with no repository read, and ConnectGit's own `branch()` and `prefix()` answer without `run()`. The new test labels these rows binding echoes, not connect's own reads.
+  - The shared shapes stay because connect emits them too: `--show-toplevel`, `--absolute-git-dir`, the quiet verify, `merge-base`, `cat-file blob` and the untracked listing. The collector's copies of these reads go to ReviewGit.
+- **Plan critique.** Every point was taken:
+  - *Handoff anchors.* The C2 and C3 anchors are refreshed (see Docs below).
+  - *Type pin.* `Query` is narrowed variant by variant rather than with an `Extract` over whole kinds, which would have kept `context` diffs and size or existence object reads.
+  - *Spies.* The collector-path cases spy every member of the view and assert which members other than `run` are called: none, or for a branch `stateFile()`'s one `branch()`. They restore every spy in a finalizer and keep the `views` tripwire.
+  - *Binding echoes.* The echo rows are labeled as such.
+  - *F1 wording.* The fix bullet is recorded as superseded, not met.
+  - *Timeouts.* The heavy git.test.ts cases carry explicit timeouts (60 s for the shapes table, 120 s for each refusal table), and both refusal tables were cut to one row per removed translator branch and one per near-miss family. Each fresh private view costs about 4 s in this container. The optional `rev-parse --verify FETCH_HEAD^{commit}` row was run once against the unchanged source. It already refused there, so it was not kept.
+  - *Spec date.* The spec addition is dated "Since CN-02 (2026-11-15)".
+  - *TMPDIR.* No separate TMPDIR override is used. The unprivileged wrapper below sets TMPDIR to `/tmp/vector-v2/connect/home`, and the baseline and post-change runs used the same wrapper. All scratch is under `/tmp/vector-v2/connect/`.
+- **Review round.** A review of this package raised seven non-blocking findings. All seven were taken; one of them needed no code change.
+  - *The collector-path pin compared only the first two argv words.* So connect's quiet verify and the collector's non-quiet one both read "rev-parse --verify", and connect's `diff --cached --name-only` and the collector's `diff --cached --no-color` both read "diff --cached". The case now compares every `run` call read for read, commits masked, before and after the review (see What changed). That goes further than the suggested exact set, because the collector also emits some of connect's own shapes, such as the quiet verify at `cli/cmd/review.ts:991`.
+    - Mutation check: the CLI's `HEAD` verify (`cli/cmd/review.ts:223`) was temporarily sent through `Git.Service` instead of `ReviewGit.client`. The uncommitted case then failed with one extra `rev-parse --verify --quiet --end-of-options HEAD^{commit}` before the review; the old two-word set would have passed it. The file was restored byte for byte (sha256 checked, `git diff` empty).
+  - *The spies used `Object.keys` with an always-true guard.* They now come from the typed name map, so a new `Git.Interface` member fails typecheck until it is spied.
+  - *Only an uncommitted target was pinned.* The branch row was added. Its other-member expectation is `{ branch: 1 }`, for `stateFile()`'s own call, not `["run"]`: a collector `branch()` that reached connect's view would make it two.
+  - *The CLI parity failure had no owner.* It is fixed upstream by `2d022b84`. Its CI status is recorded in the stop-condition result, and a lane note is in the handoff. No task was queued, since all that remains is the lead's merge.
+  - *Four dropped shapes depart from the brief.* The count is corrected from "three" to "four", with each shape's emitter lines. The commit body and the PR description repeat them.
+  - *`let` flags in git.test.ts's `refuses` helper.* They are now one `const seen` object.
+- **Held.**
+  - Q6 is open. These stay untouched (plan §8 decision 6): the routes `POST /experimental/session/:sessionID/connect` and `POST /experimental/connect/review`, `connect/owner.ts`, the httpapi connect group and handlers, and the `connect/directory-request.ts` ledger.
+  - `review/**` is not edited.
+  - `defaultBranch` still fails closed (C3, CN-03 to CN-05).
+  - No flag changes.
+- **Hand-off note for scope-finish.**
+  - In a connect review, `Git.Service` inside `ReviewService.execute` is ConnectGit's view (`adapters/vectorscope.ts:591`). A direct `Git.Service` user inside the review would reach that view, refuse and poison the review, failing closed.
+  - `review/impact.ts:147,165,183` is such a user. At `0ee486e3` it is not wired into reviews: only `review/eval.ts` imports core impact types.
+  - If impact is wired into reviews, it should read through `ReviewGit.client` and ReviewGit's grammar, not `Git.Service`.
+- **Stop-condition result.** No shape was restored.
+  - Every Linux success case in git.test.ts, review-service.test.ts and worktree-target.test.ts passes after narrowing.
+  - vectorscope.test.ts fails 11 cases in this container after narrowing. Each of the 11 also failed in the baseline run with the unchanged `git.ts`, under the same wrapper and `--timeout 30000`. That baseline failed 13 cases among the 27 that finished before the run was stopped at its 10-minute limit; the last case, "in process", did not run. Nine of the 11 are 30-second timeouts. One is fallout: a timed-out case's review kept running into the next case. The eleventh is a real failure: the CLI half of "the same review from the CLI and from connect" calls `executeLocalReview` with `identity: "vectorscope"` outside `ReviewGit.within`, so it is refused at `cli/cmd/review.ts:213` and returns exit code 2 (:653). A temporary log line, since removed, confirmed the refusal message: "The VectorScope service requires a private Git view." That case came from `093c4a2d` and does not involve ConnectGit.
+    - That failure is a real defect at this branch's base, and `release-finish` has already fixed it. Its commit `2d022b84`, "fix(engine): run the CLI parity review inside the private Git view", is test only and runs the CLI call inside `ReviewGit.within`. It landed after `0ee486e3`, so connect-finish gets it only when the lead merges `release-finish` or `main` in. This package neither merges nor copies it. The lane note is in the handoff's Source bullet.
+    - CI status: test.yml run 43656696007 (PR #33 at `cf2373c4`) passed the case on engine (linux, shard 4/4), job 132636762529, in 3949.82 ms. That run's one Linux engine failure is an unrelated HttpApi CORS timeout on shard 3/4, job 132636762518.
+    - `2d022b84` adds the same `import { ReviewGit } from "@/review/git"` line this package adds, at the same place in vectorscope.test.ts, so both sides make one identical change there.
+  - Run again after narrowing with `--timeout 120000`, as a diagnostic only, vectorscope.test.ts gave 26 pass, 1 skip and 1 fail, with 291 expect() calls in 584 s. The one failure is that CLI comparison case. So no success case in the file depends on a removed shape.
+  - fix.test.ts behaved the same way. At `--timeout 30000` it had 11 pass and 2 fail, both 30-second timeouts in re-review cases that run several reviews. At `--timeout 120000` it gave 13 pass, 181 expect() calls.
+  - directory-live.test.ts failed one case on its first run: a 5-second wait for the consent question ran out. Its sibling case, which waits for the same question, passed in that run. On a rerun at `--timeout 30000`, all 7 cases passed.
+  - *Mutation check.* `ReviewGit.client` was temporarily made to return `Git.Service` even with a view in place, and `connect/git.ts` was set back to its unchanged copy. The collector-path case then failed, because the collector's `branch()` call reached connect's view. Both files were restored byte for byte; `review/**` carries no edit.
+- **Docs.**
+  - Handoff: the CW-20 status bullet now records the narrowing and the pin, with Q6 still open. The C2 and C3 Remaining-work anchors were refreshed to `connect/git.ts:277-278` (the `realpath(directory)` check in `use()`) and `:240` (`selected()`'s `defaultBranch: fail`); they were :318 and :281. CN-02 has no Remaining-work line, so these are its only handoff changes.
+  - Spec: the status line and the §6 VectorScope cell.
+  - The review-findings and v2-complete-plan citations stay pinned to their own source SHAs.
+- **Receipts.** All runs were local, one file at a time from `packages/engine`, through `/home/user/.tools/vector-serial`, with `--timeout 30000` unless noted.
+  - *How the Linux cases ran.* This container runs as root, and ReadOnlyGit refuses root ("this host has no supported unprivileged Git verifier", core `read-only-git.ts:505-508`). Run as root, every Linux ReadOnlyGit case refuses, including the existing first success case in vectorscope.test.ts. They therefore ran through `/tmp/vector-v2/connect/as-ci.sh`, a copy of the c1 lane's wrapper. It runs `unshare -m` with `/usr/bin/python3` pointed at 3.12, then `setpriv` to uid 1000, as CI runs unprivileged.
+  - *Against the unchanged `git.ts`:*
+    - the new vectorscope case passed, 1 pass (with the existing first success case alongside: 2 pass, 32 expect() calls);
+    - git.test.ts with the new cases, in a first, longer version of the tables (18 collector rows and 21 refusal rows), failed only the collector-shapes case: 7 pass, 1 fail, 79 expect() calls. Every collector row was accepted except `rev-parse --verify FETCH_HEAD^{commit}`, and every refusal row already refused. The tables were then trimmed to the rows kept.
+  - *After narrowing:*
+    - git.test.ts: 8 pass, 0 fail, 80 expect() calls, 186.5 s. The shapes table took 7.4 s, the collector refusals 58.3 s and the unknown-argv refusals 43.3 s.
+    - review-service.test.ts: 3 pass, 15 expect() calls.
+    - worktree-target.test.ts: 14 pass, 118 expect() calls.
+    - vectorscope.test.ts: 16 pass, 1 skip, 11 fail, 263 expect() calls. All 11 also failed at the baseline; see the stop-condition result.
+    - The regression sweep, at `--timeout 30000`:
+      - background.test.ts: 12 pass, 111 expect() calls.
+      - after-run.test.ts: 22 pass, 105 expect() calls.
+      - directory.test.ts: 19 pass, 112 expect() calls.
+      - directory-live.test.ts: 7 pass, 58 expect() calls, on the rerun.
+      - loop.test.ts: 2 pass, 276 expect() calls.
+      - fix.test.ts: 11 pass and 2 timeouts, then 13 pass at 120 s.
+    - The collector-path case was rerun after its last edit, which removed two type assertions: 1 pass, 10 expect() calls.
+  - *After the review round:*
+    - the two collector-path cases (`-t "collector reads are answered"`): 2 pass, 0 fail, 22 expect() calls, 45.6 s at `--timeout 30000` (21.4 s and 20.6 s each), and the same at `--timeout 120000`;
+    - the mutation check above: 1 fail, as intended, then the file restored;
+    - git.test.ts with the `seen` object: 8 pass, 0 fail, 80 expect() calls, 181.7 s;
+    - vectorscope.test.ts in full at `--timeout 120000`, as a diagnostic: 27 pass, 1 skip, 1 fail, 303 expect() calls, 672.2 s. The one failure is the CLI parity case (`expect(cli.exitCode).toBe(0)`, received 2), which `2d022b84` fixes upstream;
+    - `bun typecheck` in packages/engine passed; `bun x prettier --check` passed on the three code files; `bun x oxlint` on them still reports 73 warnings and no errors; `git diff --check` was clean.
+  - *Static checks.* `bun typecheck` in packages/engine passed. `bun x prettier --check` passed on the three code files. `bun x oxlint` on them reports 73 warnings and no errors, down from 90 at the unchanged source. The new case's four warnings are the file's existing `calls[0]!` and Linux-gate patterns. `git diff --check` was clean.
+  - *Commit gate,* rerun on the final tree through the same wrapper at `--timeout 30000`:
+    - git.test.ts: 8 pass, 0 fail, 80 expect() calls, 150.4 s.
+    - The two collector-path cases: 2 pass, 22 expect() calls, 38.5 s.
+    - review-service.test.ts: 3 pass, 15 expect() calls.
+    - worktree-target.test.ts: 13 pass and 1 fail, twice. The failure is "a full task re-review compares its stored findings and refuses since from another valid task", which hits its own 60-second limit after the first of its three reviews (2 expect() calls). It passed in 56.0 s in the run recorded above. Run alone, it failed the same way with the narrowed `git.ts` and with the unchanged `git.ts` (copied back for the run, then the narrowed file restored and its sha256 checked). So the failure is this container's speed, not the narrowing.
+    - vectorscope.test.ts in full: 16 pass, 1 skip, 12 fail, 281 expect() calls, 545.2 s. All 12 failures are in the baseline's 13. Nine are 30-second timeouts. Two are fallout: leftover calls from timed-out cases' reviews reached "outside a live run the cap is what the ended run had left…" (3 calls, expected 1) and "nothing to review comes back not reviewed" (1 call, expected 0). Run alone, both pass, with 5 and 6 expect() calls. The twelfth is the CLI parity case that `2d022b84` fixes upstream.
+    - `bun typecheck` in packages/engine passed. The full typecheck (`bun turbo typecheck --concurrency=2`) passed, 27 of 27 tasks.
+  - No CI ran for this package. The Linux engine shard of test.yml is the authority for the Linux-only cases.

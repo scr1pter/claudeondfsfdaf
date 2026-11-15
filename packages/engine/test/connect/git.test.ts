@@ -1,7 +1,7 @@
 import { afterEach, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Layer, Option } from "effect"
+import { Cause, Effect, Layer, Option, Stream } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
@@ -330,33 +330,181 @@ for (const kind of ["unsupported-query", "unsupported-metadata"] as const) {
   )
 }
 
+const REFUSED = "This review's Git reads cannot be inspected safely, so Vector stopped it."
+const bytes = (text: string) => Stream.make(new TextEncoder().encode(text))
+
+// A committed src/probe.ts, then an uncommitted edit to it and an untracked src/extra.ts.
+const shapesFixture = Effect.gen(function* () {
+  const test = yield* TestInstance
+  const directory = test.directory
+  yield* write(directory, "src/probe.ts", "export const probe = 1\n")
+  yield* git(directory, ["add", "-A"])
+  yield* git(directory, ["commit", "-qm", "connect read shapes"])
+  const head = yield* git(directory, ["rev-parse", "HEAD"])
+  const oid = yield* git(directory, ["rev-parse", `${head}:src/probe.ts`])
+  const branch = yield* git(directory, ["symbolic-ref", "--short", "HEAD"])
+  const metadata = yield* Effect.promise(() => ReadOnlyGit.metadataHead(directory))
+  yield* write(directory, "src/probe.ts", "export const probe = 2\n")
+  yield* write(directory, "src/extra.ts", "export const extra = true\n")
+  return { directory, head, oid, branch, metadata }
+})
+
+// One fresh connect Git view per read: the read must refuse, poison the view, and so stop the review before a model.
+const refuses = (directory: string, args: string[], stdin?: string) =>
+  Effect.gen(function* () {
+    const seen = { args: args.join(" "), entered: false, ran: "", model: false }
+    const exit = yield* ConnectGit.use(directory, (selected) =>
+      Effect.gen(function* () {
+        seen.entered = true
+        const result = yield* selected.git
+          .run(args, { cwd: directory, ...(stdin === undefined ? {} : { stdin: bytes(stdin) }) })
+          .pipe(Effect.exit)
+        seen.ran = result._tag
+        yield* selected.check()
+        seen.model = true
+      }),
+    ).pipe(Effect.exit)
+    const error = exit._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined
+    return { ...seen, message: error instanceof Error ? error.message : undefined }
+  })
+const refusedRow = (args: string[]) => ({
+  args: args.join(" "),
+  entered: true,
+  ran: "Failure",
+  model: false,
+  message: REFUSED,
+})
+
 local(
-  "the private adapter refuses raw execution, config redirection and unsafe paths without a live fallback",
+  "connect's own read shapes are answered from the admitted repository",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* shapesFixture
+      const NAMES = ["--name-only", "--no-renames", "--no-ext-diff", "--no-relative", "-z"]
+      const committed = "export const probe = 1\n"
+      yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          const read = (args: string[], stdin?: string) =>
+            selected.git
+              .run(args, { cwd: f.directory, ...(stdin === undefined ? {} : { stdin: bytes(stdin) }) })
+              .pipe(Effect.map((result) => ({ args: args.join(" "), code: result.exitCode, text: result.text() })))
+          const rows: [string[], string, string?][] = [
+            // changes(): the top level, HEAD, the name-only diffs and both untracked listings.
+            [["rev-parse", "--show-toplevel"], f.metadata.directory + "\n"],
+            [["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"], f.head + "\n"],
+            [["rev-parse", "--verify", "--quiet", "--end-of-options", `${f.head}^{commit}`], f.head + "\n"],
+            [["diff", ...NAMES, f.head, "--"], "src/probe.ts\0"],
+            [["diff", "--cached", ...NAMES, f.head, "--"], ""],
+            [["diff", ...NAMES, f.head, f.head, "--"], ""],
+            [["ls-files", "--others", "--exclude-standard", "-z"], "src/extra.ts\0"],
+            [["ls-files", "--others", "-z", "--", ":(icase).vector", ":(icase).gitattributes"], ""],
+            // mergeBase() and ConnectGit.mergeBase.
+            [["merge-base", f.head, f.head], f.head + "\n"],
+            // stateFile().
+            [["rev-parse", "--absolute-git-dir"], f.metadata.gitDirectory + "\n"],
+            // plan()'s settings read through ConnectGit.show, and ledOutAt()'s link target.
+            [["cat-file", "blob", `${f.head}:src/probe.ts`], committed],
+            [["cat-file", "blob", "HEAD:src/probe.ts"], committed],
+            [["cat-file", "blob", f.oid], committed],
+            // ledOutAt().
+            [["ls-tree", "-z", f.head, "--", "src/probe.ts"], `100644 blob ${f.oid}\tsrc/probe.ts\0`],
+            // drifted().
+            [
+              ["cat-file", "--batch", "--follow-symlinks"],
+              `${f.oid} blob ${committed.length}\n${committed}\n`,
+              `${f.head}:src/probe.ts\n`,
+            ],
+            // Binding echoes kept as the brief lists them: answered from the admitted binding with no repository read.
+            // Nothing emits them through run() at 0ee486e3; ConnectGit's branch() and prefix() answer without it.
+            [["rev-parse", "--git-dir"], f.metadata.gitDirectory + "\n"],
+            [["rev-parse", "--git-common-dir"], f.metadata.commonDirectory + "\n"],
+            [["rev-parse", "--show-prefix"], "\n"],
+            [["symbolic-ref", "--quiet", "--short", "HEAD"], f.branch + "\n"],
+          ]
+          for (const [args, text, stdin] of rows)
+            expect(yield* read(args, stdin)).toEqual({ args: args.join(" "), code: 0, text })
+          expect(yield* selected.git.show(f.directory, f.head, "src/probe.ts")).toBe(committed)
+          expect(yield* selected.git.mergeBase(f.directory, f.head)).toBe(f.head)
+          expect(yield* selected.git.branch(f.directory)).toBe(f.branch)
+          expect(yield* selected.git.prefix(f.directory)).toBe("")
+          // No row poisoned the view.
+          yield* selected.check()
+        }),
+      )
+    }),
+  { git: true },
+  60_000,
+)
+
+local(
+  "VectorScope's collector shapes refuse in connect's Git view and poison it",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* shapesFixture
+      const DIFF = [
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-relative",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+      ]
+      const shapes = [
+        ["status", "--porcelain", "--untracked-files=normal", "--no-renames"],
+        ["rev-parse", "--is-shallow-repository"],
+        ["rev-parse", "--verify", "--end-of-options", `${f.head}^{commit}`],
+        ["cat-file", "-s", `${f.head}:src/probe.ts`],
+        ["cat-file", "-e", `${f.head}:src/probe.ts`],
+        ["cat-file", "-e", `${f.head}^{commit}`],
+        ["diff", ...DIFF, "--find-renames", "--unified=3", f.head, "--"],
+        ["diff", ...DIFF, "--find-renames", "--unified=20", "--cached", f.head, "--"],
+        ["diff", ...DIFF, "--find-renames", "--unified=3", f.head, f.head],
+        ["diff", ...DIFF, "--find-renames", "--unified=3", f.head, f.head, "--", "src/probe.ts"],
+        ["diff", "--no-index", ...DIFF, "--unified=3", "--", "/dev/null", "src/extra.ts"],
+        ["grep", "-n", "-w", "-F", "-I", "--no-color", "--full-name", "-z", "-e", "probe", f.head, "--", "."],
+        ["rev-list", "--max-parents=0", f.head],
+        ["log", "-n", "5", "--no-color", "--date=short", "--format=%h %an %ad %s", f.head, "--", "src/probe.ts"],
+        ["log", "--no-color", "-n", "50", "--format=%s", `${f.head}..${f.head}`],
+        ["blame", "--porcelain", "--root", "--no-textconv", "-L", "1,1", f.head, "--", "src/probe.ts"],
+      ]
+      const seen = yield* Effect.forEach(shapes, (args) => refuses(f.directory, args))
+      expect(seen).toEqual(shapes.map(refusedRow))
+    }),
+  { git: true },
+  120_000,
+)
+
+local(
+  "the private adapter refuses raw execution, config redirection, unsafe paths and unknown argv without a live fallback",
   () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
-      for (const args of [
+      const shapes = [
         ["log", "--output=leak"],
         ["grep", "--open-files-in-pager=bad"],
         ["cat-file", "--filters", "HEAD:probe"],
         ["config", "--file", "../outside", "filter.fixture.clean"],
-      ]) {
-        let model = false
-        let entered = false
-        const exit = yield* ConnectGit.use(test.directory, (selected) =>
-          Effect.gen(function* () {
-            entered = true
-            yield* selected.git.run(args, { cwd: test.directory }).pipe(Effect.catchCause(() => Effect.void))
-            yield* selected.check()
-            model = true
-          }),
-        ).pipe(Effect.exit)
-        expect(entered).toBe(true)
-        expect(exit._tag).toBe("Failure")
-        expect(model).toBe(false)
-      }
+        [],
+        ["rev-parse", "HEAD"],
+        ["merge-base", "--all", "HEAD", "HEAD"],
+        ["cat-file", "blob", "main:src/probe.ts"],
+        ["show", "HEAD"],
+        ["fetch", "origin"],
+        // The batch read without its request, and the batch request is not a path of HEAD or of an exact commit.
+        ["cat-file", "--batch", "--follow-symlinks"],
+      ]
+      const seen = yield* Effect.forEach(shapes, (args) => refuses(test.directory, args))
+      expect(seen).toEqual(shapes.map(refusedRow))
+      // A request on stdin goes with the batch read only.
+      expect(yield* refuses(test.directory, ["rev-parse", "--show-toplevel"], "HEAD:vector.json\n")).toEqual(
+        refusedRow(["rev-parse", "--show-toplevel"]),
+      )
+      expect(
+        yield* refuses(test.directory, ["cat-file", "--batch", "--follow-symlinks"], "main:vector.json\n"),
+      ).toEqual(refusedRow(["cat-file", "--batch", "--follow-symlinks"]))
     }),
   { git: true },
+  120_000,
 )
 
 local(
@@ -400,10 +548,11 @@ local(
                 retained = selected
                 yield* selected.check()
                 const result = yield* selected.git.run(
-                  ["status", "--porcelain", "--untracked-files=no", "--no-renames"],
+                  ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"],
                   { cwd: test.directory },
                 )
                 expect(result.exitCode).toBe(0)
+                expect(result.text().trim()).toBe(metadata.head)
                 models++
               }),
             root,
