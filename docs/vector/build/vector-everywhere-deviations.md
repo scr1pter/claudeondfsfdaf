@@ -469,3 +469,69 @@ An idle computer with no viewer stays connected while the Durable Object hiberna
 - The CI relay smoke's "presence sees the computer online" (e2e/relay-smoke.ts:219) now runs through `killed()`'s KV read inside the object on Cloudflare's local runtime, so a broken read there would turn it red. vector-hosted-ci.yml's relay job runs it with the wrangler dry run.
 - A smoke check of presence while the flag is set is left for EV-06, which edits the smoke for job-offer anyway.
 - After the owner deploys the Worker, VE-50 should confirm that presence answers offline while the `remote` switch is off.
+
+## 2026-11-15, EV-06: the relay forwards signed job offers to computers (R-C1, relay side)
+
+Spec §11 R-C1 (:843), §3.4 (the 20-second offer window), §5 E9 (:564) and E10, codium-build-spec.md §4.17. Relay package only: the API's `RelayAction` is EV-09's. Line numbers are after this package.
+
+### What changed
+
+- **The Worker forwards `job-offer`** (packages/relay/src/index.ts). The special case and the 501 `RELAY_JOB_OFFER_RESERVED` branch are gone; :78 checks `INTERNAL_ACTIONS` only. `job-offer` takes the same checks as every internal action, in the same order: 405 (method), 503 (no secret), 413 (declared and actual length), 401 (signature, 300 s skew), 400 (JSON and `account`). The account handle (`accountHandle(ACCOUNT_KEY, account)`) names the object, which gets the parsed body and the nonce. The Worker reads no kill flag for internal calls, as before. The header comment (:5-6, :9-10) lists `job-offer` and says the relay never logs an offer.
+- **The object delivers it** (packages/relay/src/account-relay.ts). `INTERNAL_ACTIONS` gains `"job-offer"` (:47-56); `OFFER` (:85) is the form check; the internal switch gains `case "job-offer": return await this.jobOffer(body, now)` (:689-690), after the nonce is recorded and `sweep(now)` has run, and inside the try/finally that runs `settle(now)`. `jobOffer()` (:763-791) answers, in this order:
+  - 400 `INTERNAL_BAD_REQUEST` unless `offer` is a string of at most `internalBodyBytes` characters matching `^vef1\.[\x21-\x7e]+$`;
+  - 200 `{delivered: 0, reason: "killed"}` while REMOTE_FLAGS `kill` is `"1"` or cannot be read (`killed()` fails closed);
+  - 200 `{delivered: 0, reason: "suspended"}` while meta `suspended` exists;
+  - 200 `{delivered: 0}`, with nothing written, while the object knows no account (meta `account` is unset: no ticket for it has stood, or it was erased), review round one (:779-780);
+  - 429 `RELAY_OFFER_LIMIT` once 30 offers were accepted in the last hour;
+  - otherwise 200 `{delivered: n}`, after sending the frame below to each of the n live computer sockets.
+  The 401 for an unsigned, forged or replayed call is the shared signature and nonce check.
+- **Limits** (packages/relay/src/limits.ts:60-62): `offersPerHour: 30`, `offerWindowMs: 3_600_000`. The root test/remote-relay-contract.test.ts compares named fields only, so it is unaffected (7 pass).
+- **Protocol docs** (packages/relay/src/protocol.ts:13, :21-33): the kind byte line and a "Job offers (R-C1)" paragraph. No code or export changed; protocol.ts still imports nothing (source.test.ts).
+- **The CI smoke** (packages/relay/e2e/relay-smoke.ts): the "job.offer is reserved" 501 check is gone; two checks take its place, "a signed job offer reaches the computer, never the phone" (:231) and "the kill flag stops presence and offers while an idle computer stays connected" (:267).
+- **The account-relay.ts comment at :376** now says only the relay sends job offers. A client-sent `0x02` frame (:411) and the control message `{t:"job.offer"}` (:377) still get the `reserved` notice and are never passed on.
+
+### The offer frame (EV-11 must decode it identically)
+
+- Byte 0 is `0x02` (`FRAME.JOB_OFFER`). Bytes 1-16 are zero (`DEVICE_BYTES`; no device sent it). Bytes 17 onward are the offer string's UTF-8 bytes, unchanged; the form check allows only 0x21-0x7e, so those bytes are its characters.
+- At most 17 + 16,384 bytes, inside the 64-KiB `frameBytes`. A real offer (`OFFER_PATTERN`) is at most 2,140 characters.
+- A binary message, sent only to sockets tagged `computer` (`this.live("computer")`), never to a phone.
+- The desktop must decode it with `decodeFrame`, require kind `FRAME.JOB_OFFER` and an all-zero device (otherwise drop the frame), read the text with `fromUtf8`, and verify it with `verifyOffer` against the pinned `OFFER_KEYS` (E9) before any HTTPS call. It must never treat those bytes as a peer or a device id.
+- Today's desktop drops every frame that is not `DATA` (packages/desktop/src/main/remote-link.ts:678), so delivering offers to current desktops is harmless.
+
+### Deviations
+
+- **The smoke file changed although the brief does not list it.** It pinned the 501 (old :267-270), and vector-hosted-ci.yml's relay job runs it, so it would have failed. The second new check also takes EV-05's deferred item: presence answers `reason: "killed"` on workerd while an idle computer is still connected.
+- **`INTERNAL_BAD_REQUEST` is reused for a malformed offer,** as every other internal action's bad body answers.
+- **The form check stays loose** (critique point 5, partly rejected). The brief sets the bound: printable ASCII, the `vef1.` prefix, at most the internal body limit. The relay imports nothing outside its folder, so it cannot share schema's `OFFER_PATTERN` (`^vef1\.[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{86}$`, at most 2,140 characters). A mirrored copy would need its own root contract test and would have to move with schema's 2,048-character claim bound. The relay checks only form either way; E9 is the desktop's check. Space (0x20) is excluded, which is tighter than "printable ASCII": an offer is base64url and dots, so a real one never holds a space, and the Worker's `ACCOUNT` check uses the same range. **Suggestion for EV-09:** add a root contract test, beside test/remote-relay-contract.test.ts, that `signOffer`'s output passes the relay's check (a `job-offer` through `handleRequest` answering 200).
+- **`delivered` counts the live computer sockets the frame was handed to.** `send()` swallows the error from a socket that closed in the same instant, so the count can include one that never received it. EV-09 reads it as "may have reached", never as a claim.
+- **Order:** form (400), then the kill flag, then the suspension, then the account, then the cap, then delivery. Only accepted offers take a place in the hour, including one to a known account with no computer online (`{delivered: 0}` with no `reason`). A refused offer (400, killed, suspended, 429) takes none, and neither does one to an object that knows no account. The places are a sliding hour of times in meta `offers`: at most 30 integers, never the offer, the account or a job id. They survive hibernation (the cap case calls `h.wake()`; mutation M13), and erase() clears them with the rest of storage (`deleteAll`).
+- **An object that knows no account stores no offer** (review round one, findings 1 and 3, taken). Meta `account` is written only when a ticket stands (connect) and `erase` deletes it, so with it unset no computer can be live. The offer then answers `{delivered: 0}`, the same answer delivery would give, before the cap is read, and meta `offers` is not written. Without this, a signed offer to an erased account's object wrote a timestamp row there: no personal data, but storage the relay did not need after P5's erase. What such a call still leaves is what every signed internal call leaves: its nonce in `seen`, which erase() keeps anyway. Mutation M16 (no guard) turns :566 red. The 200 stays a 200 with no `reason`: the API cannot tell an unknown account from one with no computer online, and should not need to.
+- **The cap is per account,** because the object is per account. An account whose offers are capped is not otherwise affected.
+- **No ticket-expiry check on the receiving computer** (R-C2): a computer whose ticket lapsed while idle still receives offers until sweep closes it after `computerTicketMaxAgeMs` (24 h).
+- **No fair-use check.** Offers are delivered and metered even when `fairUse(now)` is `"awake"`: internal() never calls `dropForFairUse`, so an account over its awake-hours still gets an offer on a socket that is already open, until its next message or alarm closes it. Each offer also books up to `idleTailMs` of awake time (fetch's `touch`), which pushes such an account further over, by at most 30 × 10 s = 5 minutes an hour. Adding a `fair-use` reason later is EV-09's or Codium's choice (critique point 9, recorded). Review round one (findings 2 and 4, both non-blocking) kept this: the brief lists no fair-use reason, it is not an E10 invariant, and refusing an offer for fair use is a product rule for Codium. If it is wanted, the change is `if (this.fairUse(now) !== "ok") return answer({ delivered: 0, reason: "fair-use" })` after the suspension check, with a test, and spec §11 R-C1's answer list gains the reason.
+- **The kill flag is read in the object only, and nothing is closed on it,** as EV-05 did for presence. An idle computer connected before the kill keeps its socket; it gets no offer.
+- **No attachment-role filter after `live("computer")`** (critique point 3, taken). Tags come from the ticket's role at accept, refresh refuses a role change, and `sweep(now)` has already closed any socket without a valid attachment, so the filter was dead code that no test or mutation could tell apart.
+- **The offer is signed, not encrypted.** Its payload is base64url JSON with the account id (`sub`), the job id, the key id, the times and a `jti` (api/_lib/everywhere/offer.ts), nothing else (spec 3.3). The relay never decodes, stores or logs it; index.ts's header now says the relay forwards ciphertext "and the API's signed job offers".
+
+### Not changed
+
+- A client-sent `0x02` frame and `{t:"job.offer"}` still answer `reserved` and are not a close (account-relay.ts:377, :411; packages/relay/test/relay.test.ts:73, whose header comment, :7-8, now says so). internal.test.ts adds the computer-sent case (:582): a `0x02` frame from one computer, aimed at another computer, at a phone, or with sixteen zero device bytes, reaches nobody.
+- The API's `RelayAction` and `relayCall` (api/_lib/remote-relay.ts, EV-09), the desktop decode (EV-11), presence, devices, sweep, alarm and refresh.
+
+### Coordination
+
+- **A Codium-area file.** packages/relay/\*\* is in spec §6.4's Codium row, and R-C1 is a request to Codium; EV-06 builds it in this lane under the lead's brief, as EV-05 did R-C4. At EV-06's working-tree check, `git diff --stat origin/release-finish...origin/<b> -- packages/relay api/_lib/remote-relay.ts docs/vector/MODEL-PLANS.md docs/vector/build/codium-a39-remote-relay-notes.md` was empty for codium-finish `2924d94b`, review-fixes `1433d105` and main `58f85edc`. The commit step repeats it before the commit and the push.
+- **Request to Codium (or the lead):** annotate the documents that still say job-offer is reserved or answers 501. They are Codium's, so EV-06 does not edit them: docs/vector/MODEL-PLANS.md:127; codium-a39-remote-relay-notes.md :11, :49, :54, :67; codium-deviations.md :882-883; codium-build-spec.md :539, :801. The form (review round one, finding 5): once the lead routes it, a dated one-line annotation at each anchor pointing to vector-everywhere-deviations.md, "2026-11-15, EV-06"; nothing is rewritten.
+- **Optional request to Codium:** refuse offers once awake-hours are used up (a `fair-use` reason), see "Deviations".
+- **The Worker deploy is owner-gated.** Production is unchanged until the owner deploys the relay Worker. Even then nothing calls `job-offer`: `RelayAction` has none until EV-09, the ports' offer defaults to `"unavailable"`, and VECTOR_EVERYWHERE_ENABLED is off.
+
+### Decisions
+
+- **Critique points taken:** (1) the cap case calls `h.wake()` after the 30th offer and before the last hour's last millisecond, and mutation M13 (times in a private field) turns it red; (2) the computer-sent `0x02` case and mutation M14; (3) no role filter; (4) the storage check reads the rows of every table, and M11 turns it red; (6) the awake-time assertion takes `before` after a known flush and says it pins fetch's existing `touch`, not offer code; (7) one file-level `viaWorker(h, action, body)` helper, with R-C4's `presence(h)` now a one-line wrapper; (8) internal.test.ts's header lists job offers, and the limits.ts insertion is anchored by its text. Point 5 is partly rejected and point 9 recorded, both under "Deviations".
+- **The cap case goes straight to the object** (`h.internal`): the Harness's fake namespace keeps the first `AccountRelay` instance, so a Worker-path call after `h.wake()` would reach the old one. The Worker path's cap is covered by "the hourly offer cap is per account" in "internal routes" (:298), which uses real per-name objects; since review round one each account has a computer connected through the Worker's `/v1/connect` (`worker()`'s `computer(sub)`, :199), because an object that knows no account takes no place.
+- **Mutations** (progress log, EV-06): 16 patches, each red on the intended cases; M9 (the 501 restored) leaves the two object-only cases green, as expected. After review round one all were re-run with M16 (no no-account guard) added: 17 patches, each red on the intended cases.
+
+### Deferred verification
+
+- The CI smoke on workerd: binary delivery to the computer and not the phone, and presence and offers while the flag is set (vector-hosted-ci.yml's relay job, with the wrangler dry run).
+- A real desktop decode (EV-11), the API's call (EV-09), and VE-50 live after the owner deploys the Worker.

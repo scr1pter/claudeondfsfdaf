@@ -4,7 +4,8 @@ import { CLOSE, FRAME, decodeFrame, encodeFrame } from "../src/protocol"
 import { Harness, deviceId, frame, token } from "./fakes"
 
 // WP A39: the relay passes ciphertext between an account's phones and computers byte for byte and stores none of it;
-// the API's internal calls revoke, suspend, list, query presence and erase; job.offer is reserved.
+// the API's internal calls revoke, suspend, list, query presence and erase. A client may not send a job offer (0x02 or
+// {t:"job.offer"}); only the API's signed job-offer call makes the relay send one, to computers (internal.test.ts).
 
 const id = (device: string) =>
   Uint8Array.from(atob(device.replace(/-/g, "+").replace(/_/g, "/") + "=="), (c) => c.charCodeAt(0))

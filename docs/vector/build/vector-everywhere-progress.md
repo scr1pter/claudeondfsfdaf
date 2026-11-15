@@ -1005,3 +1005,221 @@ Deferred:
 - Request to Codium (or the lead): annotate
   docs/vector/build/codium-a39-remote-relay-notes.md:11 and §4.17's presence
   entry point with R-C4's behaviour and the optional `reason`.
+
+## EV-05 push receipts (recorded 2026-11-15)
+
+At `8caf62cb` (EV-05, pushed), all workflow_dispatch on `everywhere-finish`,
+read with the GitHub tools on 2026-11-15 (during EV-06). Observed conclusions
+only; nothing was re-run.
+
+- vector-everywhere 43680774247: success.
+- vector-hosted-ci 43680776690: success. This was EV-05's last "done when"
+  item (relay tests, relay typecheck, wrangler dry run and local smoke).
+- typecheck 43680782059: success.
+- vector-at-mention 43680779587: failure, 1 of 10 jobs: 132710709977,
+  "sandbox (codium, success, bun)", at "Run the unprivileged probe" (then
+  "Observe the synthetic probe report" and "Assert isolation, crash
+  protection and cleanup"). The same inherited @vector probe step as EV-01 to
+  EV-04; not a lane file, and not re-run. The other nine jobs succeeded.
+
+With these, the handoff's "Relay presence" gate is marked CI green.
+
+## EV-06: relay forwards signed job offers (2026-11-15)
+
+Base: HEAD `8caf62cb` (EV-05, pushed), equal to `origin/everywhere-finish`.
+`git fetch origin release-finish main everywhere-finish` found
+`release-finish` still at `cf2373c4`, already merged, so no merge was needed;
+`main` is `58f85edc` and is not merged (PR #33 is not in). `git diff --stat
+origin/release-finish...origin/<b>` limited to packages/relay,
+api/_lib/remote-relay.ts, docs/vector/MODEL-PLANS.md and
+codium-a39-remote-relay-notes.md was empty for codium-finish `2924d94b`,
+review-fixes `1433d105` and main: no other lane touches the relay. EV-06
+depends on no review-fixes commit and no brain-transport work. The changes are
+in the working tree, not committed.
+
+Files changed (line numbers after EV-06):
+
+- packages/relay/src/index.ts: header (:5-6, :9-10); :78 checks
+  `INTERNAL_ACTIONS` only; the 501 `RELAY_JOB_OFFER_RESERVED` branch removed.
+- packages/relay/src/account-relay.ts: imports `utf8` (:9), `DEVICE_BYTES`
+  and `encodeFrame` (:15, :20); `INTERNAL_ACTIONS` gains `"job-offer"`
+  (:47-56); `OFFER` (:85); the comment at :376 reworded (behaviour at :377 and
+  :411 unchanged); `case "job-offer"` (:689-690); `jobOffer()` with its JSDoc
+  (:763-791), including the no-account guard (:779-780, review round one).
+- packages/relay/src/limits.ts:60-62: `offersPerHour: 30`,
+  `offerWindowMs: 60 * 60_000`.
+- packages/relay/src/protocol.ts: the kind line (:13) and the "Job offers
+  (R-C1)" paragraph (:21-33); comments only, still no import.
+- packages/relay/e2e/relay-smoke.ts (CI only): header (:1-6); `offerText`
+  (:44-47); "a signed job offer reaches the computer, never the phone" (:231);
+  "the kill flag stops presence and offers while an idle computer stays
+  connected" (:267); the 501 check removed. Not in the brief's list; see the
+  deviations log.
+- packages/relay/test/internal.test.ts: imports (:5-26); the header (:28-31);
+  the `OFFER` fixture (:36); the file-level `viaWorker(h, action, body)`
+  helper (:39), which R-C4's `presence(h)` (:343) now wraps; `worker()` gains
+  `computer(sub)` (:199, review round one), a computer connected through the
+  Worker's `/v1/connect` so that account's object knows its account. In
+  "internal routes" the 501 case is replaced by two:
+  - :271 unsigned and forged offers answer 401 and reach no object; a signed
+    one answers 200 `{delivered: 0}`; its replay answers 401
+    `INTERNAL_SIGNATURE_INVALID`;
+  - :298 with one computer per account, thirty offers to one account answer
+    200 `{delivered: 1}`, the 31st 429 `RELAY_OFFER_LIMIT`, another account's
+    200 `{delivered: 1}`; the computers hold 30 and 1 frames; two distinct
+    handles.
+
+  A new describe, "job offers reach the account's computers (R-C1)" (:424),
+  each case on a fresh `Harness`:
+  - :428 two computers and a phone: `{delivered: 2}`; each computer gets one
+    frame of 17 + offer bytes with kind `0x02`, sixteen zero device bytes
+    and the offer text; the phone gets none; meta `offers` holds only the
+    time; no table row and no attachment holds the payload, the signature or
+    the account;
+  - :456 no phone: twenty offers (`noViewerFrames`) each `{delivered: 1}`;
+    the computer stays open; no alarm, no viewer meter, no `viewing_since`;
+    a data frame then gets the first `no-viewer` notice and closes nothing;
+    after six minutes (the ticket has lapsed) an offer is still delivered and
+    books one `idleTailMs` of awake time (fetch's existing `touch`);
+  - :483 the kill flag set, then unreadable: `{delivered: 0, reason:
+    "killed"}`, no frame, the computer not closed; cleared: `{delivered: 1}`;
+  - :501 suspended: the suspend call closes the computer, the offer answers
+    `{delivered: 0, reason: "suspended"}`; lifted and reconnected:
+    `{delivered: 1}`;
+  - :515 three killed and two malformed offers take no place; thirty are
+    accepted; after `h.wake()` the 31st is 429; still 429 one millisecond
+    before the hour; after another `h.wake()` and that millisecond, accepted;
+  - :540 ten malformed values (missing, a number, an array, empty, `vef2.`,
+    `vef1.` alone, a space, a non-ASCII character, a newline, a leading space)
+    and an offer longer than `internalBodyBytes` (straight to the object)
+    answer 400; a body with no account answers 400 at the Worker; no frame,
+    no place;
+  - :566 (review round one) an object that knows no account: an offer before
+    any computer connected answers `{delivered: 0}` and leaves no `offers`
+    row; after a computer connects, one is delivered and one time is kept;
+    after `erase` (the computer closed `REMOTE_REVOKED`) an offer answers
+    `{delivered: 0}`, sends nothing, and meta holds only `revoked_before`,
+    meters nothing;
+  - :582 a computer's own `0x02` frame, aimed at another computer, at the
+    phone, or with sixteen zero device bytes, reaches nobody; three
+    `reserved` notices; the sender stays open.
+- packages/relay/test/relay.test.ts: the header comment (:7-8) only. The
+  client-sent `0x02` case (:73) is unchanged.
+- Docs: vector-everywhere-deviations.md (the EV-06 entry),
+  vector-everywhere-spec.md (dated notes under §2's "Nothing can send a job"
+  :102, E9 :565 and R-C1 :844), vector-everywhere-handoff.md (the EV-05 bullet
+  marked CI green; a "Relay job offers" bullet; the owner's rules unchanged),
+  this file (the EV-05 receipts and this entry). v2-notes/v2-complete-plan.md
+  and Codium's documents are not edited.
+
+No new env var, flag, route path, dependency, install or generated file.
+Nothing becomes reachable on vectordev.ai. No test calls a real host: only
+packages/relay/test/fakes.ts and the in-memory Worker.
+
+Checks (each through `vector-serial`, one file per run):
+
+| Check | Result |
+| --- | --- |
+| packages/relay test/internal.test.ts at HEAD (baseline) | 15 pass, 0 fail, 65 assertions |
+| packages/relay test/relay.test.ts at HEAD (baseline) | 14 pass, 0 fail, 73 assertions |
+| packages/relay test/internal.test.ts with EV-06 | 23 pass, 0 fail, 233 assertions; after review round one 24 pass, 0 fail, 245 assertions |
+| packages/relay test/relay.test.ts (the client-sent `0x02` case) | 14 pass, 0 fail, 73 assertions |
+| packages/relay test/idle.test.ts | 12 pass, 0 fail, 50 assertions |
+| packages/relay test/routing.test.ts | 9 pass, 0 fail, 51 assertions |
+| packages/relay test/limits.test.ts | 13 pass, 0 fail, 43 assertions |
+| packages/relay test/fair-use.test.ts | 8 pass, 0 fail, 36 assertions |
+| packages/relay test/ticket.test.ts | 9 pass, 0 fail, 63 assertions |
+| packages/relay test/source.test.ts (no Bun or Node module, no logging, protocol.ts imports nothing) | 7 pass, 0 fail, 87 assertions |
+| root test/remote-relay-contract.test.ts | 7 pass, 0 fail, 20 assertions |
+| root test/remote-ticket-api.test.ts | 29 pass, 0 fail, 261 assertions |
+| packages/relay `bun typecheck` (tsgo; src, test and e2e) | exit 0 |
+| prettier --check on the seven code and test files | clean |
+| Diff guards | no personal path or email address; no added line over 120 columns; no trailing whitespace; only the eleven files above changed |
+| wrangler dry run and `bun run smoke` | not run locally (the smoke starts `wrangler dev --local`); vector-hosted-ci.yml's relay job runs both |
+
+Mutations: each is a patch under /tmp/vector-v2/everywhere/ev06-mut/, applied
+with `git apply`, internal.test.ts run alone (and relay.test.ts for M12 and
+M14), then `git apply -R`; the SHA-256 of account-relay.ts and index.ts
+matched pre.sha after every run. After review round one all seventeen were
+re-run from /tmp/vector-v2/everywhere/ev06-mut-r1/ (M1, M2, M8 and M13
+regenerated against the guarded `jobOffer()`, M16 new); the table shows those
+results, with the new line numbers, and every run ended `ALL-REVERTED` with
+pre.sha matched.
+
+| Mutation | internal.test.ts | Red cases |
+| --- | --- | --- |
+| M1: no kill-flag line | 22 pass, 2 fail | :483, :515 |
+| M2: no suspension line | 23 pass, 1 fail | :501 |
+| M3: send to `this.live()`, phones too | 22 pass, 2 fail | :428, :483 |
+| M4: `>` for `>=` in the cap | 22 pass, 2 fail | :298, :515 |
+| M5: the form check without the `vef1.` prefix | 23 pass, 1 fail | :540 |
+| M6a: frame kind `FRAME.DATA` | 23 pass, 1 fail | :428 |
+| M6b: device bytes all 1 | 23 pass, 1 fail | :428 |
+| M7: `orphan()` per delivered socket | 21 pass, 3 fail | :298, :456, :515 |
+| M8: the place taken before the kill and suspension checks | 23 pass, 1 fail | :515 |
+| M9: the Worker's 501 branch restored | 16 pass, 8 fail | :271 (after its 401 assertions), :298, :428, :456, :483, :501, :540, :566; :515 and :582 go straight to the object and stay green |
+| M10: `killed()`'s catch returns false | 22 pass, 2 fail | :366 (EV-05's unreadable flag), :483 |
+| M11: the offer text also stored in meta | 23 pass, 1 fail | :428 |
+| M12: data() passes a client `0x02` on like data | 23 pass, 1 fail; relay.test.ts 13 pass, 1 fail | :582; relay.test.ts:73 |
+| M13: the offer times in a private field, not meta | 21 pass, 3 fail | :428 (no meta row), :515 (the cap lost at `h.wake()`), :566 (no time kept) |
+| M14: data() forwards a computer's `0x02` to the other computers | 23 pass, 1 fail; relay.test.ts 13 pass, 1 fail | :582; relay.test.ts:73 |
+| M15: no length bound | 23 pass, 1 fail | :540 |
+| M16 (review round one): no no-account guard | 23 pass, 1 fail | :566 |
+
+The awake-time assertion in :456 pins fetch's existing `touch` for internal
+calls (R-C1's "offers count toward awake time"); no mutation of `jobOffer()`
+targets it.
+
+Review round one (six findings, none blocking; working tree, not committed):
+
+- Findings 1 and 3 (an offer to an object that knows no account wrote meta
+  `offers`), taken: `jobOffer()` answers `{delivered: 0}` before the cap when
+  meta `account` is unset, and writes nothing (account-relay.ts:779-780). New
+  case :566; the per-account cap case :298 now connects a computer per account
+  through the Worker. Mutation M16 red.
+- Findings 2 and 4 (no fair-use check), kept and recorded in the deviations
+  log's "No fair-use check" bullet; no change for EV-06.
+- Finding 5 (Codium's documents still say 501), kept as the recorded request;
+  the deviations log's Coordination bullet now names the annotation form.
+- Finding 6 (done-when not met): unchanged. The commit, the full turbo
+  typecheck, the push and the green vector-hosted-ci.yml and typecheck.yml
+  runs are still outstanding, and the handoff bullet stays "CI pending" until
+  they pass.
+- Re-run after the fix, one file at a time: internal.test.ts 24 pass, 0 fail,
+  245 assertions; relay.test.ts 14/0/73; routing.test.ts 9/0/51;
+  limits.test.ts 13/0/43; source.test.ts 7/0/87; fair-use.test.ts 8/0/36;
+  idle.test.ts 12/0/50; ticket.test.ts 9/0/63; packages/relay `bun typecheck`
+  exit 0; prettier --check on account-relay.ts and internal.test.ts clean;
+  the seventeen mutations as in the table above.
+
+Commit gate (2026-11-15): `git fetch` found release-finish `cf2373c4`
+(already merged), main `58f85edc` (PR #33 not on it) and everywhere-finish
+equal to HEAD `8caf62cb`; the packages/relay, remote-relay.ts,
+MODEL-PLANS.md and relay-notes diff against release-finish was again empty
+for codium-finish `2924d94b`, review-fixes `1433d105` and main. Only the
+eleven EV-06 paths were in the working tree. Re-run through `vector-serial`,
+one file at a time: internal.test.ts 24 pass, 0 fail, 245 assertions;
+relay.test.ts 14/0/73; packages/relay `bun typecheck` exit 0; prettier
+--check on the seven code, test and smoke files clean; the full
+`bun turbo typecheck --concurrency=2` 27 of 27 tasks successful. Committed
+as `feat(relay): deliver signed job offers to online computers`; the push
+and run ids are recorded in the next entry.
+
+Deferred:
+
+- Then the dispatches on `everywhere-finish`: vector-hosted-ci.yml (only
+  while no vector-codium run is in progress; they share a concurrency group)
+  and typecheck.yml. Never vector-codium.yml. EV-06 is done once
+  vector-hosted-ci is green (relay tests, relay typecheck, wrangler dry run
+  and the smoke's two new checks on workerd); record the run ids in the next
+  entry.
+- EV-09: `RelayAction` gains `job-offer`; a root contract test that
+  `signOffer`'s output passes the relay's form check. EV-11: the desktop
+  decodes the frame exactly as the deviations log's "The offer frame" says.
+- Owner: deploy the relay Worker. VE-50: an offer reaches the owner's
+  computer only, and nothing while the `remote` switch is off.
+- Request to Codium (or the lead): annotate MODEL-PLANS.md:127,
+  codium-a39-remote-relay-notes.md :11, :49, :54, :67, codium-deviations.md
+  :882-883 and codium-build-spec.md :539, :801, which still say job-offer is
+  reserved or answers 501. Optional: refuse offers once awake-hours are used
+  up.

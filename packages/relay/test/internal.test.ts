@@ -2,27 +2,55 @@ import { describe, expect, test } from "bun:test"
 import { AccountRelay } from "../src/account-relay"
 import { handleRequest } from "../src/index"
 import { INTERNAL_HEADERS, internalCanonical, sha256Hex, signInternal, verifyInternalSignature } from "../src/internal"
-import { utf8 } from "../src/bytes"
-import { CLOSE } from "../src/protocol"
-import { accountHandle } from "../src/ticket"
+import { base64url, fromUtf8, utf8 } from "../src/bytes"
+import { RELAY_LIMITS } from "../src/limits"
+import { CLOSE, DEVICE_BYTES, FRAME, decodeFrame, encodeFrame } from "../src/protocol"
+import { accountHandle, signTicket } from "../src/ticket"
 import {
   ACCOUNT,
   ACCOUNT_KEY,
+  EPOCH,
   INTERNAL_SECRET,
   NOW,
   FakeKV,
   FakeNamespace,
   FakeRuntime,
   Harness,
+  type FakeSocket,
   type FakeState,
+  type UpgradeResponse,
+  deviceId,
+  frame,
   ticketKeys,
+  token,
 } from "./fakes"
 
-// WP A39: the API's calls to the relay (kill, suspend, presence, devices, revoke, erase, the kill flag) carry WP A37's
-// HMAC: the service, method, path, timestamp, nonce and a hash of the body, 300 s of skew, each nonce once.
-// test/remote-relay-contract.test.ts at the repository root checks the same bytes against the API's own signer.
+// WP A39: the API's calls to the relay (kill, suspend, presence, devices, revoke, erase, the kill flag and, for R-C1,
+// job offers) carry WP A37's HMAC: the service, method, path, timestamp, nonce and a hash of the body, 300 s of skew,
+// each nonce once. test/remote-relay-contract.test.ts at the repository root checks the same bytes against the API's
+// own signer.
 
 const PATH = "/internal/v1/presence"
+
+/** An offer in the API's shape (`vef1.<payload>.<86-character signature>`); the relay checks only its form. */
+const OFFER = () => `vef1.${token()}${token()}.${base64url(crypto.getRandomValues(new Uint8Array(64)))}`
+
+/** The API's signed call through the real Worker to the account's object, the path relayCall takes. */
+async function viaWorker(h: Harness, action: string, body: Record<string, unknown>) {
+  const text = JSON.stringify(body)
+  const path = `/internal/v1/${action}`
+  const signed = await signInternal(INTERNAL_SECRET, { method: "POST", path, body: text, now: h.clock.now })
+  const response = await handleRequest(
+    new Request(`https://relay.example${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...signed },
+      body: text,
+    }),
+    h.env,
+    h.runtime,
+  )
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+}
 
 async function headersFor(body: string, input: { now?: number; nonce?: string; path?: string; secret?: string } = {}) {
   return signInternal(input.secret ?? INTERNAL_SECRET, {
@@ -167,7 +195,36 @@ describe("internal routes", () => {
       )
       return { status: response.status, body: (await response.json()) as Record<string, unknown>, signed }
     }
-    return { call, namespace, kv, clock, env, runtime }
+    // A computer of `sub` through the Worker's connect path, so that account's object knows its account.
+    const computer = async (sub: string) => {
+      const iat = Math.floor(clock.now / 1000)
+      const ticket = await signTicket(
+        {
+          v: 1,
+          aud: "vector-relay",
+          sub,
+          role: "computer",
+          dev: deviceId(),
+          computers: 3,
+          rank: 2,
+          epoch: EPOCH,
+          periodEnd: NOW + 86_400_000,
+          iat,
+          exp: iat + 300,
+          jti: token(),
+        },
+        keys.privateKey,
+      )
+      const response = (await handleRequest(
+        new Request("https://relay.example/v1/connect", {
+          headers: { upgrade: "websocket", "sec-websocket-protocol": `vector.v1, ${ticket}` },
+        }),
+        env,
+        runtime,
+      )) as UpgradeResponse
+      return runtime.servers.get(response.webSocket!) as FakeSocket
+    }
+    return { call, computer, namespace, kv, clock, env, runtime }
   }
 
   test("a signed call reaches the account's object, named by the account's HMAC", async () => {
@@ -211,11 +268,50 @@ describe("internal routes", () => {
     expect(((await again.json()) as { error: { code: string } }).error.code).toBe("INTERNAL_SIGNATURE_INVALID")
   })
 
-  test("job.offer is reserved: a signed offer answers 501 and reaches no object", async () => {
-    const { call, namespace } = await worker()
-    const result = await call("job-offer", { account: ACCOUNT })
-    expect(result).toMatchObject({ status: 501, body: { error: { code: "RELAY_JOB_OFFER_RESERVED" } } })
+  test("job-offer is a signed internal action: unsigned, forged or replayed offers answer 401", async () => {
+    const { call, env, runtime, namespace } = await worker()
+    const body = JSON.stringify({ account: ACCOUNT, offer: OFFER() })
+    const unsigned = await handleRequest(
+      new Request("https://relay.example/internal/v1/job-offer", { method: "POST", body }),
+      env,
+      runtime,
+    )
+    expect(unsigned.status).toBe(401)
+    const forged = await call("job-offer", null, {
+      raw: body,
+      headers: { [INTERNAL_HEADERS.signature]: "A".repeat(43) },
+    })
+    expect(forged.status).toBe(401)
     expect(namespace.calls).toHaveLength(0)
+    const first = await call("job-offer", null, { raw: body })
+    expect({ status: first.status, body: first.body }).toEqual({ status: 200, body: { delivered: 0 } })
+    // The same signed request again, inside the skew window: the object has seen its nonce.
+    const again = await handleRequest(
+      new Request("https://relay.example/internal/v1/job-offer", { method: "POST", headers: first.signed, body }),
+      env,
+      runtime,
+    )
+    expect(again.status).toBe(401)
+    expect(((await again.json()) as { error: { code: string } }).error.code).toBe("INTERNAL_SIGNATURE_INVALID")
+  })
+
+  test("the hourly offer cap is per account: the 31st offer to one account answers 429 RELAY_OFFER_LIMIT", async () => {
+    const { call, computer, namespace } = await worker()
+    const first = await computer(ACCOUNT)
+    const second = await computer("acct_fixture_0002")
+    const send = async (account: string) => {
+      const result = await call("job-offer", { account, offer: OFFER() })
+      return { status: result.status, body: result.body }
+    }
+    for (let index = 0; index < RELAY_LIMITS.offersPerHour; index++)
+      expect(await send(ACCOUNT)).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(await send(ACCOUNT)).toEqual({ status: 429, body: { error: { code: "RELAY_OFFER_LIMIT" } } })
+    expect(await send("acct_fixture_0002")).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(first.frames()).toHaveLength(RELAY_LIMITS.offersPerHour)
+    expect(second.frames()).toHaveLength(1)
+    expect(new Set(namespace.calls.map((entry) => entry.name))).toEqual(
+      new Set([(await accountHandle(ACCOUNT_KEY, ACCOUNT))!, (await accountHandle(ACCOUNT_KEY, "acct_fixture_0002"))!]),
+    )
   })
 
   test("other methods, unknown actions, bad bodies and an unset secret are refused", async () => {
@@ -244,20 +340,7 @@ describe("internal routes", () => {
 
 describe("presence honours the kill flag and the suspension (R-C4)", () => {
   // The API's signed presence call through the real Worker to the account's object, the path relayPresence takes.
-  async function presence(h: Harness) {
-    const body = JSON.stringify({ account: ACCOUNT })
-    const signed = await signInternal(INTERNAL_SECRET, { method: "POST", path: PATH, body, now: h.clock.now })
-    const response = await handleRequest(
-      new Request(`https://relay.example${PATH}`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...signed },
-        body,
-      }),
-      h.env,
-      h.runtime,
-    )
-    return { status: response.status, body: (await response.json()) as Record<string, unknown> }
-  }
+  const presence = (h: Harness) => viaWorker(h, "presence", { account: ACCOUNT })
 
   test("the kill flag: no computer is online while an idle computer's socket is still open", async () => {
     const h = await Harness.create()
@@ -335,5 +418,186 @@ describe("presence honours the kill flag and the suspension (R-C4)", () => {
     await h.disconnect(computer.socket)
     // Offline for want of a computer carries no reason.
     expect((await presence(h)).body).toEqual({ online: false, computers: [], viewers: 1 })
+  })
+})
+
+describe("job offers reach the account's computers (R-C1)", () => {
+  const offer = (h: Harness, text: unknown) => viaWorker(h, "job-offer", { account: ACCOUNT, offer: text })
+  const offers = (h: Harness) => h.state.sql.rows<{ v: string }>("SELECT v FROM meta WHERE k = 'offers'")
+
+  test("an offer reaches every live computer, never a phone, byte for byte; only its time is kept", async () => {
+    const h = await Harness.create()
+    const first = await h.computer()
+    const second = await h.computer()
+    const phone = await h.phone()
+    const text = OFFER()
+    expect(await offer(h, text)).toEqual({ status: 200, body: { delivered: 2 } })
+    for (const computer of [first, second]) {
+      const frames = computer.socket.frames()
+      expect(frames).toHaveLength(1)
+      expect(frames[0]!.byteLength).toBe(1 + DEVICE_BYTES + text.length)
+      const decoded = decodeFrame(frames[0]!)!
+      expect(decoded.kind).toBe(FRAME.JOB_OFFER)
+      expect(decoded.device).toEqual(new Uint8Array(DEVICE_BYTES))
+      expect(fromUtf8(decoded.ciphertext)).toBe(text)
+    }
+    expect(phone.socket.frames()).toHaveLength(0)
+    // Storage keeps the offer's time and nothing of the offer or the account.
+    expect(offers(h)).toEqual([{ v: JSON.stringify([h.clock.now]) }])
+    const [, payload, signature] = text.split(".")
+    const stored = JSON.stringify(h.state.sql.tables().map((table) => h.state.sql.rows(`SELECT * FROM ${table}`)))
+    for (const needle of [payload!, signature!, ACCOUNT]) {
+      expect(stored).not.toContain(needle)
+      for (const entry of h.state.entries)
+        expect(JSON.stringify(entry.socket.deserializeAttachment())).not.toContain(needle)
+    }
+  })
+
+  test("with no phone: no alarm, viewer time or NO_VIEWER place; a lapsed ticket receives; awake time", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer()
+    for (let index = 0; index < RELAY_LIMITS.noViewerFrames; index++)
+      expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(computer.socket.frames()).toHaveLength(RELAY_LIMITS.noViewerFrames)
+    expect(computer.socket.readyState).toBe(1)
+    expect(computer.socket.closed).toBeUndefined()
+    expect(h.state.alarm).toBeNull()
+    expect(h.meter("viewer")).toBe(0)
+    expect(h.state.sql.rows("SELECT v FROM meta WHERE k = 'viewing_since'")).toEqual([])
+    // The offers took no NO_VIEWER place: this data frame with no viewer is the first, so it gets a notice and the
+    // computer stays open (twenty offers plus it would have closed it).
+    await h.message(computer.socket, frame(FRAME.DATA, deviceId(), new Uint8Array([1])))
+    expect(computer.socket.last("error")).toEqual({ t: "error", code: "no-viewer" })
+    expect(computer.socket.closed).toBeUndefined()
+    // Awake time pins fetch's existing touch for internal calls (R-C1: offers count toward awake time), not
+    // offer-specific code. Connecting wrote the meters at NOW and every call since came at NOW, so nothing is pending
+    // here; six minutes on, the next call adds one idle tail and writes it.
+    const before = h.meter("awake")
+    await h.run(6 * 60_000)
+    expect((computer.socket.deserializeAttachment() as { exp: number }).exp * 1000).toBeLessThan(h.clock.now)
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(computer.socket.frames()).toHaveLength(RELAY_LIMITS.noViewerFrames + 1)
+    expect(h.meter("awake")).toBe(before + RELAY_LIMITS.idleTailMs)
+  })
+
+  test("the kill flag, set or unreadable, sends nothing and closes nothing", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer()
+    const phone = await h.phone()
+    h.kv.values.set("kill", "1")
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 0, reason: "killed" } })
+    h.kv.values.delete("kill")
+    h.kv.failing = true
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 0, reason: "killed" } })
+    expect(computer.socket.frames()).toHaveLength(0)
+    expect(phone.socket.frames()).toHaveLength(0)
+    expect(computer.socket.readyState).toBe(1)
+    expect(computer.socket.closed).toBeUndefined()
+    h.kv.failing = false
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(computer.socket.frames()).toHaveLength(1)
+  })
+
+  test("a suspended account gets no offer until the suspension is lifted", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer()
+    const at = h.clock.now
+    expect((await h.internal("suspend", { account: ACCOUNT, suspended: true, reason: "owner", at })).status).toBe(200)
+    expect(computer.socket.closed?.code).toBe(CLOSE.REMOTE_PAUSED)
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 0, reason: "suspended" } })
+    expect(computer.socket.frames()).toHaveLength(0)
+    expect((await h.internal("suspend", { account: ACCOUNT, suspended: false, at: at + 1 })).status).toBe(200)
+    const again = await h.computer({ dev: computer.dev })
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(again.socket.frames()).toHaveLength(1)
+  })
+
+  test("at most 30 offers in a sliding hour, kept across hibernation; refused offers take no place", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer()
+    // Straight to the object: h.wake() replaces the instance, and the Worker's fake namespace keeps the first one.
+    const send = (text: unknown) => h.internal("job-offer", { account: ACCOUNT, offer: text })
+    h.kv.values.set("kill", "1")
+    for (let index = 0; index < 3; index++)
+      expect(await send(OFFER())).toEqual({ status: 200, body: { delivered: 0, reason: "killed" } })
+    h.kv.values.delete("kill")
+    expect((await send("vef1.a b")).status).toBe(400)
+    expect((await send(42)).status).toBe(400)
+    for (let index = 0; index < RELAY_LIMITS.offersPerHour; index++)
+      expect(await send(OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    h.wake()
+    expect(await send(OFFER())).toEqual({ status: 429, body: { error: { code: "RELAY_OFFER_LIMIT" } } })
+    expect(computer.socket.frames()).toHaveLength(RELAY_LIMITS.offersPerHour)
+    await h.run(RELAY_LIMITS.offerWindowMs - 1)
+    expect((await send(OFFER())).status).toBe(429)
+    h.wake()
+    await h.run(1)
+    expect(await send(OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(computer.socket.frames()).toHaveLength(RELAY_LIMITS.offersPerHour + 1)
+    expect(computer.socket.closed).toBeUndefined()
+  })
+
+  test("malformed offers answer 400, send nothing and take no place", async () => {
+    const h = await Harness.create()
+    const computer = await h.computer()
+    const refused = { status: 400, body: { error: { code: "INTERNAL_BAD_REQUEST" } } }
+    for (const text of [
+      undefined,
+      42,
+      ["vef1.x"],
+      "",
+      "vef2.abc",
+      "vef1.",
+      "vef1.a b",
+      "vef1.\u00e9",
+      "vef1.a\n",
+      " vef1.a",
+    ])
+      expect(await offer(h, text)).toEqual(refused)
+    // Longer than any internal body, so the Worker would answer 413 first: this one goes straight to the object.
+    const long = `vef1.${"A".repeat(RELAY_LIMITS.internalBodyBytes)}`
+    expect(await h.internal("job-offer", { account: ACCOUNT, offer: long })).toEqual(refused)
+    // No account: the Worker refuses before any object.
+    expect(await viaWorker(h, "job-offer", { offer: OFFER() })).toEqual(refused)
+    expect(computer.socket.frames()).toHaveLength(0)
+    expect(offers(h)).toEqual([])
+  })
+
+  test("an object that knows no account (never connected, or erased) sends nothing and stores no offer", async () => {
+    const h = await Harness.create()
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 0 } })
+    expect(offers(h)).toEqual([])
+    const computer = await h.computer()
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 1 } })
+    expect(offers(h)).toHaveLength(1)
+    expect((await h.internal("erase", { account: ACCOUNT })).body).toEqual({ erased: true })
+    expect(computer.socket.closed?.code).toBe(CLOSE.REMOTE_REVOKED)
+    expect(await offer(h, OFFER())).toEqual({ status: 200, body: { delivered: 0 } })
+    expect(computer.socket.frames()).toHaveLength(1)
+    // What erase left (the revocation time, the used ids) is all there is: no offer time came back.
+    expect(h.state.sql.rows("SELECT k FROM meta")).toEqual([{ k: "revoked_before" }])
+    expect(h.state.sql.rows("SELECT * FROM meters")).toEqual([])
+  })
+
+  test("a computer cannot inject an offer: a 0x02 frame it sends reaches no other computer and no phone", async () => {
+    const h = await Harness.create()
+    const sender = await h.computer()
+    const other = await h.computer()
+    const phone = await h.phone()
+    const forged = utf8(OFFER())
+    await h.message(sender.socket, frame(FRAME.JOB_OFFER, other.dev, forged))
+    h.advance(1500)
+    await h.message(sender.socket, frame(FRAME.JOB_OFFER, phone.dev, forged))
+    h.advance(1500)
+    // The exact shape of a relay-sent offer frame: sixteen zero device bytes.
+    await h.message(sender.socket, encodeFrame(FRAME.JOB_OFFER, new Uint8Array(DEVICE_BYTES), forged))
+    expect(other.socket.frames()).toHaveLength(0)
+    expect(phone.socket.frames()).toHaveLength(0)
+    expect(sender.socket.messages().filter((message) => message.t === "error")).toEqual([
+      { t: "error", code: "reserved" },
+      { t: "error", code: "reserved" },
+      { t: "error", code: "reserved" },
+    ])
+    expect(sender.socket.closed).toBeUndefined()
   })
 })
