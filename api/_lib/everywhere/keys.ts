@@ -162,7 +162,10 @@ export const everywhereKeys = {
   /** Terminal transitions enqueue fixed replies atomically; the sweep retries failed platform posts. */
   jobsPosts: () => key("jobs", "posts"),
   jobPostLock: (jobId: string) => key("job", jid(jobId), "posting"),
+  /** Excludes concurrent status posts for one job (Slack and GitHub); each post holds it once and releases it. */
   jobStatusLock: (jobId: string) => key("job", jid(jobId), "status"),
+  /** VE-10: present for 30 s after a GitHub progress post, so progress edits the status comment at most every 30 s. */
+  jobStatusEdited: (jobId: string) => key("job", jid(jobId), "status", "edited"),
   /** Slack's conservative one-thread-read-per-workspace-per-minute budget, shared by all functions. */
   slackThreadRead: (team: string) => key("slack", "thread", matching(team, /^T[A-Z0-9]{1,31}$/)),
   slackRetry: (installationKey: string, method: string) => key("slack", "retry", installation(installationKey), matching(method, /^[a-zA-Z.]{1,64}$/)),

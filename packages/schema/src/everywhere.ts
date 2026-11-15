@@ -417,6 +417,10 @@ export type GithubReference = {
   /** Verified immutable binder identity and event family; no GitHub text crosses the server. */
   readonly actorId?: number
   readonly event?: (typeof GITHUB_EVENTS)[number]
+  /**
+   * The lowercase hex SHA-256 of the trigger's UTF-8 body. Required when `event` is `issues` (C8), because an issue's
+   * updated_at moves on every label, assignment or comment; comment events may prove themselves by unedited timestamps.
+   */
   readonly bodySha256?: string
 }
 
@@ -672,6 +676,8 @@ function githubReference(value: unknown, path: string, platform: PlatformId): In
   const event = member(field(fields, "event"), `${path}.event`, GITHUB_EVENTS)
   if (event === "issues" ? commentId !== undefined || kind !== "issue" : commentId === undefined || (event === "pull_request_review_comment" && kind !== "pr")) refuse(path, "event does not match reference")
   const bodySha256 = field(fields, "bodySha256")
+  // C8: an issue trigger is proved by its body hash alone, so an `issues` reference must carry one.
+  if (event === "issues" && bodySha256 === undefined) refuse(`${path}.bodySha256`, "required")
   return { ...reference, actorId, event, ...(bodySha256 === undefined ? {} : { bodySha256: matching(bodySha256, `${path}.bodySha256`, /^[0-9a-f]{64}$/) }) }
 }
 

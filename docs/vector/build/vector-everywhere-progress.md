@@ -26,8 +26,8 @@ here.
 | C4, a Linear refresh can break the install | Delivered | api/_lib/everywhere/linear/credentials.ts:95-97 (the rotated pair is saved as `verification: "pending"` before `viewer`) | none |
 | C5, ledger release in `finally` | Delivered (everywhere-runner-delivery.md) | everywhere-runner.ts:334-336 (release in try/catch, `active.delete` in `finally`); recovery releases in `finally` at :360-362 (`recover()` at :354) | none |
 | C6, a 1 MB cap on the whole stream buffer | Delivered (everywhere-runner-delivery.md) | packages/desktop/src/main/everywhere-engine.ts:75 (2-MiB response cap), :111 (8-MiB per-event cap), :121 (pending-buffer bound) | none |
-| C7, the GitHub status lock is never released | Open | api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`) | EV-02 |
-| C8, `bodySha256` is optional | Open | packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash) | EV-02 |
+| C7, the GitHub status lock is never released | Delivered by EV-02 (CI pending) | At 0ee486e3: api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`). Lines at EV-02's change: status.ts:20-26 (a `randomUUID` token, 120 s), :31 (the job is read under the lock), :36-37 (the `jobStatusEdited` throttle, progress only), :50 (set after the platform write, before the reference write), :53 (`swapValue` release in `finally`); keys.ts:168 (`jobStatusEdited`); tests packages/web/test/everywhere-github.test.ts:186-441 (the gate and fixture helpers at :186-227, then nine cases from :229, the token case at :282) | EV-02's dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml) after the push |
+| C8, `bodySha256` is optional | Delivered by EV-02 (CI pending) | At 0ee486e3: packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash). Lines at EV-02's change: everywhere.ts:680 (required for `issues`), the JSDoc at :420-423; adapter.ts unchanged (:82 answers 400 before any write); everywhere-github.ts:39-43 (issues by the hash alone); tests packages/schema/test/everywhere.test.ts:568, packages/desktop/src/main/everywhere-github.test.ts:103 (issues by the hash) and :82 (spec 4.1's comment rule pinned) | EV-02's dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml) after the push |
 | C test gap, the runner abort matrix | Mostly covered | packages/desktop/src/main/everywhere-runner.test.ts:296, :305, :324-358, :360-416, :419, :461, :488, :505. Missing: answers to the `pushing` report (everywhere-runner.ts:286) and after the push is admitted | EV-03 |
 | F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`) |
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
@@ -424,3 +424,138 @@ merged into this branch, as are `vector-everywhere` (`890bb072`) and
 `v2-everywhere` (`40e70861`). review-fixes' FIT-5 commit had not landed (not
 an ancestor of HEAD, and review-fixes is not on origin), so spec :879 was left
 alone.
+
+## EV-02: C7 status lock and C8 issue body hash (2026-11-15)
+
+Base: HEAD `b82acf57` (EV-01, pushed). `git fetch origin release-finish main
+everywhere-finish` found `release-finish` still at `cf2373c4`, already merged
+(`5733ceea`), and `everywhere-finish` equal to HEAD, so no merge was needed.
+EV-02 depends on no review-fixes commit and no brain-transport work. The
+changes were written and checked in the working tree first, as this
+package's brief asked; the commit gate at the end of this entry re-ran the
+checks and committed them in one commit.
+
+Files changed:
+
+- api/_lib/everywhere/github/status.ts (C7): the lock is a `randomUUID`
+  token, 120 s, `onlyNew`, released with `swapValue` in `finally` (:20-26,
+  :53); the job is read under the lock (:31); progress returns while
+  `jobStatusEdited` exists (:36-37), and sets it for 30 s after the platform
+  write and before the reference write (:50). `GithubStatusPort` and the
+  `githubStatus` signature are unchanged.
+- api/_lib/everywhere/keys.ts: `jobStatusEdited(jid)`
+  (`vector:everywhere:job:<jid>:status:edited`, :168) and a JSDoc on
+  `jobStatusLock` (:165).
+- packages/schema/src/everywhere.ts (C8): `githubReference()` refuses an
+  `issues` reference without `bodySha256` (:680); the `bodySha256` JSDoc
+  (:420-423). One helper, so `decodeGithubReference`, `decodeInboundTrigger`,
+  `decodeJob` and the server's `decodeJobRecord` all refuse it.
+- packages/desktop/src/main/everywhere-github.ts (C8): an `issues` trigger is
+  decided by the body hash alone (:39-43); comment triggers are unchanged.
+- api/_lib/everywhere/github/adapter.ts: unchanged; :79-82 already refuse a
+  reference that fails to decode with 400 `HANDOFF_INVALID` before any write.
+- Tests: packages/web/test/everywhere-github.test.ts (9 new cases, :186-441,
+  the new block prettier-formatted; the ninth, at :282, pins the token in the
+  lock release and was added after review), packages/web/test/everywhere-keys.test.ts
+  (1 new case and 1 refusal), packages/schema/test/everywhere.test.ts (1 new
+  case, :568), packages/desktop/src/main/everywhere-github.test.ts (2 new
+  cases: :103, issues by the hash alone; :82, added after review, pins spec
+  §4.1's comment rule, equal timestamps with a mismatched hash accepted).
+- Docs: vector-everywhere-deviations.md (the EV-02 entry),
+  vector-everywhere-spec.md (three dated notes: after §4.1 item 1, after the
+  Phase 2 table for the VE-10 row, after R-A6; the owner's text is kept, and
+  every later spec line moves down by up to four, so review-fixes' FIT-5 line
+  is now found by its text), this file (the C7 and C8 rows of the Tier B
+  table, and this entry).
+
+No route, page, flag, generated file, dependency or install. The feature stays
+dormant: the handoff still answers 501 without an injected verifier and
+binding, and no production `GithubStatusPort` exists.
+
+Checks (each through the lane's `vector-serial` lock, one file per run, from
+the package directory; real-Redis cases skip without `VECTOR_TEST_REDIS_URL`):
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-github.test.ts (changed) | 16 pass, 0 fail, 131 assertions, 0.30 s; again after formatting the new block: 16 pass, 0 fail, 131 assertions, 0.35 s; after review, with the token case: 17 pass, 0 fail, 137 assertions, 0.33 s |
+| packages/web test/everywhere-keys.test.ts (changed) | 15 pass, 0 fail, 126 assertions, 0.07 s |
+| packages/schema test/everywhere.test.ts (changed) | 54 pass, 0 fail, 412 assertions, 0.03 s |
+| packages/desktop src/main/everywhere-github.test.ts, `--no-env-file` (changed) | 5 pass, 0 fail, 71 assertions, 0.21 s; after review, with the comment-rule case: 6 pass, 0 fail, 83 assertions, 0.22 s |
+| packages/web test/everywhere-jobs.test.ts (regression: `decodeJobRecord`) | 43 pass, 9 skip (real Redis), 0 fail, 329 assertions, 0.24 s |
+| packages/web test/everywhere-jobs-api.test.ts (regression) | 22 pass, 0 fail, 226 assertions, 0.53 s |
+| packages/web test/everywhere-sweep.test.ts (regression: the outbox) | 6 pass, 0 fail, 34 assertions, 0.30 s |
+| packages/web test/everywhere-slack-events.test.ts (regression: the shared lock key) | 12 pass, 0 fail, 94 assertions, 0.33 s |
+| packages/desktop src/main/everywhere-runner.test.ts, `--no-env-file` (regression: decline `trigger-changed`) | 33 pass, 0 fail, 212 assertions, 0.09 s |
+| API typecheck, `bun typecheck --project ../../tsconfig.json` in packages/engine | exit 0 |
+| packages/schema `bun typecheck` (covers test/) | exit 0 |
+| packages/desktop `bun typecheck` | exit 0; it excludes `src/**/*.test.ts`, and the test imports `bun:test`, which desktop's `types` do not include, so the desktop test is checked only by running it |
+| packages/web `bun typecheck` (astro check, covers test/) | 0 errors, 0 warnings (288 files); again after formatting: 0 errors, 0 warnings; after review (the token case and its `setValue` import): 0 errors, 0 warnings (288 files) |
+| Prettier drift (lines prettier would change), HEAD then now | status.ts 30 then 28; keys.ts 27 then 27; schema everywhere.ts 36 then 36; desktop everywhere-github.ts 110 then 110; web everywhere-github.test.ts 170 then 170; everywhere-keys.test.ts 0 then 0; schema everywhere.test.ts 16 then 16; desktop everywhere-github.test.ts 99 then 99; after review, web everywhere-github.test.ts 170 and desktop everywhere-github.test.ts 99, so the two added cases add none |
+| Diff guards | no added personal path or email address; no new code line over 120 columns except the two status.ts lines that only gained two spaces of indent (`existing` at :41, the invalid-reference throw at :43) |
+
+Mutations (each a patch under /tmp/vector-v2/everywhere/ev02-mut/, applied,
+run, and reverted with `git apply -R`; the three source files' SHA-256 sums
+matched their pre-mutation values afterwards). Every mutation turned its case
+red:
+
+| Mutation | Red cases |
+| --- | --- |
+| No lock release | 9 of 16 in everywhere-github.test.ts, including the four new lock cases (the two gated ones time out at 30 s, as the lock is never free) and the existing :137 and :164 cases |
+| Job read before the lock | "progress that waited for the lock never overwrites a terminal status" only |
+| No throttle | "progress within 30 s of the last edit is dropped", "a post whose reference write failed still spaces the next progress edit", and the existing :137 case |
+| Terminal posts honour the throttle | "a terminal post that met the lock succeeds on retry" only |
+| Throttle set before the platform write | "a failed progress edit releases the lock and sets no edit throttle" only |
+| Throttle set after the reference write (the plan's original order) | "a post whose reference write failed still spaces the next progress edit by 30 s" only |
+| Schema rule removed | the schema case, and "an issues handoff without bodySha256 gets 400" |
+| Desktop keeps the timestamp proof for issues | "an issue trigger is proved by its body hash alone" only |
+| After review: an unconditional `DEL` of the lock in place of `swapValue` | "a post whose lock expired releases only its own token" only (1 of 17) |
+| After review: a present hash decides a comment trigger on its own | "a comment trigger with unedited timestamps is accepted even with a mismatched hash" only (1 of 6) |
+
+The two after-review mutations were applied by copying the file aside,
+editing it, running the one file and copying it back; the SHA-256 of status.ts
+and of desktop everywhere-github.ts matched their pre-mutation values
+afterwards. The rows above them were run before the token case existed, at 16
+cases; line numbers in them are the current ones.
+
+EV-01's push receipts, at `b82acf57` (all workflow_dispatch on
+`everywhere-finish`, re-read with the GitHub tools for this entry):
+
+- vector-everywhere 43659585176: success.
+- vector-hosted-ci 43659588075: success.
+- typecheck 43659593581: success.
+- vector-at-mention 43659590964: failure in job 132645692417, "sandbox
+  (codium, success, bun)". The Bun probe throws "The tool process probe
+  attempted external network access" (Bun v1.3.14) and the next step finds no
+  vector-out/summary.json. It is inherited from the base: the same job fails
+  with the same two log lines on `release-finish` at `cf2373c4` (run
+  43656695886, job 132636679771), and at `0ee486e3` the same job failed at
+  the same step (run 43636452570, job 132574203362). It is @vector's sandbox
+  probe, not a lane file; it is recorded for the lead and was not re-run.
+
+Commit gate (2026-11-15): `git fetch origin release-finish main
+everywhere-finish` again found nothing new (`release-finish` `cf2373c4`,
+already merged; `everywhere-finish` equal to HEAD `b82acf57`), and the working
+tree held only this package's eleven files. Re-run, one file at a time through
+`vector-serial`:
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-github.test.ts | 17 pass, 0 fail, 137 assertions, 0.32 s |
+| packages/web test/everywhere-keys.test.ts | 15 pass, 0 fail, 126 assertions, 0.06 s |
+| packages/schema test/everywhere.test.ts | 54 pass, 0 fail, 412 assertions, 0.03 s |
+| packages/desktop src/main/everywhere-github.test.ts, `--no-env-file` | 6 pass, 0 fail, 83 assertions, 0.21 s |
+| API, schema and desktop `bun typecheck` | exit 0 each |
+| packages/web `bun typecheck` | 0 errors, 0 warnings (288 files) |
+| Full `bun turbo typecheck --concurrency=2` | exit 0, 27 of 27 tasks (22 cached) |
+
+Deferred:
+
+- EV-02's own CI (vector-everywhere.yml, vector-hosted-ci.yml for the schema
+  tests, typecheck.yml, plus vector-at-mention.yml and vector-codium.yml as
+  the commit gate dispatches them) runs after the commit and push; its run ids
+  go in the next entry (EV-03's), as EV-01's went here. vector-everywhere.yml
+  green is this package's last "done when" item.
+- VE-50 live acceptance: on a private test repository, check that the REST
+  issue body is byte-equal to the `issues` event payload's body.
+- R-A6 (owner-gated, Q13): the route job must send the issue body hash for
+  `issues` events.

@@ -22,6 +22,7 @@ import {
   createJobId,
   decodeClaim,
   decodeDecline,
+  decodeGithubReference,
   decodeInboundTrigger,
   decodeJob,
   decodeOfferClaims,
@@ -562,6 +563,49 @@ describe("decodeInboundTrigger", () => {
     expect(refused(decodeInboundTrigger(slackTrigger({ github: { kind: "issue", number: 1 } })))).toBe(
       "github: not allowed",
     )
+  })
+
+  test("an issues reference needs its body hash, and comment references do not (C8)", () => {
+    const issues = { kind: "issue", number: 7, actorId: 583231, event: "issues" }
+    expect(refused(decodeGithubReference(issues))).toBe("github.bodySha256: required")
+    const hashed = { ...issues, bodySha256: "a".repeat(64) }
+    expect(decoded(decodeGithubReference(hashed))).toEqual(hashed as never)
+    expect(refused(decodeGithubReference({ ...issues, bodySha256: "A".repeat(64) }))).toBe(
+      "github.bodySha256: malformed",
+    )
+    for (const reference of [
+      { kind: "issue", number: 7, commentId: 99, actorId: 583231, event: "issue_comment" },
+      { kind: "pr", number: 9, commentId: 99, actorId: 583231, event: "issue_comment" },
+      { kind: "pr", number: 9, commentId: 99, actorId: 583231, event: "pull_request_review_comment" },
+      { kind: "issue", number: 7, commentId: 99 },
+    ])
+      expect(decoded(decodeGithubReference(reference))).toEqual(reference as never)
+    const trigger = {
+      platform: "github",
+      installation: "github:12345678",
+      deliveryId: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+      actor: { userId: "583231", external: false, guest: false, bot: false },
+      kind: "mention",
+      thread: { ref: "acme/web#7" },
+      task: "",
+      context: [],
+      repository: { fullName: "acme/web", id: 123456 },
+      github: issues,
+      shared: false,
+    }
+    expect(refused(decodeInboundTrigger(trigger))).toBe("github.bodySha256: required")
+    expect(decoded(decodeInboundTrigger({ ...trigger, github: hashed })).github).toEqual(hashed as never)
+    const githubJob = job({
+      platform: "github",
+      kind: "mention",
+      issue: undefined,
+      task: "",
+      context: [],
+      github: issues,
+      reply: { format: "markdown", maxChars: 4_000 },
+    })
+    expect(refused(decodeJob(githubJob))).toBe("github.bodySha256: required")
+    expect(decoded(decodeJob({ ...githubJob, github: hashed })).github).toEqual(hashed as never)
   })
 
   test("refuses malformed references", () => {
