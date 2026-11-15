@@ -28,7 +28,7 @@ here.
 | C6, a 1 MB cap on the whole stream buffer | Delivered (everywhere-runner-delivery.md) | packages/desktop/src/main/everywhere-engine.ts:75 (2-MiB response cap), :111 (8-MiB per-event cap), :121 (pending-buffer bound) | none |
 | C7, the GitHub status lock is never released | Delivered by EV-02 (CI pending) | At 0ee486e3: api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`). Lines at EV-02's change: status.ts:20-26 (a `randomUUID` token, 120 s), :31 (the job is read under the lock), :36-37 (the `jobStatusEdited` throttle, progress only), :50 (set after the platform write, before the reference write), :53 (`swapValue` release in `finally`); keys.ts:168 (`jobStatusEdited`); tests packages/web/test/everywhere-github.test.ts:186-441 (the gate and fixture helpers at :186-227, then nine cases from :229, the token case at :282) | EV-02's dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml) after the push |
 | C8, `bodySha256` is optional | Delivered by EV-02 (CI pending) | At 0ee486e3: packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash). Lines at EV-02's change: everywhere.ts:680 (required for `issues`), the JSDoc at :420-423; adapter.ts unchanged (:82 answers 400 before any write); everywhere-github.ts:39-43 (issues by the hash alone); tests packages/schema/test/everywhere.test.ts:568, packages/desktop/src/main/everywhere-github.test.ts:103 (issues by the hash) and :82 (spec 4.1's comment rule pinned) | EV-02's dispatches (vector-everywhere.yml, vector-hosted-ci.yml, typecheck.yml) after the push |
-| C test gap, the runner abort matrix | Mostly covered | packages/desktop/src/main/everywhere-runner.test.ts:296, :305, :324-358, :360-416, :419, :461, :488, :505. Missing: answers to the `pushing` report (everywhere-runner.ts:286) and after the push is admitted | EV-03 |
+| C test gap, the runner abort matrix | Covered by EV-03 (CI pending) | Existing cases, one line lower after EV-03's import: packages/desktop/src/main/everywhere-runner.test.ts:297, :306, :325-359, :361-417, :420, :462, :489, :506. EV-03's cases: :538 (a lost acknowledgement of a `held` result, the regression for the fix at everywhere-runner.ts:320), :566 (`stop`/`lost` on `pushing`), :611 (actual HTTP 404/409 on `pushing`), :654 (a heartbeat `stop` before push admission), :690 (a switch `stop` during an admitted push), :747 (`stop`/`lost`/404/409 heartbeats during an admitted push, publication settle refused). Two points wait for the lead (deviations log, EV-03) | EV-03's dispatches (vector-everywhere.yml, typecheck.yml) after the push |
 | F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`) |
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
 | F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
@@ -559,3 +559,140 @@ Deferred:
   issue body is byte-equal to the `issues` event payload's body.
 - R-A6 (owner-gated, Q13): the route job must send the issue body hash for
   `issues` events.
+
+## EV-02 push receipts (recorded 2026-11-15)
+
+At `c46a6598`, all workflow_dispatch on `everywhere-finish`, re-read with the
+GitHub tools on 2026-11-15 (during EV-03). They complete EV-02's "Deferred"
+item; EV-02's deviations entry says their run ids go in the next progress entry.
+
+- vector-everywhere 43668358969: success.
+- typecheck 43668370110: success.
+- vector-at-mention 43668364250: failure, 1 of 10 jobs: 132672693929,
+  "sandbox (codium, success, bun)", at "Run the unprivileged probe". That is
+  the job and step EV-01 recorded (job 132645692417), inherited from the base;
+  it is @vector's sandbox probe, not a lane file, and was not re-run.
+- vector-hosted-ci 43668361214: cancelled after 14 s (02:33:39 to 02:33:53).
+  vector-codium 43668367381 started at 02:33:43 and calls
+  vector-hosted-ci.yml as a reusable workflow (its run lists that file at
+  `c46a6598`), and both share the group
+  `vector-hosted-ci-workflow_dispatch-refs/heads/everywhere-finish` with
+  `cancel-in-progress: true` (vector-hosted-ci.yml:45-47), so the later
+  call cancelled the standalone run. Inside vector-codium the "Hosted
+  services / Hosted tests" and "Hosted services / typecheck" jobs were
+  skipped, so EV-02's schema tests still have no hosted run.
+- vector-codium 43668367381: failure, 2 of 21 jobs. Shard 3/4 (job
+  132672703195) lists the failed files packages/web/test/cloud-agents-ledger.test.ts
+  and packages/web/test/model-plan-gateway-hooks.test.ts, neither a lane file
+  nor one EV-02 changed. Shard 1/4 (job 132672703266) also failed at "Run the
+  Codium test files"; its failed files were not read here. EV-03 did not
+  diagnose either. **Lane-rule deviation:** the run was a workflow_dispatch
+  from the same account, within the same nine seconds as the other four EV-02
+  runs (02:33:37 to 02:33:46), so it was EV-02's own commit-gate dispatch (EV-02's "Deferred" names it). The lane
+  notes say not to dispatch vector-codium.yml before PR #33 is on main and
+  merged into this branch (about 570 changed files until then); it is
+  recorded for the lead and EV-03 dispatches none.
+
+Still open for EV-02:
+
+- EV-02's hosted run (vector-hosted-ci.yml, for packages/schema
+  test/everywhere.test.ts), dispatched only once no vector-codium run is in
+  progress on the branch, since they share a concurrency group.
+
+## EV-03: runner abort matrix at the push boundary (2026-11-15)
+
+Base: HEAD `c46a6598` (EV-02, pushed), equal to `origin/everywhere-finish`.
+`git fetch origin release-finish main everywhere-finish` found
+`release-finish` still at `cf2373c4`, already merged (`5733ceea`), so no merge
+was needed. EV-03 depends on no review-fixes commit and no brain-transport
+work. The changes were checked in the working tree first, then committed as
+one package commit; its SHA and the dispatch run ids go in the next entry,
+after the push.
+
+Files changed:
+
+- packages/desktop/src/main/everywhere-runner.ts: one fix. The `held` and
+  `no-changes` settle goes through `deliver` with the same payload (:319
+  comment, :320), so a lost acknowledgement replays that exact result
+  instead of a substituted one without the branch (deviations log, EV-03).
+  No other line moved.
+- packages/desktop/src/main/everywhere-runner.test.ts: one import (`branchFor`
+  from `@vectordevai/core/everywhere/publish`, :3, so every existing case is
+  one line lower) and an appended block (:515-817): the `jobsServer` helper
+  (:516) and 16 cases: :538 (the regression for the fix), :566 (`stop`,
+  `lost` on `pushing`, 2), :611 (actual HTTP 404, 409 on `pushing`, 2), :654
+  (a heartbeat `stop` after `pushing`, before push admission), :690 (a switch
+  `stop` during an admitted confirmed or ambiguous push, 2), :747 (a `stop`,
+  `lost`, 404 or 409 heartbeat during an admitted confirmed or ambiguous push,
+  with the publication settle refused, 8).
+- Docs: vector-everywhere-deviations.md (the EV-03 entry),
+  vector-everywhere-handoff.md (the runner abort matrix gate, and two items
+  under "Left open by the repairs"; the owner's rules unchanged), this file
+  (the "C test gap" row and this entry). The spec is not edited (E8 already
+  names "everywhere-runner.test.ts (each abort case)"), nor
+  v2-notes/v2-complete-plan.md or everywhere-runner-delivery.md.
+
+No route, page, flag, generated file, dependency or install. The feature stays
+dormant: VECTOR_EVERYWHERE_ENABLED is off, the desktop's OFFER_KEYS is empty,
+and with no safe worktree every production job settles `held` before any
+engine work. No test calls a real host: loopback fetchers and the fetch guard
+only.
+
+Checks (each through `vector-serial`, one file per run, from packages/desktop):
+
+| Check | Result |
+| --- | --- |
+| src/main/everywhere-runner.test.ts, `--no-env-file`, at HEAD before any change | 33 pass, 0 fail, 212 assertions, 0.09 s |
+| the same file with EV-03's changes | 49 pass, 0 fail, 355 assertions, 0.13 s; again after the `satisfies Settle` edit below: 49 pass, 0 fail, 355 assertions, 0.12 s |
+| packages/desktop `bun typecheck` (`tsgo -b`) | exit 0; desktop's tsconfig excludes `src/**/*.test.ts`, so it checks the runner, not the test |
+| The test file alone, with a scratch tsconfig (/tmp/vector-v2/everywhere/ev03/tsconfig.now.json: extends desktop's, `types` node and bun, includes only this file), desktop's `tsgo -p` | HEAD's test file: exit 0, no errors. EV-03's file first gave two TS2769 errors at the regression case (its expected `held` literal widened `outcome` to `string`); with `satisfies Settle`: exit 0, no errors |
+| Prettier drift (lines prettier 3.6.2, `semi: false`, `printWidth: 120`, would change), HEAD then now | everywhere-runner.ts 316 then 316; everywhere-runner.test.ts 391 then 391. The new block was already prettier-clean; its only lines over 120 columns are five test titles in template literals |
+| Diff guards | no personal path or email address; everywhere-runner.ts changes two lines |
+| Full `bun turbo typecheck --concurrency=2` | not run: EV-03 does not commit or push in this step; it runs at the commit gate |
+
+Mutations, run only in a scratch harness: /tmp/vector-v2/everywhere/ev03/
+holds copies of the runner and its four imports under mut/, and mut.test.ts
+is the worktree test file with its imports pointed there. run-muts.sh copies
+the fixed runner, HEAD's runner (M0) or a mutated copy (mutate.py) into mut/,
+runs the one file, and restores the fixed copy. The worktree runner and test
+were never edited for a mutation; their SHA-256 sums matched before and after
+both passes. Both passes gave the same red sets:
+
+| Mutation | Result | Red cases |
+| --- | --- | --- |
+| none (the fixed runner in the harness) | 49 pass, 0 fail | none |
+| M0: HEAD's runner, the old single settle at :319-320 | 46 pass, 3 fail | :538 (the regression), the two :611 cases (their settles differ) |
+| M1: :195 ignores a non-continue answer to `pushing` | 45 pass, 4 fail | the two :566 cases, the two :611 cases |
+| M2: :293 without `controller.signal.aborted \|\|` | 48 pass, 1 fail | :654 only |
+| M3: throw when aborted straight after a confirmed push | 43 pass, 6 fail | the existing deadline-during-push case (:129), the confirmed :690 case, the four confirmed :747 cases |
+| M4: the catch (:327) skips the publication when the outcome is `cancelled` | 44 pass, 5 fail | the ambiguous :690 case, the four ambiguous :747 cases |
+| M5: `deliver` tries 5 times instead of 3 | 38 pass, 11 fail | the existing durable-delivery case (:108), the two :611 cases, all eight :747 cases |
+
+Review round one (deviations log, EV-03, "Review round one"). The test file
+only changed: in the cases at :690 and :747 the fake `push` now records
+`abortedDuringPush`, asserted after `offer()` resolves, in place of an
+`expect` inside the fake (+3 lines per case, so the :744 case moved to :747
+and the block now ends at :817). The runner is unchanged (SHA-256
+`563d1c5c…77c5e` before and after).
+
+| Check | Result |
+| --- | --- |
+| src/main/everywhere-runner.test.ts, `--no-env-file` | 49 pass, 0 fail, 355 assertions, 0.13 s |
+| packages/desktop `bun typecheck` (`tsgo -b`) | exit 0 |
+| The test file alone, scratch tsconfig.now.json, `tsgo -p` | exit 0, no errors |
+| Prettier drift, before then after the round | 80 then 80 lines; no change inside the new block (:515 onward) |
+| Mutations, third pass (run-muts2.sh, mut.test.ts rebuilt from this file, the pre-review copy kept as mut.v1.test.ts) | FIXED and M0-M5 give the same counts and red sets as the table above |
+| M6: :195 does not abort on a non-continue `heartbeat` answer | pre-review cases: 39 pass, 10 fail (the four existing heartbeat cases at :325-417 time out; :654; the five confirmed :690/:747 variants); round-one cases: 34 pass, 15 fail, the same ten plus the five ambiguous :690/:747 variants, which only the recorded flag turns red |
+
+Deferred:
+
+- EV-03's commit, the full turbo typecheck and the push, then its dispatches
+  (vector-everywhere.yml and typecheck.yml on `everywhere-finish`); their run
+  ids go in the next entry. vector-everywhere.yml green is this package's
+  last "done when" item.
+- For the lead (deviations log, EV-03): the brief's "no settle after
+  404/409" against the runner's bounded settle; whether a stop heard during
+  an admitted push should suppress the draft PR; the publication result
+  after a stop, cancel, lost job or sponsor 404 (server reply, permanent
+  pending receipts, the 32-receipt starvation); the no-safe-worktree and
+  needs-approval single settles.

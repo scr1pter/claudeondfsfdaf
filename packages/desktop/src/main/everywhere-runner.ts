@@ -316,8 +316,8 @@ export function createEverywhereRunner(deps: RunnerDeps) {
           }
         }
       }
-      await deps.jobs.settle({ jid, lease: job.lease.id, outcome, summary, branch, checks: "skipped" })
-      settled = true
+      // A lost acknowledgement replays this exact result, keeping its summary and local branch.
+      settled = await deliver({ jid, lease: job.lease.id, outcome, summary, branch, checks: "skipped" })
       await watched
     } catch {
       if (controller.signal.aborted && outcome === "failed") outcome = "cancelled"

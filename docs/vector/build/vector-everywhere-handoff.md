@@ -41,14 +41,15 @@ Independent review and re-review closed the five reported P1c findings; the opti
 - Earlier general-CI wording and Localmode fixture failures were repaired in `565c03ea8` and are covered by the successful final-source general run above; older-head receipts are retained as history.
 - Dedicated run `43228105045` exercised the new fences on healthy digest-pinned Valkey 7.2.14: erased-link/deleting-account admission before quota/index writes, readiness bounds and erasure, wrong-type unchanged poststate, in-flight native-revocation cleanup, `00`/`01` counter refusal, native-resource reservations, Jira drafts, delivery/claim/slot races and cooldown maximum ordering. The locally skipped Redis cases therefore have actual hosted proof at the final source. VE-10 remains an injected port with no real App registration. Linear directory distribution, native payload/permission qualification and the private result surface remain explicit gates.
 - Component tests do not qualify a real laptop, relay, platform app or Actions workflow. The explicit safe-worktree capability, its physical placement, signing-key handoff and R-M2 offline shell remain unwired/unproven here. R-M3's screened outward Brain audience remains a separate prerequisite; VE-08 proves personal-fact exclusion, not that entire audience contract.
-- **Runner abort matrix (2026-11-15, re-read at `0ee486e3`).** Most cases exist in packages/desktop/src/main/everywhere-runner.test.ts:
-  - every approval rejected (:296), and an engine question rejected (:305);
-  - a server `stop` and `lost` answered to `started` and `heartbeat` (:324-358);
-  - the actual jobs client's HTTP 404 and 409 on `started` and `heartbeat` (:360-416);
-  - five minutes without a heartbeat acknowledgement (:419), and an acknowledgement keeping a live job past the first lease boundary (:461);
-  - toggle-off, Stop and the deadline (:488), and recovery (:505).
+- **Runner abort matrix (2026-11-15; complete at component level by EV-03, CI pending).** packages/desktop/src/main/everywhere-runner.test.ts, line numbers after EV-03:
+  - every approval rejected (:297), and an engine question rejected (:306);
+  - a server `stop` and `lost` answered to `started` and `heartbeat` (:325-359);
+  - the actual jobs client's HTTP 404 and 409 on `started` and `heartbeat` (:361-417);
+  - five minutes without a heartbeat acknowledgement (:420), and an acknowledgement keeping a live job past the first lease boundary (:462);
+  - toggle-off, Stop and the deadline (:489), and recovery (:506);
+  - EV-03: a lost acknowledgement of a `held` result replays it exactly, with its branch (:538); `stop` and `lost` answered to `pushing` (:566); the actual client's 404 and 409 on `pushing` (:611); a `stop` heard on a heartbeat after `pushing`, before the push is admitted (:654); a switch `stop` during an admitted confirmed or ambiguous push (:690); a `stop`, `lost`, 404 or 409 heartbeat during an admitted push whose publication settle is refused (:747).
 
-  Still missing: `stop`, `lost`, 404 and 409 answered to the `pushing` report (everywhere-runner.ts:286) and after the push is admitted. Lane package EV-03 adds them. Complete the matrix before activating the laptop route.
+  EV-03 fixed one runner defect (the `held`/`no-changes` settle now replays its exact result, everywhere-runner.ts:320). This is component-level evidence only: no real laptop, relay or jobs server. Two points wait for the lead (deviations log, EV-03): the brief's "no settle after 404/409" against the runner's bounded settle, and whether a stop heard during the push should suppress the draft PR.
 - P3, P4, Surfaces and go-live retain their specified merge and owner gates. No registration, credentials/settings change, paid inference, PR, release or main merge occurred in this continuation.
 
 **What Vector everywhere is:** an @Vector bot on GitHub, Slack, Linear and Jira that is local-first.
@@ -116,6 +117,8 @@ Each item below is also in the deviations log.
 - **Secret scan.** `decodeSettle` has no secret scan, because the server sanitizes again in `renderResult`.
 - **Codium's ErasePart shape.** The contract's guess was wrong; it is `{id, configured(), requires?, erase(account, context)}`, and `EVERYWHERE_ERASE_PART` follows it. Codium registers it in its own file (R-C9).
 - **Native disconnect revocation:** the production Slack factory now opens and revokes only its own sealed bot token before erasure. Custom injected exchange transports own their revocation port; Linear now seals rotating credential pairs and revokes its own refresh grant; Jira remains in its later package scope.
+- **Publication under a stop or cancel (EV-03, open).** Under the stop switch the jobs API answers a publication settle 200 `stop` without recording it; the desktop counts that as delivered and clears its receipt, and the platform reply says the run was cancelled, with no branch or PR. After a platform or user cancel, a lost job or a sponsor 404 during the push, the server refuses the publication settle, so the receipt stays pending, recovery re-sends it on every start, and 32 such receipts would stop the computer taking jobs. A stop heard during the push still opens the draft PR (pinned; open question). The follow-up is named in the deviations log's EV-03 entry.
+- **Single settles outside the push boundary (EV-03, open).** The no-safe-worktree and needs-approval settles are still sent once; a lost acknowledgement there is replaced by a `failed` result. The follow-up routes both through `deliver`.
 
 ## How CI runs on this branch
 
