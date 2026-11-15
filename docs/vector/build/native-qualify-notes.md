@@ -123,7 +123,7 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-1 | Allow native Shell dispatch from the lane and classify keeper destination errors by a fixed errno enum | Once, `{"diagnostic_cell": true}`, in the commit step after the push, gated on guard-unit | Committed (see below); the guard-unit result and the native dispatch run/job IDs and head are recorded in the dispatch log |
 | NQ-2 | Prove owned background cleanup under required isolation on Linux, and correct C9 | None (typecheck; test.yml at the lane end) | Committed (see below); passes locally; the Linux engine shard of `test.yml` runs it at the lane end |
 | NQ-3 | Refuse at admission any mask whose ancestors the keeper cannot search | Once, `{"diagnostic_cell": true}` | Committed (see below; D45); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log |
-| NQ-4 | Inventory direct process spawn sites and their isolation stance | None (typecheck; test.yml at the lane end) | Planned |
+| NQ-4 | Inventory direct process spawn sites and their isolation stance | None (typecheck; test.yml at the lane end) | Committed (see below; D56); passes locally; the engine shards of `test.yml` run it at the lane end |
 | NQ-5 | Mask the runner home instead of its unreachable temporary leaf | Once, `{"diagnostic_cell": true}` | Planned |
 | NQ-6 | Native baseline cell follow-up A | Once, `{"diagnostic_cell": true}` | Planned |
 | NQ-7 | Native baseline follow-up B and the full matrix | Exactly one: the diagnostic cell, or `{"diagnostic_cell": false}` (eight cells) only if the diagnostic cell is green with the `owned` refusal case. Any full-matrix spend beyond that one bounded dispatch is owner-gated. | Planned |
@@ -135,7 +135,8 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | --- | --- | --- | --- | --- | --- | --- |
 | NQ-1 | [43660129312](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660129312) (`workflow_dispatch`, attempt 1, failure) | `132647364562` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `597dbcc922b44a0e53e0c311cbe416b26cdf6252` | `{"diagnostic_cell": true}` (the run has this single job) | `prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created` (entry `CalledProcessError` exit 1; control `native-prepare` `CalledProcessError` exit 125; transport `close` `ChildExit` exit 1) | Gate: guard-unit [43660083062](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660083062) passed at the same head (typecheck [43660085781](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660085781) passed too). Steps 1-12 passed: control policy (3 pass, 0 fail, 33 `expect()` calls), pure Python (`Ran 35 tests` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" failed (exit 125). Steps 14-16 (seed, verify, lifecycle witness) were skipped. Step 17 "Always finish the exact owned native operation; missing state is refused" printed `cleanup-proof` (entry `RuntimeError`; control `native-cleanup` exit 125) and reports conclusion `success` in the API. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'failure' 'skipped' 'failure'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded the receipts (artifact `14139517979`). |
 | NQ-2 | None: not a native package | | | | | Only the runner's automatic `native-guard-unit.yml` and `typecheck.yml` dispatches follow the push. |
-| NQ-3 | Pending: dispatched in the commit step after the push, once guard-unit and typecheck pass at the pushed SHA; the run, job, head and gate results (or a skipped dispatch) are recorded from the API by a later package, at the latest NQ-5 (D45) | | | `{"diagnostic_cell": true}` | Expected, not a result: `prepare-mask-host-temp-keeper-search` (see the NQ-3 section) | Gate: guard-unit (`Ran 40 tests` ... `OK`) and typecheck must both pass at the pushed SHA. |
+| NQ-3 | [43675930370](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675930370) (`workflow_dispatch`, attempt 1, failure) | `132695971881` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `f05f991616584eb0542f9ac1fead49e730ba1027` | `{"diagnostic_cell": true}` (the run has this single job) | `prepare-mask-host-temp-keeper-search` (entry `RuntimeError`, errno and exit null; control `native-prepare` `CalledProcessError` exit 125; transport `close` `ChildExit` exit 1) | Gate: guard-unit [43675734735](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675734735) (job `132695351609`, `Ran 40 tests in 0.132s` ... `OK`) and typecheck [43675737341](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675737341) both passed at the same head. Steps 1-12 passed: control policy (3 pass, 0 fail, 33 `expect()` calls), pure Python (`Ran 40 tests in 0.197s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" failed (exit 125). Steps 14-16 (seed, verify, lifecycle witness) were skipped. Step 17 "Always finish the exact owned native operation; missing state is refused" printed transport `close` `ChildExit` exit 1 and control `native-state` `FileNotFoundError` `ENOENT` (no entry record), exit 125, and reports conclusion `success` in the API. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'failure' 'skipped' 'failure'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded the receipts (artifact `14146243257`). |
+| NQ-4 | None: not a native package | | | | | Only the runner's automatic `native-guard-unit.yml` and `typecheck.yml` dispatches follow the push. |
 
 Before NQ-1, `list_workflow_runs` for `native-shell.yml` on `native-qualify` returned
 `total_count` 0, and `origin/native-qualify` did not exist.
@@ -144,6 +145,14 @@ NQ-2 filled the NQ-1 row from `list_workflow_runs`, `list_workflow_jobs`,
 `get_workflow_run` and the job log tail, read on 15 November 2026 (D21); at that read,
 43660129312 was still the only `native-shell.yml` run on `native-qualify`. NQ-3
 interprets this row and does not record it again.
+
+NQ-4 filled the NQ-3 row from `list_workflow_runs` (`total_count` 2 for `native-shell.yml`
+on `native-qualify`; 43675930370 is the newer), `list_workflow_jobs` for that run and for
+guard-unit run 43675734735, `get_workflow_run` for both gate runs, and the two job log
+tails, read on 15 November 2026 (D52). The row records those API and log facts only. As
+a plain string comparison, the entry stage equals the one the NQ-3 section lists first
+in its interpretation table; reading what it says about the blocking ancestor is
+NQ-5's, and NQ-4 does not interpret it.
 
 ## NQ-1, 15 November 2026
 
@@ -841,3 +850,333 @@ From the worktree, one Bun workload at a time through the lock:
   as NQ-1's did, because a commit cannot record the dispatch that follows its own push.
   The dispatch-log row stays pending in that commit; the commit step's report carries the
   gate run IDs and the native run ID, and a later package fills the row from the API.
+
+## NQ-4, 15 November 2026
+
+All citations are at the lane head `f05f9916`. Of the files the inventory cites, only
+`github.isolation.ts` changed since `0ee486e3` (NQ-1 and NQ-3 grew `FAILURE_STAGES`), so
+its spawn line is the HEAD line (D46).
+
+### Precondition
+
+Read from the API on 15 November 2026: `list_workflow_runs` for `native-shell.yml` on
+`native-qualify` returns `total_count` 2. The newer run, `43675930370`, is the NQ-3
+dispatch and is `completed` with `failure` at `f05f9916`; its facts are now in the
+dispatch log. No native run was in progress. NQ-4 is not a native package and does not
+depend on that run.
+
+### What landed
+
+- `packages/engine/test/spawn-inventory.test.ts`, the only code change. It imports only
+  `bun:test` and `node:path`, so Core never reaches into Engine. It transpiles every
+  non-test source file under `packages/core/src` and `packages/engine/src` (1235 files,
+  about 0.65 s) and holds eleven tests:
+  - T1: the scan sees each primitive, and ignores comments and look-alikes (28 snippets,
+    plus one `.tsx` case);
+  - T2: the set of files that reach a spawner equals the table below; it fails on any
+    unlisted file (named with its labels) and on any stale entry;
+  - T3: `type-only` entries reach a process module in types only, and every other entry
+    reaches one at run time;
+  - T4: each `launch` entry calls `ProcessIsolation.launch(` or `commandPlan(`, starts at
+    least one `isolated.file` with `isolated.args` and no shell of its own, and makes no
+    other start the check can see, except one listed helper call: no other call through a
+    name bound from a process module (a named, default or namespace import, or a
+    destructured or `const`-bound `require(…)` or `import(…)`), no member call on an
+    inline `require(…)` or `import(…)` of one, and no run-time primitive whose calls the
+    check cannot follow (Bun's own spawners and `Bun[]`/`"bun"` imports, Effect's
+    platform layers). The helper list fails when stale;
+  - T5: both `required-refusal` entries contain `ProcessIsolation.required()` and spawn;
+  - T6: the `#pty` import map in `packages/core/package.json` names exactly the two
+    `pty-backend` entries, only `core/src/pty.ts` loads them, and it calls
+    `ProcessIsolation.launch(`;
+  - T7: only `engine/src/task/shells.ts` loads the Windows holder, and it still asks
+    `isolationRefusal({ platform: process.platform, required: ProcessIsolation.required() })`
+    (the refusal's behaviour is S4-3's test);
+  - T8: the plugin host's only primitive is `Bun.$`, and it calls
+    `ProcessIsolation.assertExternalCodeAllowed()`;
+  - T9: only `engine/src/mcp/stdio.ts`, a `launch` entry, constructs
+    `StdioClientTransport`;
+  - T10: only `core/src/cross-spawn-spawner.ts` builds Effect's `ChildProcessSpawner`
+    service (`make`/`makeHandle` imported from it, a namespace import of it,
+    `ChildProcessSpawner.make`/`.makeHandle`/`.of`, or `Layer`/`Context`/`Effect` called
+    with it as the first argument);
+  - T11 (next to T4 in the file): T4's per-file check on 14 snippets, one per form: a
+    planned call, a call on another file, a default-import member call, a cross-spawn
+    default member call, `const`-bound `require` and `await import`, inline `require` and
+    `import()` member calls, `Bun.spawn`, `Bun.spawnSync`, `Bun.$`, a `globalThis.Bun`
+    destructure, a `"bun"` import and an Effect platform layer.
+- No production source, workflow, flag, environment or configuration switch changes.
+  `LinuxIsolationBuild.enabled` and `entrySHA` and `ProcessIsolation.FLOOR` are untouched,
+  and native plus owned stays refused.
+
+### Stance vocabulary
+
+- `launch`: routes every process through the ProcessIsolation launch decision and starts
+  only what it returns. While FLOOR and the native build are off, that is the command
+  unchanged, or a refusal off Linux under required isolation (`decide`,
+  `process-isolation.ts:313-330`). No site is isolated today.
+- `pty-backend`: a PTY adapter behind `#pty` that only `core/src/pty.ts` loads, after its
+  own launch decision.
+- `required-refusal`: refuses to spawn while `ProcessIsolation.required()`.
+- `fixed-helper`: a fixed system program with fixed arguments; no caller-chosen command.
+- `type-only`: names a process module in types only.
+- `windows-holder`: the Windows Job Object holder, which only ShellJobs loads and which
+  ShellJobs refuses under required isolation.
+- `runner`: the CI job's own controller, run before or after the agent or in a separate
+  job, never as the agent.
+- `cli`: a person's own command, which a hosted agent cannot reach.
+- `plugin-host`: hands a spawner to plugins, whose external code is refused under
+  required isolation.
+- `url-opener`: opens a URL in the operating system's browser on a person's request.
+- `re-export`: re-exports a process module's class without constructing it.
+
+Principle 5 ("every spawn site consults the isolation floor") holds for the 6 `launch` and
+2 `pty-backend` entries. The other 23 are listed exceptions, each with its reason.
+
+### Stance table
+
+| File | Stance | Why (HEAD lines) |
+| --- | --- | --- |
+| `core/src/cross-spawn-spawner.ts` | launch | The Effect spawner: `ProcessIsolation.launch` (:432), or `commandPlan` in a native build under required isolation (:413; owned commands refused at :411), inside `Effect.try`; cross-spawn starts `isolated.file` with `isolated.args` and `isolated.options` (:452). Its Windows `killGroup` taskkill (:523) is the one listed helper call (F7). |
+| `core/src/untrusted-git.ts` | launch | `ProcessIsolation.launch` (:66), then `execFile(isolated.file, isolated.args)` (:68). |
+| `core/src/brain/document/ocr.ts` | launch | `ProcessIsolation.launch` (:280), then `spawn(isolated.file, isolated.args)` with `shell: false` (:282). |
+| `engine/src/util/process.ts` | launch | `Process.spawn`, used by LSP servers and installers: `ProcessIsolation.launch` (:81), then cross-spawn with `isolated.file`, `isolated.args` and `isolated.shell` (:82-84). Its `child_process` import is a type (F3). |
+| `engine/src/cli/cmd/github.bundle.ts` | launch | The bundle's Git helper: `ProcessIsolation.launch` (:732), then `spawn(isolated.file, isolated.args)` (:734). |
+| `engine/src/mcp/stdio.ts` | launch | Local MCP servers: `ProcessIsolation.launch` (:13), then the SDK's `StdioClientTransport` starts `isolated.file` with `isolated.args` (:14-16) (F4). |
+| `core/src/pty/pty.bun.ts` | pty-backend | The bun-pty adapter behind `#pty`; only `core/src/pty.ts` loads it (:21), and it spawns after `ProcessIsolation.launch` (:241-242). |
+| `core/src/pty/pty.node.ts` | pty-backend | The `@lydell/node-pty` adapter (a `createRequire` load, :12) behind `#pty`; same loader and decision. |
+| `core/src/directory-identity.ts` | required-refusal | The fixed Python metadata reader: refuses while isolation is required at admission (:700) and right before `spawn` (:748-749). |
+| `core/src/read-only-git.ts` | required-refusal | The fixed Python Git verifier: `requireValue(!ProcessIsolation.required())` at open (:1221) and right before `spawn` (:569-570). |
+| `core/src/owned-process.ts` | fixed-helper | `groupEmpty` runs `/bin/ps -A -o pgid=,stat=` with `untrustedChildEnvironment` during an owned stop (:79); no caller input reaches its argv. |
+| `core/src/pty/process.ts` | fixed-helper | `foreground` runs `ps -o tpgid= -p <pid>` for the PTY's own pid (:55), resolved through `PATH` with the engine's environment (F8). |
+| `core/src/shell.ts` | fixed-helper | `killTree`'s Windows-only `taskkill /pid <pid> /f /t` (:38): a fixed argv, resolved through `PATH` and the working directory, with `untrustedChildEnvironment` (F7). |
+| `core/src/config/managed.ts` | fixed-helper | Company-policy readers: `plutil`, `ls -lde`, `reg.exe` and `powershell.exe` at absolute paths with minimal environments (:312, :343, :410, :529). |
+| `core/src/local-mode/hardware.ts` | fixed-helper | Vector Local's hardware read: `vm_stat` or `nvidia-smi` with fixed arguments, found with `which` outside the repository, with the engine's environment (:151) (F9). |
+| `engine/src/lsp/launch.ts` | type-only | Uses the `ChildProcessWithoutNullStreams` type; starts servers through `Process.spawn` (:12). |
+| `engine/src/lsp/server.ts` | type-only | Uses the same type; starts servers through `lsp/launch.ts` and `Process.spawn`. |
+| `engine/src/tool/shell/windows-process.ts` | windows-holder | The Job Object holder (System32 `powershell.exe`, :182). Only `task/shells.ts` loads it (:23, used at :610), and `ShellJobs.start` refuses a Windows background command while isolation is required (`isolationRefusal` :96, called at :464). SPAWN-3 (the holder's own guard) is the review-fixes lane's. |
+| `engine/src/cli/cmd/github.isolation.ts` | runner | The native adapter's control transport (:1116). Only `github.sandbox.ts` loads it; it runs as the runner in `vector github sandbox prepare` and `finish`. |
+| `engine/src/cli/cmd/github.sandbox.ts` | runner | `vector github sandbox prepare|run|finish`, Linux-only. It sets up the sandbox and launches the agent as `vector-agent` (:800); the agent never runs this file. |
+| `engine/src/cli/cmd/github.publish.ts` | runner | `vector github publish`, in the separate publish job after the agent job. It runs Git with hooks, helpers and credentials disabled (:309) (F6). |
+| `engine/src/cli/cmd/ship.ts` | runner | The hidden `vector ship capture`, in Ship Desk's own job, which holds only a capture ticket (`captureEnvironmentProblem` :65, checked at :556). There it runs the repository's start command through `sh -c` (:212), Git (:270) and Chrome (:304), unisolated by design (F12). |
+| `engine/src/cli/cmd/db.ts` | cli | `vector db` opens `sqlite3` on the person's local database (:39). |
+| `engine/src/installation/standalone.ts` | cli | A Windows-only `cmd.exe` start of the upgrade or removal script (:227), from `vector upgrade`, `vector uninstall` or the app's upgrade request. A hosted agent runs only on Linux. |
+| `engine/src/plugin/index.ts` | plugin-host | Hands `Bun.$` to server plugins (:201). External plugin code is refused while isolation is required (`assertExternalCodeAllowed`, :124-139), and the internal plugins never call it (F2). |
+| `engine/src/mcp/index.ts` | url-opener | MCP OAuth opens the authorization URL (:1288), from `vector mcp auth` (`cli/cmd/mcp.ts:260`) or the app's MCP auth request (`handlers/mcp.ts:69`); no agent tool calls it. Its stdio import (:13) is a type; servers start through `mcp/stdio.ts` (:490). |
+| `engine/src/plugin/snowflake-cortex.ts` | url-opener | The external-browser sign-in opens the authorize URL (:484) inside the auth method's `authorize` (:474), reached only from a person's provider sign-in: `ProviderAuth.authorize` (`provider/auth.ts:236`) from the provider authorize route (`handlers/provider.ts:115`), or `vector providers login` (`cli/cmd/providers.ts:101`). It is an internal plugin, so `assertExternalCodeAllowed` does not cover it; no agent tool reaches provider sign-in. |
+| `engine/src/cli/cmd/web.ts` | url-opener | `vector web` opens the local UI (:75, :79). |
+| `engine/src/cli/vector-account.ts` | url-opener | `vector login`, or the account gate on a person's first interactive run (`ensureVectorAccount`, called from `index.ts:164`, logs in at :438 and refuses without a TTY at :431), opens the approval page (:250). |
+| `engine/src/cli/cmd/invite.ts` | url-opener | `vector invite --open` (:138). |
+| `engine/src/mcp/sdk.ts` | re-export | Re-exports `StdioClientTransport` (:17) for `mcp/index.ts`'s `instanceof` check (:676); only `mcp/stdio.ts` constructs it (T9). |
+
+Counts: launch 6, pty-backend 2, required-refusal 2, fixed-helper 5, type-only 2,
+windows-holder 1, runner 4, cli 2, plugin-host 1, url-opener 5, re-export 1 (31).
+
+### Search model
+
+- Primitives. Process modules: `child_process` (with or without `node:`), `cross-spawn`,
+  `bun-pty`, `node-pty` (with or without `@lydell/`), the MCP SDK's
+  `client/stdio(.js)`, `open`, and Effect's platform index or `NodeServices`,
+  `NodeContext` or `NodeChildProcessSpawner` subpath (node, bun or `-shared`). Bun's own:
+  `Bun.spawn`, `Bun.spawnSync`, `Bun.$`, `Bun.openInEditor`, `Bun[...]`,
+  `globalThis["Bun"]` (or `self`), and `const { ... } = Bun` (or `globalThis.Bun`,
+  `self.Bun`), an import of `spawn`, `spawnSync`, `$` or `openInEditor`, a
+  default import or a namespace import from `"bun"`, and any `NodeChildProcessSpawner` or
+  `BunChildProcessSpawner` name.
+- Run time versus types. `Bun.Transpiler` (`ts`, or `tsx` for `.tsx`/`.jsx`) erases
+  comments, `import type`, `import { type X }` and `typeof import()`, and keeps value
+  imports. The run-time labels are read from its output. A process module that matches
+  only the raw text is a type-level reference, so a quoted module name in a comment fails
+  closed; a Bun member access in a comment does not count.
+- `open` and Effect's platform index count only in import positions (`from`, `import(`,
+  `require(`), because `"open"` is a common event name and `core/src/effect/platform-node.ts`
+  names the index in a comment.
+- Effect `ChildProcess` users need no entry: they spawn through the `ChildProcessSpawner`
+  service, which only `cross-spawn-spawner.ts` builds (T10), and no core or engine file
+  imports a platform spawner layer (T2). At HEAD those users are 18 files
+  (`owned-process.ts` imports types only):
+  - core: `git.ts`, `process.ts`, `ripgrep.ts`, `ripgrep/binary.ts`, `tool/bash.ts`;
+  - engine: `format/index.ts`, `git/index.ts`, `installation/index.ts`, `mcp/index.ts`,
+    `project/project.ts`, `session/prompt.ts`, `snapshot/index.ts`, `task/shells.ts`,
+    `tool/registry.ts`, `tool/shell.ts`, `tool/shell/windows-process.ts`,
+    `tool/terminal.ts`, `worktree/index.ts`.
+  That list comes from a search at HEAD and is not frozen by the test.
+- Limits: a computed specifier (`import(name)`), aliasing beyond the patterns (a spawn
+  function or module handed on as a value and called elsewhere, `Bun` bound to another
+  name with `const B = Bun`, or a `createRequire(…)(…)` load followed by its calls), spawns
+  inside dependencies, other packages, scripts and `entry.py` are not seen (F10, F11).
+  T4 follows only the binding forms above; in a launch file that already reaches a
+  process module, a start through an alias of that module is not seen. T4's call window
+  is the text up to the first `)` or 160 characters after the call's name.
+
+### Findings
+
+- F1: `github.secrets.ts`, which the brief lists as a runner-side controller, starts no
+  process. It imports no process module, and its only match is a comment ("Bun.spawn was
+  given", :185). It is not in the table.
+- F2: `plugin/index.ts` hands `Bun.$` to plugins; the brief's table missed it. It is
+  justified as `plugin-host`. A search of `engine/src/plugin` found no `$` tagged
+  template and no `input.$`. No change.
+- F3: `util/process.ts` imports `child_process` for a type only and spawns through
+  cross-spawn, so the brief's three patterns would have called a real launch site
+  type-only. `cross-spawn` is a primitive.
+- F4: MCP stdio servers start through the SDK's `StdioClientTransport`
+  (`mcp/stdio.ts:11-20`), which no brief pattern sees. The SDK stdio specifier is a
+  primitive; `mcp/sdk.ts` and `mcp/index.ts` follow from it.
+- F5: the `open` package starts the operating system's URL opener in five files, all on
+  a person's request. `open` is a primitive, matched in import positions only.
+- F6: `github.publish.ts` runs in the publish job, so it is `runner`, not user CLI.
+- F7: `cross-spawn-spawner.ts:523` `killGroup` runs `NodeChildProcess.exec` (a shell, a
+  `PATH`-resolved `taskkill` and the engine's inherited environment) on Windows only.
+  `shell.ts:38` also starts a bare `taskkill`, which libuv resolves through the working
+  directory and `PATH`, though with `untrustedChildEnvironment`. Both run only for
+  unisolated processes, because Windows refuses every launch while isolation is required.
+  One follow-up for the review-fixes lane covers both: start
+  `%SystemRoot%\System32\taskkill.exe` with `untrustedChildEnvironment` and no shell. Not
+  fixed here (D54).
+- F8: `pty/process.ts:55` runs a `PATH`-resolved `ps` with the engine's environment,
+  unlike `owned-process.ts`. It is reached from the terminal tool's signal path
+  (`engine/src/tool/terminal.ts:651`). It is a Hands PTY file, so it is recorded for the
+  Hands lane and not fixed.
+- F9: `hardware.ts:151` `execFile` inherits the engine's environment, and `which` finds
+  the program through `PATH`. Minor; recorded.
+- F10: spawns inside dependencies are not inventoried, matching the egress inventory's
+  scope: `google-auth-library` (`build/src/auth/googleauth.js` and
+  `pluggable-auth-handler.js` import `child_process`), reached through `GoogleAuth` at
+  `core/src/plugin/provider/google-vertex.ts:45` and `engine/src/provider/provider.ts:806`;
+  `@aws-sdk/credential-provider-process` (`credential_process`), through
+  `fromNodeProviderChain` at `provider.ts:601` and `:625` and `amazon-bedrock.ts:100-101`;
+  and `@npmcli/arborist`, at `npm.ts:159-179` with `ignoreScripts: true`. Deferred.
+- F11: out of scope: other packages (desktop, app, cloud and the rest), scripts,
+  `entry.py` (the Python root-side native entry), and `worker_threads`, which start no
+  process.
+- F12: `ship.ts` runs the repository's own start command, Git and Chrome unisolated by
+  design. Its boundary is the credential-free job that `captureEnvironmentProblem`
+  enforces before capture (no OIDC request, no run token, no `VECTOR_CLI_TOKEN`), not the
+  agent sandbox. Recorded; no change.
+
+### Evidence (local)
+
+From `packages/engine`, one Bun workload at a time through the lock:
+
+- `bun test --timeout 30000 test/spawn-inventory.test.ts`: 11 pass, 0 fail, 23
+  `expect()` calls, before and after Prettier (after the review round, D55; it was 10
+  pass and 22 calls before T11).
+- `bun typecheck` (`tsgo --noEmit`): exit 0.
+- Prettier 3.6.2 (`node_modules/.bin/prettier --write`, through the lock) rewrapped the
+  test file; `git diff --check` is clean.
+- Mutations, from `/tmp/vector-v2/native/nq4/mutate.sh`, all rerun with the eleven
+  tests after the review round (`/tmp/vector-v2/native/nq4/mutate-review.log`). Each
+  edits one source file, runs the test file once, then restores it from
+  `/tmp/vector-v2/native/nq4/saved` and checks it with `cmp`; every one was restored:
+  - M1, `import { spawn as probe } from "node:child_process"` plus an export appended to
+    the unlisted `engine/src/util/error.ts` (the brief's synthetic unlisted import): T2
+    fails, naming `packages/engine/src/util/error.ts child_process` (10 pass, 1 fail);
+  - M2, `untrusted-git.ts` starts `git` instead of `isolated.file`: T4 fails (10/1);
+  - M3, every `ProcessIsolation.required()` in `read-only-git.ts` replaced by `false`: T5
+    fails (10/1);
+  - M4, `export { spawn as ptySpawn } from "./pty.bun"` appended to `pty/process.ts`: T6
+    fails (10/1);
+  - M5, `lsp/launch.ts:1` `import type` changed to a value import: T3 fails (10/1); the
+    transpiler keeps a value import even when only types use it. M5b, a real
+    `child_process` value import added there: T3 fails (10/1);
+  - M6, the comment `// Bun.spawn(["x"])` appended to `util/error.ts`: 11 pass;
+  - M7, `import { NodeServices } from "@effect/platform-node"` plus a use appended to
+    `util/error.ts`: T2 fails, naming `effect-platform` (10/1);
+  - M8, `ChildProcessSpawner.of(...)` appended to `core/src/process.ts`: T10 fails (10/1);
+  - M9, `util/process.ts` passes `shell: opts.shell` instead of `isolated.shell`: T4 fails
+    (10/1);
+  - M10, `export const probe = () => Bun.spawn(["git"])` appended to `untrusted-git.ts`
+    (the review's example; before D55 it passed all ten tests, per the review and by
+    reading the old T4, which saw only calls through imported names): T4 fails, naming
+    `packages/core/src/untrusted-git.ts Bun.spawn primitive` (10/1);
+  - M11, `import cp from "node:child_process"` and a `cp.exec("x")` call appended to
+    `untrusted-git.ts`: T4 fails, naming `cp.exec("x"` (10/1);
+  - M12, an inline `require("node:child_process").exec("x")` appended to `ocr.ts`: T4
+    fails (10/1);
+  - M13, an inline `(await import("node:child_process")).exec("x")` appended to
+    `github.bundle.ts`: T4 fails (10/1);
+  - M14, `const { spawn: probe } = globalThis.Bun` and a call appended to the unlisted
+    `util/error.ts`: T2 fails, naming `packages/engine/src/util/error.ts Bun[]` (10/1).
+- Plan-step probes (`/tmp/vector-v2/native/nq4/*-probe.ts`) only read sources and use
+  `Bun.Transpiler`; no production code ran.
+
+### Deferred
+
+- `test.yml` at the lane end runs the file in the engine shards (Linux and Windows); it is
+  platform-neutral and needs no network or process.
+- F7 (with `shell.ts:38`) and SPAWN-3 for the review-fixes lane; F8 for the Hands lane;
+  F10 (dependency-internal spawns).
+- The `native-guard-unit.yml` and `typecheck.yml` run IDs that follow the NQ-4 push are
+  in the commit step's report; a later package records them from the API (D56).
+
+### Deviations and decisions
+
+- D46. Citations are at `f05f9916`. The brief's `0ee486e3` line numbers still hold for
+  every cited file except `github.isolation.ts`, whose spawn is cited at its HEAD line.
+- D47 (brief's table corrected; critique accepted for `ship.ts`). The primitive set adds
+  cross-spawn, the MCP SDK stdio transport, `open` in import positions, Effect's platform
+  spawners, `Bun.openInEditor`, computed or destructured `Bun` access and imports from
+  `"bun"` (F3-F5). The table has 31 entries, not the brief's 24: `github.secrets.ts` is
+  dropped (F1), and `plugin/index.ts`, `mcp/stdio.ts`, `mcp/sdk.ts`, `mcp/index.ts`,
+  `snowflake-cortex.ts`, `web.ts`, `vector-account.ts` and `invite.ts` are added, with the
+  new stances `plugin-host`, `url-opener` and `re-export`. `github.publish.ts` (F6) and
+  `ship.ts` (F12) are `runner`, not `cli`: both run in their own CI job, and `runner` is
+  defined to cover that job, not only the agent job.
+- D48 (critique accepted, both major points). `launch` is defined by what the decision
+  returns today, and the notes and addendum say that no site is isolated today and that
+  principle 5 holds for 8 of the 31 entries. The Effect platform index and
+  `NodeServices`/`NodeContext`/`NodeChildProcessSpawner` subpaths are primitives, and T10
+  pins `cross-spawn-spawner.ts` as the only builder of the spawner service. Departure
+  from the critique: the platform specifiers count in import positions only, because
+  `core/src/effect/platform-node.ts` names the index in a comment and would otherwise need
+  an entry; an `import type` from it still counts as a type-level reference. The 18
+  Effect `ChildProcess` users are listed in the search model, not the critique's nine.
+- D49 (critique accepted). T4 requires `isolated.file` with `isolated.args` as the next
+  argument (or `command:`/`args:` for the SDK transport) and rejects a `shell:` other than
+  `isolated.shell` or `false` in the call window. One listed helper call is exempt (F7),
+  and the exemption fails when stale. The brief's "contains `ProcessIsolation.`" is
+  replaced by a call of `launch(` or `commandPlan(`.
+- D50. Run-time references come from `Bun.Transpiler` output and type-level ones from the
+  raw text (search model). T1 keeps one run-time case per primitive and a few type-only
+  and negative cases (26 plus one `.tsx` when this entry was written, 28 after D55), per
+  the critique's scope point. `INVENTORY` and
+  `HELPER_CALLS` use `as const` (with `satisfies` and a small `Stance` union) instead of
+  explicit annotations.
+- D51. Reachability checks beyond the brief: T6 (PTY backends only through `pty.ts`), T7
+  (the holder only through ShellJobs, and ShellJobs still asks the refusal), T9 (the MCP
+  stdio transport only in `mcp/stdio.ts`) and T10.
+- D52 (critique accepted). The NQ-3 dispatch-log row is filled here, as D45 allows, with
+  API and log facts only. The one comparison sentence is a plain string comparison with
+  the NQ-3 table; NQ-5 interprets the row.
+- D53. `native-isolation-status.md` and `process-ownership-followup.md` are unchanged,
+  because no isolation behaviour or ownership contract changes (as in D37).
+  `v2-spawn-review.md` gains a dated addendum only.
+- D54 (critique accepted for the grouping). F7 and `shell.ts:38` are one review-fixes
+  follow-up, not fixed here: the spawner is the hot spot, and both changes are
+  Windows-only behaviour that cannot be checked locally. F8 is a Hands PTY file. F9 and
+  F12 are recorded. F10 is deferred. The NQ-4 package row reads "Implemented, uncommitted"
+  until the commit step, as in D44.
+- D55 (review round one; all five non-blocking findings accepted). T4 was weaker than its
+  title: it saw only calls through named or namespace imports and destructured
+  `require`/`import()`, so a default-import member call (`cp.exec`), a `const`-bound
+  `require` or `await import`, an inline `require(…).exec(…)` and any `Bun.spawn`,
+  `Bun.spawnSync` or `Bun.$` in a launch file passed (the review found that appending
+  `Bun.spawn(["git"])` to `untrusted-git.ts` left all ten tests green). Now `imported` binds a default as `name`
+  and `name.`, `directCalls` follows `const`-bound `require`/`import()` and inline member
+  calls, and T4 counts every run-time primitive outside the six traced process modules as
+  unplanned (`unplannedCalls`). That covers the Bun-native set the review named, and
+  Effect's platform layers too; the alternative of pinning each launch entry's label set
+  was not taken, because a pin would let a reviewed Bun spawn through without a planned
+  or helper-call check. T11 unit-checks each form, and M10-M14 show the gaps closed. The
+  `Bun[]` pattern also matches a destructure from `globalThis.Bun` or `self.Bun` and a
+  `globalThis["Bun"]` access, with two T1 cases. T1's count was 26, not 27 as recorded;
+  it is now 28. The `vector-account.ts` reason names the startup account gate as well as
+  `vector login`; the review cited :430 and :437, and the HEAD lines are :431 (the TTY
+  refusal) and :438 (`login()`). The search model's limits now name the aliasing forms
+  T4 still misses, and the spawn review addendum is worded to the check.
+- D56 (commit step). The commit stages only this test file, `native-qualify-notes.md`
+  and `v2-spawn-review.md`, and dispatches nothing native. The package-table row reads
+  "Committed" in the NQ-4 commit itself, as in D45. Before the push, the commit step
+  reran the test file (11 pass, 0 fail), the engine `bun typecheck` and the full
+  `bun turbo typecheck --concurrency=2` with `TURBO_CACHE_DIR` inside the worktree.

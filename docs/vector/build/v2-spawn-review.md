@@ -416,3 +416,48 @@ belong to the review-fixes lane.
 product decision that stays with the owner. Until it is made, uncertain cleanup keeps
 failing closed: the row is failed and the slot stays held. §6 Q2 (delegate or refuse)
 also stays open.
+
+## Addendum, 15 November 2026: §4 principle 5 inventory (NQ-4)
+
+This is a dated addendum, and nothing above it was edited. The citations are at the
+`native-qualify` lane head `f05f9916`.
+
+Principle 5 ("every spawn site consults the isolation floor") now has a mechanical guard,
+`packages/engine/test/spawn-inventory.test.ts`. It lists the 31 core and engine source
+files that can start a process directly, each with a stance and a reason, and fails on any
+new file that reaches a spawner and on any stale entry. Stances: launch 6, pty-backend 2,
+required-refusal 2, fixed-helper 5, type-only 2, windows-holder 1, runner 4, cli 2,
+plugin-host 1, url-opener 5, re-export 1.
+
+Principle 5 holds for the 6 `launch` and 2 `pty-backend` entries only. The other 23 are
+listed exceptions with their reasons (fixed system helpers, the CI job's own controllers,
+a person's own commands, URL openers and similar). `launch` means that a site routes every
+process through the ProcessIsolation launch decision and starts only what it returns.
+While FLOOR and the native build are off, that is the command unchanged, or a refusal off
+Linux under required isolation; no site is isolated today.
+
+What the test asserts beyond the list:
+
+- each launch site calls `ProcessIsolation.launch` or `commandPlan`, starts
+  `isolated.file` with `isolated.args` and no shell of its own, and makes no other start
+  that the textual check can see: no other call through a name bound from a process
+  module, no member call on an inline `require` or `import()` of one, and no Bun or Effect
+  platform spawner. One exemption is listed, the Windows `killGroup` taskkill at
+  `core/cross-spawn-spawner.ts:523`. A start through an alias beyond the check's patterns
+  is not seen; the notes list those limits;
+- `directory-identity.ts` and `read-only-git.ts` refuse while
+  `ProcessIsolation.required()`;
+- the PTY backends load only through `core/pty.ts`, which runs the launch decision first;
+- the Windows holder loads only through ShellJobs, which still asks `isolationRefusal`
+  (the C2 guard; SPAWN-3 adds the holder's own guard in the review-fixes lane);
+- the MCP SDK's stdio transport is constructed only in `engine/mcp/stdio.ts`;
+- only `core/cross-spawn-spawner.ts` builds Effect's `ChildProcessSpawner` service, so the
+  Effect `ChildProcess` users spawn through it.
+
+§4.3's list (PTY, MCP stdio, `util/process.ts`, untrusted Git, the bundle Git helper and
+OCR) matches the `launch` and `pty-backend` stances; the inventory adds the Effect spawner
+itself. The test does not cover spawns inside dependencies, other packages, scripts or the
+Python native entry. The table, the findings (including the Windows taskkill follow-up
+for the review-fixes lane and `pty/process.ts`'s `ps` for the Hands lane) and the search
+model are in [`native-qualify-notes.md`](native-qualify-notes.md#nq-4-15-november-2026),
+NQ-4.
