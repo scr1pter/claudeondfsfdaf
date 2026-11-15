@@ -1387,7 +1387,7 @@ cd packages/core && bun test test/review/model-evidence.test.ts
 cd script/vectorscope-eval && bun test certify.test.ts
 ```
 
-## Outcome ledger (VS-46a)
+## Outcome ledger (VS-46a; schema 2, VS-46c and VS-46d)
 
 `outcomes.ts` reads what the review job already recorded on merged pull
 requests (the sticky state and the finding markers, through core
@@ -1434,11 +1434,70 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   a line it also names, escaped, left unreviewed or skipped). Per finding:
   its id, severity, category, outcome,
   stratum, whether someone other than the author and the bots engaged, the
-  resolver's role and a hashed dismisser. No login, title, body, path or code.
-  Logins are hashed with a random per-run key that is never stored, which
-  hides them in the file only: the PR numbers it keeps identify the people
-  involved to anyone who can read the repository, and two ledgers can be
-  joined on them.
+  resolver's role and a hashed dismisser. No login, title, body, path or code
+  in the clear. Logins are hashed with a random per-run key that is never
+  stored, which hides them in the file only: the PR numbers it keeps identify
+  the people involved to anyone who can read the repository, and two ledgers
+  can be joined on them.
+- **Schema 2 (VS-46c and VS-46d).** Collection writes `vectorscope-outcomes/2`
+  only: every v1 field with its v1 value, plus what the VS-46c and VS-46d
+  report sections need, as one schema change (addendum B §1.8 and §1.9).
+  - Per PR: `added` and `deleted` (the reviewed files' lines, as
+    `riskFeatures` counts them for the band, so present exactly when `band`
+    is); for a reviewed PR, `unreviewedFiles` (the state's last run) and
+    `humanComments` (issue comments, review-thread comments and reviews with a
+    body by someone other than the author and the bots).
+  - Per unfiltered fix (`fixes`): `commit`, the fix commit's index in
+    `fixCommits` (a link inside this ledger, not a new name), and `deleted`,
+    which splits that fix's blamed lines on the PR into `code` (still the PR's
+    under `-w -M -C`), `blank` and `comment` (dropped by the filter),
+    `whitespace` (put elsewhere by `-w` alone) and `moved` (kept by `-w` alone,
+    put elsewhere by `-M` and `-C`). The five sum to `lines`.
+  - `fixesFiltered`, the filtered label beside the unfiltered one: each fix's
+    deleted code lines blamed again with `-w -M -C`, skipping blank and
+    comment-only lines by a fixed prefix table per language (by extension, or
+    by name for Dockerfile, Makefile, `.gitignore` and the like; no block
+    tracking, so a `* ` continuation reads as a comment; `#` is never a
+    comment in C, C++, C# or Rust, and a shebang is code; a backslash is part
+    of a file's name on every system). An entry has the filtered `lines`
+    (never 0), the same `commit` link, and the hashed `location` (path and
+    git's hunk funcname) holding most of them. Every place the fix edited is
+    on its `fixCommits` entry.
+  - `sameAgent`, on both labels of an agent-stratum PR only: the fix's PR is
+    in the trusted `--agent-prs` record too, by the same author. The record
+    names PRs, not agents, and an untrusted marker never sets it. When the
+    call cap stopped the lookup of the fix commit's own PR, the answer is
+    unknown, not false: that fix's entries carry no `sameAgent`, and the PR
+    is marked `sameAgentIncomplete`.
+  - Ledger level: `subjects` (the base branch's first-parent commits in the
+    merge window, and how many are fix-prefixed or revert-prefixed, with
+    core's word lists anchored at the start, unlike `risk.ts`'s history count;
+    a GitHub merge commit is read by its PR title line) and `fixCommits`
+    (every fix commit the scan labelled: its day, kind, deleted lines by kind,
+    and at most 32 distinct hashed locations, `capped` beyond), which the
+    fix entries of both labels name by `commit`. A fix commit with no deleted
+    line blames no PR, so only `fixCommits` shows it (VS-46d item 2).
+  - Paths and funcnames are hashed like logins, under the same per-run key
+    and separated by kind. They are pseudonyms, not secrets: a PR number, its
+    merge time and a fix's days name the fix commit to anyone who can read the
+    repository, and its diff then links those hashes to their paths across
+    the whole ledger.
+  - The filtered blame covers the whole file at the fix's first parent: git
+    blames a moved line on its original commit over the whole file, but on
+    its mover when `-L` names only that line. It costs one whole-file blame per
+    fix commit and file with a deleted code line, plus one `-w` blame where the
+    two disagree, and a line count first (`git diff --numstat` against the
+    empty tree). A file the default skip rules leave out (lockfiles,
+    generated and vendored files), or one longer than 5,000 lines there, is
+    blamed by its deleted code lines' runs instead, as v1's own blame is, so
+    its cost is bounded as v1's is; a line moved into such a file may stay on
+    its mover. Its lookups share the 4,000 call cap after every v1 read, so
+    every v1 field but `problems` is as v1 collected it. A fix whose filtered
+    lookups the cap stopped gets no kinds or filtered entry, every PR in its
+    label window is marked `filteredIncomplete`, and one more line in
+    `problems` (and so in the report's Problems section) says so.
+  - Before sealing, `collect` checks the ledger against the same schema-2
+    rules `open` checks, and refuses, writing nothing, when it fails them.
 - **Outcomes.** A fix is confirmed only when its thread was resolved by
   someone who is neither a bot nor the PR author; the author's own resolve is
   `fixed-self-resolved` and the job's is `fixed-model-only`. Dismissals are
@@ -1459,6 +1518,8 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   `outcomes-report.md` (and the
   ledger itself only with `--ledger`) and prints the expiry: delete the files
   by then. `ci.ts unseal` refuses a ledger, because it does not check expiry.
+  A `vectorscope-outcomes/1` ledger still opens, read-only and as v1, against
+  VS-46a's own checks: `--ledger` writes it back as read, never upgraded.
 - **The report.** Internal (D12): it claims no accuracy and compares
   nothing. Every rate is paired with cycle time over its own PRs. A rate
   needs 50 settled findings (or 50 PRs or reviews); smaller cells show counts
@@ -1468,10 +1529,17 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   share, with a sensitivity row counting every fix) is reported. The band
   check needs 200 matured PRs with a band; overlapping low and high intervals
   mean `riskOf` is documented as a size, reach and sensitivity heuristic for
-  that repository, and history risk areas are never enabled there.
+  that repository, and history risk areas are never enabled there. Every v1
+  section is the same on a schema-1 and a schema-2 ledger. The schema-2
+  sections come with SF-04, SF-05a and SF-05b; until then a schema-2 report
+  adds none, and a schema-1 report adds one, "Schema 2 sections", that reads
+  "unavailable: a /1 ledger has no added or deleted counts".
 - **Deferred.** Proxy validation (VS-46b), history risk areas and the depth
   assignment (runner wiring and Q30), and the re-review share of spend (the
-  state keeps only a PR's total). Run on a real repository only after Q30.
+  state keeps only a PR's total). The VS-46c and VS-46d report sections
+  (SF-04, SF-05a, SF-05b). Schema 2 does not carry per-file fix data for
+  Effort@20% or a per-finding dismissal reason, so those sections read
+  unavailable on it. Run on a real repository only after Q30.
 
 The tests use a fake GitHub client and git repositories they build, and
 spawn no `gh`:

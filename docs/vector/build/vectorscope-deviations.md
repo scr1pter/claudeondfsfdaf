@@ -16774,3 +16774,586 @@ and the new variant name is refused everywhere.
   (the VS-44 row: item c, the planner and the pending variant, is now built
   in source) and `vectorscope-continuation.md`, and the correcting entry for
   the stale `:16000` sentence.
+
+## 2026-11-15 · VS-46c and VS-46d Ledger schema 2 collection fields (SF-03)
+
+Addendum B §1.8 (VS-46c) and §1.9 (VS-46d), collection half only, built on
+`scope-finish` at `f8543197` as lane package SF-03. It implements the SF-03
+plan as corrected by its critique; where a critique point was taken in
+another form, or a plan expectation turned out wrong, the reason is under
+"Critique points" or "Plan corrections". It is script-only:
+`script/vectorscope-eval/outcomes.ts`, its test file and the eval README. The
+VS-46c and VS-46d report sections are SF-04, SF-05a and SF-05b.
+
+- **Status: committed, the lead's answers pending.** Three parts of the /2
+  shape go beyond the task's field list and wait on the lead's yes or no:
+  decision (c) (the fifth kind, `whitespace`), decision (g) (`fixCommits`,
+  and with it the `commit` link of decision (m)) and decision (j)
+  (`unreviewedFiles` and `humanComments`). The commit gate committed them as
+  built, because the lane's commit rule puts decisions for the lead in the
+  gate's report, not in its blockers. `vectorscope-outcomes/2` becomes a
+  one-time schema name once a ledger is collected under it, and none has
+  been: collection needs the owner's sealing key and refuses to run in
+  Actions, a real repository waits on Q30, and `scope-finish` reaches `main`
+  only through the lead's PR. So each fallback, written under its decision,
+  stays applicable as a follow-up commit on `scope-finish` before that PR,
+  and T1's pins do not move under any of them. A later entry records the
+  outcome.
+
+- **Scope.** Addendum B §1.8 :185-204 (compatibility :200) and §1.9 :206-227
+  (items 2, 3, 9 and 10 :212-221, compatibility :223), at `f8543197`. The
+  spec cites `LedgerPull` at `outcomes.ts:207-228`; at the base it is
+  `:207-227`. Other citations at the base: `LEDGER_SCHEMA` `:69`, `collect`
+  `:674-729`, `readPull`'s `riskOf(riskFeatures(...))` `:895`, `fixHits`
+  `:1214-1269` (blame `:1243-1254`), `ledgerPull` `:1309-1349`,
+  `ledgerProblem` `:1469-1484`, `outcomeReport` `:1554-1711`,
+  `renderOutcomes` `:1810-1889`, `openCommand` `:2045-2075`. In the final file
+  (after review round one): `LEDGER_SCHEMA` `:76`,
+  `MAX_FILTERED_BLAME_LINES` `:120`, the types `:217-334`, `subjectCounts`
+  `:597`, `hashName` `:633`, `collect` `:857`, `commitPulls` `:1363`,
+  `fixHits` `:1447`, `filteredFixes` `:1539`, `blameAt` and `linesAt`
+  `:1629-1651`, `DeletedLineKind`, the table and `deletedLineKind`
+  `:1653-1698`, `ledgerPull` `:1739`, `ledgerFixCommit` `:1846`, the decoders
+  `:1937-2073`, `ledgerProblem`, `v1LedgerProblem` and `entriesProblem`
+  `:2079-2104`, `outcomeReport` `:2177`, `collectCommand` `:2611` (the
+  pre-seal check `:2662`), `openCommand` `:2678`.
+- **Test first.** At `f8543197`, source unedited, `outcomes.test.ts` gave
+  40 pass, 0 fail (421 expect calls). The byte-identity case (T1 below) was
+  then added with identity helpers (`v1Of` returned the ledger as it was,
+  `v1Only` the text as it was). It printed the base digests, which are pinned
+  as `V1_DIGESTS` in the test file, and the file then gave 41 pass, 0 fail.
+  The pins: VS-46a's ledger JSON per synthetic history (`collect` at NOW
+  `5050ae094062…`, `revertMerge` `867098113c47…`, `collect` at NOW + 60 days
+  `fbc83dcbbb68…`), the SHA-256 of every report section by heading, and the
+  GitHub call counts (32, 36, 32). A full-decision synthetic ledger
+  (`fullSynthetic`: 200 settled findings, every outcome and stratum, 200
+  banded matured PRs whose low and high intervals overlap, a problem) pins
+  all six v1 sections.
+- **What landed.**
+  - `LEDGER_SCHEMA` is `"vectorscope-outcomes/2"`. New exports:
+    `LEDGER_SCHEMA_V1`, `V1_UNAVAILABLE`
+    (`"unavailable: a /1 ledger has no added or deleted counts"`),
+    `MAX_FIX_LOCATIONS` (32), `MAX_FILTERED_BLAME_LINES` (5,000),
+    `OutcomeLedgerV1`, `LedgerPullV1`,
+    `LedgerFixV1`, `LedgerFix`, `LedgerFilteredFix`, `LedgerLineKinds`,
+    `LedgerLocation`, `LedgerSubjects`, `LedgerFixCommit`, `DeletedLineKind`,
+    `subjectCounts`, `deletedLineKind`, `hashName` and `v1LedgerProblem`.
+    `OutcomeLedger` and `LedgerPull` keep their names and extend the v1 types.
+  - New `LedgerPull` fields:
+    - `added` and `deleted`, from the same `riskFeatures` call that gives the
+      band, so they are present exactly when `band` is;
+    - `unreviewedFiles` and `humanComments`, on reviewed PRs (decision (j));
+    - per unfiltered fix (`fixes[]`), `commit` (decision (m)), `deleted` with
+      five kinds (`code`, `blank`, `comment`, `whitespace`, `moved`) and
+      `sameAgent`;
+    - `fixesFiltered`, the filtered label, beside `fixes` (matured PRs only):
+      `{days, lines, kind, commit, location: {path, fn?}, sameAgent?}`;
+    - `filteredIncomplete: true` (decision (h)) and
+      `sameAgentIncomplete: true` (decision (n)).
+  - New ledger-level fields `subjects` (`commits`, `fix`, `revert`) and
+    `fixCommits` (`date`, `kind`, `deleted` by kind, `locations`, `capped`;
+    decision (g)).
+  - Collection: `readPull` keeps the `riskFeatures` result. `fixHits` returns
+    `{hits, fixes}` and records, for each deleted line, its number and kind
+    (never its text: decision (q)) and which window PRs the unfiltered blame
+    put it on (blame porcelain's final line, now read as `final`). The new
+    `filteredFixes` runs after every v1 read and after the truncation
+    problems. `commitPulls` gains a `filtered` lookup over the same cache and
+    cap and a `mapped` lookup (v1's, undefined at the cap) for each fix
+    commit's own PR, and drops its unused `missed()` method. `collect`'s
+    command checks the ledger with `ledgerProblem` before sealing it
+    (decision (p)).
+  - Decoders: VS-46a's decoder is kept as `LedgerEntriesV1`, verbatim. The /2
+    decoder spreads its `.fields` and adds the new entries and rules: line
+    counts with the band; both labels together; `filteredIncomplete` only with
+    them; a fix without kinds only on a PR marked incomplete; the five kinds
+    summing to `lines`; filtered `lines` at least 1; `unreviewedFiles` and
+    `humanComments` exactly on reviewed PRs; `sameAgent` exactly on
+    agent-stratum PRs, absent there only on a PR marked
+    `sameAgentIncomplete`, which needs a missing flag; 16-hex location
+    hashes; fix plus revert subjects at most `commits`; `fixCommits[].date`
+    as YYYY-MM-DD; at most `MAX_FIX_LOCATIONS` locations; every fix entry's
+    `commit` names a `fixCommits` entry of its own kind. `ledgerProblem` refuses every schema but
+    /2. `v1LedgerProblem` checks a /1 ledger against the v1 decoder. Both
+    share `entriesProblem`, whose checks and messages are the old ones, in
+    their old order.
+  - `open`: a /1 ledger goes through `v1LedgerProblem`, renders every v1
+    section as before plus one "## Schema 2 sections" section reading
+    `V1_UNAVAILABLE`, is written back by `--ledger` exactly as read, and the
+    stdout says "It is a vectorscope-outcomes/1 ledger, opened read-only as
+    v1". USAGE says so under `open`. `outcomeReport` takes either schema and
+    reads only v1 fields (`OutcomeReport.unavailable` is set for /1 only).
+  - Tests: eleven new cases in `outcomes.test.ts`, fourteen after review
+    round one (below), new bad and good
+    /2 entries in the existing "every entry the report reads is checked"
+    case, and /2 helpers (`synthetic` gains `subjects` and `fixCommits`;
+    `pullOf` gains `fixesFiltered`, line counts with a band, and the
+    reviewed-PR counts).
+  - README "Outcome ledger (VS-46a; schema 2, VS-46c and VS-46d)": a schema-2
+    bullet (fields, kinds, the filter table, same-agent, subjects, fix
+    commits, the pseudonym caveat, whole-file blame and its cost, the shared
+    call cap), the /1 read-only note, the report note and the deferred items.
+- **How it works.**
+  - For each fix commit, and each file in its diff with a deleted code line,
+    one `git blame --line-porcelain --first-parent -w -M -C <sha>^1 -- <path>`
+    over the whole file (no `-L`). The exceptions are a path `classifyPath`
+    skips under the default rules (lockfiles, generated and vendored files)
+    and a file with more than `MAX_FILTERED_BLAME_LINES` lines at `<sha>^1`
+    (counted by `git diff --numstat <empty tree> <sha>^1 -- :(literal)<path>`).
+    Those are blamed with `-L` over the deleted code lines' runs, one call
+    per run as v1 blames them (decision (o)). Each deleted code line's commit
+    is looked up (`lookup.filtered`) and kept as a PR when it is a window PR
+    whose label window holds the fix (0 < days <= 90), as v1 does.
+  - Every deleted line on a PR P that the unfiltered blame (U) put on P is
+    classified, and the five counts sum to the v1 entry's `lines`:
+    - `blank` or `comment` by `deletedLineKind`;
+    - `code` when the filtered blame (F) also puts it on P;
+    - `whitespace` when F does not and `git blame -w` alone does not either;
+    - `moved` when F does not but `-w` alone does.
+  - The `-w` blame runs once per file (or once per run, for a bounded file),
+    and only when the file has a code line U and F disagree on.
+  - The filtered entry's `lines` counts the code lines F puts on P, and
+    `location` is the (path, hunk funcname) holding most of them, the first in
+    diff order on a tie, hashed. An entry exists only when that count is above
+    0, so a non-empty `fixesFiltered` means fixed, as `fixes` does.
+  - `subjects` counts first-parent commits with since <= at <= until (git
+    only). A GitHub merge commit (two parents and GitHub's merge subject) is
+    read by its body's first line when that line is not empty. The fix and
+    revert words are core's `FIX_SUBJECT` and `REVERT_SUBJECT`, anchored at
+    the start with their own flags.
+  - `fixCommits` keeps one entry per commit `fixKind` labelled in `fixHits`'s
+    range: from the window's first merge to 90 days after its last. Each
+    entry has the day only, the kind, all deleted lines by kind, and the
+    distinct hashed (path, funcname) of every hunk, add-only hunks included,
+    in diff order, capped. Every fix entry of either label names its entry
+    by `commit`, its index in history order.
+  - `sameAgent` is left out, and the PR marked `sameAgentIncomplete`, for a
+    fix whose own-PR lookup the call cap stopped (`lookup.mapped` gave
+    undefined). v1 reads that commit as before: `of` still gives no PR.
+- **Decisions.**
+  - (a) _Two lists._ The filtered label is a separate v1-shaped list. The
+    kinds sit on the unfiltered entries they decompose, and `location` on the
+    filtered entries (the primary label). `sameAgent` is on both (critique
+    11), because it depends on the fix and the PR, not on the filter.
+  - (b) _Whole-file blame._ The plan's probe (git 2.43.0) was reproduced in
+    `/tmp/vector-v2/scope/sf03/probe` with block lines under git's
+    20-character move threshold and blocks above it: whole-file
+    `-w -M -C` blames the moved line (within a file and to another file) on
+    the original commit, and `-L n,n` leaves it on the mover. T6 uses such
+    lines, so a per-line `-L` mutation fails T6 itself (with long lines it
+    survived T6). Cost: one whole-file blame per (fix commit, file with a
+    deleted code line), plus one `-w` blame per file with a disputed line,
+    and one `git diff --numstat` line count. Review round one bounded it
+    (decision (o)): skipped and oversized files are blamed by runs, as v1's
+    blame is. Recorded in the README.
+  - (c) _Whitespace is split from moves (critique 1, option 1)._ The fifth
+    count, `whitespace`, goes beyond the spec's four-field list (`code`,
+    `blank`, `comment`, `moved`). Item 3 asks for the share "split into whitespace,
+    comment and move", which four fields cannot carry on a one-time schema.
+    `blank` is not described as the whitespace share anywhere.
+    _Lead decision (pending):_ if the lead says no, delete `whitespace` (the
+    type, the decoder and the sum) and the `-w`-only blame, and fold the
+    count into `moved`. That is reversible before commit. It changes T5 (#11
+    becomes `{moved 2}`, and the `-w`-only blame assertion goes), the kinds
+    literals of T2, T6 and the decoder test, and the README's kinds bullet;
+    T1's pins do not move, since `v1Of` removes every /2 field.
+  - (d) _Prefix table only._ No block-comment tracking: a `* x` continuation
+    reads as a comment, and so does a C line that starts with `* `.
+    Extensions follow the table in the code and README. A file with no
+    extension is keyed by its lowercased name: Dockerfile, Makefile,
+    GNUmakefile, `.gitignore`, `.gitattributes`, `.dockerignore`,
+    `.editorconfig`. Further rules:
+    - `<!--` covers vue, svelte, astro, html, htm, xhtml, xml, svg, md and
+      markdown;
+    - css has `/* */` and `*` but not `//`, which scss and less keep;
+    - a shebang is code;
+    - `#` is code in C, C++, C#, Rust and as a PHP attribute (`#[`);
+    - `.m` is Objective-C;
+    - `CMakeLists.txt` and `Dockerfile.dev` get no rule;
+    - Python docstrings are code.
+  - (e) _Prefix-based subjects._ "fix-prefixed" (item 1) is start-anchored,
+    unlike `risk.ts`'s `countHistory`, which matches anywhere. "Add a fix for
+    x" is no fix here. Anchoring makes the two counts disjoint. The plan's
+    `!revert &&` guard was dead code (its mutation survived), so it was
+    removed.
+  - (f) _Same agent._ Both PRs are in the trusted record, with the same
+    non-empty lowercased author login. The record names PRs, not agents, so
+    two trusted PRs by different logins are not the same agent, and an
+    untrusted marker (`agent-signal`) never sets the flag. The flag exists
+    only on agent-stratum PRs.
+  - (g) _`fixCommits`, beyond the task's list (critique 5)._ Item 2's
+    untraceable share needs every fix commit, and a fix with no deleted line
+    blames no PR. Item 10 needs earlier fixes' locations. Without the field
+    both would need a /3.
+    - Mitigations, per the critique: the day, not the timestamp; at most 32
+      locations, `capped` beyond (the cap is a new constant); and the README
+      calls the hashes linkable per-run pseudonyms.
+    - Caveat: the day is a small gain. `mergedAt` plus a fix entry's `days`
+      already names the fix commit, so every hashed location in the ledger is
+      linkable to anyone who can read the repository.
+    - Caveat: the scan starts at the window's first merge, so item 10's
+      365-day prior-fix lookback is truncated for most PRs, and SF-05 must say
+      so.
+    - _Lead decision (pending):_ approve, or drop the field and record items 2
+      and 10 as unavailable on /2. Dropping it also drops `commit`
+      (decision (m)), `MAX_FIX_LOCATIONS`, `ledgerFixCommit`, the ledger-level
+      kind check, the location-cap test and the `fixCommits` and `commit`
+      assertions of T2, T5, T6, the own-cap test and the decoder test. T1's
+      pins do not move.
+  - (h) _The filtered pass and the call cap (critique 3)._ `lookup.filtered`
+    shares the v1 cache and cap but counts its own misses and pushes its own
+    problem line, after every v1 problem: "the API call cap was reached in
+    the filtered blame: PRs marked filteredIncomplete have an incomplete
+    filtered label". A fix commit whose filtered lookups the cap stopped gets
+    no attribution: its v1 entries lose `deleted`, and it adds no filtered
+    entry. Every PR in its label window is marked `filteredIncomplete`,
+    because the missed line's owner is unknown. So `moved` is never inflated,
+    a dropped filtered line is never silent, and every v1 field but
+    `problems` keeps its v1 value at the cap (tested). `problems` is a v1
+    field, rendered in the v1 "## Problems" section, so at the cap both gain
+    the filtered line after v1's own lines, which keep their text and order
+    (review round one, item 9). A separate /2-only `filteredProblems` field
+    was not added: the owner reads cap problems in one place, and the parity
+    claim is stated exactly instead.
+  - (i) _`fn` is git's hunk funcname_, as git prints it in the hunk header:
+    the default rule, or a built-in driver that the clone's `.gitattributes`
+    selects. It is hashed and only a label.
+  - (j) _`unreviewedFiles` and `humanComments`, beyond the task's list
+    (critique 2)._ Item 5's "reviewed, nothing posted, complete" proxy needs
+    the state's unreviewed count, and item 7 needs human-comment volume. Both
+    come from reads collection already makes (the state; issue comments,
+    review threads and reviews), on reviewed PRs only, where threads are read.
+    `humanComments` counts issue comments, review-thread comments and reviews
+    with a non-empty body (after trimming) by someone who is neither the
+    author nor a bot.
+    _Lead decision (pending):_ keep both, or drop them (with
+    `PullRead.humanComments`, their decoder rules, T2's assertion and the #3
+    review fixture) and have SF-05 print those strata as unavailable on /2.
+    T1's pins do not move.
+  - (k) _No report counts (critique 4)._ The plan's `CollectionCounts` and
+    its "## Schema 2 collection" section are dropped: the report sections
+    are SF-04's and SF-05's. A /2 report adds nothing, so on these histories
+    it is VS-46a's report byte for byte. A /1 report adds one section,
+    "## Schema 2 sections", reading `V1_UNAVAILABLE`, which SF-04 and SF-05
+    replace with one unavailable line per section.
+  - (l) _Per-section digests (critique 7)._ T1 pins one digest per report
+    section, so SF-04's change to the band-separation sentence re-pins only
+    "## Risk band against post-merge outcomes" (and only `V1_DIGESTS.full`,
+    the one history that reaches it).
+  - (m) _A `commit` link on every fix entry (review round one, item 6)._ Both
+    labels' entries carry `commit`, the fix commit's index in `fixCommits`.
+    Without it, the unfiltered label has no location at all, and an entry
+    can be matched to its fix commit only by its day, which two fixes on one
+    day share. With it, VS-46d item 10 (recurrence) can use every place the
+    fix edited, for either label, and leave out the fix's own row exactly.
+    It is an index, not a hash, and it links nothing the day did not
+    already: `mergedAt` plus `days` names the fix commit. It exists only with
+    `fixCommits`, so it follows decision (g).
+  - (n) _Same-agent unknown at the cap (review round one, item 2)._ v1's
+    own-PR lookup gave `[]` at the call cap, so `sameAgent` read `false`
+    ("not the same agent") where the answer was unknown, biasing item 9's
+    share down on capped runs. `commitPulls.mapped` returns undefined at the
+    cap, with v1's problem line; `of` is `mapped ?? []`, so v1 is unchanged.
+    A fix commit records `ownUnknown`, its entries carry no `sameAgent`, and
+    the PR is marked `sameAgentIncomplete`. The decoder allows a missing
+    flag on an agent PR only with the mark, and the mark only on an agent PR
+    with a missing flag. SF-05 leaves those fixes out of the same-agent share
+    and says how many.
+  - (o) _The filtered blame is bounded (review round one, item 7, taken in
+    another form)._ A file `classifyPath` skips under the default rules
+    (lockfiles, generated and vendored files), or one longer than
+    `MAX_FILTERED_BLAME_LINES` (5,000) at the fix's first parent, is blamed
+    with `-L` over its deleted code lines' runs, one call per run, as v1
+    blames it: its cost is v1's, and nothing is dropped. The line count is
+    `git diff --numstat` from the empty tree (SHA-1 or SHA-256, by the
+    commit id's length), with a `:(literal)` pathspec so a path named like a
+    pathspec is only a path; `diff` is already a READ_ONLY_GIT subcommand,
+    and `cat-file` is not used (owner Q18). The review proposed marking such
+    a fix's label window `filteredIncomplete` instead. That was not taken:
+    Renovate's default semantic titles ("fix(deps): update …") edit
+    lockfiles, so on such repositories nearly every PR would be marked and
+    the filtered label would be empty. The cost of the taken form is weaker
+    move detection in those files only: a line moved into one from far away
+    may stay on its mover. No `Bun.spawnSync` timeout was added: `localGit`
+    runs every v1 git call, and a timeout there would change v1.
+  - (p) _A pre-seal check (review round one, item 4)._ The collect command
+    runs `ledgerProblem` at its own clock before sealing and refuses, with
+    "The collected ledger fails its own check (…): it was not sealed.
+    Nothing was written.", writing nothing. So drift between `ledgerPull`
+    and the /2 decoder fails at collection, not as "malformed" at `open`
+    after up to 4,000 calls.
+  - (q) _Kinds, not text (review round one, item 8)._ `fixHits` computes each
+    deleted line's kind when it parses the diff and keeps `{line, kind}`, so
+    no deleted line's text outlives the diff it came from.
+    `deletedLineKind` takes a path's name with `posix.basename` (item 3), so
+    a backslash is part of a name on every system, as it is in git.
+- **Not carried by schema 2.** Per-file fix data for Effort@20% of
+  `order(files)` (unbuilt), and a per-finding dismissal reason (VS-35b's
+  classifier stays gated on the owner precision sample). SF-04 and SF-05
+  print those as unavailable on /2; adding either later is a /3. The
+  floor-moved count needs no field: SF-04 reads it from `score` against core
+  `RISK_CUTPOINTS`.
+- **Plan corrections.**
+  - The plan's T2 expected three hashed locations for #4's fix. git gives each
+    of its four hunks its own funcname context, so there are four.
+  - The plan's T5 fixture had no direct commit, and expected #11 as
+    `{moved 1}` under the four-field shape. The final fixture adds a direct
+    commit (230 days ago, before the window) whose line #11 reindents, and
+    #12 deletes it. So #11 is `{whitespace 2}`, and the same line is the
+    filtered pass's only new GitHub lookup, which the cap test needs.
+  - Subjects in that fixture are `{8, 3, 0}`.
+  - The cap test cannot use a small `maxCalls`. `PR_CALL_RESERVE` (200)
+    truncates every PR below it, so the fixture adds 200 empty commits that
+    v1 looks up, and the cap is the uncapped run's 227 calls minus one (226).
+- **Critique points.** Twelve; all taken, three in another form.
+  1. _Whitespace and move (major)._ Taken, option 1 (decision (c)); the lead's
+     yes is pending.
+  2. _Missing fields (major)._ Taken in part (decision (j)):
+     `unreviewedFiles` and `humanComments` are added. Effort@20% per-file
+     data and the dismissal reason are not (under "Not carried"). The lead's
+     yes on the two added fields is pending.
+  3. _Shared call cap (major)._ Taken (decision (h)). The test uses a
+     226-call cap, because of `PR_CALL_RESERVE` (plan corrections).
+  4. _Report scope (major)._ Taken (decision (k)).
+  5. _`fixCommits` (major)._ Taken with the mitigations (decision (g)),
+     approval pending. The timestamp point is weaker than stated, because the
+     same link exists through `days`.
+  6. _T7 (major)._ Taken. #10 (agent-account, trusted) is fixed by #12
+     (agent-account, trusted: `true`), by #13 (agent-account, not in the
+     record: `false`, decided by the record alone) and by #14 (other-agent,
+     trusted: `false`). A record that names #13 too flips it to `true`. The
+     record-removal mutation fails T7 (and T5).
+  7. _Per-section digests (minor)._ Taken (decision (l)).
+  8. _Anchoring and flags (minor)._ Taken: `new RegExp(…, FIX_SUBJECT.flags)`;
+     T3's "Fix rounding" case catches a dropped `i` (mutation below).
+  9. _Comment table gaps (minor)._ Taken (decision (d)).
+  10. _Git cost (minor)._ Taken in another form: recorded, no cap (decision
+      (b)); review round one then bounded it (decision (o)).
+  11. _`sameAgent` on one label (minor)._ Taken: on both.
+  12. _Process (minor)._ Taken. prettier and oxlint ran through
+      `vector-serial`. `VARIANTS` was recounted by importing `replay.ts`: 18
+      entries, 33 pending halves, 3 wired. CI belongs to the commit phase;
+      what the commit gate dispatched, and why `test.yml` is not among it,
+      is under "Tests actually run".
+- **Default and parity proof.**
+  - T1: on the three synthetic histories, `v1Of(ledger)` (the /2 ledger with
+    the schema named /1 and every /2 field removed, key order kept) has
+    VS-46a's JSON digest. Every report section has VS-46a's digest, the /2
+    report is exactly VS-46a's, and the GitHub call counts are VS-46a's, so
+    the filtered pass adds no call there.
+  - `fullSynthetic`'s six sections are unchanged as a /2 report and again
+    as a /1 report, with the one added section.
+  - At the cap, `v1Of` of the capped ledger equals the uncapped one's,
+    `problems` aside, which gains only the filtered line. At the own-PR cap
+    (decision (n)), `v1Of` is again equal, `problems` aside, which holds
+    v1's own cap line only.
+  - `git diff --stat` touches only `script/vectorscope-eval/outcomes.ts`, its
+    test, its README and this log: no runner, core, digest, app, provider or
+    session file. The import-graph case passes unchanged, so the import set
+    is unchanged.
+  - `READ_ONLY_GIT`, `GIT_HARDENING` and `FORBIDDEN_GIT_ARG` are unchanged,
+    and `-w`, `-M`, `-C` and `--numstat` pass the forbidden-argument check.
+    The line count is a `diff` (already allowed, with its hardening), not
+    `cat-file` (owner Q18). No new GitHub
+    endpoint: the filtered lookup is the existing `commits/<sha>/pulls`.
+  - Output stays sealed. Collection still refuses to start in Actions and
+    still checks the key first.
+- **Pin.** `REVIEW_PIPELINE_SOURCES` stays `aef0d5c84ed90782` and
+  `REVIEW_PIPELINE_REVISION` stays 4: no pinned file changed, and
+  `REVIEW_PIPELINE_FILES` lists no `script/` file.
+- **Replay variant.** None. `VARIANTS` is untouched: 18 entries, 33 pending
+  halves, 3 wired, counted by importing `replay.ts`.
+- **Desktop half.** Not applicable: the ledger is an owner-machine script,
+  and the desktop keeps no outcome ledger.
+- **Hand-offs to SF-04, SF-05a and SF-05b.**
+  - Read v1 fields through `LedgerPullV1`. For a /1 ledger, print each new
+    section as `V1_UNAVAILABLE`, replacing the single "## Schema 2 sections"
+    block, and re-pin the changed section digests in T1.
+  - Leave PRs marked `filteredIncomplete` out of every filtered-label rate,
+    and say how many there were. Their `fixes` entries may lack `deleted`.
+  - SF-04: base rates from `subjects`, `revertedDays` and both fix labels.
+    The size baseline from `added + deleted`, and the floor-moved count from
+    `score` against `RISK_CUTPOINTS`. The "never" sentence and
+    `bands.separation` are SF-04's.
+  - SF-05a and SF-05b:
+    - untraceable share: `fixCommits` with all three deleted counts at 0,
+      or `code` at 0 for the filtered label;
+    - the reattributed or dropped share: `blank + whitespace` against
+      `comment` against `moved`, or `whitespace` alone if the lead keeps the
+      whitespace field, which decides how "whitespace" is defined (decision
+      (c));
+    - the same-agent share, on both labels, leaving out fixes without
+      `sameAgent` on PRs marked `sameAgentIncomplete`, and saying how many;
+    - recurrence from `fixCommits` locations, for either label: an entry's
+      `commit` names its fix commit, whose own row is left out exactly; with
+      the truncated lookback (decision (g));
+    - item 5's proxy from `reviewed`, `unreviewedFiles === 0` and no
+      findings, labelled a proxy;
+    - item 7's volume from `humanComments`;
+    - Effort@20% and dismissal reasons as unavailable.
+- **Review round one** (ten findings, all non-blocking).
+  1. _Scope beyond the field list (decisions (c), (g), (j))._ Not decidable
+     here: the lead's answer is pending (the status line at the top). The
+     fallbacks and what each re-pins are under the decisions.
+  2. _`sameAgent` false when the own-PR lookup hit the cap._ Fixed
+     (decision (n)), with a cap fixture.
+  3. _`basename` is win32 on Windows._ Fixed: `posix.basename` (decision
+     (q)); T4 gains a `build\Makefile` case, which only a Windows leg can
+     fail on the old code.
+  4. _No /2 check before sealing._ Fixed (decision (p)), with a refusal test,
+     and every capped ledger of the cap-sweep test now passes `ledgerProblem`.
+  5. _`humanComments`' review term untested._ Fixed: #3 of the shared fixture
+     gains reviews by carol (a body: counted), dave (empty) and erin
+     (whitespace only), the author and a bot (none counted), and T2 pins #3
+     at 2. #3 already had a person's comment, so `humanReview` and T1's pins
+     do not move.
+  6. _No per-run link from a fix entry to its fix commit._ Fixed (decision
+     (m)), rather than only recording the limit.
+  7. _The filtered blame is unbounded._ Taken in another form (decision
+     (o)): bounded by runs, not marked incomplete. The reason is recorded
+     there.
+  8. _Deleted text kept to the end._ Fixed (decision (q)).
+  9. _"v1 fields and problems as v1 collected them" is not exact at the
+     cap._ Fixed by rewording the README and decision (h); no new field.
+  10. _Do not commit before the lead answers (c), (g) and (j)._ Taken in
+      another form at the commit gate: committed with the answers pending,
+      for the reason in the status line, and no ledger exists under /2, so
+      every fallback can still land before the lead's PR. The re-pins under
+      each fallback are stated: T1's do not move under any of them, T2, T5
+      and T6 and the decoder test do.
+- **Tests actually run** (each file alone from `packages/script`, through
+  `vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
+  `TMPDIR=/tmp/vector-v2/scope/sf03/tmp`):
+  - At `f8543197`: `outcomes.test.ts` 40 pass, 0 fail. With T1 added at the
+    base: 41 pass, 0 fail.
+  - Before review round one: `outcomes.test.ts` 51 pass, 0 fail (40
+    existing, one with added assertions, and 11 new):
+    - T1, byte-identical v1 fields and sections;
+    - T2, sizes, subjects, fix commits and the filtered label on the
+      existing repository;
+    - the location cap;
+    - T3, subject counts;
+    - T4, deleted-line kinds;
+    - T5, the filtered label with `-w`, blank and comment lines and every
+      kind, plus the git argument shapes;
+    - T6, moved lines;
+    - T7, same-agent;
+    - the call cap;
+    - T8, a /1 ledger opens read-only;
+    - T9, no writes on the filter and move histories.
+  - After review round one: `outcomes.test.ts` 54 pass, 0 fail (727 expect
+    calls). Three cases are new: the own-PR cap (decision (n)), the bounded
+    blame (decision (o): a lockfile, a file one line over the bound, one at
+    it and a small one, with a reindented line the bounded `-w` blame
+    settles), and the pre-seal refusal (decision (p)). Existing cases gained
+    assertions: `ledgerProblem` on every cap of the cap sweep, T2's #3
+    reviews, `commit` in T2, T5 and T6, a `build\Makefile` case in T4, and
+    nine bad and two good decoder entries. The v1 report tests gained only
+    `commit: 0` on their fix literals, for the type. T1's pins did not move.
+  - `ci.test.ts` 39 pass, 0 fail (regression), before and after round one.
+  - `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`: clean. `bun typecheck` in `packages/script`: clean.
+    Both re-run after review round one: clean. No package source changed, so
+    no package typecheck is owed beyond these. The full TURBO typecheck is
+    for the commit phase, before the push.
+  - `prettier --check` is clean on `outcomes.ts`, `outcomes.test.ts` and the
+    README, after review round one too. This entry was checked through
+    `--stdin-filepath`; the rest of this log is not prettier-clean at the
+    base and is untouched.
+  - `oxlint` on `outcomes.ts` and its test: 25 warnings, 0 errors. Only one
+    warning is on a line this diff touches: the open command's ledger cast,
+    `no-unsafe-type-assertion`, which the base had as `as OutcomeLedger`. The
+    new code's unused rest names, needless spreads and needless non-null
+    assertions were removed. After review round one: still 25 warnings, 0
+    errors, none on a line round one added.
+  - Review round one's mutations of `outcomes.ts`, each run against the whole
+    test file and restored, with the file's SHA-256 checked after each batch.
+    20 of 21 are caught (the number is the failing cases):
+    - `sameAgent` ignoring the unknown own PR: 1;
+    - no `sameAgentIncomplete` mark: 1;
+    - the own PR through v1's `of`: 1;
+    - no pre-seal check: 1;
+    - always whole-file: 1; always by runs: 3; no skip-rule bound: 1;
+      the size bound as `>=`: 1; no `:(literal)` pathspec: 1; an unbounded
+      `-w` blame: 1 (it survived until the bound fixture gained #42's
+      reindented line);
+    - drop `-w` from the filtered blame: 3; the filtered pass through v1's
+      lookup: 1;
+    - review bodies not checked: 1; not trimmed: 1; no reviews term: 1;
+    - the decoder without the `commit` check: 1; without the mark rule: 1;
+      with the mark unconstrained: 1;
+    - `commit` off by one: 9; the filtered `commit` always 0: 2;
+    - survived: `posix.basename` back to `basename`, which is the same
+      function on Linux; T4's backslash case fails on it only on Windows.
+  - Mutations of `outcomes.ts` before review round one, on that file, each
+    run against the whole test file, restored, and its SHA-256
+    (`8776eb9dd92e…`) checked after every restore. They were not re-run
+    after round one. 30 of 32 are caught (the number is the failing cases),
+    and two survive (the next bullets):
+    - drop `-w` from the filtered blame: 2;
+    - drop `-C`: 2;
+    - per-line `-L` filtered blame: 2 (T6, T5);
+    - drop the `-w`-only blame: 1;
+    - remove the comment table: 2;
+    - `#` as a comment in C: 2;
+    - shebang as a comment: 1;
+    - drop the merge-title rule: 1;
+    - `FIX_SUBJECT` anywhere: 1;
+    - `REVERT_SUBJECT` anywhere: 1;
+    - anchored words without the `i` flag: 2;
+    - `sameAgent` on agent-signal PRs: 3;
+    - `sameAgent` without the record: 2;
+    - unhashed path: 8;
+    - no domain separation in `hashName`: 1;
+    - the location tie to the last place: 2;
+    - the v1 decoder for /2: 2;
+    - /1 accepted by `ledgerProblem`: 1;
+    - /1 decoded with the /2 decoder: 1;
+    - the filtered pass through the v1 lookup: 1;
+    - no incompleteness mark: 1;
+    - a v1 value changed (the fix kind): 5, T1 among them;
+    - fix-commit time kept to the second: 7;
+    - no location cap: 1;
+    - human comments counting the author: 1;
+    - `unreviewedFiles` on every PR: 7;
+    - the /1 report without its unavailable section: 2;
+    - `--ledger` upgrading a /1 ledger: 1.
+  - Dropping `-M` (with `-C` kept) fails only T5's argument-shape assertion,
+    because `-C` implies `-M`.
+  - Survived: running the filtered pass before the truncation problems. No
+    fixture has both a truncated PR and a filtered miss, so the order is
+    recorded, not claimed.
+  - Survived: `riskFeatures` without `changed`. It changes only test-only,
+    and no synthetic PR is test-only. That is a gap in VS-46a's own tests,
+    outside SF-03's scope, and adding such a PR would move T1's pinned
+    digests.
+  - Commit gate, on the final tree, from `packages/script` as above:
+    `outcomes.test.ts` 54 pass, 0 fail (727 expect calls), run once with
+    `GITHUB_ACTIONS=false` and once with `GITHUB_ACTIONS=true` as CI sets it.
+    The eval tsconfig, `bun typecheck` in `packages/script` and the full
+    TURBO typecheck (27 of 27 tasks) are clean.
+  - Not run locally: the CI-only legs (Windows and macOS of `test.yml`),
+    which alone can fail T4's `build\Makefile` case on the old code.
+  - CI: the commit gate dispatches, on `scope-finish`, the lead's list for
+    this gate: `typecheck.yml`, `scope-directory-identity.yml`,
+    `review-memory-fence.yml`, `scope-app-validation.yml` and
+    `vector-at-mention.yml`. Only `typecheck.yml` covers this change (it
+    typechecks `packages/script`); the other four run as regression cover
+    only, since no core, engine, app, `run.ts`, `model.ts` or
+    `session/llm.ts` file changed. `review-http-regression.yml` is not
+    needed (no HttpApi or review service change). `test.yml`, the only
+    workflow that runs the top-level eval tests and so `outcomes.test.ts`, is
+    not in this gate's list and is left for the lead to dispatch or batch
+    with the next runtime package (the lane runs it once at the end).
+- **Not claimed.** No run on a real repository (Q30 and Q43 stay open), no
+  paid run, no quality, accuracy or label-precision claim (the labels stay
+  unaudited until VS-46d item 1's owner sample), and no default, key or
+  variant change. `vectorscope-remaining.md:4-6` authorizes reversible
+  software only.
+- **Left to the lane's final package.**
+  - Refresh `vectorscope-remaining.md:91` (the VS-46 row: VS-46c's and
+    VS-46d's collection half, ledger schema 2, is now built in source;
+    their report sections are SF-04 and SF-05) and
+    `vectorscope-continuation.md`.
+  - Append the correcting entry for the stale `:16000` sentence.
+  - SF-03 touches neither file.

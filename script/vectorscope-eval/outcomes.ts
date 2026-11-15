@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createHmac, randomBytes } from "node:crypto"
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
-import { basename, dirname, isAbsolute, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { Option, Schema } from "effect"
 import { fromGitHubFiles, parseUnifiedDiff, type GitHubPrFile } from "../../packages/core/src/review/diff"
@@ -13,7 +13,7 @@ import {
   type SeverityGradient,
 } from "../../packages/core/src/review/eval"
 import { spread } from "../../packages/core/src/review/eval-report"
-import { classifyFiles } from "../../packages/core/src/review/ignore"
+import { classifyFiles, classifyPath } from "../../packages/core/src/review/ignore"
 import {
   FIX_SUBJECT,
   REVERT_SUBJECT,
@@ -65,8 +65,18 @@ import { OUTCOME_LEDGER_FILE, publicKey, PUBLIC_KEY_ENV, seal, unseal, type Seal
 //            key before any read. It prints counts only.
 //   open     On the owner's machine: unseals a ledger, refuses an expired one, and writes the report (and, with
 //            --ledger, the ledger itself) to a directory outside every git work tree.
+//
+// Schema 2 (addendum B §1.8 and §1.9: VS-46c and VS-46d as one schema change) keeps every v1 field with its v1 value
+// and adds what their report sections need: per-PR line counts, a second, filtered follow-up-fix label (blame with -w,
+// -M and -C over code lines only) beside the unfiltered one, the kinds of each fix's blamed lines, hashed fix
+// locations, the same-agent flag from the trusted record, and the base branch's subject counts and fix commits.
+// Collection writes only schema 2. `open` still reads a schema-1 ledger, read-only and as v1: it is never upgraded, and
+// every schema-2 section reads "unavailable".
 
-export const LEDGER_SCHEMA = "vectorscope-outcomes/1"
+export const LEDGER_SCHEMA = "vectorscope-outcomes/2"
+export const LEDGER_SCHEMA_V1 = "vectorscope-outcomes/1"
+// What every schema-2 report section says for a schema-1 ledger.
+export const V1_UNAVAILABLE = "unavailable: a /1 ledger has no added or deleted counts"
 export const SEALED_LEDGER = "vectorscope-outcomes.sealed.json"
 export const REPORT_FILE = "outcomes-report.md"
 // A sealed ledger expires this many days after collection; the expiry is inside the sealed payload.
@@ -102,6 +112,12 @@ export const READ_ONLY_GIT = ["rev-parse", "config", "log", "diff", "blame"] as 
 export const DEFAULT_BOTS = ["github-actions[bot]"]
 // A reaction that acknowledges a finding. GraphQL spells them as uppercase enums, REST as lowercase or "+1".
 export const POSITIVE_REACTIONS = ["thumbs_up", "+1", "heart", "hooray", "rocket"]
+// A fix commit keeps at most this many hashed locations (its first, in diff order); `capped` says when it had more.
+export const MAX_FIX_LOCATIONS = 32
+// The filtered pass blames a file whole only up to this many lines at the fix's first parent. A longer file, or one the
+// default skip rules leave out (lockfiles, generated and vendored files), is blamed by its deleted lines' runs, as v1's
+// own blame is, so its cost is bounded as v1's is.
+export const MAX_FILTERED_BLAME_LINES = 5000
 
 export const OUTCOMES = [
   "fixed-confirmed-by-thread", // marked fixed, and its thread resolved by a person who is neither a bot nor the PR author
@@ -144,8 +160,17 @@ const PRUNE_MARGIN = 512
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
+// git's empty tree, which every repository holds without storing it: SHA-1 and SHA-256.
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+const EMPTY_TREE_SHA256 = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+// What readPull classifies a PR's files with: the default skip rules, no .gitattributes.
+const SKIP_RULES = {
+  config: { ignore: DEFAULT_REVIEW_CONFIG.ignore, ignoreDefaults: DEFAULT_REVIEW_CONFIG.ignoreDefaults },
+}
 // The same regular expression the impact builder reads a clone's mode with (packages/engine/src/review/impact.ts).
 const PARTIAL_CLONE = "^(extensions\\.partialclone|remote\\..*\\.promisor)$"
+// A hunk header's ranges; what follows them is git's funcname for the hunk (diff.ts HUNK_HEADER).
+const HUNK_RANGE = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?/
 // git's C-quoting escapes (diff.ts ESCAPES).
 const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 }
 const FORBIDDEN_GIT_ARG = /^(?:--output\b|-o$|--ext-diff$|--textconv$|--show-signature$|--exec\b|--upload-pack\b)/
@@ -188,8 +213,9 @@ export const THREAD_COMMENTS_QUERY = `query($id: ID!, $cursor: String) {
   }
 }`
 
-export interface OutcomeLedger {
-  schema: typeof LEDGER_SCHEMA
+// A schema-1 ledger, as VS-46a collected it. `open` still reads one, read-only.
+export interface OutcomeLedgerV1 {
+  schema: typeof LEDGER_SCHEMA_V1
   repository: string // "owner/name": one nominated repository per ledger
   branch: string
   collectedAt: string // ISO 8601
@@ -199,12 +225,75 @@ export interface OutcomeLedger {
   expires: string // collectedAt plus LEDGER_DAYS
   merged: { since: string; until: string }
   logins: "hmac-sha256/per-run" // keyed with a random key that was never stored
-  pulls: LedgerPull[]
+  pulls: LedgerPullV1[]
   findings: LedgerFinding[]
   problems: string[] // reads cut short; the PR they touch is truncated
 }
 
-export interface LedgerPull {
+// Schema 2: every v1 field with its v1 value, and the fields VS-46c and VS-46d add.
+export interface OutcomeLedger extends Omit<OutcomeLedgerV1, "schema" | "pulls"> {
+  schema: typeof LEDGER_SCHEMA
+  pulls: LedgerPull[]
+  subjects: LedgerSubjects
+  fixCommits: LedgerFixCommit[]
+}
+
+// The base branch's first-parent commits in the merge window, and how many of their subjects are fix-prefixed or
+// revert-prefixed (subjectCounts).
+export interface LedgerSubjects {
+  commits: number
+  fix: number
+  revert: number
+}
+
+// One follow-up-fix candidate the scan blamed (a commit fixKind labels, in the window fixes are looked for): when, why,
+// what kinds of line it deleted, and where it edited. A fix with no deleted line is the untraceable kind (VS-46d item 2).
+export interface LedgerFixCommit {
+  date: string // YYYY-MM-DD: the day, not the time, so the ledger keeps no commit's exact timestamp
+  kind: "label" | "title"
+  deleted: { code: number; blank: number; comment: number }
+  locations: LedgerLocation[] // distinct, in diff order, at most MAX_FIX_LOCATIONS
+  capped?: true
+}
+
+// A file, and the function git's hunk header names (its funcname, when it finds one), both hashed with hashName.
+export interface LedgerLocation {
+  path: string
+  fn?: string
+}
+
+export interface LedgerFixV1 {
+  days: number
+  lines: number
+  kind: "label" | "title"
+}
+
+// What the filter makes of each deleted line the unfiltered blame put on the PR: still the PR's under -w -M -C (code),
+// dropped as blank or comment-only, or put elsewhere by -w alone (whitespace) or by -M and -C (moved). The five sum to
+// the entry's `lines`.
+export interface LedgerLineKinds {
+  code: number
+  blank: number
+  comment: number
+  whitespace: number
+  moved: number
+}
+
+export interface LedgerFix extends LedgerFixV1 {
+  commit: number // the fix commit's index in the ledger's fixCommits: a link within this ledger, not a new name
+  deleted?: LedgerLineKinds // absent only on a PR marked filteredIncomplete, for the fix whose filtered pass was cut short
+  sameAgent?: boolean // agent-stratum PRs only, and absent there only for a fix whose own PR the call cap left unknown
+}
+
+// The filtered label: `lines` are the code lines the filtered blame puts on the PR, never 0, so a non-empty list means
+// fixed, as for `fixes`.
+export interface LedgerFilteredFix extends LedgerFixV1 {
+  commit: number
+  location: LedgerLocation // where most of those lines are, the first in diff order on a tie
+  sameAgent?: boolean
+}
+
+export interface LedgerPullV1 {
   number: number
   author: string // hashLogin
   stratum: PullStratum
@@ -222,8 +311,26 @@ export interface LedgerPull {
   truncated: boolean // a read was cut short: left out of every rate
   matured: boolean // merged at least MATURITY_DAYS before observedUntil
   revertedDays?: number // matured only: the first revert on the base branch, in days after the merge
-  fixes?: { days: number; lines: number; kind: "label" | "title" }[] // matured only, within 90 days
+  fixes?: LedgerFixV1[] // matured only, within 90 days
   lines?: { edited: number; flagged: number; escaped: number; unreviewed: number; skipped: number } // matured, kept
+}
+
+export interface LedgerPull extends LedgerPullV1 {
+  // With band: the reviewed files' added and deleted lines, as riskFeatures counts them for riskOf.
+  added?: number
+  deleted?: number
+  // Reviewed PRs only: the files the state's last run left unreviewed, and comments by people other than the author
+  // and the bots (issue comments, review-thread comments and reviews with a body).
+  unreviewedFiles?: number
+  humanComments?: number
+  fixes?: LedgerFix[]
+  fixesFiltered?: LedgerFilteredFix[] // matured only, as fixes
+  // The call cap stopped a lookup of the filtered blame for a fix in this PR's label window: its filtered label is
+  // incomplete, and the fix's `deleted` kinds are left out.
+  filteredIncomplete?: true
+  // Agent-stratum PRs only: the call cap stopped the lookup of a fix commit's own PR, so whether that fix is the same
+  // agent's is unknown, and its entries carry no sameAgent.
+  sameAgentIncomplete?: true
 }
 
 export interface LedgerFinding {
@@ -474,6 +581,36 @@ export function fixKind(
   return FIX_SUBJECT.test(pull?.title ?? commit.subject) ? "title" : undefined
 }
 
+// Core's fix and revert words, anchored at the start: a fix-prefixed or revert-prefixed subject (VS-46c item 1). Unlike
+// risk.ts's history count, which matches them anywhere in a subject, "Add a fix for x" is neither here.
+const FIX_PREFIX = new RegExp(`^\\s*(?:${FIX_SUBJECT.source})`, FIX_SUBJECT.flags)
+const REVERT_PREFIX = new RegExp(`^\\s*(?:${REVERT_SUBJECT.source})`, REVERT_SUBJECT.flags)
+// GitHub's merge-commit subject, which names the source branch; GitHub puts the PR's title on the body's first line.
+const GITHUB_MERGE = /^Merge pull request #\d+ from \S+/
+
+/**
+ * The base rate of fix-prefixed and revert-prefixed subjects: the base branch's first-parent commits with
+ * `since <= at <= until`, each read by its subject, except a GitHub merge commit, which is read by its body's first line
+ * (the PR title) when that line is not empty. Both word lists are anchored at the start, so no line is both a fix and
+ * a revert. Git only: no PR is looked up.
+ */
+export function subjectCounts(
+  history: readonly Pick<BaseCommit, "at" | "parents" | "subject" | "body">[],
+  window: { since: number; until: number },
+): LedgerSubjects {
+  const lines = history
+    .filter((commit) => commit.at >= window.since && commit.at <= window.until)
+    .map((commit) => {
+      const title = commit.body.split("\n")[0]?.trim() ?? ""
+      return commit.parents.length > 1 && GITHUB_MERGE.test(commit.subject) && title ? title : commit.subject
+    })
+  return {
+    commits: lines.length,
+    fix: lines.filter((line) => FIX_PREFIX.test(line)).length,
+    revert: lines.filter((line) => REVERT_PREFIX.test(line)).length,
+  }
+}
+
 export function matured(mergedAt: number, now: number) {
   return mergedAt <= now - MATURITY_DAYS * DAY
 }
@@ -486,6 +623,15 @@ export function matured(mergedAt: number, now: number) {
 // the repository.
 export function hashLogin(login: string, key: Uint8Array): string {
   return createHmac("sha256", key).update(login.toLowerCase()).digest("hex").slice(0, 16)
+}
+
+// A path or a hunk's function header, as the first 16 hex characters of an HMAC-SHA256 under the same per-run key,
+// separated from logins and from each other by its kind, and case-sensitive. A per-run pseudonym, not a secret: nobody
+// can hash a path without the key, but a PR number, its merge time and a fix's days name the fix commit to anyone who
+// can read the repository, whose diff then links that entry's hashes to their paths, and every other use of the same
+// hash in the ledger with them.
+export function hashName(kind: "path" | "fn", text: string, key: Uint8Array): string {
+  return createHmac("sha256", key).update(`${kind}\0${text}`).digest("hex").slice(0, 16)
 }
 
 /**
@@ -643,7 +789,8 @@ interface PullRead {
   stratum: PullStratum
   state?: ReviewState
   humanReview: boolean
-  risk?: { band: RiskBand; score: number }
+  humanComments: number
+  risk?: { band: RiskBand; score: number; added: number; deleted: number }
   skipped: Set<string> // paths the default skip rules leave out of review
   findings: ReadFinding[]
   bulk: Set<string>
@@ -656,6 +803,42 @@ interface Hit {
   kind: "label" | "title"
   path: string
   line: number
+}
+
+// A follow-up-fix candidate as the unfiltered scan read it, for the filtered pass and the ledger's fix commits.
+interface FixCommit {
+  sha: string
+  at: number
+  kind: "label" | "title"
+  own?: ListedPull // its PR, as the v1 scan looked it up
+  ownUnknown: boolean // the call cap stopped that lookup, so `own` is not known to be absent
+  files: {
+    path: string // the path blamed at the first parent: a renamed file's old path
+    // section: the hunk header's funcname. Each deleted line keeps its number and kind, never its text.
+    hunks: { section: string; deleted: { line: number; kind: DeletedLineKind }[] }[]
+  }[]
+  // `${path}\0${line}` of each deleted line: the window PRs the unfiltered blame put it on within their label window.
+  owners: Map<string, number[]>
+}
+
+interface FilteredRow {
+  path: string
+  section: string
+  kind: DeletedLineKind
+  line: number
+  u: number[]
+  f: number[]
+  w: number[]
+}
+
+// What one fix's filtered pass makes of one PR's lines (LedgerLineKinds, and the filtered label).
+interface Attribution {
+  fix: string
+  days: number
+  kind: "label" | "title"
+  deleted: LedgerLineKinds
+  lines: number
+  location?: { path: string; section: string }
 }
 
 interface Budget extends GitHubRead {
@@ -710,9 +893,20 @@ export async function collect(input: CollectInput, deps: CollectDeps): Promise<O
   }
   const lookup = commitPulls(github, input.repository, branch, listed, onBase, problems)
   const reverts = await revertDays(history, window, input.repository, lookup)
-  const hits = await fixHits(history, window, { git, lookup, repository: input.repository })
+  const scanned = await fixHits(history, window, { git, lookup, repository: input.repository })
   for (const read of reads) for (const reason of read.truncated) problems.push(`PR #${read.pull.number}: ${reason}`)
-  const ctx = { observed, key: deps.key, reverts, hits }
+  // Schema 2's filtered pass runs after every v1 read, so v1's reads, their order and their problem lines are as they
+  // were; at the call cap the filtered pass adds its own line after them.
+  const filtered = await filteredFixes(scanned.fixes, window, { git, lookup })
+  const ctx: LedgerContext = {
+    observed,
+    key: deps.key,
+    reverts,
+    hits: scanned.hits,
+    filtered,
+    fixes: new Map(scanned.fixes.map((fix, index) => [fix.sha, { index, own: fix.own, ownUnknown: fix.ownUnknown }])),
+    trusted: input.agentPulls,
+  }
   return {
     schema: LEDGER_SCHEMA,
     repository: input.repository,
@@ -724,6 +918,8 @@ export async function collect(input: CollectInput, deps: CollectDeps): Promise<O
     logins: "hmac-sha256/per-run",
     pulls: reads.map((read) => ledgerPull(read, ctx)),
     findings: reads.flatMap((read) => ledgerFindings(read, ctx)),
+    subjects: subjectCounts(history, { since: input.since, until: input.until }),
+    fixCommits: scanned.fixes.map((fix) => ledgerFixCommit(fix, deps.key)),
     problems,
   }
 }
@@ -889,10 +1085,9 @@ async function readPull(
   const files = await pages(ctx.github, `${base}/files`, MAX_FILE_PAGES, "the PR's files")
   if (files.capped) truncated.push(`its files stopped at ${MAX_FILE_PAGES * PER_PAGE}`)
   const changed = fromGitHubFiles(files.items.map(prFile))
-  const classified = classifyFiles(changed, {
-    config: { ignore: DEFAULT_REVIEW_CONFIG.ignore, ignoreDefaults: DEFAULT_REVIEW_CONFIG.ignoreDefaults },
-  })
-  const assessed = files.capped ? undefined : riskOf(riskFeatures(classified.review, { changed }))
+  const classified = classifyFiles(changed, SKIP_RULES)
+  const features = files.capped ? undefined : riskFeatures(classified.review, { changed })
+  const assessed = features ? riskOf(features) : undefined
   const reviews = await pages(ctx.github, `${base}/reviews`, MAX_LIST_PAGES, "the PR's reviews")
   if (reviews.capped) truncated.push(`its reviews stopped at ${MAX_LIST_PAGES} pages`)
   const commits = await pages(ctx.github, `${base}/commits`, Math.ceil(MAX_COMMITS / PER_PAGE), "the PR's commits")
@@ -904,6 +1099,10 @@ async function readPull(
     reviews.items.some((item) => person(str(obj(obj(item).user).login))) ||
     issueComments.some((comment) => person(comment.user.login)) ||
     threads.threads.some((thread) => thread.comments.some((comment) => person(comment.author)))
+  const humanComments =
+    issueComments.filter((comment) => person(comment.user.login)).length +
+    threads.threads.flatMap((thread) => thread.comments).filter((comment) => person(comment.author)).length +
+    reviews.items.filter((item) => person(str(obj(obj(item).user).login)) && str(obj(item).body).trim() !== "").length
   const stratum = agentStratum(
     {
       number: pull.number,
@@ -924,7 +1123,17 @@ async function readPull(
     stratum,
     ...(state ? { state } : {}),
     humanReview,
-    ...(assessed ? { risk: { band: assessed.band, score: assessed.likelihood.score } } : {}),
+    humanComments,
+    ...(assessed && features
+      ? {
+          risk: {
+            band: assessed.band,
+            score: assessed.likelihood.score,
+            added: features.added,
+            deleted: features.deleted,
+          },
+        }
+      : {}),
     skipped: new Set(classified.skipped.map((file) => file.path)),
     findings,
     bulk: bulkResolved(findings, ctx.isBot),
@@ -1041,6 +1250,7 @@ function cappedPull(pull: ListedPull, trusted: ReadonlySet<number>): PullRead {
     pull,
     stratum: agentStratum({ number: pull.number, author: pull.author, coAuthors: [] }, trusted),
     humanReview: false,
+    humanComments: 0,
     skipped: new Set(),
     findings: [],
     bulk: new Set(),
@@ -1160,31 +1370,50 @@ function commitPulls(
 ) {
   const bySha = new Map(listed.map((pull) => [pull.mergeSha, pull]))
   const cache = new Map<string, Promise<ListedPull[]>>()
-  const missed = { count: 0 }
+  const missed = { v1: 0, filtered: 0 }
+  // A commit's PRs, or undefined when the call cap stops the lookup.
+  const find = (sha: string): Promise<ListedPull[]> | undefined => {
+    const known = bySha.get(sha)
+    if (known) return Promise.resolve([known])
+    // A commit older than the window is no reviewed PR's.
+    if (!onBase.has(sha)) return Promise.resolve([])
+    if (!cache.has(sha)) {
+      if (github.left() <= 0) return undefined
+      cache.set(
+        sha,
+        github.get(`/repos/${repository}/commits/${sha}/pulls`).then((value) =>
+          list(value, "a commit's PRs")
+            .flatMap((item) => listedPull(item) ?? [])
+            .filter((pull) => pull.base === branch),
+        ),
+      )
+    }
+    return cache.get(sha)
+  }
+  // v1's lookup, with v1's problem when the cap stops it; undefined then.
+  const mapped = async (sha: string): Promise<ListedPull[] | undefined> => {
+    const found = find(sha)
+    if (found) return found
+    missed.v1++
+    if (missed.v1 === 1) problems.push("the API call cap was reached: some commits were not mapped to PRs")
+    return undefined
+  }
   return {
-    // Every lookup the cap stopped, reported once at the end.
-    missed: () => missed.count,
-    async of(sha: string): Promise<ListedPull[]> {
-      const known = bySha.get(sha)
-      if (known) return [known]
-      // A commit older than the window is no reviewed PR's.
-      if (!onBase.has(sha)) return []
-      if (!cache.has(sha)) {
-        if (github.left() <= 0) {
-          missed.count++
-          if (missed.count === 1) problems.push("the API call cap was reached: some commits were not mapped to PRs")
-          return []
-        }
-        cache.set(
-          sha,
-          github.get(`/repos/${repository}/commits/${sha}/pulls`).then((value) =>
-            list(value, "a commit's PRs")
-              .flatMap((item) => listedPull(item) ?? [])
-              .filter((pull) => pull.base === branch),
-          ),
+    // As v1 reads it: no PR when the cap stopped the lookup.
+    of: async (sha: string): Promise<ListedPull[]> => (await mapped(sha)) ?? [],
+    // The same, for a caller that must tell a commit with no PR from one the cap left unknown (a fix commit's own PR).
+    mapped,
+    // The filtered pass's lookups: the same cache and cap, but a miss is the filtered pass's own, with its own problem,
+    // so it never reads as a v1 label left incomplete. Undefined when the cap stopped it.
+    async filtered(sha: string): Promise<ListedPull[] | undefined> {
+      const found = find(sha)
+      if (found) return found
+      missed.filtered++
+      if (missed.filtered === 1)
+        problems.push(
+          "the API call cap was reached in the filtered blame: PRs marked filteredIncomplete have an incomplete filtered label",
         )
-      }
-      return (await cache.get(sha)) ?? []
+      return undefined
     },
   }
 }
@@ -1213,14 +1442,16 @@ async function revertDays(
 
 // Follow-up fixes and the reviewed PRs' lines they edited: the fix's deleted lines, blamed at its first parent along
 // the first-parent history, so each blamed commit is a base-branch merge, squash or rebased commit. A commit that
-// reverts anything, itself or through a commit it merged, is never a fix.
+// reverts anything, itself or through a commit it merged, is never a fix. Each fix commit is also kept, with its
+// deleted lines and which PR the blame put each on, for schema 2's filtered pass and fix commits; that adds no read.
 async function fixHits(
   history: readonly BaseCommit[],
   window: readonly ListedPull[],
   deps: { git: GitRead; lookup: ReturnType<typeof commitPulls>; repository: string },
 ) {
   const out = new Map<number, Hit[]>()
-  if (!window.length) return out
+  const fixes: FixCommit[] = []
+  if (!window.length) return { hits: out, fixes }
   const numbers = new Set(window.map((pull) => pull.number))
   const first = Math.min(...window.map((pull) => pull.mergedAt))
   const last = Math.max(...window.map((pull) => pull.mergedAt)) + MATURITY_DAYS * DAY
@@ -1228,17 +1459,19 @@ async function fixHits(
     if (commit.at <= first || commit.at > last || !commit.parents.length) continue
     const reverts = revertsOf(commit, deps.repository)
     if (reverts.shas.length || reverts.pulls.length) continue
-    const [own] = await deps.lookup.of(commit.sha)
+    const mine = await deps.lookup.mapped(commit.sha)
+    const own = mine?.[0]
     const kind = fixKind(commit, own)
     if (!kind) continue
-    const runs = parseUnifiedDiff(deps.git(["diff", "--unified=0", "-M", `${commit.sha}^1`, commit.sha])).flatMap(
-      (file) =>
-        lineRuns(
-          file.hunks.flatMap((hunk) =>
-            hunk.lines.flatMap((line) => (line.kind === "del" && line.oldLine ? [line.oldLine] : [])),
-          ),
-        ).map((run) => ({ path: file.oldPath ?? file.path, run })),
+    const diff = parseUnifiedDiff(deps.git(["diff", "--unified=0", "-M", `${commit.sha}^1`, commit.sha]))
+    const runs = diff.flatMap((file) =>
+      lineRuns(
+        file.hunks.flatMap((hunk) =>
+          hunk.lines.flatMap((line) => (line.kind === "del" && line.oldLine ? [line.oldLine] : [])),
+        ),
+      ).map((run) => ({ path: file.oldPath ?? file.path, run })),
     )
+    const owners = new Map<string, number[]>()
     for (const entry of runs) {
       const blamed = blameLines(
         deps.git([
@@ -1261,11 +1494,207 @@ async function fixHits(
             ...(out.get(pull.number) ?? []),
             { fix: commit.sha, days, kind, path: line.path, line: line.line },
           ])
+          const at = `${entry.path}\0${line.final}`
+          owners.set(at, [...(owners.get(at) ?? []), pull.number])
         }
       }
     }
+    fixes.push({
+      sha: commit.sha,
+      at: commit.at,
+      kind,
+      ...(own ? { own } : {}),
+      ownUnknown: mine === undefined,
+      files: diff.map((file) => {
+        const path = file.oldPath ?? file.path
+        return {
+          path,
+          hunks: file.hunks.map((hunk) => ({
+            section: hunk.header.replace(HUNK_RANGE, "").trim(),
+            deleted: hunk.lines.flatMap((line) =>
+              line.kind === "del" && line.oldLine
+                ? [{ line: line.oldLine, kind: deletedLineKind(path, line.text) }]
+                : [],
+            ),
+          })),
+        }
+      }),
+      owners,
+    })
   }
-  return out
+  return { hits: out, fixes }
+}
+
+/**
+ * Schema 2's filtered label (VS-46d item 3): each fix commit's deleted code lines blamed again with -w -M -C, and the
+ * kinds of every deleted line the unfiltered blame put on a PR. Blank and comment-only lines (deletedLineKind) are never
+ * blamed by it. The blame covers the whole file at the fix's first parent: git blames a line moved to another file on
+ * its mover when -L names only that line's range, and on its original commit over the whole file. A file the default
+ * skip rules leave out, or one longer than MAX_FILTERED_BLAME_LINES, is blamed by its deleted code lines' runs instead,
+ * as v1 blames it, so a line moved into it may stay on its mover. A code line the unfiltered blame puts on a PR and the
+ * filtered one does not is blamed once more with -w alone, which tells the whitespace share from the move share.
+ * Lookups share the v1 cache and call cap; a fix whose filtered lookups the cap stopped gets no attribution, and every
+ * PR in its label window is marked incomplete instead.
+ */
+async function filteredFixes(
+  fixes: readonly FixCommit[],
+  window: readonly ListedPull[],
+  deps: { git: GitRead; lookup: ReturnType<typeof commitPulls> },
+): Promise<{ byPull: Map<number, Attribution[]>; incomplete: Set<number> }> {
+  const byPull = new Map<number, Attribution[]>()
+  const incomplete = new Set<number>()
+  const pulls = new Map(window.map((pull) => [pull.number, pull]))
+  for (const fix of fixes) {
+    const labelled = (pull: ListedPull) => {
+      const days = (fix.at - pull.mergedAt) / DAY
+      return days > 0 && days <= MATURITY_DAYS
+    }
+    const cut = { short: false }
+    const owned = async (sha: string | undefined) => {
+      if (!sha) return []
+      const found = await deps.lookup.filtered(sha)
+      if (!found) cut.short = true
+      return (found ?? []).filter((pull) => pulls.has(pull.number) && labelled(pull)).map((pull) => pull.number)
+    }
+    // Each deleted line, in diff order, with the PRs each blame puts it on: u unfiltered, f filtered, w with -w alone.
+    const rows: FilteredRow[] = []
+    for (const file of fix.files) {
+      const deleted = file.hunks.flatMap((hunk) => hunk.deleted.map((line) => ({ ...line, section: hunk.section })))
+      const code = deleted.filter((line) => line.kind === "code").map((line) => line.line)
+      // Undefined for a whole-file blame; otherwise the runs a bounded one names.
+      const runs =
+        code.length &&
+        (classifyPath(file.path, SKIP_RULES) !== undefined ||
+          linesAt(deps.git, fix.sha, file.path) > MAX_FILTERED_BLAME_LINES)
+          ? lineRuns(code)
+          : undefined
+      const filtered = code.length
+        ? blameAt(deps.git, ["-w", "-M", "-C"], fix.sha, file.path, runs)
+        : new Map<number, string>()
+      const read: FilteredRow[] = []
+      for (const line of deleted)
+        read.push({
+          path: file.path,
+          section: line.section,
+          kind: line.kind,
+          line: line.line,
+          u: fix.owners.get(`${file.path}\0${line.line}`) ?? [],
+          f: line.kind === "code" ? await owned(filtered.get(line.line)) : [],
+          w: [],
+        })
+      const disputed = read.filter((row) => row.kind === "code" && row.u.some((number) => !row.f.includes(number)))
+      const spaced = disputed.length ? blameAt(deps.git, ["-w"], fix.sha, file.path, runs) : new Map<number, string>()
+      for (const row of disputed) row.w = await owned(spaced.get(row.line))
+      rows.push(...read)
+    }
+    if (cut.short) {
+      for (const pull of window) if (labelled(pull)) incomplete.add(pull.number)
+      continue
+    }
+    for (const number of new Set(rows.flatMap((row) => [...row.u, ...row.f]))) {
+      const pull = pulls.get(number)!
+      const mine = rows.filter((row) => row.u.includes(number))
+      const away = mine.filter((row) => row.kind === "code" && !row.f.includes(number))
+      const kept = rows.filter((row) => row.f.includes(number))
+      // Where most of the PR's filtered lines are; Map keeps diff order, and a later place must have strictly more.
+      const places = Map.groupBy(kept, (row) => `${row.path}\0${row.section}`)
+      const top = [...places.values()].reduce<typeof kept | undefined>(
+        (best, group) => (!best || group.length > best.length ? group : best),
+        undefined,
+      )
+      byPull.set(number, [
+        ...(byPull.get(number) ?? []),
+        {
+          fix: fix.sha,
+          days: (fix.at - pull.mergedAt) / DAY,
+          kind: fix.kind,
+          deleted: {
+            code: mine.filter((row) => row.kind === "code" && row.f.includes(number)).length,
+            blank: mine.filter((row) => row.kind === "blank").length,
+            comment: mine.filter((row) => row.kind === "comment").length,
+            whitespace: away.filter((row) => !row.w.includes(number)).length,
+            moved: away.filter((row) => row.w.includes(number)).length,
+          },
+          lines: kept.length,
+          ...(top ? { location: { path: top[0].path, section: top[0].section } } : {}),
+        },
+      ])
+    }
+  }
+  return { byPull, incomplete }
+}
+
+// `git blame --line-porcelain --first-parent` at a fix's first parent, with extra options, over the whole file or, given
+// runs, one call per run as v1 blames: each blamed line, by its number there, and the commit blamed for it.
+function blameAt(
+  git: GitRead,
+  options: readonly string[],
+  sha: string,
+  path: string,
+  runs?: readonly [number, number][],
+) {
+  const ranges = runs?.map((run) => ["-L", `${run[0]},${run[1]}`]) ?? [[]]
+  return new Map(
+    ranges.flatMap((range) =>
+      blameLines(
+        git(["blame", "--line-porcelain", "--first-parent", ...options, ...range, `${sha}^1`, "--", path]),
+      ).map((line) => [line.final, line.sha] as const),
+    ),
+  )
+}
+
+// A file's line count at a fix's first parent: its added lines against the empty tree (0 for a binary file). The
+// `:(literal)` magic keeps a path a PR author named like a pathspec only a path.
+function linesAt(git: GitRead, sha: string, path: string) {
+  const empty = sha.length === 64 ? EMPTY_TREE_SHA256 : EMPTY_TREE
+  return Number(git(["diff", "--numstat", empty, `${sha}^1`, "--", `:(literal)${path}`]).split("\t")[0]) || 0
+}
+
+export type DeletedLineKind = "code" | "blank" | "comment"
+
+// Comment-only line starts, tested on the trimmed line. `#` is never one in C, C++, C#, Rust (preprocessor lines and
+// attributes) or a PHP attribute, and a shebang is code. Block comments are not tracked: a deleted line inside one is
+// code unless it starts like a comment line (`*` continuations do, and so does a C line that starts with `* `).
+const SLASH = /^(?:\/\/|\/\*|\*\/|\*(?:\s|$))/
+const BLOCK = /^(?:\/\*|\*\/|\*(?:\s|$))/
+const MARKUP = /^<!--/
+const HASH = /^#(?!!)/
+const COMMENT_STARTS: readonly [string, readonly RegExp[]][] = [
+  [
+    "ts tsx mts cts js jsx mjs cjs go rs java kt kts scala groovy cs fs c h cc cpp cxx hpp hh m mm swift dart sol",
+    [SLASH],
+  ],
+  ["proto scss less", [SLASH]],
+  ["css", [BLOCK]],
+  ["vue svelte astro", [SLASH, MARKUP]],
+  ["html htm xhtml xml svg md markdown", [MARKUP]],
+  ["php", [SLASH, /^#(?!\[)/]],
+  ["tf hcl", [SLASH, HASH]],
+  ["py pyi rb sh bash zsh pl r jl ex exs graphql yml yaml toml nix cmake", [HASH]],
+  ["dockerfile makefile gnumakefile mk gitignore gitattributes dockerignore editorconfig", [HASH]],
+  ["ps1", [/^(?:#(?!!)|<#)/]],
+  ["sql lua hs elm", [/^--/]],
+  ["erl", [/^%/]],
+  ["clj cljs el lisp scm", [/^;/]],
+]
+const COMMENT_RULES = new Map(
+  COMMENT_STARTS.flatMap(([names, rules]) => names.split(" ").map((name) => [name, rules] as const)),
+)
+
+/**
+ * A deleted line's kind for the filtered label: blank (only whitespace), comment-only (it starts with a comment marker
+ * of its file's language, from the fixed table above, keyed by extension, or for a file with none by its lowercased
+ * name: Dockerfile, Makefile, .gitignore and the like), or code. A language the table does not name has no comment
+ * lines. CMakeLists.txt is read as a .txt file, so as code.
+ */
+export function deletedLineKind(path: string, text: string): DeletedLineKind {
+  const line = text.trim()
+  if (line === "") return "blank"
+  // Git paths are POSIX on every system: a backslash is part of a name, never a separator.
+  const name = posix.basename(path).toLowerCase()
+  const dot = name.lastIndexOf(".")
+  const rules = COMMENT_RULES.get(dot === -1 ? name : name.slice(dot + 1)) ?? []
+  return rules.some((rule) => rule.test(line)) ? "comment" : "code"
 }
 
 // Consecutive line numbers as [first, last] runs, for one blame call each.
@@ -1279,12 +1708,13 @@ function lineRuns(lines: readonly number[]): [number, number][] {
     }, [])
 }
 
-// `git blame --line-porcelain`: each line's commit, its line number in that commit's file, and that file's path, which
-// git still quotes under core.quotePath=false when it holds a quote, a backslash or a control character.
+// `git blame --line-porcelain`: each line's commit, its line number in that commit's file, that file's path, which git
+// still quotes under core.quotePath=false when it holds a quote, a backslash or a control character, and its line
+// number in the blamed revision (`final`).
 function blameLines(text: string) {
-  return text.split("\n").reduce<{ sha: string; line: number; path: string }[]>((out, row) => {
+  return text.split("\n").reduce<{ sha: string; line: number; final: number; path: string }[]>((out, row) => {
     const header = /^([0-9a-f]{40}) (\d+) (\d+)(?: \d+)?$/.exec(row)
-    if (header) return [...out, { sha: header[1]!, line: Number(header[2]), path: "" }]
+    if (header) return [...out, { sha: header[1], line: Number(header[2]), final: Number(header[3]), path: "" }]
     const last = out.at(-1)
     if (last && row.startsWith("filename ")) last.path = unquotedPath(row.slice("filename ".length))
     return out
@@ -1306,16 +1736,59 @@ function unquotedPath(text: string) {
   return new TextDecoder().decode(new Uint8Array(bytes))
 }
 
-function ledgerPull(
-  read: PullRead,
-  ctx: { observed: number; key: Uint8Array; reverts: Map<number, number>; hits: Map<number, Hit[]> },
-): LedgerPull {
+function ledgerPull(read: PullRead, ctx: LedgerContext): LedgerPull {
   const pull = read.pull
   const state = read.state
   const ripe = matured(pull.mergedAt, ctx.observed)
   const reverted = ctx.reverts.get(pull.number)
   const hits = ctx.hits.get(pull.number) ?? []
   const kept = ripe && (reverted === undefined || reverted > MATURITY_DAYS)
+  const attributions = ctx.filtered.byPull.get(pull.number) ?? []
+  // Every fix and attribution comes from a scanned fix commit.
+  const scanned = (fix: string) => ctx.fixes.get(fix)!
+  // From the trusted record only: the fix's PR and this one are both in it, by the same author. An untrusted marker
+  // (agent-signal) never sets it, and a fix whose own PR the call cap left unknown gets no flag.
+  const same = (fix: string) => {
+    const commit = scanned(fix)
+    if (read.stratum !== "agent" || commit.ownUnknown) return {}
+    const login = commit.own?.author.login.toLowerCase()
+    return {
+      sameAgent:
+        !!commit.own && !!login && ctx.trusted.has(commit.own.number) && login === pull.author.login.toLowerCase(),
+    }
+  }
+  const fixes = ripe
+    ? [...Map.groupBy(hits, (hit) => hit.fix).values()].map((group) => {
+        const attribution = attributions.find((entry) => entry.fix === group[0].fix)
+        return {
+          days: group[0].days,
+          lines: group.length,
+          kind: group[0].kind,
+          commit: scanned(group[0].fix).index,
+          ...(attribution ? { deleted: attribution.deleted } : {}),
+          ...same(group[0].fix),
+        }
+      })
+    : undefined
+  const fixesFiltered = ripe
+    ? attributions.flatMap((entry) =>
+        entry.lines > 0 && entry.location
+          ? [
+              {
+                days: entry.days,
+                lines: entry.lines,
+                kind: entry.kind,
+                commit: scanned(entry.fix).index,
+                location: hashedLocation(entry.location, ctx.key),
+                ...same(entry.fix),
+              },
+            ]
+          : [],
+      )
+    : undefined
+  const unknown =
+    read.stratum === "agent" &&
+    [...(fixes ?? []), ...(fixesFiltered ?? [])].some((entry) => entry.sameAgent === undefined)
   return {
     number: pull.number,
     author: hashLogin(pull.author.login, ctx.key),
@@ -1331,20 +1804,66 @@ function ledgerPull(
     statePruned:
       !!state &&
       (state.findings.length >= MAX_SUMMARY_FINDINGS || encodeState(state).length > MAX_STATE_CHARS - PRUNE_MARGIN),
-    ...(read.risk ? { band: read.risk.band, score: read.risk.score } : {}),
+    ...(state ? { unreviewedFiles: state.unreviewed.length, humanComments: read.humanComments } : {}),
+    ...(read.risk
+      ? { band: read.risk.band, score: read.risk.score, added: read.risk.added, deleted: read.risk.deleted }
+      : {}),
     truncated: read.truncated.length > 0,
     matured: ripe,
     ...(ripe && reverted !== undefined ? { revertedDays: reverted } : {}),
-    ...(ripe
+    ...(fixes && fixesFiltered
       ? {
-          fixes: [...Map.groupBy(hits, (hit) => hit.fix).values()].map((group) => ({
-            days: group[0]!.days,
-            lines: group.length,
-            kind: group[0]!.kind,
-          })),
+          fixes,
+          fixesFiltered,
+          ...(ctx.filtered.incomplete.has(pull.number) ? { filteredIncomplete: true as const } : {}),
+          ...(unknown ? { sameAgentIncomplete: true as const } : {}),
         }
       : {}),
     ...(kept && state ? { lines: lineCounts(read, hits) } : {}),
+  }
+}
+
+interface LedgerContext {
+  observed: number
+  key: Uint8Array
+  reverts: Map<number, number>
+  hits: Map<number, Hit[]>
+  filtered: { byPull: Map<number, Attribution[]>; incomplete: Set<number> }
+  // Each scanned fix commit, by sha: its index in fixCommits and its own PR, as the v1 scan looked it up.
+  fixes: Map<string, { index: number; own: ListedPull | undefined; ownUnknown: boolean }>
+  trusted: ReadonlySet<number>
+}
+
+function hashedLocation(location: { path: string; section: string }, key: Uint8Array): LedgerLocation {
+  return {
+    path: hashName("path", location.path, key),
+    ...(location.section ? { fn: hashName("fn", location.section, key) } : {}),
+  }
+}
+
+// A fix commit as the ledger keeps it: its day, its kind, its deleted lines by kind and its distinct hashed locations
+// (every hunk's file and funcname, add-only hunks included), at most MAX_FIX_LOCATIONS.
+function ledgerFixCommit(fix: FixCommit, key: Uint8Array): LedgerFixCommit {
+  const kinds = fix.files.flatMap((file) => file.hunks.flatMap((hunk) => hunk.deleted.map((line) => line.kind)))
+  const places = [
+    ...new Map(
+      fix.files.flatMap((file) =>
+        file.hunks.map(
+          (hunk) => [`${file.path}\0${hunk.section}`, { path: file.path, section: hunk.section }] as const,
+        ),
+      ),
+    ).values(),
+  ]
+  return {
+    date: new Date(fix.at).toISOString().slice(0, 10),
+    kind: fix.kind,
+    deleted: {
+      code: kinds.filter((kind) => kind === "code").length,
+      blank: kinds.filter((kind) => kind === "blank").length,
+      comment: kinds.filter((kind) => kind === "comment").length,
+    },
+    locations: places.slice(0, MAX_FIX_LOCATIONS).map((place) => hashedLocation(place, key)),
+    ...(places.length > MAX_FIX_LOCATIONS ? { capped: true as const } : {}),
   }
 }
 
@@ -1413,38 +1932,37 @@ const IsoDate = Schema.String.check(Schema.makeFilter((value: string) => Number.
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const Amount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 const PullNumber = Schema.Int.check(Schema.isGreaterThan(0))
-const LedgerEntries = Schema.Struct({
+const FixKind = Schema.Literals(["label", "title"])
+// Today's VS-46a decoder, unchanged: what a schema-1 ledger is checked against.
+const LedgerPullV1Entry = Schema.Struct({
+  number: PullNumber,
+  author: Schema.String,
+  stratum: Schema.Literals(["human", "agent", "agent-signal"]),
+  reviewed: Schema.Boolean,
+  humanReview: Schema.Boolean,
+  createdAt: IsoDate,
+  mergedAt: IsoDate,
+  cycleHours: Amount,
+  reviews: Count,
+  rereviews: Count,
+  costUsd: Amount,
+  statePruned: Schema.Boolean,
+  band: Schema.optionalKey(Schema.Literals(RISK_BANDS)),
+  score: Schema.optionalKey(Schema.Finite),
+  truncated: Schema.Boolean,
+  matured: Schema.Boolean,
+  revertedDays: Schema.optionalKey(Amount),
+  fixes: Schema.optionalKey(Schema.Array(Schema.Struct({ days: Amount, lines: Count, kind: FixKind }))),
+  lines: Schema.optionalKey(
+    Schema.Struct({ edited: Count, flagged: Count, escaped: Count, unreviewed: Count, skipped: Count }),
+  ),
+})
+const LedgerEntriesV1 = Schema.Struct({
   repository: Schema.String,
   branch: Schema.String,
   observedUntil: IsoDate,
   merged: Schema.Struct({ since: IsoDate, until: IsoDate }),
-  pulls: Schema.Array(
-    Schema.Struct({
-      number: PullNumber,
-      author: Schema.String,
-      stratum: Schema.Literals(["human", "agent", "agent-signal"]),
-      reviewed: Schema.Boolean,
-      humanReview: Schema.Boolean,
-      createdAt: IsoDate,
-      mergedAt: IsoDate,
-      cycleHours: Amount,
-      reviews: Count,
-      rereviews: Count,
-      costUsd: Amount,
-      statePruned: Schema.Boolean,
-      band: Schema.optionalKey(Schema.Literals(RISK_BANDS)),
-      score: Schema.optionalKey(Schema.Finite),
-      truncated: Schema.Boolean,
-      matured: Schema.Boolean,
-      revertedDays: Schema.optionalKey(Amount),
-      fixes: Schema.optionalKey(
-        Schema.Array(Schema.Struct({ days: Amount, lines: Count, kind: Schema.Literals(["label", "title"]) })),
-      ),
-      lines: Schema.optionalKey(
-        Schema.Struct({ edited: Count, flagged: Count, escaped: Count, unreviewed: Count, skipped: Count }),
-      ),
-    }),
-  ),
+  pulls: Schema.Array(LedgerPullV1Entry),
   findings: Schema.Array(
     Schema.Struct({
       pr: PullNumber,
@@ -1462,13 +1980,115 @@ const LedgerEntries = Schema.Struct({
   ),
   problems: Schema.Array(Schema.String),
 })
+// Schema 2: the v1 entries with VS-46c's and VS-46d's fields, and the rules that tie them together.
+const Hash = Schema.String.check(Schema.isPattern(/^[0-9a-f]{16}$/))
+const Location = Schema.Struct({ path: Hash, fn: Schema.optionalKey(Hash) })
+const LineKinds = Schema.Struct({ code: Count, blank: Count, comment: Count, whitespace: Count, moved: Count })
+const LedgerFixEntry = Schema.Struct({
+  days: Amount,
+  lines: Count,
+  kind: FixKind,
+  commit: Count,
+  deleted: Schema.optionalKey(LineKinds),
+  sameAgent: Schema.optionalKey(Schema.Boolean),
+}).check(
+  Schema.makeFilter(
+    (fix) =>
+      !fix.deleted ||
+      fix.deleted.code + fix.deleted.blank + fix.deleted.comment + fix.deleted.whitespace + fix.deleted.moved ===
+        fix.lines,
+  ),
+)
+const LedgerPullEntry = Schema.Struct({
+  ...LedgerPullV1Entry.fields,
+  unreviewedFiles: Schema.optionalKey(Count),
+  humanComments: Schema.optionalKey(Count),
+  added: Schema.optionalKey(Count),
+  deleted: Schema.optionalKey(Count),
+  fixes: Schema.optionalKey(Schema.Array(LedgerFixEntry)),
+  fixesFiltered: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        days: Amount,
+        lines: Schema.Int.check(Schema.isGreaterThan(0)),
+        kind: FixKind,
+        commit: Count,
+        location: Location,
+        sameAgent: Schema.optionalKey(Schema.Boolean),
+      }),
+    ),
+  ),
+  filteredIncomplete: Schema.optionalKey(Schema.Literal(true)),
+  sameAgentIncomplete: Schema.optionalKey(Schema.Literal(true)),
+}).check(
+  Schema.makeFilter((pull) => {
+    const flags = [...(pull.fixes ?? []), ...(pull.fixesFiltered ?? [])].map((fix) => fix.sameAgent)
+    return (
+      // Line counts come with the band, and the two labels and the incompleteness mark come together.
+      (pull.band !== undefined) === (pull.added !== undefined) &&
+      (pull.band !== undefined) === (pull.deleted !== undefined) &&
+      (pull.fixes !== undefined) === (pull.fixesFiltered !== undefined) &&
+      (!pull.filteredIncomplete || pull.fixesFiltered !== undefined) &&
+      (pull.fixes ?? []).every((fix) => fix.deleted !== undefined || pull.filteredIncomplete === true) &&
+      pull.reviewed === (pull.unreviewedFiles !== undefined) &&
+      pull.reviewed === (pull.humanComments !== undefined) &&
+      // Same-agent comes from the trusted record only, so only an agent-stratum PR carries it, on every entry but those
+      // of a fix whose own PR the call cap left unknown, which the PR's mark names.
+      flags.every((flag) =>
+        flag === undefined ? pull.stratum !== "agent" || pull.sameAgentIncomplete === true : pull.stratum === "agent",
+      ) &&
+      (!pull.sameAgentIncomplete || (pull.stratum === "agent" && flags.some((flag) => flag === undefined)))
+    )
+  }),
+)
+const LedgerEntries = Schema.Struct({
+  ...LedgerEntriesV1.fields,
+  pulls: Schema.Array(LedgerPullEntry),
+  subjects: Schema.Struct({ commits: Count, fix: Count, revert: Count }).check(
+    Schema.makeFilter((subjects) => subjects.fix + subjects.revert <= subjects.commits),
+  ),
+  fixCommits: Schema.Array(
+    Schema.Struct({
+      date: Schema.String.check(
+        Schema.isPattern(DATE),
+        Schema.makeFilter((value: string) => Number.isFinite(Date.parse(value))),
+      ),
+      kind: FixKind,
+      deleted: Schema.Struct({ code: Count, blank: Count, comment: Count }),
+      locations: Schema.Array(Location).check(Schema.makeFilter((locations) => locations.length <= MAX_FIX_LOCATIONS)),
+      capped: Schema.optionalKey(Schema.Literal(true)),
+    }),
+  ),
+}).check(
+  // Every fix entry names a fix commit of this ledger, of its own kind.
+  Schema.makeFilter((ledger) =>
+    ledger.pulls.every((pull) =>
+      [...(pull.fixes ?? []), ...(pull.fixesFiltered ?? [])].every(
+        (fix) => ledger.fixCommits[fix.commit]?.kind === fix.kind,
+      ),
+    ),
+  ),
+)
+const decodeLedger = Schema.decodeUnknownOption(LedgerEntries)
+const decodeLedgerV1 = Schema.decodeUnknownOption(LedgerEntriesV1)
 
 // Why a ledger cannot be opened now, or undefined. The bounds are checked because anyone with the public key can seal
 // a payload: a collection time in the future, or an expiry more than LEDGER_DAYS after it, is refused, and so is any
-// entry the report could not read.
+// entry the report could not read. Only a schema-2 ledger passes: collection writes no other, and a schema-1 ledger is
+// opened only through v1LedgerProblem.
 export function ledgerProblem(value: unknown, now: number): string | undefined {
+  if (obj(value).schema !== LEDGER_SCHEMA) return `not a ${LEDGER_SCHEMA} ledger`
+  return entriesProblem(value, now, decodeLedger)
+}
+
+// The same checks for a schema-1 ledger, which `open` reads read-only, against VS-46a's own decoder.
+export function v1LedgerProblem(value: unknown, now: number): string | undefined {
+  if (obj(value).schema !== LEDGER_SCHEMA_V1) return `not a ${LEDGER_SCHEMA_V1} ledger`
+  return entriesProblem(value, now, decodeLedgerV1)
+}
+
+function entriesProblem(value: unknown, now: number, decode: (value: unknown) => Option.Option<unknown>) {
   const ledger = obj(value)
-  if (ledger.schema !== LEDGER_SCHEMA) return `not a ${LEDGER_SCHEMA} ledger`
   const collected = Date.parse(str(ledger.collectedAt))
   const expires = Date.parse(str(ledger.expires))
   if (!Number.isFinite(collected)) return "the ledger has no collection date"
@@ -1478,7 +2098,7 @@ export function ledgerProblem(value: unknown, now: number): string | undefined {
   if (expires - collected > LEDGER_DAYS * DAY)
     return `the ledger's expiry is more than ${LEDGER_DAYS} days after its collection`
   if (now >= expires) return `the ledger expired on ${str(ledger.expires).slice(0, 10)}: delete it`
-  if (Option.isNone(Schema.decodeUnknownOption(LedgerEntries)(value))) return "the ledger is malformed"
+  if (Option.isNone(decode(value))) return "the ledger is malformed"
   if (Date.parse(str(ledger.observedUntil)) > collected) return "the ledger's history ends after its collection"
   return undefined
 }
@@ -1542,6 +2162,9 @@ export interface OutcomeReport {
   bands?: { rows: Record<RiskBand, BandRow>; separation: "too-few" | "overlap" | "separated" }
   split: Record<"agent" | "agent-signal" | "bulk", Record<Outcome, number>>
   cycle: { n: number; p50: number; p90: number } | null
+  // A schema-1 ledger only: it has none of the fields the schema-2 sections read, so each says so. SF-04 and SF-05 add
+  // those sections.
+  unavailable?: typeof V1_UNAVAILABLE
   problems: string[]
 }
 
@@ -1551,10 +2174,12 @@ export interface OutcomeReport {
  * count and interval and shows no rate. Below MIN_VOLUME settled human-stratum findings on PRs merged in the 90 days
  * before collection, only the gradient, its sensitivity row, the split and the counts are reported.
  */
-export function outcomeReport(ledger: OutcomeLedger): OutcomeReport {
+export function outcomeReport(ledger: OutcomeLedger | OutcomeLedgerV1): OutcomeReport {
+  // Every v1 section reads only v1 fields, whichever schema the ledger has.
+  const all: readonly LedgerPullV1[] = ledger.pulls
   const collected = Date.parse(ledger.collectedAt)
-  const byNumber = new Map(ledger.pulls.map((pull) => [pull.number, pull]))
-  const pulls = ledger.pulls.filter((pull) => !pull.truncated)
+  const byNumber = new Map(all.map((pull) => [pull.number, pull]))
+  const pulls = all.filter((pull) => !pull.truncated)
   const findings = ledger.findings.filter((finding) => byNumber.get(finding.pr)?.truncated === false)
   const human = findings.filter((finding) => finding.stratum === "human")
   const settled = human.filter((finding) => SETTLED.includes(finding.outcome))
@@ -1578,10 +2203,10 @@ export function outcomeReport(ledger: OutcomeLedger): OutcomeReport {
     expires: ledger.expires,
     merged: ledger.merged,
     pulls: {
-      total: ledger.pulls.length,
+      total: all.length,
       reviewed: pulls.filter((pull) => pull.reviewed).length,
       matured: matured.length,
-      truncated: ledger.pulls.length - pulls.length,
+      truncated: all.length - pulls.length,
       byStratum: tally(
         ["human", "agent", "agent-signal"] as const,
         pulls.map((pull) => pull.stratum),
@@ -1616,6 +2241,7 @@ export function outcomeReport(ledger: OutcomeLedger): OutcomeReport {
       ),
     },
     cycle: overall ? { n: overall.n, p50: overall.p50, p90: overall.p90 } : null,
+    ...(ledger.schema === LEDGER_SCHEMA_V1 ? { unavailable: V1_UNAVAILABLE } : {}),
     problems: ledger.problems,
   } satisfies OutcomeReport
   if (decision === "gradient-only") return base
@@ -1711,16 +2337,16 @@ export function outcomeReport(ledger: OutcomeLedger): OutcomeReport {
 }
 
 function bandsOf(
-  matured: readonly LedgerPull[],
+  matured: readonly LedgerPullV1[],
   cycleOf: (numbers: Iterable<number>) => Cycle,
 ): NonNullable<OutcomeReport["bands"]> {
-  const reverted = (pull: LedgerPull, days: number) => pull.revertedDays !== undefined && pull.revertedDays <= days
-  const fixed = (pull: LedgerPull, days: number) => (pull.fixes ?? []).some((fix) => fix.days <= days)
+  const reverted = (pull: LedgerPullV1, days: number) => pull.revertedDays !== undefined && pull.revertedDays <= days
+  const fixed = (pull: LedgerPullV1, days: number) => (pull.fixes ?? []).some((fix) => fix.days <= days)
   const rows = Object.fromEntries(
     RISK_BANDS.map((band) => {
       const inBand = matured.filter((pull) => pull.band === band)
       const clean = inBand.filter((pull) => !reverted(pull, MATURITY_DAYS))
-      const windows = (test: (pull: LedgerPull, days: number) => boolean, group: readonly LedgerPull[]) =>
+      const windows = (test: (pull: LedgerPullV1, days: number) => boolean, group: readonly LedgerPullV1[]) =>
         Object.fromEntries(
           LABEL_WINDOWS.map((days) => [
             days,
@@ -1882,10 +2508,11 @@ export function renderOutcomes(report: OutcomeReport): string {
         }`,
       ]
     : []
+  const unavailable = report.unavailable ? ["", "## Schema 2 sections", "", report.unavailable] : []
   const problems = report.problems.length
     ? ["", "## Problems", "", ...report.problems.map((problem) => `- ${problem}`)]
     : []
-  return [...lines, ...full, ...problems, ""].join("\n")
+  return [...lines, ...full, ...unavailable, ...problems, ""].join("\n")
 }
 
 function gradientTable(gradient: GradientReport, cycle: (value: Cycle) => string) {
@@ -1937,6 +2564,7 @@ collect:
                              The ledger is sealed to ${PUBLIC_KEY_ENV}.
 open:
   --ledger                   Also write the ledger itself, beside the report
+  A ${LEDGER_SCHEMA_V1} ledger opens read-only, as v1: its schema-2 sections print as unavailable.
 `
 
 const OPTIONS = {
@@ -2029,6 +2657,11 @@ async function collectCommand(
       key: deps.key ?? randomBytes(32),
     },
   )
+  // Schema 2's rules tie many fields together: a ledger that breaks one is refused here, before it is sealed, and not by
+  // `open` after the whole collection.
+  const problem = ledgerProblem(ledger, deps.now)
+  if (problem)
+    return refuse(1, `The collected ledger fails its own check (${problem}): it was not sealed. Nothing was written.`)
   mkdirSync(out, { recursive: true, mode: 0o700 })
   writePrivate(
     join(out, SEALED_LEDGER),
@@ -2060,16 +2693,19 @@ function openCommand(paths: readonly string[], withLedger: boolean, now: number)
   const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(data.toString("utf8"))
   if (Option.isNone(decoded))
     return refuse(1, "The ledger cannot be opened: it is not valid JSON. Nothing was written.")
-  const problem = ledgerProblem(decoded.value, now)
+  // A schema-1 ledger is read as v1, against VS-46a's decoder, and written back with --ledger as it was read: never
+  // upgraded or resealed.
+  const legacy = obj(decoded.value).schema === LEDGER_SCHEMA_V1
+  const problem = legacy ? v1LedgerProblem(decoded.value, now) : ledgerProblem(decoded.value, now)
   if (problem) return refuse(1, `The ledger cannot be opened: ${problem}. Nothing was written.`)
-  // ledgerProblem checked every entry the report reads.
-  const ledger = decoded.value as OutcomeLedger
+  // ledgerProblem or v1LedgerProblem checked every entry the report reads.
+  const ledger = decoded.value as OutcomeLedger | OutcomeLedgerV1
   mkdirSync(target, { recursive: true, mode: 0o700 })
   writePrivate(join(target, REPORT_FILE), renderOutcomes(outcomeReport(ledger)))
   if (withLedger) writePrivate(join(target, OUTCOME_LEDGER_FILE), JSON.stringify(ledger, null, 2) + "\n")
   return {
     code: 0,
-    stdout: `Wrote ${withLedger ? `${REPORT_FILE} and ${OUTCOME_LEDGER_FILE}` : REPORT_FILE} to ${target}. The ledger expires on ${ledger.expires.slice(0, 10)}: delete these files by then.\n`,
+    stdout: `Wrote ${withLedger ? `${REPORT_FILE} and ${OUTCOME_LEDGER_FILE}` : REPORT_FILE} to ${target}. The ledger expires on ${ledger.expires.slice(0, 10)}: delete these files by then.${legacy ? ` It is a ${LEDGER_SCHEMA_V1} ledger, opened read-only as v1: its schema-2 sections are unavailable.` : ""}\n`,
     stderr: "",
   }
 }

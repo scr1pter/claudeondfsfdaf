@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { generateKeyPairSync } from "node:crypto"
+import { createHash, generateKeyPairSync } from "node:crypto"
 import {
   existsSync,
   mkdirSync,
@@ -31,15 +31,20 @@ import {
   fixKind,
   ghArgs,
   ghReader,
+  deletedLineKind,
   hashLogin,
+  hashName,
   LEDGER_DAYS,
   LEDGER_SCHEMA,
+  LEDGER_SCHEMA_V1,
   ledgerProblem,
   localGit,
   main,
   matured,
   MIN_MATURED,
   MIN_SETTLED,
+  MAX_FILTERED_BLAME_LINES,
+  MAX_FIX_LOCATIONS,
   MIN_VOLUME,
   NOT_FIX_LABEL,
   OUTCOMES,
@@ -50,14 +55,20 @@ import {
   revertsOf,
   revertTargets,
   SEALED_LEDGER,
+  subjectCounts,
   THREAD_COMMENTS_QUERY,
   THREADS_QUERY,
+  v1LedgerProblem,
+  V1_UNAVAILABLE,
   WRITER_PERMISSIONS,
   type GitHubRead,
   type LedgerFinding,
+  type LedgerFix,
   type LedgerPull,
+  type LedgerPullV1,
   type Outcome,
   type OutcomeLedger,
+  type OutcomeLedgerV1,
 } from "./outcomes"
 import { REPO_ROOT } from "./paths"
 import { OUTCOME_LEDGER_FILE, PUBLIC_KEY_ENV, seal, unseal, type Sealed } from "./seal"
@@ -653,6 +664,8 @@ describe("collection over a synthetic repository", () => {
         maxCalls: cap,
       })
       expect(recorder.calls.length).toBeLessThanOrEqual(cap)
+      // Whatever the cap, the ledger passes its own schema-2 check, as collect requires before it seals one.
+      expect(ledgerProblem(ledger, NOW)).toBeUndefined()
       if (cap === 1) expect(ledger.problems[0]).toContain("merged-PR listing")
       if (cap === 205) expect(ledger.pulls.filter((pull) => !pull.truncated).map((pull) => pull.number)).toEqual([1])
     }
@@ -788,7 +801,7 @@ describe("the report", () => {
 
   test("a reverted PR is neither positive nor clean for the fix rate", () => {
     const pulls = [
-      pullOf(10, 200, { band: "high", revertedDays: 10, fixes: [{ days: 20, lines: 1, kind: "label" }] }),
+      pullOf(10, 200, { band: "high", revertedDays: 10, fixes: [{ days: 20, lines: 1, kind: "label", commit: 0 }] }),
       ...repeat(49, (index) => pullOf(100 + index, 200, { band: "high", fixes: [] })),
     ]
     const report = outcomeReport(
@@ -810,13 +823,13 @@ describe("the report", () => {
             ...repeat(MIN_MATURED / 2, (index) =>
               pullOf(1000 + index, 200, {
                 band: "low",
-                fixes: index < low ? [{ days: 5, lines: 1, kind: "title" }] : [],
+                fixes: index < low ? [{ days: 5, lines: 1, kind: "title", commit: 0 }] : [],
               }),
             ),
             ...repeat(highPulls, (index) =>
               pullOf(2000 + index, 200, {
                 band: "high",
-                fixes: index < high ? [{ days: 5, lines: 1, kind: "title" }] : [],
+                fixes: index < high ? [{ days: 5, lines: 1, kind: "title", commit: 0 }] : [],
               }),
             ),
           ],
@@ -905,10 +918,23 @@ describe("expiry", () => {
   })
 
   test("every entry the report reads is checked before it reads any", () => {
+    const place = { path: "0123456789abcdef", fn: "fedcba9876543210" }
+    const fixCommit = {
+      date: "2026-07-10",
+      kind: "label",
+      deleted: { code: 1, blank: 0, comment: 0 },
+      locations: [place],
+    }
     const ledger = (overrides: Record<string, unknown> = {}) => ({
       ...synthetic([finding(1, "acknowledged")]),
+      fixCommits: [fixCommit],
       ...overrides,
     })
+    const kinds = { code: 1, blank: 1, comment: 0, whitespace: 0, moved: 1 }
+    const fix = { days: 5, lines: 3, kind: "label", commit: 0, deleted: kinds }
+    const filtered = { days: 5, lines: 1, kind: "label", commit: 0, location: place }
+    const agent = (entries: { fixes: unknown[]; fixesFiltered: unknown[] }, extra: Record<string, unknown> = {}) =>
+      ledger({ pulls: [{ ...pullOf(1, 200), stratum: "agent", ...entries, ...extra }] })
     expect(ledgerProblem(ledger(), NOW)).toBeUndefined()
     for (const bad of [
       ledger({ findings: [{ ...finding(1, "acknowledged"), outcome: "lost" }] }),
@@ -924,8 +950,67 @@ describe("expiry", () => {
       ledger({ repository: 7 }),
       ledger({ observedUntil: undefined }),
       ledger({ problems: [1] }),
+      // Schema 2's entries and the rules that tie them together.
+      ledger({ subjects: undefined }),
+      ledger({ subjects: { commits: 3, fix: -1, revert: 0 } }),
+      ledger({ subjects: { commits: 3, fix: 2, revert: 2 } }),
+      ledger({ fixCommits: undefined }),
+      ledger({ fixCommits: [{ ...fixCommit, date: "soon" }] }),
+      ledger({ fixCommits: [{ ...fixCommit, date: "2026-07-10T12:00:00.000Z" }] }),
+      ledger({ fixCommits: [{ ...fixCommit, locations: [{ path: "src/app.ts" }] }] }),
+      ledger({ fixCommits: [{ ...fixCommit, locations: repeat(MAX_FIX_LOCATIONS + 1, () => place) }] }),
+      ledger({ pulls: [{ ...pullOf(1, 30), band: "high", score: 1 }] }),
+      ledger({ pulls: [{ ...pullOf(1, 30), added: 3, deleted: 1 }] }),
+      ledger({ pulls: [{ ...pullOf(1, 30), unreviewedFiles: undefined }] }),
+      ledger({ pulls: [{ ...pullOf(1, 30), reviewed: false }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixesFiltered: undefined }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), filteredIncomplete: true, fixes: undefined, fixesFiltered: undefined }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [{ ...fix, deleted: { ...kinds, moved: 0 } }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [{ days: 5, lines: 1, kind: "label", commit: 0 }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixesFiltered: [{ ...filtered, lines: 0 }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixesFiltered: [{ ...filtered, location: { path: "SRC" } }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [{ ...fix, sameAgent: true }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), stratum: "agent", fixes: [fix] }] }),
+      // A fix entry names a fix commit of this ledger, of its own kind.
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [{ ...fix, commit: undefined }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [{ ...fix, commit: 1 }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixesFiltered: [{ ...filtered, commit: -1 }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [{ ...fix, kind: "title" }] }] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixesFiltered: [filtered] }], fixCommits: [] }),
+      // A missing same-agent flag needs the mark, the mark needs a missing flag, and both need an agent PR.
+      agent({ fixes: [{ ...fix, sameAgent: true }], fixesFiltered: [filtered] }),
+      agent({ fixes: [{ ...fix, sameAgent: true }], fixesFiltered: [] }, { sameAgentIncomplete: true }),
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [fix], sameAgentIncomplete: true }] }),
+      ledger({ pulls: [{ ...pullOf(1, 30), stratum: "agent", sameAgentIncomplete: true }] }),
     ])
       expect(ledgerProblem(bad, NOW)).toContain("malformed")
+    // What collection writes passes: kinds that sum to the lines, both labels, and an agent PR's same-agent flags.
+    for (const good of [
+      ledger({ pulls: [{ ...pullOf(1, 200), fixes: [fix], fixesFiltered: [filtered] }] }),
+      ledger({ pulls: [pullOf(1, 200, { band: "low", score: 3 })] }),
+      ledger({
+        pulls: [
+          {
+            ...pullOf(1, 200),
+            stratum: "agent",
+            fixes: [{ ...fix, sameAgent: false }],
+            fixesFiltered: [{ ...filtered, sameAgent: true }],
+          },
+        ],
+      }),
+      ledger({
+        pulls: [
+          { ...pullOf(1, 200), filteredIncomplete: true, fixes: [{ days: 5, lines: 1, kind: "label", commit: 0 }] },
+        ],
+      }),
+      ledger({ fixCommits: [fixCommit, { ...fixCommit, locations: [], capped: true }] }),
+      ledger({
+        pulls: [{ ...pullOf(1, 200), fixes: [{ ...fix, commit: 1, kind: "title" }] }],
+        fixCommits: [fixCommit, { ...fixCommit, kind: "title" }],
+      }),
+      agent({ fixes: [fix, { ...fix, sameAgent: false }], fixesFiltered: [filtered] }, { sameAgentIncomplete: true }),
+    ])
+      expect(ledgerProblem(good, NOW)).toBeUndefined()
     expect(ledgerProblem(ledger({ observedUntil: new Date(NOW + DAY).toISOString() }), NOW)).toContain(
       "history ends after",
     )
@@ -1139,6 +1224,25 @@ describe("the command line", () => {
         .code,
     ).toBe(1)
   })
+
+  test("collect seals no ledger its own schema-2 check refuses", async () => {
+    const repo = fixtureRepo("cli-unsealable")
+    // A listing no GitHub sends, which collection reads and the decoder refuses: a PR numbered below 1.
+    const world = {
+      ...repo.world,
+      pulls: repo.world.pulls.map((pull) => (pull.number === 2 ? { ...pull, number: -2 } : pull)),
+    }
+    const out = join(root, "cli-unsealable-out")
+    const result = await main(
+      ["collect", "--repository", REPOSITORY, "--repo-dir", repo.dir, "--since", "2026-04-01", "--out", out],
+      { env: { [PUBLIC_KEY_ENV]: OWNER.publicKey }, github: fakeGitHub(world).github, now: NOW, key: KEY },
+    )
+    expect(result).toMatchObject({ code: 1, stdout: "" })
+    expect(result.stderr).toContain(
+      "The collected ledger fails its own check (the ledger is malformed): it was not sealed. Nothing was written.",
+    )
+    expect(existsSync(out)).toBe(false)
+  })
 })
 
 describe("what the ledger may load and what it reuses", () => {
@@ -1231,6 +1335,737 @@ describe("what the ledger may load and what it reuses", () => {
   })
 })
 
+// The digests VS-46a's ledger and report gave on these synthetic histories, printed at f8543197 before schema 2: the v1
+// fields of a schema-2 ledger, and every v1 report section, must stay byte-identical (addendum B §1.8, §1.9). Report
+// sections are pinned one by one, so SF-04's rewording of the band-separation sentence re-pins only that section.
+const GRADIENT_ONLY = {
+  "## Severity gradient": "109c7965eb66acfcbd2ad2180533b3d65f6ec3e4cf617ddcbfe1683e51318a02",
+  "## Split out": "836cdacae23c82582f4256cfa1b3b43d2a012c1105ac1b4aff9ceafab685d08e",
+}
+const V1_DIGESTS = {
+  collect: {
+    ledger: "5050ae094062071fa08b7167749f8afa2d6c6f2d07e20b4f738409e1af11e3db",
+    report: { "#": "a2440abf8af9dfd3046f9c4605a82ad807b5284d220da76210e00660522b20e5", ...GRADIENT_ONLY },
+    calls: 32,
+  },
+  revertMerge: {
+    ledger: "867098113c47c233d9c33c660d7881246fc6b0734cbdd8a4584df11c8f575fa2",
+    report: { "#": "527f98a748b140e8b642297252fbcea65d1a222b7aa5ac419706db1b1eb34546", ...GRADIENT_ONLY },
+    calls: 36,
+  },
+  later: {
+    ledger: "fbc83dcbbb6860b89e93bba3a3a4b82255138da3d35712546bb68812972e498d",
+    report: { "#": "b6510367b6135abcda17e94db1e823855cba65697e748758ab7eb386acd42408", ...GRADIENT_ONLY },
+    calls: 32,
+  },
+  full: {
+    "#": "8d3ebf400a8096a86bfbabbbc2d2da498475810f8720b6155756e6d032f6a766",
+    "## Severity gradient": "22eee9e73613e5b4b1b8bb2af94adca274c8bdcdf748f64a20e724b2b5c7d1ca",
+    "## Split out": "84e13e3fba075e2d22018dbfe0cf46ec2151fd73351c334def93755a1fbc3f02",
+    "## Resolution": "3cfab86799e6ad2397561ab0875c587637d91c293306a61986067199964af3f5",
+    "## Risk band against post-merge outcomes": "e2e6a8f127c168702edba82eebc2c0741f06eb7d7147554ff7f474031659f72f",
+    "## Problems": "8e8e3bcac7208276ebec51e8620f0058d2d87a558b70dfcff4fc14bc983e3a57",
+  },
+}
+
+describe("schema 2 collection (VS-46c, VS-46d)", () => {
+  test("the v1 fields and report sections are byte-identical to VS-46a's", async () => {
+    for (const [name, repo, now] of [
+      ["collect", fixtureRepo("v1-collect"), NOW],
+      ["revertMerge", fixtureRepo("v1-revert-merge", { revertMerge: true }), NOW],
+      ["later", fixtureRepo("v1-later"), NOW + 60 * DAY],
+    ] as const) {
+      const recorder = fakeGitHub(repo.world)
+      const ledger = await collect(input(), { github: recorder.github, git: localGit(repo.dir), now, key: KEY })
+      expect(ledger.schema).toBe(LEDGER_SCHEMA)
+      expect(digest(JSON.stringify(v1Of(ledger)))).toBe(V1_DIGESTS[name].ledger)
+      // A schema-2 report adds no section yet, so all of it is VS-46a's.
+      const text = renderOutcomes(outcomeReport(ledger))
+      expect(v1Only(text)).toBe(text)
+      expect(sectionDigests(text)).toEqual(V1_DIGESTS[name].report)
+      // The filtered pass adds no GitHub call on these histories: every commit it blames is one the v1 pass mapped.
+      expect(recorder.calls.length).toBe(V1_DIGESTS[name].calls)
+    }
+    const full = fullSynthetic()
+    const text = renderOutcomes(outcomeReport(full))
+    expect(text).toContain("Separation: overlap.")
+    expect(sectionDigests(text)).toEqual(V1_DIGESTS.full)
+    // The same ledger read as schema 1: every v1 section as before, and one more saying the rest is unavailable.
+    const legacy = renderOutcomes(outcomeReport(v1Of(full)))
+    expect(sectionDigests(v1Only(legacy))).toEqual(V1_DIGESTS.full)
+    expect(legacy).toContain(`\n## Schema 2 sections\n\n${V1_UNAVAILABLE}\n\n## Problems\n`)
+  })
+
+  test("sizes, subjects, fix commits and the filtered label on the synthetic repository", async () => {
+    const repo = fixtureRepo("schema2")
+    const ledger = await collect(input(), {
+      github: fakeGitHub(repo.world).github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+    })
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const pull = (number: number) => ledger.pulls.find((entry) => entry.number === number)!
+    // The merged PR's reviewed files, as riskFeatures counts them: #3's lockfile is not reviewed.
+    expect(ledger.pulls.map((entry) => [entry.number, entry.added, entry.deleted])).toEqual([
+      [1, 10, 0],
+      [2, 5, 0],
+      [3, 30, 0],
+      [4, 4, 4],
+      [6, 5, 0],
+    ])
+    // Reviewed PRs only: #3's state left one file unreviewed. #1 has a writer's thread reply and a thread comment by the
+    // User account named like the App (its author's issue comment is not counted); #3 has bob's thread reply and
+    // carol's review with a body.
+    expect(ledger.pulls.map((entry) => [entry.number, entry.unreviewedFiles, entry.humanComments])).toEqual([
+      [1, 0, 2],
+      [2, 0, 0],
+      [3, 1, 2],
+      [4, undefined, undefined],
+      [6, 0, 0],
+    ])
+    // Seven first-parent commits in the window, none fix-prefixed ("Handle the crash" is a fix by its label only).
+    expect(ledger.subjects).toEqual({ commits: 7, fix: 0, revert: 1 })
+    const at = (path: string, fn?: string) => ({
+      path: hashName("path", path, KEY),
+      ...(fn ? { fn: hashName("fn", fn, KEY) } : {}),
+    })
+    // #4's four hunks, each with git's funcname (the line before the hunk, as no diff driver is set).
+    expect(ledger.fixCommits).toEqual([
+      {
+        date: new Date(NOW - 120 * DAY).toISOString().slice(0, 10),
+        kind: "label",
+        deleted: { code: 4, blank: 0, comment: 0 },
+        locations: [at("src/app.ts", "one 11"), at("src/app.ts", "three 24"), at(CAFE, "cafe 2"), at(QUOTED, "hi 8")],
+      },
+    ])
+    const kinds = (code: number) => ({ code, blank: 0, comment: 0, whitespace: 0, moved: 0 })
+    // Both labels name #4's fix commit by its index in fixCommits.
+    expect(pull(1).fixes).toEqual([{ days: 80, lines: 1, kind: "label", commit: 0, deleted: kinds(1) }])
+    expect(pull(1).fixesFiltered).toEqual([
+      { days: 80, lines: 1, kind: "label", commit: 0, location: at("src/app.ts", "one 11") },
+    ])
+    // Three lines in three files, one each: the first in diff order is the location.
+    expect(pull(3).fixes).toEqual([{ days: 30, lines: 3, kind: "label", commit: 0, deleted: kinds(3) }])
+    expect(pull(3).fixesFiltered).toEqual([
+      { days: 30, lines: 3, kind: "label", commit: 0, location: at("src/app.ts", "three 24") },
+    ])
+    expect(pull(2)).toMatchObject({ fixes: [], fixesFiltered: [] })
+    // Not matured: neither label.
+    expect(pull(6).fixesFiltered).toBeUndefined()
+    // #6 is in the trusted record, but it has no fix to flag.
+    expect(ledger.pulls.every((entry) => entry.filteredIncomplete === undefined)).toBe(true)
+    const text = JSON.stringify(ledger)
+    for (const secret of ["src/app.ts", "one 11", "three 24", "cafe 2", "hi 8", "caf", "say "])
+      expect(text).not.toContain(secret)
+    // Paths and function headers are hashed apart from logins and from each other, and case-sensitively.
+    expect(new Set([hashLogin("src", KEY), hashName("path", "src", KEY), hashName("fn", "src", KEY)]).size).toBe(3)
+    expect(hashName("path", "SRC", KEY)).not.toBe(hashName("path", "src", KEY))
+
+    const reverted = fixtureRepo("schema2-merge", { revertMerge: true })
+    const merge = await collect(input(), {
+      github: fakeGitHub(reverted.world).github,
+      git: localGit(reverted.dir),
+      now: NOW,
+      key: KEY,
+    })
+    // The revert branch's merge counts by its title line, "Remove auth for now": no revert-prefixed subject is left.
+    expect(merge.subjects).toEqual({ commits: 7, fix: 0, revert: 0 })
+  })
+
+  test("a fix commit keeps at most MAX_FIX_LOCATIONS locations, and says when it had more", async () => {
+    const dir = join(root, "many-places")
+    mkdirSync(dir, { recursive: true })
+    fixtureGit(dir, ["init", "-q"])
+    const blocks = (value: string) =>
+      textOf(
+        Array.from({ length: MAX_FIX_LOCATIONS + 3 }, (_, index) => [`block${index}:`, `  ${value} ${index}`]).flat(),
+      )
+    write(dir, { "src/many.yml": blocks("old"), "README.md": "many\n" })
+    commitAll(dir, ["Initial"], NOW - 300 * DAY)
+    write(dir, { "README.md": "many, and more\n" })
+    const c30 = commitAll(dir, ["Add more (#30)"], NOW - 200 * DAY)
+    write(dir, { "src/many.yml": blocks("new") })
+    const c31 = commitAll(dir, ["fix: every block (#31)"], NOW - 150 * DAY)
+    const world = plainWorld(
+      [
+        listing(30, 200, "Add more", { login: "dev-one" }, c30),
+        listing(31, 150, "fix: every block", { login: "dev-two" }, c31),
+      ],
+      { 30: [prFile("README.md", 1, 1)], 31: [prFile("src/many.yml", MAX_FIX_LOCATIONS + 3, MAX_FIX_LOCATIONS + 3)] },
+    )
+    const ledger = await collect(filterInput([]), {
+      github: fakeGitHub(world).github,
+      git: localGit(dir),
+      now: NOW,
+      key: KEY,
+    })
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    expect(ledger.fixCommits.length).toBe(1)
+    const commit = ledger.fixCommits[0]
+    expect(commit.deleted).toEqual({ code: MAX_FIX_LOCATIONS + 3, blank: 0, comment: 0 })
+    expect(commit.capped).toBe(true)
+    // The first ones in diff order, each block's own funcname (the yml has no driver: the line before the hunk).
+    expect(commit.locations).toEqual(
+      Array.from({ length: MAX_FIX_LOCATIONS }, (_, index) => ({
+        path: hashName("path", "src/many.yml", KEY),
+        fn: hashName("fn", `block${index}:`, KEY),
+      })),
+    )
+  })
+
+  test("subject counts: fix-prefixed and revert-prefixed lines, GitHub merges by their title, inside the window", () => {
+    const window = { since: NOW - DAY, until: NOW + DAY }
+    const commit = (subject: string, extra: { body?: string; merge?: boolean; at?: number } = {}) => ({
+      at: extra.at ?? NOW,
+      parents: extra.merge ? ["1".repeat(40), "2".repeat(40)] : ["1".repeat(40)],
+      subject,
+      body: extra.body ?? "",
+    })
+    const count = (...commits: ReturnType<typeof commit>[]) => subjectCounts(commits, window)
+    for (const subject of ["fix: x", "fix(core): x", "Fix rounding", "Bugfix: x", "hotfix x", "  fixes the build"])
+      expect(count(commit(subject))).toEqual({ commits: 1, fix: 1, revert: 0 })
+    for (const subject of ["fixup! x", "prefix the name", "debug the parser", "Add a fix for x", "Fixture update"])
+      expect(count(commit(subject))).toEqual({ commits: 1, fix: 0, revert: 0 })
+    // A revert is never also a fix.
+    for (const subject of ['Revert "Fix crash"', "revert: x", "Reverts the change"])
+      expect(count(commit(subject))).toEqual({ commits: 1, fix: 0, revert: 1 })
+    const merged = "Merge pull request #7 from acme/fix-revert-button"
+    expect(count(commit(merged, { merge: true, body: "Add the button\n\nDetails." }))).toEqual({
+      commits: 1,
+      fix: 0,
+      revert: 0,
+    })
+    expect(count(commit(merged, { merge: true, body: "Fix the button" }))).toEqual({ commits: 1, fix: 1, revert: 0 })
+    expect(count(commit(merged, { merge: true, body: "Revert the button" }))).toEqual({
+      commits: 1,
+      fix: 0,
+      revert: 1,
+    })
+    // No title line, or a commit that is not a merge: the subject, which starts with "Merge".
+    expect(count(commit(merged, { merge: true }))).toEqual({ commits: 1, fix: 0, revert: 0 })
+    expect(count(commit(merged, { merge: true, body: "\nFix later" }))).toEqual({ commits: 1, fix: 0, revert: 0 })
+    expect(count(commit(merged, { body: "Fix the button" }))).toEqual({ commits: 1, fix: 0, revert: 0 })
+    expect(
+      count(
+        commit("fix: a", { at: window.since - 1 }),
+        commit("fix: b", { at: window.since }),
+        commit("fix: c", { at: window.until }),
+        commit("fix: d", { at: window.until + 1 }),
+      ),
+    ).toEqual({ commits: 2, fix: 2, revert: 0 })
+  })
+
+  test("deleted-line kinds come from a fixed prefix table per language", () => {
+    for (const [path, text] of [
+      ["src/a.ts", ""],
+      ["src/a.ts", "  \t\r"],
+      ["notes.xyz", "   "],
+    ])
+      expect(deletedLineKind(path, text)).toBe("blank")
+    for (const [path, text] of [
+      ["src/a.ts", "// x"],
+      ["src/a.ts", "  /* x"],
+      ["src/a.ts", " * x"],
+      ["src/a.ts", "*/"],
+      ["src/a.go", "// x"],
+      ["src/a.py", "    # x"],
+      ["db/a.sql", "-- x"],
+      ["src/a.erl", "% x"],
+      ["src/a.vue", "<!-- x -->"],
+      ["src/a.vue", "// x"],
+      ["docs/a.md", "<!-- x -->"],
+      ["src/a.css", "/* x */"],
+      ["src/a.scss", "// x"],
+      ["src/a.php", "# x"],
+      ["infra/a.tf", "# x"],
+      ["Dockerfile", "# x"],
+      ["Makefile", "# x"],
+      [".gitignore", "# x"],
+      ["src/a.lisp", "; x"],
+      ["src/a.ps1", "<# x"],
+    ])
+      expect(deletedLineKind(path, text)).toBe("comment")
+    for (const [path, text] of [
+      ["src/a.c", "#include <x>"],
+      ["src/a.c", "*ptr = 1;"],
+      ["src/a.rs", "#[derive(Debug)]"],
+      ["src/a.php", "#[Attr]"],
+      ["src/a.ts", "--x;"],
+      ["src/a.ts", "x = 1 // trailing"],
+      ["src/a.css", "// not a CSS comment"],
+      ["docs/a.md", "# A heading"],
+      ["notes.xyz", "# x"],
+      ["CMakeLists.txt", "# x"],
+      ["bin/run.py", "#!/usr/bin/env python3"],
+      // A backslash is part of a git path's name on every system: this file is named build\Makefile, not Makefile.
+      ["build\\Makefile", "# x"],
+    ])
+      expect(deletedLineKind(path, text)).toBe("code")
+  })
+
+  test("the filtered label: -w, blank and comment-only lines, and the kinds of every blamed line", async () => {
+    const repo = filterRepo("filter")
+    const git = recordingGit(repo.dir)
+    const ledger = await collect(filterInput([10, 12, 14]), {
+      github: fakeGitHub(repo.world).github,
+      git: git.git,
+      now: NOW,
+      key: KEY,
+    })
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    expect(ledger.problems).toEqual([])
+    const pull = (number: number) => ledger.pulls.find((entry) => entry.number === number)!
+    const kinds = (counts: Partial<Record<keyof NonNullable<LedgerFix["deleted"]>, number>>) => ({
+      code: 0,
+      blank: 0,
+      comment: 0,
+      whitespace: 0,
+      moved: 0,
+      ...counts,
+    })
+    const calc = { path: hashName("path", "src/calc.ts", KEY), fn: hashName("fn", CALC_HEADER, KEY) }
+    const tool = { path: hashName("path", "src/tool.py", KEY), fn: hashName("fn", TUNE_HEADER, KEY) }
+    // #12 deletes #10's comment, blank line and the py comment, edits #10's rate line and #include, and deletes two
+    // lines #11 only reindented: the unfiltered blame gives #10 five lines and #11 two; the filtered one gives #10 the
+    // rate line, the #include and the reindented console line, and #11 none (its other line goes to a direct commit).
+    // `commit` is each fix's index in fixCommits: #12, #13, #14 and #15 in history order.
+    expect(pull(10).fixes).toEqual([
+      {
+        days: 50,
+        lines: 5,
+        kind: "label",
+        commit: 0,
+        deleted: kinds({ code: 2, blank: 1, comment: 2 }),
+        sameAgent: true,
+      },
+      { days: 60, lines: 1, kind: "title", commit: 1, deleted: kinds({ code: 1 }), sameAgent: false },
+      { days: 70, lines: 1, kind: "label", commit: 2, deleted: kinds({ code: 1 }), sameAgent: false },
+    ])
+    expect(pull(10).fixesFiltered).toEqual([
+      { days: 50, lines: 3, kind: "label", commit: 0, location: calc, sameAgent: true },
+      { days: 60, lines: 1, kind: "title", commit: 1, location: calc, sameAgent: false },
+      { days: 70, lines: 1, kind: "label", commit: 2, location: tool, sameAgent: false },
+    ])
+    expect(pull(11).fixes).toEqual([
+      { days: 30, lines: 2, kind: "label", commit: 0, deleted: kinds({ whitespace: 2 }) },
+      { days: 55, lines: 1, kind: "title", commit: 3, deleted: kinds({ code: 1 }) },
+    ])
+    expect(pull(11).fixesFiltered).toEqual([{ days: 55, lines: 1, kind: "title", commit: 3, location: calc }])
+    for (const entry of ledger.pulls)
+      for (const fix of entry.fixes ?? []) {
+        const deleted = fix.deleted!
+        expect(deleted.code + deleted.blank + deleted.comment + deleted.whitespace + deleted.moved).toBe(fix.lines)
+      }
+    expect(ledger.subjects).toEqual({ commits: 8, fix: 3, revert: 0 })
+    const entry = { path: hashName("path", "src/main.c", KEY) }
+    expect(ledger.fixCommits).toEqual([
+      { date: day(150), kind: "label", deleted: { code: 4, blank: 1, comment: 2 }, locations: [calc, entry, tool] },
+      { date: day(140), kind: "title", deleted: { code: 1, blank: 0, comment: 0 }, locations: [calc] },
+      { date: day(130), kind: "label", deleted: { code: 1, blank: 0, comment: 0 }, locations: [tool] },
+      { date: day(125), kind: "title", deleted: { code: 1, blank: 0, comment: 0 }, locations: [calc] },
+    ])
+    // Only read-only git. One whole-file -w -M -C blame per fix and file with a deleted code line (#12's py file has
+    // only a comment), one -w blame where the two disagree, and the unfiltered blames by line run, as before.
+    expect(git.calls.every((args) => (READ_ONLY_GIT as readonly string[]).includes(args[0]))).toBe(true)
+    const blames = git.calls.filter((args) => args[0] === "blame")
+    const filtered = blames.filter((args) => args.includes("-C"))
+    expect(filtered.map((args) => args.slice(-1)[0])).toEqual([
+      "src/calc.ts",
+      "src/main.c",
+      "src/calc.ts",
+      "src/tool.py",
+      "src/calc.ts",
+    ])
+    for (const args of filtered) {
+      expect(args.slice(0, 6)).toEqual(["blame", "--line-porcelain", "--first-parent", "-w", "-M", "-C"])
+      expect(args).not.toContain("-L")
+    }
+    const spaced = blames.filter((args) => args.includes("-w") && !args.includes("-C"))
+    expect(spaced.map((args) => args.slice(0, 4).concat(args.slice(-1)))).toEqual([
+      ["blame", "--line-porcelain", "--first-parent", "-w", "src/calc.ts"],
+    ])
+    const plain = blames.filter((args) => !args.includes("-w"))
+    expect(plain.length).toBe(7)
+    for (const args of plain) expect(args.slice(0, 4)).toEqual(["blame", "--line-porcelain", "--first-parent", "-L"])
+  })
+
+  test("moved lines: -M -C blames a block moved within a file and to another file on its original PR", async () => {
+    const repo = moveRepo("move")
+    const ledger = await collect(filterInput([]), {
+      github: fakeGitHub(repo.world).github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+    })
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    const pull = (number: number) => ledger.pulls.find((entry) => entry.number === number)!
+    expect(ledger.pulls.map((entry) => [entry.number, entry.added, entry.deleted])).toEqual([
+      [20, 10, 0],
+      [21, 10, 10],
+      [22, 2, 2],
+    ])
+    // Without -M -C both edited lines are the mover's; with them, the original PR's, one in each file.
+    expect(pull(21).fixes).toEqual([
+      {
+        days: 20,
+        lines: 2,
+        kind: "label",
+        commit: 0,
+        deleted: { code: 0, blank: 0, comment: 0, whitespace: 0, moved: 2 },
+      },
+    ])
+    expect(pull(21).fixesFiltered).toEqual([])
+    expect(pull(20).fixes).toEqual([])
+    expect(pull(20).fixesFiltered).toEqual([
+      {
+        days: 70,
+        lines: 2,
+        kind: "label",
+        commit: 0,
+        location: { path: hashName("path", "src/app.ts", KEY), fn: hashName("fn", ALPHA[1], KEY) },
+      },
+    ])
+    expect(pull(22)).toMatchObject({ fixes: [], fixesFiltered: [] })
+  })
+
+  test("same-agent comes from the trusted record only; untrusted markers only exclude", async () => {
+    const repo = filterRepo("same-agent")
+    const run = (trusted: number[]) =>
+      collect(filterInput(trusted), {
+        github: fakeGitHub(repo.world).github,
+        git: localGit(repo.dir),
+        now: NOW,
+        key: KEY,
+      })
+    const flags = (ledger: OutcomeLedger, number: number) => {
+      const entry = ledger.pulls.find((item) => item.number === number)!
+      return [...(entry.fixes ?? []), ...(entry.fixesFiltered ?? [])].map((fix) => fix.sameAgent)
+    }
+    const trusted = await run([10, 12, 14])
+    // #10 by agent-account: fixed by #12 (agent-account, trusted), by #13 (agent-account, not in the record: only the
+    // record decides) and by #14 (trusted, another author).
+    expect(trusted.pulls.find((entry) => entry.number === 10)!.stratum).toBe("agent")
+    expect(flags(trusted, 10)).toEqual([true, false, false, true, false, false])
+    // #11 is a bot's (agent-signal, untrusted), fixed by its own bot author's #15: never flagged.
+    expect(trusted.pulls.find((entry) => entry.number === 11)!.stratum).toBe("agent-signal")
+    expect(flags(trusted, 11)).toEqual([undefined, undefined, undefined])
+    // A record naming #13 too makes it the same agent's.
+    expect(flags(await run([10, 12, 13, 14]), 10)).toEqual([true, true, false, true, true, false])
+    const none = await run([])
+    expect(none.pulls.flatMap((entry) => [...(entry.fixes ?? []), ...(entry.fixesFiltered ?? [])])).not.toContainEqual(
+      expect.objectContaining({ sameAgent: expect.anything() }),
+    )
+    expect(JSON.stringify(none)).not.toContain("sameAgent")
+  })
+
+  test("a filtered lookup past the call cap leaves v1 as it was and marks the PRs it could touch", async () => {
+    const repo = filterRepo("filter-capped", { chores: 200 })
+    const full = fakeGitHub(repo.world)
+    const uncapped = await collect(filterInput([10, 12, 14]), {
+      github: full.github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+    })
+    // The filtered pass's only read: #12's -w blame puts a line #11 reindented on a direct commit before the window,
+    // which no v1 read looked up.
+    expect(full.calls.at(-1)).toEqual({ kind: "get", path: `/repos/${REPOSITORY}/commits/${repo.direct}/pulls` })
+    expect(uncapped.problems).toEqual([])
+    const capped = await collect(filterInput([10, 12, 14]), {
+      github: fakeGitHub(repo.world).github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+      maxCalls: full.calls.length - 1,
+    })
+    expect(ledgerProblem(capped, NOW)).toBeUndefined()
+    expect({ ...v1Of(capped), problems: [] }).toEqual({ ...v1Of(uncapped), problems: [] })
+    expect(capped.problems).toEqual([
+      "the API call cap was reached in the filtered blame: PRs marked filteredIncomplete have an incomplete filtered label",
+    ])
+    // #12's label window holds #10 and #11: neither gets #12's kinds or filtered entry, and both are marked.
+    const pull = (ledger: OutcomeLedger, number: number) => ledger.pulls.find((entry) => entry.number === number)!
+    expect(capped.pulls.filter((entry) => entry.filteredIncomplete).map((entry) => entry.number)).toEqual([10, 11])
+    expect(pull(capped, 10).fixes!.map((fix) => fix.deleted === undefined)).toEqual([true, false, false])
+    expect(pull(capped, 10).fixesFiltered).toEqual(pull(uncapped, 10).fixesFiltered!.slice(1))
+    expect(pull(capped, 11).fixesFiltered).toEqual(pull(uncapped, 11).fixesFiltered)
+    for (const number of [12, 13, 14, 15]) expect(pull(capped, number)).toEqual(pull(uncapped, number))
+    expect(capped.fixCommits).toEqual(uncapped.fixCommits)
+  })
+
+  test("a fix whose own PR the call cap left unknown gets no same-agent flag, and its PR says so", async () => {
+    const repo = ownCapRepo("own-capped")
+    const full = fakeGitHub(repo.world)
+    const uncapped = await collect(filterInput([30]), {
+      github: full.github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+    })
+    // The last read: the direct fix commit's own PR, after the 200 chores'.
+    expect(full.calls.at(-1)).toEqual({ kind: "get", path: `/repos/${REPOSITORY}/commits/${repo.fix}/pulls` })
+    const pull = (ledger: OutcomeLedger) => ledger.pulls.find((entry) => entry.number === 30)!
+    expect(pull(uncapped).stratum).toBe("agent")
+    // Looked up, with no PR: a direct commit is in no trusted record, so not the same agent's.
+    expect(pull(uncapped).fixes).toEqual([
+      {
+        days: 50,
+        lines: 1,
+        kind: "title",
+        commit: 0,
+        deleted: { code: 1, blank: 0, comment: 0, whitespace: 0, moved: 0 },
+        sameAgent: false,
+      },
+    ])
+    expect(pull(uncapped).fixesFiltered!.map((fix) => fix.sameAgent)).toEqual([false])
+    expect(pull(uncapped).sameAgentIncomplete).toBeUndefined()
+    const capped = await collect(filterInput([30]), {
+      github: fakeGitHub(repo.world).github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+      maxCalls: full.calls.length - 1,
+    })
+    expect(ledgerProblem(capped, NOW)).toBeUndefined()
+    // v1 reads the commit by its subject either way, and says the cap stopped a lookup.
+    expect({ ...v1Of(capped), problems: [] }).toEqual({ ...v1Of(uncapped), problems: [] })
+    expect(capped.problems).toEqual(["the API call cap was reached: some commits were not mapped to PRs"])
+    // Unknown, not "not the same agent": no flag on either label, and the PR is marked.
+    const { sameAgent: _flag, ...unflagged } = pull(uncapped).fixes![0]
+    expect(pull(capped).fixes).toEqual([unflagged])
+    expect(pull(capped).fixesFiltered!.map((fix) => fix.sameAgent)).toEqual([undefined])
+    expect(pull(capped).sameAgentIncomplete).toBe(true)
+    expect(pull(capped).filteredIncomplete).toBeUndefined()
+  })
+
+  test("the filtered blame is whole-file only for reviewed files up to MAX_FILTERED_BLAME_LINES lines", async () => {
+    const repo = boundRepo("bounded")
+    const git = recordingGit(repo.dir)
+    const ledger = await collect(filterInput([]), {
+      github: fakeGitHub(repo.world).github,
+      git: git.git,
+      now: NOW,
+      key: KEY,
+    })
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    expect(ledger.problems).toEqual([])
+    const pull = (number: number) => ledger.pulls.find((entry) => entry.number === number)!
+    const kinds = (code: number, whitespace: number) => ({ code, blank: 0, comment: 0, whitespace, moved: 0 })
+    // Every edited line is still attributed, and nothing is marked: a bounded blame drops no line. The unfiltered blame
+    // puts big.ts's line on #42, which only reindented it; the bounded -w -M -C blame and the bounded -w blame give it
+    // back to #40.
+    expect(pull(40).fixes).toEqual([{ days: 50, lines: 3, kind: "label", commit: 0, deleted: kinds(3, 0) }])
+    expect(pull(40).fixesFiltered).toEqual([
+      { days: 50, lines: 4, kind: "label", commit: 0, location: { path: hashName("path", "package-lock.json", KEY) } },
+    ])
+    expect(pull(42).fixes).toEqual([{ days: 30, lines: 1, kind: "label", commit: 0, deleted: kinds(0, 1) }])
+    expect(pull(42).fixesFiltered).toEqual([])
+    expect(ledger.pulls.every((entry) => entry.filteredIncomplete === undefined)).toBe(true)
+    // The lockfile (a skip rule) is never measured; the others are, against the empty tree, with literal pathspecs.
+    const probes = git.calls.filter((args) => args[0] === "diff" && args.includes("--numstat"))
+    expect(probes.map((args) => args.slice(-1)[0])).toEqual([
+      ":(literal)src/big.ts",
+      ":(literal)src/edge.ts",
+      ":(literal)src/small.ts",
+    ])
+    for (const args of probes)
+      expect(args.slice(0, 3)).toEqual(["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"])
+    // The lockfile and the file one line over the bound are blamed by the deleted line's run; the file at the bound and
+    // the small one whole.
+    const filtered = git.calls.filter((args) => args[0] === "blame" && args.includes("-C"))
+    const ranges = (args: string[]) => [args.slice(-1)[0], args.includes("-L") ? args[args.indexOf("-L") + 1] : "whole"]
+    expect(filtered.map(ranges)).toEqual([
+      ["package-lock.json", "2,2"],
+      ["src/big.ts", "3,3"],
+      ["src/edge.ts", "whole"],
+      ["src/small.ts", "whole"],
+    ])
+    // The -w blame of the disputed line is bounded the same way.
+    expect(
+      git.calls.filter((args) => args[0] === "blame" && args.includes("-w") && !args.includes("-C")).map(ranges),
+    ).toEqual([["src/big.ts", "3,3"]])
+  })
+
+  test("a /1 ledger opens read-only, as v1, with every schema-2 section unavailable", async () => {
+    const repo = fixtureRepo("legacy")
+    const ledger = await collect(input(), {
+      github: fakeGitHub(repo.world).github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+    })
+    const legacy = v1Of(ledger)
+    const keyFile = join(root, "legacy.pem")
+    writeFileSync(keyFile, OWNER.privateKey)
+    const sealedAs = (name: string, payload: unknown) => {
+      const path = join(root, name)
+      writeFileSync(
+        path,
+        JSON.stringify(seal({ [OUTCOME_LEDGER_FILE]: Buffer.from(JSON.stringify(payload)) }, OWNER.publicKey)),
+      )
+      return path
+    }
+    const open = async (sealed: string, target: string) =>
+      main(["open", sealed, keyFile, join(root, target), "--ledger"], { now: NOW + DAY, env: {} })
+    const opened = await open(sealedAs("legacy.sealed.json", legacy), "legacy-opened")
+    expect(opened.code).toBe(0)
+    expect(opened.stdout).toContain(`It is a ${LEDGER_SCHEMA_V1} ledger, opened read-only as v1`)
+    const current = await open(sealedAs("current.sealed.json", ledger), "current-opened")
+    expect(current.code).toBe(0)
+    expect(current.stdout).not.toContain("read-only")
+    const report = readFileSync(join(root, "legacy-opened", REPORT_FILE), "utf8")
+    expect(v1Only(report)).toBe(readFileSync(join(root, "current-opened", REPORT_FILE), "utf8"))
+    expect(report).toContain(`\n## Schema 2 sections\n\n${V1_UNAVAILABLE}\n`)
+    // Written back as it was read: still schema 1, never upgraded.
+    expect(readFileSync(join(root, "legacy-opened", OUTCOME_LEDGER_FILE), "utf8")).toBe(
+      JSON.stringify(legacy, null, 2) + "\n",
+    )
+
+    // Collection's check refuses it; only open's v1 check reads it, with every v1 bound.
+    expect(ledgerProblem(legacy, NOW)).toContain(`not a ${LEDGER_SCHEMA}`)
+    expect(v1LedgerProblem(legacy, NOW)).toBeUndefined()
+    expect(v1LedgerProblem(ledger, NOW)).toContain(`not a ${LEDGER_SCHEMA_V1}`)
+    expect(v1LedgerProblem(legacy, NOW + LEDGER_DAYS * DAY)).toContain("expired")
+    expect(v1LedgerProblem({ ...legacy, collectedAt: new Date(NOW + DAY).toISOString() }, NOW)).toContain("after now")
+    expect(v1LedgerProblem({ ...legacy, pulls: [{ ...legacy.pulls[0], band: "extreme" }] }, NOW)).toContain("malformed")
+    const { subjects, ...without } = ledger
+    expect(subjects).toBeDefined()
+    expect(ledgerProblem(without, NOW)).toContain("malformed")
+    for (const [name, payload, text] of [
+      ["legacy-expired", { ...legacy, expires: new Date(NOW + DAY / 2).toISOString() }, "expired"],
+      ["legacy-malformed", { ...legacy, findings: "x" }, "malformed"],
+      ["legacy-unknown", { ...legacy, schema: "vectorscope-outcomes/9" }, `not a ${LEDGER_SCHEMA}`],
+    ] as const) {
+      const result = await main(["open", sealedAs(`${name}.sealed.json`, payload), keyFile, join(root, name)], {
+        now: NOW + DAY,
+        env: {},
+      })
+      expect(result).toMatchObject({ code: 1, stdout: "" })
+      expect(result.stderr).toContain(text)
+      expect(existsSync(join(root, name))).toBe(false)
+    }
+  })
+
+  test("collection makes no write and no model call on the filter and move histories", async () => {
+    for (const [repo, trusted] of [
+      [filterRepo("no-writes-filter"), [10, 12, 14]],
+      [moveRepo("no-writes-move"), []],
+    ] as const) {
+      const recorder = fakeGitHub(repo.world)
+      const git = recordingGit(repo.dir)
+      const before = fixtureGit(repo.dir, ["status", "--porcelain", "--untracked-files=all"])
+      const head = fixtureGit(repo.dir, ["rev-parse", "HEAD"])
+      await collect(filterInput([...trusted]), { github: recorder.github, git: git.git, now: NOW, key: KEY })
+      // Every request is a GET under the repository or one of the two fixed queries; the client has no other method.
+      for (const call of recorder.calls) {
+        if (call.kind === "get") expect(() => ghArgs({ kind: "get", path: call.path }, REPOSITORY)).not.toThrow()
+        if (call.kind === "query") expect([THREADS_QUERY, THREAD_COMMENTS_QUERY]).toContain(call.document)
+      }
+      expect(git.calls.every((args) => (READ_ONLY_GIT as readonly string[]).includes(args[0]))).toBe(true)
+      expect(fixtureGit(repo.dir, ["status", "--porcelain", "--untracked-files=all"])).toBe(before)
+      expect(fixtureGit(repo.dir, ["rev-parse", "HEAD"])).toBe(head)
+    }
+  })
+})
+
+const day = (days: number) => new Date(NOW - days * DAY).toISOString().slice(0, 10)
+
+const digest = (text: string) => createHash("sha256").update(text).digest("hex")
+
+// One digest per report section, keyed by its heading ("#" for the opening lines), so a later package that changes one
+// section re-pins only that one.
+function sectionDigests(text: string) {
+  return Object.fromEntries(
+    text
+      .split(/(?=\n## )/)
+      .map((part, index) => [index === 0 ? "#" : part.slice(1, part.indexOf("\n", 1)), digest(part)]),
+  )
+}
+
+// A schema-2 ledger's v1 part, keys in their order: the schema named /1, and every schema-2 field left out.
+function v1Of(ledger: OutcomeLedger): OutcomeLedgerV1 {
+  const { subjects: _subjects, fixCommits: _fixCommits, ...rest } = ledger
+  return { ...rest, schema: LEDGER_SCHEMA_V1, pulls: ledger.pulls.map(v1Pull) }
+}
+
+function v1Pull(pull: LedgerPull): LedgerPullV1 {
+  const {
+    added: _added,
+    deleted: _deleted,
+    unreviewedFiles: _unreviewed,
+    humanComments: _comments,
+    fixesFiltered: _filtered,
+    filteredIncomplete: _incomplete,
+    sameAgentIncomplete: _unknown,
+    ...rest
+  } = pull
+  return {
+    ...rest,
+    ...(pull.fixes ? { fixes: pull.fixes.map((fix) => ({ days: fix.days, lines: fix.lines, kind: fix.kind })) } : {}),
+  }
+}
+
+// A report without its schema-2 sections.
+function v1Only(text: string) {
+  return text
+    .split(/(?=\n## )/)
+    .filter((part) => !part.startsWith("\n## Schema 2"))
+    .join("")
+}
+
+// A full-decision ledger that reaches every v1 report section: 200 settled human-stratum findings, each severity and
+// outcome, the split strata, line counts, 200 banded matured PRs whose low and high intervals overlap, and a problem.
+function fullSynthetic(): OutcomeLedger {
+  const severities = ["blocking", "concern", "nit"] as const
+  const ledger = synthetic(
+    [
+      ...repeat(MIN_VOLUME, (index) => finding(1, "acknowledged", { severity: severities[index % 3] })),
+      ...repeat(60, (index) =>
+        finding(3, index % 2 ? "fixed-confirmed-by-thread" : "dismissed-writer", {
+          severity: "blocking",
+          ...(index % 2 ? {} : { dismisser: index % 4 ? "1".repeat(16) : "2".repeat(16) }),
+          laterFixed: index % 3 === 0,
+        }),
+      ),
+      finding(3, "open-at-merge", { laterFixed: true, category: "security" }),
+      finding(3, "dismissed-author", { laterFixed: false }),
+      finding(3, "dismissed-unattributed", { laterFixed: true }),
+      finding(3, "fixed-self-resolved", { humanEngaged: false }),
+      finding(3, "fixed-model-only", { humanEngaged: false }),
+      finding(3, "outdated"),
+      finding(4, "fixed-confirmed-by-thread", { stratum: "agent" }),
+      finding(4, "acknowledged", { stratum: "agent-signal" }),
+      finding(4, "dismissed-writer", { stratum: "bulk" }),
+    ],
+    [
+      pullOf(3, 100, {
+        cycleHours: 10,
+        humanReview: false,
+        reviews: 3,
+        rereviews: 2,
+        costUsd: 1.25,
+        lines: { edited: 4, flagged: 1, escaped: 2, unreviewed: 1, skipped: 0 },
+      }),
+      pullOf(4, 120, { stratum: "agent", reviewed: false, cycleHours: 5 }),
+      ...repeat(MIN_MATURED / 2, (index) =>
+        pullOf(1000 + index, 200, {
+          band: "low",
+          fixes: index < 10 ? [{ days: 5, lines: 1, kind: "title", commit: 0 }] : [],
+          ...(index === 0 ? { revertedDays: 20 } : {}),
+        }),
+      ),
+      ...repeat(MIN_MATURED / 2, (index) =>
+        pullOf(2000 + index, 200, {
+          band: index % 5 ? "high" : "medium",
+          fixes: index < 12 ? [{ days: 40, lines: 2, kind: "label", commit: 0 }] : [],
+        }),
+      ),
+    ],
+  )
+  return { ...ledger, problems: ["PR #9: its comments stopped at 30 pages"] }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Synthetic ledgers
 
@@ -1246,6 +2081,8 @@ function synthetic(findings: LedgerFinding[], pulls: LedgerPull[] = []): Outcome
     logins: "hmac-sha256/per-run",
     pulls: [pullOf(1, 30), pullOf(2, 91), ...pulls],
     findings,
+    subjects: { commits: 0, fix: 0, revert: 0 },
+    fixCommits: [],
     problems: [],
   }
 }
@@ -1266,7 +2103,9 @@ function pullOf(number: number, daysAgo: number, extra: Partial<LedgerPull> = {}
     statePruned: false,
     truncated: false,
     matured: daysAgo >= 90,
-    ...(daysAgo >= 90 ? { fixes: [] } : {}),
+    ...(daysAgo >= 90 ? { fixes: [], fixesFiltered: [] } : {}),
+    ...(extra.band ? { added: 10, deleted: 0 } : {}),
+    ...(extra.reviewed === false ? {} : { unreviewedFiles: 0, humanComments: 1 }),
     ...extra,
   }
 }
@@ -1427,6 +2266,303 @@ function revertBranch(dir: string, c2: string, at: (days: number) => number) {
     at(170),
   )
   return fixtureGit(dir, ["rev-parse", "HEAD"])
+}
+
+// The filtered label's history, one squash commit per PR: base (300 days ago); a direct commit (230, before the
+// window's first merge) adds a line; #10 (200, agent-account) adds a comment, a blank line, two values and a flag block
+// to calc.ts, a comment and a line to tool.py and an #include to main.c; #11 (180, helper[bot]) reindents the direct
+// line and the flag block and adds a value; optional chores (170); #12 (150, agent-account, labelled bug) deletes the
+// direct line, the comment, the blank line, the py comment and the reindented console line, and edits the rate line and
+// the #include; #13 (140, agent-account, "Fix rounding") deletes #10's cap; #14 (130, other-agent, labelled bug) edits
+// #10's py line; #15 (125, helper[bot], "fix: ...") deletes #11's value; a README edit (5) ends the history.
+const CALC_HEADER = "export function computeRate(input) {"
+const TUNE_HEADER = "def tune(value):"
+const AGENT = { login: "agent-account" }
+const HELPER = { login: "helper[bot]", type: "Bot" }
+
+function filterRepo(name: string, options: { chores?: number } = {}) {
+  const dir = join(root, name)
+  mkdirSync(dir, { recursive: true })
+  fixtureGit(dir, ["init", "-q"])
+  const at = (days: number) => NOW - days * DAY
+  const calc = (lines: string[]) =>
+    textOf([
+      CALC_HEADER,
+      "  const base = input.base",
+      "  const factor = input.factor",
+      ...lines,
+      "  return base * factor",
+      "}",
+    ])
+  write(dir, {
+    "src/calc.ts": calc([]),
+    "src/tool.py": textOf([TUNE_HEADER, "    return value"]),
+    "src/main.c": textOf(["int main(void) {", "  return 0;", "}"]),
+    "README.md": "calc\n",
+  })
+  commitAll(dir, ["Initial"], at(300))
+  write(dir, { "src/calc.ts": calc(["  const directValue = 1"]) })
+  const direct = commitAll(dir, ["Tune the calculator"], at(230))
+  write(dir, {
+    "src/calc.ts": calc([
+      "  const directValue = 1",
+      "  // the rate is the base times the factor",
+      "",
+      "  const rateValue = base * factor",
+      "  const capValue = Math.min(rateValue, 100)",
+      "  if (input.flag) {",
+      '    console.log("flagged")',
+      "  }",
+    ]),
+    "src/tool.py": textOf([TUNE_HEADER, "    # tune later", "    value = value * 2", "    return value"]),
+    "src/main.c": textOf(["#include <stdio.h>", "int main(void) {", "  return 0;", "}"]),
+  })
+  const c10 = commitAll(dir, ["Add the rate (#10)"], at(200))
+  write(dir, {
+    "src/calc.ts": calc([
+      "    const directValue = 1",
+      "  // the rate is the base times the factor",
+      "",
+      "  const rateValue = base * factor",
+      "  const capValue = Math.min(rateValue, 100)",
+      "  const botValue = rateValue + 1",
+      "    if (input.flag) {",
+      '      console.log("flagged")',
+      "    }",
+    ]),
+  })
+  const c11 = commitAll(dir, ["Reindent the flag block (#11)"], at(180))
+  repeat(options.chores ?? 0, (index) =>
+    fixtureGit(dir, ["commit", "-q", "--allow-empty", "-m", `Chore ${index}`], at(170)),
+  )
+  write(dir, {
+    "src/calc.ts": calc([
+      "  const rateValue = base * factor * 1",
+      "  const capValue = Math.min(rateValue, 100)",
+      "  const botValue = rateValue + 1",
+      "    if (input.flag) {",
+      "    }",
+    ]),
+    "src/tool.py": textOf([TUNE_HEADER, "    value = value * 2", "    return value"]),
+    "src/main.c": textOf(["#include <stdlib.h>", "int main(void) {", "  return 0;", "}"]),
+  })
+  const c12 = commitAll(dir, ["fix: tidy the rate (#12)"], at(150))
+  write(dir, {
+    "src/calc.ts": calc([
+      "  const rateValue = base * factor * 1",
+      "  const botValue = rateValue + 1",
+      "    if (input.flag) {",
+      "    }",
+    ]),
+  })
+  const c13 = commitAll(dir, ["Fix rounding (#13)"], at(140))
+  write(dir, { "src/tool.py": textOf([TUNE_HEADER, "    value = value * 3", "    return value"]) })
+  const c14 = commitAll(dir, ["Handle the overflow (#14)"], at(130))
+  write(dir, {
+    "src/calc.ts": calc(["  const rateValue = base * factor * 1", "    if (input.flag) {", "    }"]),
+  })
+  const c15 = commitAll(dir, ["fix: drop the bot value (#15)"], at(125))
+  write(dir, { "README.md": "calc, and how to run it\n" })
+  commitAll(dir, ["Update the README"], at(5))
+  return {
+    dir,
+    direct,
+    world: plainWorld(
+      [
+        listing(10, 200, "Add the rate", AGENT, c10),
+        listing(11, 180, "Reindent the flag block", HELPER, c11),
+        listing(12, 150, "fix: tidy the rate", AGENT, c12, ["bug"]),
+        listing(13, 140, "Fix rounding", AGENT, c13),
+        listing(14, 130, "Handle the overflow", { login: "other-agent" }, c14, ["bug"]),
+        listing(15, 125, "fix: drop the bot value", HELPER, c15),
+      ],
+      {
+        10: [prFile("src/calc.ts", 7), prFile("src/tool.py", 2), prFile("src/main.c", 1)],
+        11: [prFile("src/calc.ts", 5, 4)],
+        12: [prFile("src/calc.ts", 1, 5), prFile("src/tool.py", 0, 1), prFile("src/main.c", 1, 1)],
+        13: [prFile("src/calc.ts", 0, 1)],
+        14: [prFile("src/tool.py", 1, 1)],
+        15: [prFile("src/calc.ts", 0, 1)],
+      },
+    ),
+  }
+}
+
+function filterInput(trusted: number[]) {
+  return {
+    repository: REPOSITORY,
+    since: NOW - 250 * DAY,
+    until: NOW - DAY,
+    bots: [BOT],
+    agentPulls: new Set(trusted),
+  }
+}
+
+// Moved lines: #20 (200 days ago) adds a block after app.ts's first line and another at the end of other.ts; #21 (150)
+// moves the first to the end of app.ts and the second into target.ts; #22 (130, labelled bug) edits one line of each.
+// Each block line has fewer alphanumeric characters than git's move threshold (20) and each block more, so blame finds
+// a moved line's origin only over the whole file: a single-line -L range leaves it on the mover.
+const ALPHA = ["alphaOne = 11", "alphaTwo = 22", "alphaThree = 33", "alphaFour = 44", "alphaFive = 55"]
+const BETA = ["betaOne = 101", "betaTwo = 202", "betaThree = 303", "betaFour = 404", "betaFive = 505"]
+
+function moveRepo(name: string) {
+  const dir = join(root, name)
+  mkdirSync(dir, { recursive: true })
+  fixtureGit(dir, ["init", "-q"])
+  const at = (days: number) => NOW - days * DAY
+  const header = 'export const header = "the application module"'
+  const base = Array.from({ length: 10 }, (_, index) => `export const base${index} = "a base line that stays put"`)
+  const other = ['export const otherOne = "other one"', 'export const otherTwo = "other two"']
+  const target = ['export const targetOne = "target one"', 'export const targetTwo = "target two"']
+  const edited = (lines: string[]) => lines.map((line, index) => (index === 2 ? `${line} // edited` : line))
+  write(dir, {
+    "src/app.ts": textOf([header, ...base]),
+    "src/other.ts": textOf(other),
+    "src/target.ts": textOf(target),
+    "README.md": "moves\n",
+  })
+  commitAll(dir, ["Initial"], at(300))
+  write(dir, { "src/app.ts": textOf([header, ...ALPHA, ...base]), "src/other.ts": textOf([...other, ...BETA]) })
+  const c20 = commitAll(dir, ["Add the blocks (#20)"], at(200))
+  write(dir, {
+    "src/app.ts": textOf([header, ...base, ...ALPHA]),
+    "src/other.ts": textOf(other),
+    "src/target.ts": textOf([...target, ...BETA]),
+  })
+  const c21 = commitAll(dir, ["Move the blocks (#21)"], at(150))
+  write(dir, {
+    "src/app.ts": textOf([header, ...base, ...edited(ALPHA)]),
+    "src/target.ts": textOf([...target, ...edited(BETA)]),
+  })
+  const c22 = commitAll(dir, ["Handle the edge (#22)"], at(130))
+  write(dir, { "README.md": "moves, and why\n" })
+  commitAll(dir, ["Update the README"], at(5))
+  return {
+    dir,
+    world: plainWorld(
+      [
+        listing(20, 200, "Add the blocks", { login: "dev-one" }, c20),
+        listing(21, 150, "Move the blocks", { login: "dev-two" }, c21),
+        listing(22, 130, "Handle the edge", { login: "dev-three" }, c22, ["bug"]),
+      ],
+      {
+        20: [prFile("src/app.ts", 5), prFile("src/other.ts", 5)],
+        21: [prFile("src/app.ts", 5, 5), prFile("src/other.ts", 0, 5), prFile("src/target.ts", 5)],
+        22: [prFile("src/app.ts", 1, 1), prFile("src/target.ts", 1, 1)],
+      },
+    ),
+  }
+}
+
+// A fix commit's own PR at the call cap: #30 (200 days ago, agent-account) adds two values; 200 chores (170) that v1
+// looks up; a direct commit (150, no PR) titled as a fix edits one of #30's values; a README edit (5) ends the history.
+function ownCapRepo(name: string) {
+  const dir = join(root, name)
+  mkdirSync(dir, { recursive: true })
+  fixtureGit(dir, ["init", "-q"])
+  const at = (days: number) => NOW - days * DAY
+  const calc = (lines: string[]) => textOf([CALC_HEADER, ...lines, "  return input", "}"])
+  write(dir, { "src/calc.ts": calc([]), "README.md": "calc\n" })
+  commitAll(dir, ["Initial"], at(300))
+  write(dir, { "src/calc.ts": calc(["  const thirtyValue = 30", "  const otherValue = 31"]) })
+  const c30 = commitAll(dir, ["Add the values (#30)"], at(200))
+  repeat(200, (index) => fixtureGit(dir, ["commit", "-q", "--allow-empty", "-m", `Chore ${index}`], at(170)))
+  write(dir, { "src/calc.ts": calc(["  const thirtyValue = 32", "  const otherValue = 31"]) })
+  const fix = commitAll(dir, ["fix: correct the value"], at(150))
+  write(dir, { "README.md": "calc, and how to run it\n" })
+  commitAll(dir, ["Update the README"], at(5))
+  return {
+    dir,
+    fix,
+    world: plainWorld([listing(30, 200, "Add the values", AGENT, c30)], { 30: [prFile("src/calc.ts", 2)] }),
+  }
+}
+
+// The filtered blame's bound: base (300 days ago) holds a lockfile, a file one line over MAX_FILTERED_BLAME_LINES, one
+// at it and a small one; #40 (200) edits one line of each; #42 (180) only reindents big.ts's; #41 (150, labelled bug)
+// edits the same four lines again.
+function boundRepo(name: string) {
+  const dir = join(root, name)
+  mkdirSync(dir, { recursive: true })
+  fixtureGit(dir, ["init", "-q"])
+  const at = (days: number) => NOW - days * DAY
+  const values = (word: string, count: number, edited: number, note: string, indent = "") =>
+    textOf(
+      Array.from({ length: count }, (_, index) =>
+        index + 1 === edited && note
+          ? `${indent}export const ${word}${index + 1} = ${index + 1} // ${note}`
+          : `export const ${word}${index + 1} = ${index + 1}`,
+      ),
+    )
+  const files = (note: string, indent = "") => ({
+    "package-lock.json": textOf(["{", `  "name": "bounded${note ? `-${note}` : ""}",`, '  "lockfileVersion": 3', "}"]),
+    "src/big.ts": values("big", MAX_FILTERED_BLAME_LINES + 1, 3, note, indent),
+    "src/edge.ts": values("edge", MAX_FILTERED_BLAME_LINES, 4, note),
+    "src/small.ts": values("small", 5, 2, note),
+  })
+  write(dir, { ...files(""), "README.md": "bounded\n" })
+  commitAll(dir, ["Initial"], at(300))
+  write(dir, files("forty"))
+  const c40 = commitAll(dir, ["Tune the values (#40)"], at(200))
+  write(dir, files("forty", "  "))
+  const c42 = commitAll(dir, ["Reindent the value (#42)"], at(180))
+  write(dir, files("fixed"))
+  const c41 = commitAll(dir, ["Handle the overflow (#41)"], at(150))
+  write(dir, { "README.md": "bounded, and why\n" })
+  commitAll(dir, ["Update the README"], at(5))
+  const edited = ["package-lock.json", "src/big.ts", "src/edge.ts", "src/small.ts"].map((path) => prFile(path, 1, 1))
+  return {
+    dir,
+    world: plainWorld(
+      [
+        listing(40, 200, "Tune the values", { login: "dev-one" }, c40),
+        listing(42, 180, "Reindent the value", { login: "dev-three" }, c42),
+        listing(41, 150, "Handle the overflow", { login: "dev-two" }, c41, ["bug"]),
+      ],
+      { 40: edited, 42: [prFile("src/big.ts", 1, 1)], 41: edited },
+    ),
+  }
+}
+
+// A merged PR as the listing gives it.
+function listing(
+  number: number,
+  days: number,
+  title: string,
+  author: { login: string; type?: string },
+  sha: string,
+  labels: string[] = [],
+) {
+  const at = NOW - days * DAY
+  return {
+    number,
+    title,
+    user: { login: author.login, type: author.type ?? "User" },
+    labels: labels.map((label) => ({ name: label })),
+    created_at: new Date(at - 2 * DAY).toISOString(),
+    merged_at: new Date(at).toISOString(),
+    updated_at: new Date(at + 3_600_000).toISOString(),
+    merge_commit_sha: sha,
+    base: { ref: "main" },
+  }
+}
+
+// A GitHub with merged PRs and their files only: no state, so nothing is reviewed.
+function plainWorld(pulls: Record<string, unknown>[], files: Record<number, unknown[]>): World {
+  return { pulls, comments: {}, threads: {}, moreComments: {}, files, reviews: {}, commits: {}, permissions: {} }
+}
+
+// The ledger's own read-only git, recording every call.
+function recordingGit(dir: string) {
+  const calls: string[][] = []
+  const git = localGit(dir)
+  return {
+    calls,
+    git: (args: readonly string[]) => {
+      calls.push([...args])
+      return git(args)
+    },
+  }
 }
 
 interface World {
@@ -1614,7 +2750,18 @@ function world(
       4: [prFile("src/app.ts", 2, 2), prFile(CAFE, 1, 1), prFile(QUOTED, 1, 1)],
       6: [prFile("src/app.ts", 5)],
     },
-    reviews: { 4: [{ user: { login: "alice", type: "User" }, state: "APPROVED" }] },
+    reviews: {
+      // On reviewed #3: a person's review with a body counts as a comment; an empty body, the author's own and a bot's
+      // do not.
+      3: [
+        { user: { login: "carol", type: "User" }, state: "COMMENTED", body: "Looks right to me." },
+        { user: { login: "dave", type: "User" }, state: "APPROVED", body: "" },
+        { user: { login: "erin", type: "User" }, state: "APPROVED", body: "  \n" },
+        { user: { login: "dev-three", type: "User" }, state: "COMMENTED", body: "Answering the review." },
+        { user: { login: "helper[bot]", type: "Bot" }, state: "COMMENTED", body: "Automated note." },
+      ],
+      4: [{ user: { login: "alice", type: "User" }, state: "APPROVED" }],
+    },
     commits: {
       2: [
         {
