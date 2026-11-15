@@ -618,3 +618,100 @@ Source: `connect-finish` at `4ea10a92`. This repair changes `packages/core/test/
 - **pack-refs since Git 2.55 (CN-04's tag case).** This was predicted, not observed: no completed run holds CN-04 yet. The case packs a repository whose `refs/heads/at-tag` holds a tag object. Since Git 2.55 the check that refuses a non-commit on a branch is made in `ref_transaction_update` (refs.c), which `pack-refs` goes through, so `pack-refs --all` dies there. The test now removes the loose branch file before `pack-refs`. It then writes the branch's record, `<tag> refs/heads/at-tag` and `^<commit>`, as Git 2.43's `pack-refs` wrote it, in sorted place before the first record, and asserts the header and that position. Live Git and the view then read the packed form as before.
 - CN-03's and CN-04's experiment notes and known strictness describe Git 2.43.0. Their describe-output and `pack-refs` statements hold only for Git before 2.49 and 2.55.
 - **Receipts.** `test/review/model-evidence.test.ts`: 30 pass, 0 fail. `test/read-only-git.test.ts`, run unprivileged as CI runs it, with Git 2.43.0: 70 pass, 9 skip, 0 fail. Git 2.56.1 could not be run here, so the 2.56 behaviour was read from v2.56.1's object-name.c, refs.c, refs/files-backend.c and refs/packed-backend.c. `bun typecheck` passed in packages/core, and `prettier --check` passed on both code files. The Linux unit shards of the dispatched Vector Codium run are the authority for the 2.56 rows.
+
+## 2026-11-15 — C3c: connect branch reviews accept named and default bases (CN-05)
+
+Source: `connect-finish` at `8e547175`. This package changes `packages/engine/src/connect/git.ts`, `packages/app/src/features/agents/agent-dashboard-model.ts`, their tests (`packages/engine/test/connect/git.test.ts`, `packages/engine/test/connect/vectorscope.test.ts`, `packages/engine/test/cli/connected.test.ts`, `packages/app/src/features/agents/agent-dashboard-model.test.ts`), this log, connected-workspace-handoff.md and the spec's status line. It changes no core file, `review/**`, `adapters/vectorscope.ts`, `hub.ts`, route, ledger, schema, generated file, flag, workflow or public page, and no export. `REVIEW_PIPELINE_FILES` and `REVIEW_PIPELINE_SOURCES` are unchanged (core `test/review/model-evidence.test.ts` passes as it is). As the orchestrator instructed, the package is handed back uncommitted for the lead's commit, as CN-03 and CN-04 were.
+
+- **What changed.**
+  - *`query()`* (`connect/git.ts:82-91`). `rev-parse --verify --quiet --end-of-options <x>^{commit}` now refuses an empty `x` or one that starts with `-`. HEAD and 7 to 40 hex digits of either case go to core `resolve` as written. Any other `x` goes to core `reference` as `{ kind: "reference", name: x }`, and core validates the name. `Query` admits the `reference` variant. `default-branch` stays out of `Query`, so no argv reaches it.
+  - *`defaultBranch`* (`connect/git.ts:273`, `defaultBranch: fail` before). It refuses a blocked view or another directory, then makes the private view's `default-branch` read. Code 1 with no bytes returns undefined, which keeps `mergeBase()`'s "Could not find the default branch to compare with. Pass one as the base." refusal (`adapters/vectorscope.ts:1176-1178`). Code 0 with `refs/remotes/origin/<name>\n` returns `{ name: "<name>", ref: "origin/<name>" }`, the shape `mergeBase()`'s candidates take (`origin/<name>`, then `<name>`, :1164-1166). Anything else poisons the view. There is no fallback to the ordinary Git service.
+  - *One shared private read with a per-view pin* (`connect/git.ts:166-186`). `run` and `defaultBranch` share `read(operation: ReadOnlyGit.Read)`, which keeps the post-read `active()` check. Within one `ConnectGit.use`, the first answer for each `reference` spelling and for `default-branch` is kept and returned again. A view keeps at most 64 answers: a new spelling past that poisons the view before any read, and a kept one is still answered. Connect's own emitters use a few spellings per view, so only an unexpected caller reaches the cap.
+  - *The app* (`app/src/features/agents/agent-dashboard-model.ts:63-65`). `directoryReviewTarget` admits 7 to 40 hex digits (64 before), because ReadOnlyGit reads SHA-1 only, and sends the base lowercased. The request body, the sessionStorage reservation key and `directoryRunMatches` all derive from this one value.
+  - *No change* to `cli/cmd/connected.ts`, `tool/connect.ts`, the command template, `adapters/vectorscope.ts`, `hub.ts`, `owner.ts` or core `read-only-git.ts`.
+- **What it closes.**
+  - C3 (review connect:correctness-security #3; v2-complete-plan §4.1 C3, §5 step 12), fixed, Linux-only. Each start path in the brief is covered:
+    - `connect {action: review, target: branch}` with no base: vectorscope.test.ts "with no base, the branch origin/HEAD names is the base" (:1470).
+    - With `base: "main"`: "a base named by a branch is resolved in connect's view and reviewed from its merge base" (:1450). git.test.ts (:319) also runs this request through the actual adapter, CLI, `Review.run` and context collector, and the repository's required clean filter never runs.
+    - `/vectorscope branch main`: command.test.ts:401 shows that it reaches the hub as `{ kind: "branch", base: "main" }`, using a fake adapter. The two cases above take it from there.
+    - `vector connected review --base main`: connected.test.ts "a branch base is sent as written" (:55) shows the exact POST body, which decodes as `Connect.ReviewInput`. `owner.ts:348/438` and `tool/connect.ts:203-204` pass the target through unchanged.
+    - The app's abbreviated or uppercase `baseCommit`: the app test and "an abbreviated uppercase base resolves to its commit" (:1524).
+  - This supersedes v2-complete-plan §4.1's C3 "Remains". Following CN-01's practice, the plan is not edited.
+  - The first sentence of the 2026-11-14 "Remaining Tier B boundaries": CN-03 closed the core half, resolution inside the private view, and CN-05 closes the connect half, because connect now uses only those reads, with no ordinary-Git fallback. Together they close that sentence on Linux. This reconciles CN-03's entry, which claimed the whole sentence, with CN-04's, which kept it open. The directory-key and orphan sentences stay open for CN-08 and CN-09.
+- **Plan critique.** All seven points were taken, two of them in part.
+  1. *A named or default base could move during one review (major).* Taken, with the per-view pin. git.test.ts:551-556 moves origin/main and origin/HEAD with live Git inside one view and gets the first answers again; a fresh view gets the new ones (:562-563). Mutation M11 removes the pin and fails :554. The cap is pinned at :567-584 (M12, M13). The pin is per spelling. `mergeBase()` sends the same spelling on every pass (the request's base, or candidates built from the pinned default branch), so the three check-1 passes and the review see one base. A fix runs in a new `ConnectGit.use` (`adapters/vectorscope.ts:645`, with `ConnectFix.targetOf` returning the name target, `fix.ts:120-122`), so it resolves the name again. Making the fix use the reviewed 40-hex base would need `adapters/vectorscope.ts` or `fix.ts` and a re-pin of the review pipeline, so it is recorded here and not done.
+  2. *`defaultBranch` widens connect's view during the review (major).* Taken. Inside the review, connect's view is `Git.Service` (`fallback: true` in the read-for-read test), so code in that context can now get an answer from `defaultBranch`; before, it poisoned the view. `tool/memory.ts:472` is one such caller. Its next step, `git.show(root, "origin/<name>", file)`, sends `cat-file blob origin/<name>:<file>`, which `object()` refuses, so the review is still poisoned. Two rows join the parametrised "collector reads are answered by VectorScope's ReviewGit view" test (vectorscope.test.ts:629-646). Each row there carries its target, the spelling check 1 verifies its base as, and the calls to members other than `run`; only the commit row's base is filled in at run time. The two new rows:
+     - named base: the quiet verify of `main^{commit}` appears only where check 1 makes it, and the other members are `{ branch: 1 }`;
+     - default base: the quiet verify of `origin/main^{commit}`, and `{ branch: 1, defaultBranch: 2 }`, one call for each check-1 pass in the spied window (before and after the review) and none inside it.
+  3. *The done criterion was met only by composition (minor).* Taken in part. One Linux real-adapter case was added (git.test.ts:319). The tool and CLI legs are still joined at the request shape (Departure 9).
+  4. *Bookkeeping conflict (minor).* Taken, with the critique's wording (above).
+  5. *Gaps in the test specs (minor).* Taken.
+     - `root` comes from `rev-list --max-parents=0 HEAD`, and both git cases assert that it differs from `head`.
+     - `main` is created explicitly, with `update-ref` in git case A and `branch -f` in the vectorscope cases. Ordinary `defaultBranch` is asserted first, but only as defined, not as `main`: a configured `init.defaultBranch` naming another existing branch would win there.
+     - The new `local(...)` cases pass 60_000 or 120_000.
+     - Case A has no uppercase short-id row, because CN-04's row at git.test.ts:442 already covers it; case A keeps a lowercase one, which mutation M3 needs.
+  6. *Bases a user is likely to type now give the generic refusal (minor).* Taken. vectorscope.test.ts:1559 sends `deadbee` and `HEAD~1`. A precondition shows that no object in the fixture has the prefix `deadbee`. Both are refused as unavailable, and nothing is reviewed. No tool or CLI description changed.
+  7. *`read`'s parameter type (minor).* Taken. It is `ReadOnlyGit.Read`, and the pin lives in it.
+- **Departures from the brief and the plan.**
+  1. *Only the quiet verify is mapped,* not the brief's `[--quiet]`. CN-02 removed the non-quiet form, which is VectorScope's collector shape (`review/source.ts:153`). git.test.ts:675 and case B's last row pin it refusing. Connect's only emitter, `commitOf`, is quiet.
+  2. *No lowercasing in the engine.* Core's `resolve` checks the spelling as given against refs, then lowercases it. If the engine lowercased, an uppercase-hex branch name would answer an object where Git answers the branch. Case B's `<upper>` row and mutation M2 pin this.
+  3. *The default comes only from origin/HEAD.* Ordinary `Git.defaultBranch` also tries a single or `upstream` remote, `init.defaultBranch`, and local `main` or `master`. Connect refuses with the existing input message instead. vectorscope.test.ts:1487 and mutation M5 pin this. The comment at `adapters/vectorscope.ts:1157` ("found as `vector review` finds it") is now narrower inside connect. It is left unedited, because the file is pinned.
+  4. *A branch whose name is 7 to 40 hex digits cannot be a bare named base.* `refs/heads/<name>` works (case B).
+  5. *Names of 41 or more hex digits give code 1,* so they get the input refusal, not poison (case A).
+  6. *Core refusal reasons still surface as ConnectGit's generic "unavailable" message.* Examples: `main~1`, a missing or ambiguous short id, a name that is both a branch and a tag, and an all-hex branch name such as `20261115`. vectorscope.test.ts:1559 pins two of them. This is unchanged and unscheduled.
+  7. *App lowercasing* changes the reservation key only for uppercase bases, which never reached a review before.
+  8. *The pin is per view,* so a fix resolves its source review's base name again (critique point 1). A moved base cannot widen the fix: owned paths are the reviewed findings' paths that are still changed (ConnectPolicy.fixable, fix.ts:43), and merging asks connect_write again with the diff.
+  9. *The tool and CLI legs are joined at the request shape,* not proven by one end-to-end run (critique point 3).
+  10. *Test-only refactor.* git.test.ts `setup()`'s `run` takes an optional target. Its two existing callers are unchanged.
+  11. *The plan's (2b) assertion* that ordinary Git "would have answered main" is `toBeDefined()` (critique point 5).
+- **Review round one.** Seven non-blocking findings; all taken.
+  1. Line citations in this entry now name test titles and match the working tree; the read-for-read refactor (3) moved the later vectorscope.test.ts cases down six lines. The handoff's `connect/git.ts` citations were updated too.
+  2. The pin key names `"default-branch"` directly instead of `operation.kind`.
+  3. The read-for-read test's rows carry their target, verified spelling and other-member calls, which replaces two nested ternaries and a lookup.
+  4. The pin goes beyond the brief, which asked only for the query mapping and `defaultBranch`. It is deliberate (critique point 1, Departure 8, M11), and the lead's commit body says so.
+  5. The pin is capped at 64 answers per view (What changed; git.test.ts:567-584; M12 and M13). Before CN-05 any such caller poisoned the view, so the cap fails closed as that did.
+  6. The `defaultBranch` comment now says that `mergeBase()` tries `origin/<name>` before `<name>`, both in this view, and the inner comment is gone. This matches the "falls back to the local branch of that name" case (vectorscope.test.ts:1509).
+  7. Departure 8 says why a moved base cannot widen a fix.
+- **Known strictness.** CN-03's and CN-04's carry over. For example, a name that matches in two of Git's places refuses as ambiguous, a branch whose value is a tag object refuses, and a short id needs at least 7 digits.
+- **Held.** Q1 and Q6 stay open. Every flag stays off. `review/**` is untouched. Off Linux, ReadOnlyGit still refuses and the review stays unavailable (the vectorscope cases fall back to `unsupportedGit`, and the git cases skip through `local`).
+- **Receipts.** Every `bun` command ran through `/home/user/.tools/vector-serial`, one test file at a time, with `--timeout 30000`. Linux-gated engine files ran under `/tmp/vector-v2/connect/as-ci.sh` (a private mount namespace, uid 1000, `CI=true`, Git 2.43.0). Logs are in `/tmp/vector-v2/connect/cn05/`.
+  - *Confirm first:* the new tests, run against the `8e547175` sources.
+    - git.test.ts: 8 pass, 3 fail. The real-adapter case is refused as unavailable. Case A dies at the first view's `defaultBranch`. Case B poisons at `refs/heads/<upper>`; its refusal rows pass, because every name refused then.
+    - vectorscope.test.ts: 30 pass, 1 skip, 7 fail: both new read-for-read rows, the named and default cases, the origin/trunk fallback, and the no-origin/HEAD and unknown-base cases, which were refused as `unavailable`, not `input`. The uppercase short base (CN-04) and the `deadbee`/`HEAD~1` row already passed.
+    - connected.test.ts: 6 pass, so the CLI needed no change.
+    - The app test: 40 pass, 1 fail (`ABCDEF0` was sent as written).
+  - *After, first hand-back:*
+    - git.test.ts: 11 pass, 0 fail (74.0 s).
+    - vectorscope.test.ts: 37 pass, 1 skip, 0 fail (220.6 s).
+    - connected.test.ts: 6 pass.
+    - agent-dashboard-model.test.ts: 41 pass.
+  - *Regressions, one file each:* engine `test/connect/worktree-target.test.ts` 14 pass, `fix.test.ts` 13 pass, `directory-live.test.ts` 7 pass and `command.test.ts` 8 pass (all through the wrapper); core `test/review/model-evidence.test.ts` 30 pass; app `src/features/connect/directory-review-controller.test.ts` 13 pass.
+  - *After review round one* (logs `r1-*.log`, `r2-git.log`): git.test.ts 11 pass, 0 fail (81.4 s); vectorscope.test.ts 37 pass, 1 skip, 0 fail (246.4 s), all four read-for-read rows passing; connected.test.ts 6 pass; worktree-target.test.ts 14 pass and fix.test.ts 13 pass, both through the wrapper. The app files did not change in this round, so the app tests were not run again.
+  - *Mutations.* Final sources: `connect/git.ts` sha256 `5b3bb70d1707f71bd34b538f9e3b79d4da7012794427430917ef91cc01bc6e55`, `agent-dashboard-model.ts` `0b9d5475f6f1de88a02bb68ca25c3e7f4bfe273a4593b76766cb3914bb99a2d4`. M1 to M10 ran on the first hand-back's `connect/git.ts` (`594820f3d6f062c14565a9fba61e6d1391a503ce9c089addb803cb1e8b6486d1`). M11 was run again, and M12 and M13 were run, on the final source. Each mutation ran with `-t` on the named case and was restored by copying the saved source back; `sha256sum -c` passed after every one.
+
+    | Mutation | Result |
+    | --- | --- |
+    | M1: every verify goes to `resolve` | Fails git case A and vectorscope (1) and (2) |
+    | M2: the engine lowercases the revision | Fails git case B at `<upper>` |
+    | M3: 7 to 39 hex digits go to `reference` | Fails case B at `<upper>`, and case A at the short id |
+    | M4: `defaultBranch` always returns undefined | Fails vectorscope (2) and case A |
+    | M5: code 1 falls back to a local `main` | Fails vectorscope (2b) |
+    | M6: code 1 poisons the view | Fails (2b) and case A |
+    | M7: the ref loses its `origin/` prefix | Fails case A (:548) |
+    | M8: the app admits 7 to 64 digits | Fails the app test |
+    | M9: the app stops lowercasing | Fails the app test |
+    | M10: the engine's `-` guard is dropped | Survives, because core also refuses a name that starts with `-`; kept as defence in depth |
+    | M11: no per-view pin | Fails case A (:554), on both sources |
+    | M12: no cap on the pin | Fails case A (:582) |
+    | M13: the cap also refuses a kept answer | Fails case A (:582) |
+  - *Static checks:*
+    - `bun typecheck` passed in packages/engine and packages/app.
+    - `prettier --check` passed on the six code files, and `git diff --check` is clean.
+    - oxlint on the six files: 0 errors. The 14 warnings on changed lines are the `!` and early-return patterns the neighbouring code already uses (`no-unnecessary-type-assertion`, `consistent-return`). After review round one the six files still report 90 warnings and 0 errors; the round adds none.
+    - After review round one, `bun typecheck` passed again in packages/engine and packages/app, and `prettier --check` and `git diff --check` passed again.
+  - *Commit gate,* rerun on the final tree (the two sha256 values above) at `--timeout 30000`, the Linux-gated files through the same wrapper (logs `gate-*.log`):
+    - git.test.ts: 11 pass, 0 fail, 123 expect() calls, 85.8 s.
+    - vectorscope.test.ts: 37 pass, 1 skip, 0 fail, 368 expect() calls, 221.1 s.
+    - connected.test.ts: 6 pass, 25 expect() calls. agent-dashboard-model.test.ts: 41 pass, 103 expect() calls.
+    - `bun typecheck` passed in packages/engine and packages/app. The full typecheck (`TURBO_CACHE_DIR=/home/user/wt/cn/.turbo/cache bun turbo typecheck --concurrency=2`) passed, 27 of 27 tasks; turbo replayed 24 of them from the worktree's local cache.
+  - *CI:* none is claimed. The Linux engine shard of test.yml is the authority for the Linux-gated cases.

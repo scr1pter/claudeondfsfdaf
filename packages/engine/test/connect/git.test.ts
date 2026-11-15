@@ -9,6 +9,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
+import type { Connect } from "@vectordevai/schema/connect"
 import { ConnectHub } from "@/connect/hub"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
 import { ConnectGit } from "@/connect/git"
@@ -254,20 +255,24 @@ const setup = (kind: "clean" | "process") =>
       resolvePromptParts: (text) => prompts.resolvePromptParts(text),
       prompt: (input) => prompts.prompt(input).pipe(Effect.orDie),
     }
-    const request: ConnectHub.StartRequest = {
-      to: "vectorscope",
-      action: "review",
-      target: { kind: kind === "process" ? "staged" : "uncommitted" },
-      requester: { kind: "agent", sessionID: requester.id, agent: "build" },
-      directory,
-      background: false,
-    }
+    const target: Connect.Target = { kind: kind === "process" ? "staged" : "uncommitted" }
     return {
       directory,
       counter,
       head,
       llm,
-      run: () => hub.run({ request, call: { ask: () => Effect.void, promptOps: ops } }),
+      run: (reviewed = target) =>
+        hub.run({
+          request: {
+            to: "vectorscope",
+            action: "review",
+            target: reviewed,
+            requester: { kind: "agent", sessionID: requester.id, agent: "build" },
+            directory,
+            background: false,
+          },
+          call: { ask: () => Effect.void, promptOps: ops },
+        }),
     }
   })
 
@@ -307,6 +312,47 @@ for (const kind of ["clean", "process"] as const) {
     60_000,
   )
 }
+
+// The brief's `/vectorscope branch main` and `vector connected review --base main` send this request unchanged
+// (tool/connect.ts, connect/owner.ts); here it runs the actual adapter, CLI, Review.run and context collector.
+local(
+  "a branch review based on a branch name reaches the actual adapter/CLI/Review.run at that branch's commit",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* setup("clean")
+      const original = yield* Git.Service
+      // setup()'s edit and added file, committed on a feature branch off a local `main` at the baseline.
+      yield* git(f.directory, ["checkout", "-q", "-b", "feature"])
+      yield* git(f.directory, ["update-ref", "refs/heads/main", f.head])
+      yield* git(f.directory, ["add", "-A"])
+      yield* git(f.directory, ["commit", "-qm", "change the probe on a branch"])
+      const head = yield* git(f.directory, ["rev-parse", "HEAD"])
+      yield* Effect.promise(() => fs.writeFile(f.counter, ""))
+      yield* f.llm.push(
+        reply()
+          .tool("StructuredOutput", {
+            summary: "The branch is sound.",
+            risk: "low",
+            files: [{ path: "src/probe.ts", note: "The return value changed" }],
+            findings: [],
+          })
+          .usage({ input: 100, output: 20 }),
+      )
+      const run = yield* f.run({ kind: "branch", base: "main" })
+      expect(run.result?.state, run.result?.summary).toBe("completed")
+      expect(run.result?.base).toBe(f.head)
+      expect(run.result?.head).toBe(head)
+      expect(run.result?.target).toEqual({ kind: "branch", base: "main" })
+      const requests = yield* f.llm.inputs
+      expect(requests.length).toBeGreaterThan(0)
+      expect(JSON.stringify(requests)).toContain("src/probe.ts")
+      expect(clients.length).toBeGreaterThan(0)
+      expect(clients.every((client) => client !== original)).toBe(true)
+      expect(yield* calls(f.counter)).toBe(0)
+    }),
+  { git: true },
+  60_000,
+)
 
 for (const kind of ["unsupported-query", "unsupported-metadata"] as const) {
   local(
@@ -446,6 +492,168 @@ local(
     }),
   { git: true },
   60_000,
+)
+
+const verify = (name: string) => ["rev-parse", "--verify", "--quiet", "--end-of-options", `${name}^{commit}`]
+// What a branch review's base can name, all at the fixture's HEAD: a local `main`, origin/main with origin/HEAD naming
+// it, a lightweight tag and an annotated one.
+const baseRefs = (directory: string) =>
+  Effect.gen(function* () {
+    yield* git(directory, ["update-ref", "refs/heads/main", "HEAD"])
+    yield* git(directory, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+    yield* git(directory, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+    yield* git(directory, ["tag", "v1.0"])
+    yield* git(directory, ["tag", "-a", "-m", "notes", "v1.0-notes"])
+  })
+
+local(
+  "branch review bases by name, remote-tracking branch, tag and origin/HEAD resolve inside connect's view",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* shapesFixture
+      const ordinary = yield* Git.Service
+      const root = yield* git(f.directory, ["rev-list", "--max-parents=0", "HEAD"])
+      expect(root).not.toBe(f.head)
+      // With no origin/HEAD, ordinary Git still names a local default branch, and connect's view names none.
+      yield* git(f.directory, ["update-ref", "refs/heads/main", "HEAD"])
+      expect(yield* ordinary.defaultBranch(f.directory)).toBeDefined()
+      yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          expect(yield* selected.git.defaultBranch(f.directory)).toBeUndefined()
+          yield* selected.check()
+        }),
+      )
+      yield* baseRefs(f.directory)
+      const read = (selected: ConnectGit.Selected, name: string) =>
+        selected.git
+          .run(verify(name), { cwd: f.directory })
+          .pipe(Effect.map((result) => ({ name, code: result.exitCode, text: result.text() })))
+      yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          // The lowercase short id goes to `resolve`, as the uppercase one in the read-shapes case does.
+          const found = [
+            f.branch,
+            `refs/heads/${f.branch}`,
+            "main",
+            "origin/main",
+            "refs/remotes/origin/main",
+            "v1.0",
+            "v1.0-notes",
+            f.head.slice(0, 7),
+          ]
+          for (const name of found) expect(yield* read(selected, name)).toEqual({ name, code: 0, text: f.head + "\n" })
+          // No ref of the name, and the name cannot be an object id: Git's quiet "not found".
+          for (const name of ["no-such-branch", "a".repeat(41), "a".repeat(64)])
+            expect(yield* read(selected, name)).toEqual({ name, code: 1, text: "" })
+          expect(yield* selected.git.defaultBranch(f.directory)).toEqual({ name: "main", ref: "origin/main" })
+          // Refs are live, but one view answers a name and the default branch as it first did, so every pass of one
+          // review compares the same range.
+          yield* git(f.directory, ["update-ref", "refs/remotes/origin/main", root])
+          yield* git(f.directory, ["update-ref", "refs/remotes/origin/moved", root])
+          yield* git(f.directory, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/moved"])
+          expect(yield* read(selected, "origin/main")).toEqual({ name: "origin/main", code: 0, text: f.head + "\n" })
+          expect(yield* selected.git.defaultBranch(f.directory)).toEqual({ name: "main", ref: "origin/main" })
+          yield* selected.check()
+        }),
+      )
+      // A new view reads the refs again.
+      yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          expect(yield* read(selected, "origin/main")).toEqual({ name: "origin/main", code: 0, text: root + "\n" })
+          expect(yield* selected.git.defaultBranch(f.directory)).toEqual({ name: "moved", ref: "origin/moved" })
+          yield* selected.check()
+        }),
+      )
+      // A view keeps at most 64 answers. A kept one is still answered there, and a new spelling poisons the view.
+      const missing = Array.from({ length: 63 }, (_, index) => `no-such-${index}`)
+      const capped = { kept: false, ran: "", model: false }
+      const bounded = yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          expect(yield* Effect.forEach(missing, (name) => read(selected, name))).toEqual(
+            missing.map((name) => ({ name, code: 1, text: "" })),
+          )
+          expect(yield* selected.git.defaultBranch(f.directory)).toEqual({ name: "moved", ref: "origin/moved" })
+          capped.kept = (yield* read(selected, "no-such-0")).code === 1
+          capped.ran = (yield* read(selected, "origin/main").pipe(Effect.exit))._tag
+          yield* selected.check()
+          capped.model = true
+        }),
+      ).pipe(Effect.exit)
+      expect(capped).toEqual({ kept: true, ran: "Failure", model: false })
+      const error = bounded._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(bounded.cause)) : undefined
+      expect(error instanceof Error ? error.message : undefined).toBe(REFUSED)
+    }),
+  { git: true },
+  60_000,
+)
+
+local(
+  "branch review bases that core refuses poison connect's view",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* shapesFixture
+      const root = yield* git(f.directory, ["rev-list", "--max-parents=0", "HEAD"])
+      expect(root).not.toBe(f.head)
+      yield* baseRefs(f.directory)
+      // A branch spelled as an uppercase short id of HEAD, at the root commit. Live Git reads the ref first.
+      const upper = f.head.slice(0, Math.max(7, f.head.search(/[a-f]/) + 1)).toUpperCase()
+      yield* git(f.directory, ["branch", upper, root])
+      expect(yield* git(f.directory, verify(upper))).toBe(root)
+      const shapes = [
+        verify("-main"),
+        verify(""),
+        verify("main~1"),
+        verify("HEAD~1"),
+        verify("@"),
+        verify("FETCH_HEAD"),
+        verify("refs/stash"),
+        // A bare remote names origin/HEAD, which is outside branches and tags.
+        verify("origin"),
+        // Fewer than 7 hex digits, and `git describe` output: either may be an object id.
+        verify("abcd"),
+        verify("v1.0-1-gabcdef0"),
+        // A short id that a ref also spells never answers through the ref, and the engine does not lowercase it.
+        verify(upper),
+        // VectorScope's collector verify, which is not quiet.
+        ["rev-parse", "--verify", "--end-of-options", "main^{commit}"],
+      ]
+      const seen = yield* Effect.forEach(shapes, (args) => refuses(f.directory, args))
+      expect(seen).toEqual(shapes.map(refusedRow))
+      // The full name of that branch answers it.
+      yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          const result = yield* selected.git.run(verify(`refs/heads/${upper}`), { cwd: f.directory })
+          expect({ code: result.exitCode, text: result.text() }).toEqual({ code: 0, text: root + "\n" })
+          yield* selected.check()
+        }),
+      )
+      // Another directory, then an origin/HEAD that names no origin branch.
+      const other = yield* tmpdirScoped()
+      const outside = yield* ConnectGit.use(f.directory, (selected) =>
+        selected.git.defaultBranch(other).pipe(Effect.exit),
+      )
+      expect(outside._tag).toBe("Failure")
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          path.join(f.metadata.commonDirectory, "refs", "remotes", "origin", "HEAD"),
+          "ref: refs/heads/main\n",
+        ),
+      )
+      const seenDefault = { ran: "", model: false }
+      const malformed = yield* ConnectGit.use(f.directory, (selected) =>
+        Effect.gen(function* () {
+          seenDefault.ran = (yield* selected.git.defaultBranch(f.directory).pipe(Effect.exit))._tag
+          yield* selected.check()
+          seenDefault.model = true
+        }),
+      ).pipe(Effect.exit)
+      expect(seenDefault).toEqual({ ran: "Failure", model: false })
+      const error =
+        malformed._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(malformed.cause)) : undefined
+      expect(error instanceof Error ? error.message : undefined).toBe(REFUSED)
+    }),
+  { git: true },
+  120_000,
 )
 
 local(

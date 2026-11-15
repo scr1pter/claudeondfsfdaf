@@ -24,10 +24,14 @@ function requireRead(condition: unknown): asserts condition {
 }
 
 type Field = "directory" | "gitDirectory" | "commonDirectory" | "branch" | "prefix"
-// Only the reads connect's own checks make. A collector read (status, a context diff, an added-file diff, a size or
-// existence check, grep, roots, history, subjects or blame) has no variant here, so query() cannot return one.
+// Only the reads connect's own checks make, a branch review's base by name included. A collector read (status, a
+// context diff, an added-file diff, a size or existence check, grep, roots, history, subjects or blame) has no variant
+// here, so query() cannot return one. The default branch is read only by defaultBranch(), never from argv.
 type Query =
-  | Extract<ReadOnlyGit.Read, { readonly kind: "resolve" | "merge-base" | "untracked" | "batch-files" | "tree" }>
+  | Extract<
+      ReadOnlyGit.Read,
+      { readonly kind: "resolve" | "reference" | "merge-base" | "untracked" | "batch-files" | "tree" }
+    >
   | {
       readonly kind: "diff"
       readonly from: string
@@ -47,8 +51,9 @@ function object(value: string): Query {
 }
 
 /**
- * Translate only the fixed reads connect's own checks emit (changes, drifted, ledOutAt, stateFile, commitOf, mergeBase
- * and plan's settings read); VectorScope's collector reads through its own ReviewGit view. Nothing runs from raw argv.
+ * Translate only the fixed reads connect's own checks emit (changes, drifted, ledOutAt, stateFile, commitOf with a
+ * branch review's base by name or commit, mergeBase and plan's settings read); VectorScope's collector reads through
+ * its own ReviewGit view. Nothing runs from raw argv.
  */
 function query(args: readonly string[], stdin?: Buffer): Query {
   requireRead(args.length > 0 && args.length <= 512)
@@ -75,7 +80,15 @@ function query(args: readonly string[], stdin?: Buffer): Query {
     return { kind: "metadata", field: metadata.get(args[1]!)! }
   if (same(args, ["symbolic-ref", "--quiet", "--short", "HEAD"])) return { kind: "metadata", field: "branch" }
   const rest = prefix(args, ["rev-parse", "--verify", "--quiet", "--end-of-options"])
-  if (rest?.length === 1 && rest[0]!.endsWith("^{commit}")) return { kind: "resolve", revision: rest[0]!.slice(0, -9) }
+  if (rest?.length === 1 && rest[0]!.endsWith("^{commit}")) {
+    const revision = rest[0]!.slice(0, -9)
+    requireRead(revision !== "" && !revision.startsWith("-"))
+    // HEAD and 7 to 40 hex digits of either case are object ids. Core's resolve checks the spelling as given against
+    // refs before it lowercases, so a short id never answers through a ref. Any other spelling is a name for core to
+    // validate.
+    if (revision === "HEAD" || /^[0-9a-f]{7,40}$/i.test(revision)) return { kind: "resolve", revision }
+    return { kind: "reference", name: revision }
+  }
   if (args[0] === "merge-base" && args.length === 3) return { kind: "merge-base", left: args[1]!, right: args[2]! }
   if (args[0] === "cat-file" && args.length === 3 && args[1] === "blob") return object(args[2]!)
   if (same(args, ["ls-files", "--others", "--exclude-standard", "-z"])) return { kind: "untracked" }
@@ -150,6 +163,27 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
   }
   const fail = () => Effect.die(block())
   const cwd = (directory: string) => active() && (directory === repository.directory || directory === admitted)
+  // Refs are live, so one view answers a name, and the default branch, as it first did: every check 1 pass of one
+  // review then compares the range the review got.
+  const pinned = new Map<string, { readonly code: number; readonly bytes: Buffer }>()
+  const read = (operation: ReadOnlyGit.Read) =>
+    Effect.gen(function* () {
+      const key =
+        operation.kind === "reference"
+          ? "reference " + operation.name
+          : operation.kind === "default-branch"
+            ? "default-branch"
+            : undefined
+      const kept = key === undefined ? undefined : pinned.get(key)
+      // Connect's own reads use a few spellings. A caller that keeps naming new ones fails closed instead.
+      if (key !== undefined && kept === undefined && pinned.size >= 64) return yield* fail()
+      const result =
+        kept ??
+        (yield* Effect.tryPromise({ try: () => repository.read(operation), catch: () => block() }).pipe(Effect.orDie))
+      if (!active()) return yield* fail()
+      if (key !== undefined) pinned.set(key, result)
+      return result
+    })
   const output = (code: number, bytes: Buffer, bound = MAX): Git.Result => ({
     exitCode: code,
     stdout: bytes.subarray(0, bound),
@@ -204,10 +238,7 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
           options.maxOutputBytes,
         )
       }
-      const result = yield* Effect.tryPromise({ try: () => repository.read(mapped), catch: () => block() }).pipe(
-        Effect.orDie,
-      )
-      if (!active()) return yield* fail()
+      const result = yield* read(mapped)
       return output(result.code, result.bytes, options.maxOutputBytes)
     })
   const check = () =>
@@ -237,7 +268,18 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
               (directory === repository.directory ? "" : "/"),
           )
         : fail(),
-    defaultBranch: fail,
+    // Only origin/HEAD, read in the private view; no ordinary-Git fallback to other remotes, init.defaultBranch or
+    // main/master. mergeBase() then tries origin/<name> before <name>, both in this view.
+    defaultBranch: (directory) =>
+      Effect.gen(function* () {
+        if (blocked || !cwd(directory)) return yield* fail()
+        const result = yield* read({ kind: "default-branch" })
+        if (result.code === 1 && result.bytes.byteLength === 0) return undefined
+        const ref =
+          result.code === 0 ? /^refs\/remotes\/(origin\/[^\n]+)\n$/.exec(result.bytes.toString("utf8"))?.[1] : undefined
+        if (!ref) return yield* fail()
+        return { name: ref.slice("origin/".length), ref } satisfies Git.Base
+      }),
     hasHead: (directory) => (cwd(directory) ? Effect.succeed(true) : fail()),
     mergeBase: (directory, base, head = "HEAD") =>
       run(["merge-base", base, head], { cwd: directory }).pipe(

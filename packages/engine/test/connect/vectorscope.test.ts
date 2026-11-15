@@ -609,22 +609,41 @@ describe("a review through connect", () => {
   }
   const NAMES = "--name-only --no-renames --no-ext-diff --no-relative -z"
   // Connect's check 1 (`changes()`) read by read, commits masked. No read names a file: the batch read's go on stdin.
-  const checkOne = (branch: boolean) => [
+  // A branch review's base is verified as `verified` spells it.
+  const checkOne = (verified?: string) => [
     "rev-parse --show-toplevel",
     "rev-parse --verify --quiet --end-of-options HEAD^{commit}",
-    ...(branch ? ["rev-parse --verify --quiet --end-of-options <sha>^{commit}", "merge-base <sha> <sha>"] : []),
+    ...(verified !== undefined
+      ? [`rev-parse --verify --quiet --end-of-options ${verified}^{commit}`, "merge-base <sha> <sha>"]
+      : []),
     `diff ${NAMES} <sha> --`,
     `diff --cached ${NAMES} <sha> --`,
     "ls-files --others --exclude-standard -z",
     "ls-files --others -z -- :(icase).vector :(icase).gitattributes",
-    ...(branch ? [`diff ${NAMES} <sha> <sha> --`] : []),
+    ...(verified !== undefined ? [`diff ${NAMES} <sha> <sha> --`] : []),
     "cat-file --batch --follow-symlinks",
   ]
 
+  // Each row's target, the spelling check 1 verifies its base as, and the calls connect's view gets to members other
+  // than run(). The commit row's base is HEAD before the branch commit, known once the fixture exists.
   for (const row of [
-    { title: "a connect review's", branch: false },
-    { title: "a connect branch review's", branch: true },
-  ])
+    { title: "a connect review's", base: undefined, target: { kind: "uncommitted" }, verified: undefined, others: {} },
+    { title: "a connect branch review's", base: "commit", target: undefined, verified: "<sha>", others: { branch: 1 } },
+    {
+      title: "a named-base branch review's",
+      base: "name",
+      target: { kind: "branch", base: "main" },
+      verified: "main",
+      others: { branch: 1 },
+    },
+    {
+      title: "a default-base branch review's",
+      base: "default",
+      target: { kind: "branch" },
+      verified: "origin/main",
+      others: { branch: 1, defaultBranch: 2 },
+    },
+  ] as const)
     it.instance(
       `${row.title} collector reads are answered by VectorScope's ReviewGit view, never by connect's own Git view`,
       () =>
@@ -636,13 +655,17 @@ describe("a review through connect", () => {
               'import { computeConnectProbe } from "./probe"\nexport const value = computeConnectProbe()\n',
           })
           yield* write(directory, { "src/probe.ts": 'export function computeConnectProbe() { return "B" }\n' })
-          const target: Connect.Target = row.branch
-            ? { kind: "branch", base: yield* git(directory, "rev-parse", "HEAD") }
-            : { kind: "uncommitted" }
+          const base = yield* git(directory, "rev-parse", "HEAD")
+          const target: Connect.Target = row.target ?? { kind: "branch", base }
           // A branch review covers the same two edits, committed on the branch.
-          if (row.branch) {
+          if (row.base !== undefined) {
             yield* git(directory, "checkout", "-q", "-b", "feature")
             yield* git(directory, "commit", "-qam", "Change the probe and last()")
+          }
+          if (row.base === "name") yield* git(directory, "branch", "-f", "main", base)
+          if (row.base === "default") {
+            yield* git(directory, "update-ref", "refs/remotes/origin/main", base)
+            yield* git(directory, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
           }
           const layer = yield* Git.Service
           const views: Git.Interface[] = []
@@ -704,14 +727,19 @@ describe("a review through connect", () => {
               ),
             )
           expect({ before: reads.slice(0, marks[0]), after: reads.slice(marks[0]) }).toEqual({
-            before: [...checkOne(row.branch), ...(row.branch ? ["rev-parse --absolute-git-dir"] : [])],
-            after: checkOne(row.branch),
+            before: [
+              ...checkOne(row.verified),
+              ...(row.verified !== undefined ? ["rev-parse --absolute-git-dir"] : []),
+            ],
+            after: checkOne(row.verified),
           })
-          // No other member was called, apart from the branch name stateFile() asks for once before a branch review.
+          // No other member was called, apart from the branch name stateFile() asks for once before a branch review and,
+          // with no base, the default branch each spied check 1 asks for: one before the review and one after, none
+          // inside it.
           const others = spies
             .filter((item) => item.member !== "run" && item.spy.mock.calls.length > 0)
             .map((item) => [item.member, item.spy.mock.calls.length])
-          expect(Object.fromEntries(others)).toEqual(row.branch ? { branch: 1 } : {})
+          expect(Object.fromEntries(others)).toEqual(row.others)
         }),
       instance,
     )
@@ -1395,6 +1423,154 @@ describe("a review through connect", () => {
         const run = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
         expect(run.result?.state).toBe("failed")
         expect(run.result?.summary).toContain(ConnectReviewService.refusedMessage("loop"))
+      }),
+    instance,
+  )
+})
+
+// connect's mergeBase() resolves a branch review's base through ReadOnlyGit's `reference`, `resolve` and
+// `default-branch` reads; the review gets only the merge base it found.
+describe("branch bases through connect's Git view", () => {
+  // A feature branch one commit past `base`: setup()'s uncommitted change, committed.
+  const branched = Effect.gen(function* () {
+    const f = yield* setup()
+    const base = yield* git(f.directory, "rev-parse", "HEAD")
+    yield* git(f.directory, "checkout", "-q", "-b", "feature")
+    yield* git(f.directory, "commit", "-qam", "Index last() by length")
+    const head = yield* git(f.directory, "rev-parse", "HEAD")
+    const run = (target: Connect.Target) =>
+      f.hub.run({
+        request: review(f.requester.id, f.directory, { target }),
+        call: { ...asker(), promptOps: recorder().ops },
+      })
+    return { ...f, base, head, run }
+  })
+
+  it.instance(
+    "a base named by a branch is resolved in connect's view and reviewed from its merge base",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "branch", "-f", "main", f.base)
+        const target: Connect.Target = { kind: "branch", base: "main" }
+        const run = yield* f.run(target)
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+        expect(run.result?.head).toBe(f.head)
+        expect(run.result?.target).toEqual(target)
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.base).toBe(f.base)
+        expect(calls[0]!.files.map((file) => file.path)).toEqual(["src/list.ts"])
+      }),
+    instance,
+  )
+
+  it.instance(
+    "with no base, the branch origin/HEAD names is the base",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "update-ref", "refs/remotes/origin/main", f.base)
+        yield* git(f.directory, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        const run = yield* f.run({ kind: "branch" })
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.base).toBe(f.base)
+      }),
+    instance,
+  )
+
+  it.instance(
+    "with no base and no origin/HEAD, the review is refused for its input, though ordinary Git would pick a branch",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "branch", "-f", "main", f.base)
+        const ordinary = yield* Git.Service
+        expect(yield* ordinary.defaultBranch(f.directory)).toBeDefined()
+        const run = yield* f.run({ kind: "branch" })
+        expect(run.result?.state).toBe("refused")
+        expect(run.result?.refusal).toBe("input")
+        expect(run.result?.verdict).toBe("not-reviewed")
+        expect(run.result?.summary).toContain(
+          "Could not find the default branch to compare with. Pass one as the base.",
+        )
+        expect(calls).toEqual([])
+        expect(outcomes).toEqual([])
+      }),
+    instance,
+  )
+
+  it.instance(
+    "an origin/HEAD that names a missing origin branch falls back to the local branch of that name",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        yield* git(f.directory, "branch", "trunk", f.base)
+        yield* git(f.directory, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+        const run = yield* f.run({ kind: "branch" })
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+      }),
+    instance,
+  )
+
+  it.instance(
+    "an abbreviated uppercase base resolves to its commit",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        // The prefix runs to a letter, so uppercasing changes it.
+        const short = f.base.slice(0, Math.max(7, f.base.search(/[a-f]/) + 1)).toUpperCase()
+        const run = yield* f.run({ kind: "branch", base: short })
+        expect(run.result?.state, run.result?.summary).toBe("completed")
+        expect(run.result?.base).toBe(f.base)
+        expect(calls[0]!.base).toBe(f.base)
+      }),
+    instance,
+  )
+
+  it.instance(
+    "a base that names nothing is refused for its input before any review",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        const run = yield* f.run({ kind: "branch", base: "no-such-branch" })
+        expect(run.result?.state).toBe("refused")
+        expect(run.result?.refusal).toBe("input")
+        expect(run.result?.verdict).toBe("not-reviewed")
+        expect(run.result?.summary).toContain(
+          "Could not find no-such-branch to compare with. Pass a branch or commit as the base.",
+        )
+        expect(calls).toEqual([])
+        expect(outcomes).toEqual([])
+      }),
+    instance,
+  )
+
+  it.instance(
+    "a missing short id or revision syntax as the base is refused as unavailable before any review",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
+        const f = yield* branched
+        const objects = yield* git(f.directory, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+        expect(objects.split("\n").some((id) => id.startsWith("deadbee"))).toBe(false)
+        for (const base of ["deadbee", "HEAD~1"]) {
+          const run = yield* f.run({ kind: "branch", base })
+          expect(run.result?.state).toBe("refused")
+          expect(run.result?.refusal).toBe("unavailable")
+          expect(run.result?.summary).toContain("Git reads cannot be inspected safely")
+        }
+        expect(calls).toEqual([])
+        expect(outcomes).toEqual([])
       }),
     instance,
   )
