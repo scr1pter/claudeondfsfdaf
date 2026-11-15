@@ -1,18 +1,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { RedisClient } from "bun"
-import { ENTITLEMENTS, type EntitlementSnapshot } from "../packages/schema/src/codium-entitlements"
+import { ENTITLEMENTS, PLAN_REASONS, type EntitlementSnapshot } from "../packages/schema/src/codium-entitlements"
 import { Hosted } from "../packages/schema/src/hosted"
 import { codiumKey } from "../api/_lib/codium-keys"
-import { MODEL_HOLD_MS, parseHoldMember, POOL_SCRIPTS, readDebits } from "../api/_lib/codium-pool"
+import { FINAL_PERIOD_REASONS, MODEL_HOLD_MS, parseHoldMember, POOL_SCRIPTS, readDebits } from "../api/_lib/codium-pool"
 import { readSnapshot } from "../api/_lib/codium-snapshot"
 import {
   HOSTED_ENTITLEMENT_SCRIPTS,
   hostedAccess,
   hostedCaps,
   hostedDiskPolicy,
+  hostedDownloadAccess,
   hostedMinutesKey,
   hoursUsedShare,
   readHostedMinutes,
+  requireHostedDownload,
   requireHostedStart,
 } from "../api/_lib/hosted-entitlement"
 import {
@@ -830,6 +832,110 @@ describe("storage, egress and retention", () => {
     await ledger.reset()
     // About 0.10 left covers three days of 10 GB.
     expect((await chargeRetention(id, { computer: "vh-a-1", gb: 10, days: 14 }, tight.options)).days).toBe(3)
+  })
+})
+
+describe("download-only blocks (H1a)", () => {
+  test("which plans may download, and what each other one answers, for every plan state and end reason", () => {
+    const answers = Object.fromEntries(
+      PLAN_REASONS.map((reason) => [reason, hostedDownloadAccess(snapshotOf("ended", "vector-100", { reason }))]),
+    )
+    expect(answers).toEqual({
+      payment_failed: "final",
+      action_required: "final",
+      payment_pending: "final",
+      canceled: "final",
+      refunded: "refused",
+      disputed: "refused",
+      early_fraud_warning: "refused",
+      closing: "closing",
+      owner: "refused",
+    })
+    expect([...FINAL_PERIOD_REASONS].sort()).toEqual([
+      "action_required",
+      "canceled",
+      "payment_failed",
+      "payment_pending",
+    ])
+    expect(hostedDownloadAccess(snapshotOf("ended", "vector-100"))).toBe("final")
+    expect(hostedDownloadAccess(snapshotOf("frozen", "vector-100", { reason: "disputed" }))).toBe("frozen")
+    expect(hostedDownloadAccess(snapshotOf("paused", "vector-100", { reason: "payment_failed" }))).toBe("paused")
+    expect(hostedDownloadAccess(snapshotOf("active", "vector-100"))).toBe("live")
+    expect(hostedDownloadAccess(snapshotOf("renewing", "vector-200"))).toBe("live")
+    expect(hostedDownloadAccess(snapshotOf("active", "vector-50"))).toBe("current")
+    expect(hostedDownloadAccess(snapshotOf("none", "vector-50"))).toBe("refused")
+    expect(hostedDownloadAccess(undefined)).toBe("refused")
+    const ended = snapshotOf("ended", "vector-100", { reason: "canceled" })
+    expect(requireHostedDownload(ended, "on")).toEqual({ snapshot: ended, final: true })
+    expect(requireHostedDownload(snapshotOf("active", "vector-50"), "on").final).toBe(false)
+    for (const service of ["off", "no-new", "stop"] as const)
+      expect(() => requireHostedDownload(ended, service)).toThrow(
+        expect.objectContaining({ code: "HOSTED_UNAVAILABLE" }),
+      )
+  })
+
+  test("an ended plan's block is held from its final period, though reconcile revoked and switched off its key", async () => {
+    const w = await world()
+    Object.assign(w.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
+    w.fakes.clock.advance(6 * HOUR + MINUTE)
+    const ended = await reconcileModelPlanAccount(id, w.fetcher, w.fakes.clock.now)
+    expect(ended).toMatchObject({ state: "ended", reason: "canceled" })
+    expect((await readModelPlanAccount(id, w.fetcher))?.key).toMatchObject({ hash: SEEDED, revoked: "canceled" })
+    expect(w.fakes.openRouter.keys.get(SEEDED)!.disabled).toBe(true)
+    // A session's block is refused as before; a download's is held from the final period's key.
+    await expect(openBlock(id, { session: "s1", size: "standard" }, w.options)).rejects.toMatchObject({
+      statusCode: 402,
+    })
+    await expect(
+      openBlock(id, { session: "s2", size: "standard", renew: 0, download: true }, w.options),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+    })
+    const started = w.fakes.clock.now
+    const block = await openBlock(id, { session: "s2", size: "standard", download: true }, w.options)
+    expect(block).toMatchObject({
+      block: 0,
+      startedAt: started,
+      endsAt: started + 15 * MINUTE,
+      stopBy: started + 20 * MINUTE,
+    })
+    expect(held(w).map(parseHoldMember)).toEqual([
+      { ticket: expect.any(String), purpose: "hosted", run: undefined, micro: 125_000 },
+    ])
+    expect((await runningBlocks(id, w.fetcher))[0]).toMatchObject({ pool: SEEDED, epoch: E1, periodEnd: P1.end * 1000 })
+    expect(await minutes(w)).toEqual({ used: 0, reserved: 15 })
+    w.fakes.clock.advance(4 * MINUTE)
+    expect(await closeBlock(id, { session: "s2", block: 0 }, w.options)).toBe(true)
+    // Its minutes are charged to that final key as its debit, and the key stays switched off.
+    expect((await debits(w)).map((debit) => [debit.ref, debit.micro])).toEqual([
+      ["hb-s2-0", 4 * chargeMinuteMicro("standard")],
+    ])
+    expect(held(w)).toEqual([])
+    expect(w.fakes.openRouter.keys.get(SEEDED)!.disabled).toBe(true)
+    expect((await rows()).map((row) => [row.ref, row.units, row.periodStart])).toEqual([
+      ["hb-s2-0", 4, P1.start * 1000],
+    ])
+    // The final hold is the cloud computer's only: any other purpose, or a run, is refused before anything is read.
+    for (const [purpose, runId] of [
+      ["brain", undefined],
+      ["hosted", "run-1"],
+    ] as const)
+      await expect(
+        holdPool(id, 0.1, MINUTE, purpose, { fetcher: w.fetcher, final: true, ...(runId ? { runId } : {}) }),
+      ).rejects.toMatchObject({ statusCode: 500, code: "MODEL_PLAN_POOL_INVALID" })
+  })
+
+  test("a final hold is refused once the plan ended for a reason whose period was not kept", async () => {
+    const w = await world()
+    Object.assign(w.fakes.stripe.subscription("sub_renewing")!, { status: "canceled", ended_at: P1.end - 3600 })
+    await reconcileModelPlanAccount(id, w.fetcher, w.fakes.clock.now)
+    const snapshot = (await readSnapshot(id, w.fetcher))!
+    w.fakes.store.set(codiumKey("ent", id), JSON.stringify({ ...snapshot, reason: "refunded" }))
+    await expect(holdPool(id, 0.1, MINUTE, "hosted", { fetcher: w.fetcher, final: true })).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MODEL_PLAN_RENEWING",
+    })
+    expect(held(w)).toEqual([])
   })
 })
 

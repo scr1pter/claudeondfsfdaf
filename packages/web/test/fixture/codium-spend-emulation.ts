@@ -1,4 +1,4 @@
-import { POOL_SCRIPTS } from "../../../../api/_lib/codium-pool"
+import { FINAL_PERIOD_REASONS, POOL_SCRIPTS } from "../../../../api/_lib/codium-pool"
 import { MODEL_SPEND_SCRIPTS } from "../../../../api/_lib/codium-spend-ledger"
 import { USAGE_HISTORY_SCRIPTS } from "../../../../api/_lib/codium-usage-history"
 
@@ -6,7 +6,7 @@ import { USAGE_HISTORY_SCRIPTS } from "../../../../api/_lib/codium-usage-history
  * The A17 spend scripts as TypeScript, step for step, for the in-memory stores that run the root `test/` suite without
  * Valkey (test.yml): GENESIS, the ledger's READ, status's read-only DAY figure, status's HISTORY of day buckets
  * (codium-usage-history.ts) and the common pool HOLD, with the shared ledger read and fence they are built from
- * (codium-spend-ledger.ts MODEL_SPEND_LUA). Model ADMIT and SETTLE are
+ * (codium-spend-ledger.ts MODEL_SPEND_LUA) and HOLD's final fence (codium-pool.ts, H1a). Model ADMIT and SETTLE are
  * deliberately not emulated: their money and race assertions run only on real Lua. test/codium-pool.test.ts runs the
  * same HOLD/READ cases both in memory and on Valkey (VECTOR_TEST_REDIS_URL), which is the check that this emulation and
  * the Lua agree; DAY's agreement with ADMIT is checked on real Lua in model-plans-api.test.ts.
@@ -305,13 +305,14 @@ export function spendScripts(store: SpendStore): [string, Script][] {
     store.hash(ledgerKey).set("compacted", String(spend.compacted + spend.gcMicro))
   }
 
-  // model_pool_fence
-  const fence = (accountKey: string, entKey: string, f: unknown, spend: Spend) => {
+  // model_pool_fence, and HOLD's model_final_fence when `final` (H1a): the same record, risk, genesis and pool checks,
+  // a revoked key allowed, and the snapshot that key's plan, ended for one of FINAL_PERIOD_REASONS (or none).
+  const fence = (accountKey: string, entKey: string, f: unknown, spend: Spend, final = false) => {
     if (
       !isTable(f) ||
       typeof f.accountRecord !== "string" ||
       integer(f.now) === undefined ||
-      integer(f.graceMs) === undefined ||
+      (!final && integer(f.graceMs) === undefined) ||
       integer(f.start) === undefined ||
       integer(f.end) === undefined ||
       integer(f.totalMicro) === undefined ||
@@ -331,7 +332,7 @@ export function spendScripts(store: SpendStore): [string, Script][] {
       truthy(account.transition) ||
       (truthy(account.ownerEnd) && !truthy((account.ownerEnd as Json).done)) ||
       truthy(key.provisioning) ||
-      truthy(key.revoked) ||
+      (!final && truthy(key.revoked)) ||
       (truthy(risk) &&
         (!isTable(risk) ||
           risk.blocked !== false ||
@@ -365,6 +366,13 @@ export function spendScripts(store: SpendStore): [string, Script][] {
     const snapshot = object(get(entKey))
     if (!snapshot) return "stale"
     if (snapshot.v !== 1 || snapshot.account !== f.account || snapshot.livemode !== f.livemode) return "unavailable"
+    if (final)
+      return snapshot.state !== "ended" ||
+        snapshot.subscription !== f.subscription ||
+        (f.version !== undefined && snapshot.version !== f.version) ||
+        (snapshot.reason !== undefined && !(FINAL_PERIOD_REASONS as readonly unknown[]).includes(snapshot.reason))
+        ? "stale"
+        : undefined
     const now = Number(f.now)
     const periodStart = Number(snapshot.periodStart)
     const periodEnd = Number(snapshot.periodEnd)
@@ -545,7 +553,10 @@ export function spendScripts(store: SpendStore): [string, Script][] {
         if (!parsed || parsed.micro !== p.required || parsed.run !== (p.run ?? "-")) return "unavailable"
         const spend = spendRead(ledgerKey!, reservationsKey!, heldKey!, debitsKey!, now, String(p.account), String(p.pool))
         if (!spend || spend.records.has(parsed.ticket)) return "unavailable"
-        const refusal = fence(accountKey!, entKey!, f, spend)
+        const final = f.final
+        if (final !== undefined && (final !== true || parsed.purpose !== "hosted" || p.run !== undefined))
+          return "unavailable"
+        const refusal = fence(accountKey!, entKey!, f, spend, final === true)
         if (refusal) return refusal
         if (p.run !== undefined && !runPoolFree(runKey!, String(p.pool))) return "runexpired"
         const burden = plus(

@@ -165,3 +165,6 @@ own Bun process. No generator input changed.
   a lockfile needs network access to update bun.lock.
 - A download-only start for an ended plan's disk is still not built. When it is, the provisioner should charge
   `chargeRetention` again.
+  - 15 Nov 2026 (Codium finish, H1a): built on the server. `chargeRetention` is charged by the first download-only start
+    of each computer, not by the provisioner (charging at the end would charge subscribers who never download);
+    `codium-deviations.md` "Codium finish: H1 download-only start (15 Nov 2026)", R3. The computer side is H1b.

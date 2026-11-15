@@ -4802,3 +4802,266 @@ No flag, setting, listing, route, `REMOTE_ROUTES` entry, price, copy or page cha
 changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged. The fixture is built only by
 `e2e/vite.config.ts` (into the gitignored `dist-e2e`) for Playwright, not for the app, the phone build or vectordev.ai.
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+## Codium finish: H1 download-only start (15 Nov 2026)
+
+Package H1a, the server half of the hosted gap that "P8 review decisions (9 Nov 2026)" (first bullet),
+`codium-p8-repairs.md` ("CI only and not done", last bullet), `codium-a53-hosted-sessions-notes.md` (A56 bullet and
+"Not done") and `MODEL-PLANS.md` ("Other charges", "Provisioner (A53)") name: spec §4.4's Cloud computer row
+(`codium-build-spec.md:354`) keeps an ended plan's disks "14 days for download (notice), then deleted", and no route
+let an ended plan download its disk. Built on `codium-finish` `572de5c4` (equal to origin/codium-finish; PR #33 unmerged:
+origin/main is `58f85edc`, origin/release-finish `cf2373c4`). The computer side is H1b. Scratch under
+`/tmp/vector-v2/codium/`. Not committed by this build step; CI ids follow in a dated line.
+
+**What landed**
+
+- `POST /api/hosted/sessions {mode: "download", computer}` (`api/_lib/hosted-api.ts:148`, `readStartBody` `:168`;
+  `api/hosted/sessions.ts` doc only). Same caller rules as a session start (a website session or a marked token, the
+  `hosted-start` 30-an-hour limit). A session body keeps its own field list and copy ("Send only size, jobMinutes,
+  prompt, title."), so the unlisted mode is never named in an error.
+- `startHostedDownload` (`api/_lib/hosted-sessions.ts:682`), in order: hosted configuration and the media bucket (503),
+  `requireAccountOpen` (the tombstone, 409 `MODEL_PLAN_ACCOUNT_CLOSING`), a hold on the account (403 `HOSTED_FROZEN`),
+  the `hosted` switch and `hostedOpen` (503), the plan (`requireHostedDownload`, below), the disk's date
+  (`hosted:disk-due`, checked before the computer, so a deleted computer answers 409 "This computer's disk is no longer
+  kept." rather than 400; and refused with 409 "Too little time is left before this computer's disk is deleted." when
+  less than a block and an hour, `DOWNLOAD_LINK_MS / 24`, is left, `:702`), the computer one the account has, and its lease (CLAIM's new ARGV[6], first computer: 429
+  `HOSTED_BUSY` "This computer is already getting its files ready."). The record is `mode: "download"`, size standard,
+  `browser: false`, `download: {requestedAt}` from the start, deadline one block; no job key. After the record and the
+  live-list ZADD the date is read again, so a start racing the nightly deletion is abandoned. The start then runs the
+  shared tail, `launchSession` (`:566`), which `startHostedSession` now also calls (its signature is unchanged; A55
+  calls it).
+- `launchSession` in download mode: `openBlock(..., download: true)`; a hold refused for the money answers 402
+  `MODEL_PLAN_EXHAUSTED` "Your Vector Codium plan cannot cover getting this computer's files ready." (no amount);
+  after the record update and before the provider, `chargeRetention(account, {computer, gb: HOSTED_DISK_GB_MAX, days:
+  Hosted.ENDED_DISK_DAYS})` (`:611`), inside the same try as the record update, so a failure there closes the block at
+  its start (nothing charged) and nothing is asked of the provider.
+- Ledger (`api/_lib/hosted-ledger.ts`): `openBlock` takes `download?: true` (with `renew` 400). The plan checks moved
+  into `blockPricing` (`:483`, the session path, unchanged checks in the same order) and `downloadPricing` (`:519`), so
+  the one `holdPool(` call and the A51 tripwire (`test/codium-pool.test.ts`, "A51 obligation") stay as they were. The
+  download block: `requireHostedDownload`; for an ended plan the entry's epoch and period end are the final key's own
+  (`${key.subscription}:${key.start*1000}`, `key.end*1000`), and a hold whose pool is not that key is given back (503);
+  `requireDailyRoom` kept; `computers: MAX_COMPUTERS` (`:530`, any plan's most, imported from hosted-provider.ts,
+  which imports this module too: it is read only at call time, so the cycle is safe, as hosted-sessions.ts →
+  codium-provisioners.ts → hosted-crons.ts → hosted-sessions.ts already is); `cap: Number.MAX_SAFE_INTEGER` (`:445`);
+  `minutesAt` never in the past (`:452`). Header: the download-only block and the producers' obligation.
+- `holdPool(..., "hosted", {final: true})` (`api/_lib/model-plan-account.ts:2485` validation, `finalPoolCredential`
+  `:2545`; the usual path moved verbatim into `currentPoolCredential` `:2521`). `final` only with purpose hosted and no
+  run (500 `MODEL_PLAN_POOL_INVALID`). It reads the private record first (closing, risk, a transition, upgrade, key
+  creation or unfinished owner end, as `snapshotPoolCredential` does), requires a ready genesis and integer credits,
+  reads the key's usage from the provider (a missing key or no usage refuses, 503) and never requires the key enabled,
+  unrevoked or inside its period. The one `placeHold(` call gains `final: true`.
+- HOLD (`api/_lib/codium-pool.ts`): `FINAL_PERIOD_REASONS` (`:241`) and `model_final_fence` (`FINAL_FENCE_LUA` `:249`):
+  `model_pool_fence`'s record, risk, genesis and pool checks (a revoked key allowed), then the snapshot must be ended on
+  the key's own subscription, at the given version, with no reason or one of `FINAL_PERIOD_REASONS`; anything else is
+  'stale'. HOLD's body (`:292`) takes the final fence only for `fence.final == true`, purpose hosted and no run (else
+  'unavailable'); floor, writes and TTL are unchanged. `model_pool_fence` and ADMIT are byte-identical.
+  `poolFence`/`placeHold` carry `final`. The emulation (`packages/web/test/fixture/codium-spend-emulation.ts`) mirrors
+  both steps.
+- `api/_lib/hosted-entitlement.ts`: `hostedDownloadAccess` (`:110`, pure) and `requireHostedDownload` (`:137`); the
+  `hostedDiskPolicy` doc now says the first download-only start charges the retention.
+- Person actions and the computer (`api/_lib/hosted-sessions.ts`): `issueViewer` and `takeOverHostedSession` refuse a
+  download session (400 "This session only gets the computer's files ready to download."); `listHostedSessions` gives it
+  no handoff; `verifyHostedRunToken` refuses it (401 `MODEL_PLAN_RUN_EXPIRED`: chat and /models both go through
+  `requireModelPlanCaller`, S3) and `assertHostedSessionLive` is false; the heartbeat answers `mode: "download"`,
+  `browser: false`, no job, no heartbeat hooks (no recording links, no hand-over alert), and `pack` at once (the
+  existing pack/upload code, since `download.requestedAt` is set). `requestDownload` accepts `starting` for a download
+  session only (a job session keeps `running`, `takeover`, `wrapping`); while the account has a deletion date no link
+  outlives it (`mintDownloadToken`'s new `until`, `api/_lib/hosted-tokens.ts:228`), and none is given once it passed
+  (410).
+- Crons (`api/_lib/hosted-crons.ts`): `reapDownload` (`:347`, called right after the suspension check) ends a download
+  on the switch, a plan that no longer allows it, the upload or the daemon's done, the block's end (`endsAt`,
+  "deadline") or a lost heartbeat; no idle or fair-use check, wrap-up, renewal or token refresh.
+  `applyHostedTransition` leaves a download running while `hostedDownloadAccess(to)` is final, current or live, so the
+  sweep's catch-up and replays of the ended transition never end it. The ended-transition comment and the provisioner
+  doc now describe the charge at the first download. The nightly deletion pass erases the account's packed files
+  (`eraseSessionArchives` over the account's sessions) before it forgets the date, and the egress waiver keys.
+  `chargeComputer` sets the bytes download sessions uploaded (`hosted:download-egress:<account>:<n>`, written by the
+  heartbeat when it confirms a download session's upload, at most `ARCHIVE_MAX_BYTES` per computer until its deletion
+  date, counted in `hosted:download-uploaded:<account>:<n>`) against the measured egress and charges the rest.
+- `packages/schema/src/hosted.ts`: `SESSION_MODES`, `SessionMode`, and `mode?: "download"` on `SessionView` and
+  `HeartbeatAnswer`. `ENDED_DISK_DAYS` and `LOST_DISPUTE_DISK_DAYS` are untouched.
+
+**Readings**
+
+- **R1, the final-period hold, and the files outside the task's list.** "Held through `holdPool(..., "hosted")` from
+  the final period" cannot be done with holdPool as it was: `requireUsableSnapshot` throws 402 for an ended snapshot
+  (`codium-snapshot.ts:149-158`), `snapshotPoolCredential` requires active or renewing and an unrevoked key
+  (`model-plan-account.ts:1846-1878`), `model_pool_fence` answers 'stale' for an ended snapshot or a revoked key
+  (`codium-spend-ledger.ts:166-191`), and reconcile revokes an ended plan's key (`revokeEndedKey`, `:762-764`) and
+  switches it off, which `readyKey` refuses. So the build edits, beyond the task's list: `api/_lib/codium-pool.ts`
+  (HOLD's final fence, the only place the money fence can run atomically), `api/_lib/model-plan-account.ts` (holdPool's
+  final path), `packages/web/test/fixture/codium-spend-emulation.ts` (the in-memory HOLD must match the Lua),
+  `api/_lib/hosted-entitlement.ts` (the plan answer for a download, beside `requireHostedStart`), `api/_lib/hosted-api.ts`
+  (the route's body), `api/_lib/hosted-tokens.ts` (the link's cap) and the CLAIM script (one optional argument). The
+  final path rests on one provider assumption: that OpenRouter keeps an expired, switched-off key readable (usage) and
+  patchable (its limit, when the block's debit is applied). Every final key is past `keyExpiresAt` (period end plus the
+  grace, `model-plan-account.ts:319`) when a download starts. The fakes answer whatever the real provider does; if
+  OpenRouter deletes or stops answering for expired keys, every download start answers 503 and nothing is held or
+  charged (tested). Owner check: confirm against OpenRouter before listing. A fallback the owner could choose, not
+  built: price the hold against the key's last recorded `limitMicro` instead of a usage read.
+- **R2, owner question: who pays a download-only block.** Reading: the final period of the ended plan (or the current
+  period after a move to a plan without a cloud computer), held and settled as any block (M2, M8), so a period that
+  cannot hold it refuses with nothing charged. The payer is chosen in one place, `downloadPricing`'s `final` and its
+  epoch, so the owner can change it; a Vector-paid block would need an owner decision under M8. The upload's egress is
+  read the other way: Vector pays it. The nightly egress charge (`chargeComputer` → `chargeNightly` → `chargeOnce`) has
+  no hold and would otherwise debit the final period the next night for up to the disk's whole size, outside the
+  block's hold; the bytes a download session uploaded are set against the computer's measured egress instead (tested:
+  2 GB uploaded, 2.5 GB measured, 0.5 GB charged). The waiver is bounded (review fix B1 below): every confirmed
+  download upload adds its bytes to `hosted:download-uploaded:<account>:<n>`, which expires at that disk's deletion date,
+  and only the part that keeps that total within one archive's worth (`ARCHIVE_MAX_BYTES`, the largest packed files a
+  computer may upload in one PUT) is added to the waiver; a further upload's egress is charged as any egress, with no
+  hold, the next night (tested: three 4 GB uploads, one archive's worth waived, the rest charged). The waiver offsets
+  whatever egress that computer measures while it lasts (7 days), a later job session's included, should the
+  subscriber come back. Owner question, no amounts: whether the subscriber should pay that egress (it would need its
+  own hold, sized from the disk), and whether one archive's worth per computer and window is the right bound.
+- **R3, owner question: the retention charge.** P8 said the provisioner "should charge chargeRetention again"; charging
+  at the transition would charge every subscriber who ends, including those who never download. Reading: the first
+  download-only start of each computer charges `chargeRetention` (the full `ENDED_DISK_DAYS`, once per computer and
+  period, `hr-<computer>-<subscription>-<start>`), after the block's hold, so a tight final period grants fewer days
+  while the disk stays kept the whole window; the first deletion date stands and the rest is at Vector's cost. A start
+  that fails after the hold (the provider cannot start the computer, or boot fails) keeps that one retention line: the
+  disk was kept, and a later start does not charge it again (tested). Disks nobody downloads stay at Vector's cost.
+  After a move to a plan without a cloud computer (`current`), both the block and the retention are charged to the
+  current, smaller plan's period, not the final period of the plan that had the computer (§4.4 and `hostedDiskPolicy`
+  say "from the final period"; the plan that had it has no ended key to charge then). Put to the owner with R2.
+- **R4, owner question: which plans may download.** `hostedDownloadAccess`, for every `PLAN_REASONS` value of an ended
+  plan: `canceled`, `payment_failed`, `action_required`, `payment_pending` and no reason → final (the last period was
+  paid and kept; only the renewal was not); `refunded`, `disputed` (a lost dispute; §4.4 keeps those disks with no
+  download), `early_fraud_warning` and `owner` (ended by Vector) → refused, 409; `closing` → 409
+  `MODEL_PLAN_ACCOUNT_CLOSING`. Frozen → 403 `HOSTED_FROZEN`; paused → 402 `HOSTED_PAUSED`; a live plan with the
+  computer → 409 (start a session and ask for its files); a live plan without it → current; no plan → refused. The
+  plan's two listed reasons were canceled and payment_failed; the critique was right that action_required and
+  payment_pending are the same case (a paid period, an uncollected renewal), so they are final too.
+- **R5, one block per session.** Each download session lasts one block, one at a time per computer (its lease); the
+  account may start another once one ended, as long as the date, the money and the starts limit allow. A download: the reaper ends it at `endsAt`, on the upload, on the daemon's done or
+  a lost heartbeat; it is never renewed and its token is never refreshed (it was minted to outlive its block). No idle
+  or fair-use check runs: there is no agent.
+- **R6, no agent.** No job, no browser, no live view, no take-over, no recording links or hand-over alert; its `vht_` is
+  refused by the gateway's verifier, so chat and /models refuse it (S3); the heartbeat route still takes it.
+- **R7, the OPEN payload.** `computers` is any plan's most (the computer's own lease, CLAIM over exactly that computer,
+  is the real bound) and `cap` is unbounded: that period includes no hours, and the block's money and one-block life
+  bound it. Rejected, the critique's alternative of a cap from the period's used and reserved minutes read first: it
+  adds a read-then-write race and no bound beyond what OPEN's `prev` check and the lease give. METER still counts the
+  block's minutes in that period's hash once it settles, in a period with no computer; nothing reads them there.
+- **R8, the provisioner skip.** Without it, every replay of the ended transition (the sweep's catch-up) would end a
+  running download. A freeze, a refund or a dispute's loss ends it.
+- **R9, the schema field and hostd.** `mode` is optional and sent only as `"download"`. Corrected from the plan: an old
+  image cannot run a download, because `requireDaemonBeat` refuses any unsigned heartbeat and today's deployed images
+  predate signed beats (`codium-p8-repairs.md`, "CI only and not done"). A hostd built from current source handles a
+  download without H1b (no job, so no agent starts; `pack` and `upload` are answered as today), once the owner rebuilds
+  the image. H1b reads `mode`.
+- **R10, copy.** New messages only, no amount, no GitHub or Actions: "Your Vector Codium plan cannot cover getting this
+  computer's files ready."; "This computer's disk is no longer kept."; "This computer's files cannot be downloaded for
+  this account."; "Your plan includes the cloud computer. Start a session and ask for its files."; "This computer is
+  already getting its files ready."; "This session only gets the computer's files ready to download."; "A download
+  names only the computer."; "Too little time is left before this computer's disk is deleted."; and the existing "Choose one of your computers.", "The cloud computer is on hold for this
+  account." and "This session's files are no longer kept." reused. The session body's "Send only size, jobMinutes,
+  prompt, title." is unchanged.
+- **R11, the packed files go with the disks.** §4.4's "then deleted" now covers the packed copy too: no link outlives
+  the deletion date, none is given after it, and the nightly deletion pass erases the account's archives (all its
+  sessions', since a job session's packed files are a copy of the same disk) before it forgets the date; a link minted
+  after that leads to 410 (tested with the R2 DELETE seen). If the media bucket cannot be signed the pass fails for that
+  account and tries again the next night (the computers are deleted first, idempotently). The bucket's own lifecycle
+  rule (owner-actions/hosted-computer.md step 4, 2 days under `hosted/`) can remove the packed files much earlier: a
+  link then leads to 410 "no longer kept" (`downloadRedirect`'s HEAD), and the person starts another download-only
+  session (or asks a running one). The code does not cap the link at the rule, since the rule's day count is the
+  owner's and the code cannot read it; the owner-actions note says the link works only while the bucket keeps the files.
+  No link is given or followed while the plan is frozen, after a lost dispute (§4.4: no download) or while the account
+  is being deleted (`requireFilesAllowed`, `hosted-sessions.ts:1210`), whatever the session.
+- **R12, not checked.** That the provider still has the disk before the hold: a start whose disk is gone pays a block
+  and the retention for an empty computer. Not built (a `provider.list` read before the hold is the owner's or H1b's
+  choice); the date re-read after the live-list ZADD closes the race with the deletion pass.
+
+**Critique points taken and rejected**
+
+- Taken (major): egress of the upload (R2, waiver and test). Taken (major): the packed files after the date (R11).
+  Taken (major): the provider assumption (R1, 503 test, owner check). Taken (major): `requestDownload` keeps
+  `takeover` for job sessions (regression case "a session under the person's control is still asked for its files").
+- Taken: R9's wording; the extra files listed in R1; epoch and period end from the final key (a ledger case runs the
+  real reconcile to `ended`/`canceled`, revoked key and switched-off key, and the block's line lands in that key's
+  period); every end reason in R4 and in a table test; the date re-read and the date checked first (a case runs the
+  nightly deletion, then a start); the body copy kept; retention outcomes in R3 with a provider-failure case; the extra
+  local runs and the web typecheck; the a56 status line and the budget observation.
+- Rejected: the read-then-cap OPEN (R7).
+
+**Observations (not changed)**
+
+- Own code: a job session's archive upload counts toward the account's daily egress fair-use counter, and a download
+  session's upload does too (the reaper runs no fair-use check on a download, but the counter is the account's).
+- The budget figure's roster drops non-live plans (`hosted-crons.ts`, budget figures), so a download block's compute for
+  an ended account is outside the M9 budget figure. Owner note, no amounts.
+- The drift check reads the snapshot's period; a download for a plan that ended `payment_failed` with a snapshot on the
+  unpaid renewal period files its line under the final key's period, which could show as drift (owner email only).
+
+**Not built**
+
+- §4.4's notice of the 14 days, and every client surface: `decodeSession` in
+  `packages/app/src/features/cloud/hosted/hosted-model.ts` ignores `mode` and would offer Watch or Take over (both
+  refused by the server). H1b (hostd reading `mode`) and the image rebuild (owner) are separate.
+
+**Ran locally** (through `vector-serial`, one file at a time from `test/` with `--timeout 30000`, after the last code
+edit): `hosted-sessions-api.test.ts` 39 pass, 1 skip (the Valkey script case); `hosted-lifecycle.test.ts` 18/0;
+`hosted-ledger.test.ts` 31 pass, 1 skip (Valkey); `hosted-reaper.test.ts` 26/0; `codium-pool.test.ts` 29/0 (in
+memory; its Valkey run is CI's); regressions `hosted-copy` 5/0, `hosted-jobs` 31 pass 1 skip, `hosted-clients` 8/0,
+`hosted-provider` 39/0, `hosted-internal` 12/0, `codium-mode` 18/0, `codium-usage-history` 11/0,
+`codium-plan-change` 29/0 and `account-delete` 37 pass 1 skip (these last five before the final line wraps, which
+changed no logic). New cases: sessions-api's "download-only starts for an ended plan's kept disk (H1a)" (9 cases) and
+the take-over regression; lifecycle's "download-only starts in §4.4's row (H1a)" (3); ledger's "download-only blocks
+(H1a)" (3); reaper's "download-only sessions (H1a)" (2); pool's "H1a: the final fence" (2); the CLAIM first-computer
+lines in the Valkey script case. Typechecks: `packages/engine` `bun typecheck --project ../../tsconfig.json` (api, test and
+the fixture), `packages/schema`, `packages/hosted-computer` and `packages/web` `bun typecheck`, all clean. `prettier
+--write` on the files that were formatted at HEAD; the others were already unformatted at HEAD and only the added lines
+were wrapped.
+
+**Only in CI.** The Valkey cases (HOLD's final fence on real Lua in `codium-pool.test.ts` "H1a: the final fence", the
+CLAIM first-computer case in `hosted-sessions-api.test.ts`, the ledger scripts), the Postgres ledger, and the hosted
+services. Dispatches after the lead's commit: Vector Codium on `codium-finish` with `base: "origin/release-finish"`,
+then typecheck.yml, then vector-hosted-ci.yml once the Vector Codium run finished.
+
+**Review fixes (15 Nov 2026).** The package review's findings, fixed in the worktree before the commit:
+
+- B1 (blocking), the unbounded egress waiver: bounded to one archive's worth per computer until its deletion date
+  (R2). Regression: `test/hosted-lifecycle.test.ts` "Vector pays at most one archive's worth of a computer's download
+  uploads until its disk's date" (three uploads on one computer; the waiver stops at `ARCHIVE_MAX_BYTES`, the counter
+  expires at the date, the nightly line charges the rest), and the deletion case now checks both keys go.
+- N1, a start just before the date: refused with 409 when less than a block plus `DOWNLOAD_LINK_MS / 24` is left.
+  Regression: sessions-api "a start too close to the disk's date is refused; one with a block and an hour to spare goes
+  ahead" (the boundary minute allowed, one minute later refused with nothing charged, leased or started).
+- N2, the `current` path end to end: sessions-api "a live plan without a cloud computer downloads from its current
+  period, retention included" (vector-50 snapshot, the provisioner's date, 201, the block's pool, epoch and period end
+  the live period's, the retention line in it, the heartbeat asking only to pack).
+- N3, the waiver key's computer number: read after the account's own prefix (`accountComputerPrefix`), any number of
+  digits, no waiver for a name that is not the account's (`hosted-crons.ts:729`). R2 now says what the waiver offsets.
+  Covered by the lifecycle egress cases.
+- N4, links while frozen: `requireFilesAllowed` in `requestDownload` and `downloadRedirect`: 403 `HOSTED_FROZEN`
+  while frozen, 409 `HOSTED_DOWNLOAD_UNAVAILABLE` after a lost dispute (beyond the finding: §4.4's row gives a lost
+  dispute no download either), 409 `MODEL_PLAN_ACCOUNT_CLOSING` while closing; a plan that ended canceled is unchanged.
+  It applies to job sessions too, which is a change to A53's behaviour for frozen accounts. Regression: sessions-api
+  "no link is given or followed while frozen, after a lost dispute or while closing (§4.4), whatever the session".
+- N5, `DOWNLOAD_COMPUTERS`: removed; `MAX_COMPUTERS` imported (see What landed), and the ledger's new `ENTITLEMENTS`
+  and `PLANS` imports are gone.
+- N6, the switch type: `SwitchValue` in `blockPricing` and `downloadPricing`.
+- N7 and N13, the upload confirmation: the CAS updater is pure again and the waiver is decided from the saved record
+  (`readyAt` and `bytes` are this beat's), with no `let` and no non-null assertion.
+- N8, the commit body: for the lead's commit (the body must name `api/_lib/model-plan-account.ts` and list
+  `api/_lib/codium-pool.ts` and `packages/web/test/fixture/codium-spend-emulation.ts` with the other files).
+- N9, the link and the bucket's rule: owner-actions note, wording in MODEL-PLANS.md, the a53 status line and the
+  owner-actions paragraph (R11).
+- N10, the owner-actions paragraph: reachability as `hostedOpen` decides it, and the number of sessions as the code
+  allows (one at a time per computer, each one block).
+- N11, the retention after a plan change: R3.
+
+None disagreed with. Local runs after these fixes (through `vector-serial`, one file at a time from `test/`, `--timeout
+30000`): `hosted-sessions-api.test.ts` 42 pass, 1 skip (Valkey); `hosted-lifecycle.test.ts` 19/0; `hosted-ledger.test.ts`
+31 pass, 1 skip; `hosted-reaper.test.ts` 26/0; regressions `hosted-provider` 39/0 (the new import cycle), `hosted-copy`
+5/0, `account-delete` 37 pass 1 skip, `hosted-jobs` 31 pass 1 skip, `hosted-internal` 12/0, `hosted-clients` 8/0,
+`codium-pool` 29/0. Mutations: with the waiver unbounded the lifecycle case fails; with `requireFilesAllowed` skipped
+the files case fails. Typechecks: `packages/engine` `bun typecheck --project ../../tsconfig.json` and `packages/schema`
+`bun typecheck`, clean. `prettier
+--write` on `api/_lib/hosted-ledger.ts` (formatted at HEAD); the other edited files were unformatted at HEAD and only
+the added lines were wrapped. Only in CI, as above.
+
+**For the lead.** None in another lane's files.
+
+Edits to `api/_lib/model-plan-*.ts`: `api/_lib/model-plan-account.ts` (`holdPool`'s `final` option and validation,
+`currentPoolCredential` holding the usual path unchanged, `finalPoolCredential`).

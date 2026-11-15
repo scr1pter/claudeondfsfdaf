@@ -123,6 +123,35 @@ computer's daemon then reports every 30 seconds through the run-API host, and it
   the worst-case disk size, 16 GB, while the plan is live) and its egress, lowers the block charges of ended sessions
   towards the provider's actual cost plus 10% (never below it), and caches the figures the budget answer reads.
 
+**Download-only starts (H1a).** After a plan ends (or moves to a plan without a cloud computer), the account can start
+download-only sessions on a computer whose disk is still inside its deletion date
+(`POST /api/hosted/sessions {mode: "download", computer}`): one at a time on each computer, none once less than a block
+and an hour is left before that date, each one block with no agent, browser or live view. The computer packs and
+uploads its disk, and the session's download link then works while the media bucket keeps the packed files (step 4's
+rule removes them; the person then starts another download-only session), never past the deletion date, and never
+while the plan is frozen, after a lost dispute or while the account is being deleted. Each block is held from the
+plan's final period (after a move to a plan without a cloud computer, from the current one), and the first start on
+each computer charges that disk's retention to the same period, once. Vector pays the uploads' egress up to one
+archive's worth per computer until the deletion date; further uploads are charged as ordinary egress. At the deletion
+date the nightly job deletes the disks and their packed files. It is reachable only when `VECTOR_HOSTED_PROVIDER` is
+set, the `hosted` switch is on, and either `computer` is listed or the account is on `VECTOR_HOSTED_ALLOW_ACCOUNTS`.
+
+Decisions that are yours (the build takes a reading for each; `codium-deviations.md` "Codium finish: H1 download-only
+start", R2-R4):
+- who pays a download-only block (today: the final period, or the current one after a move to a plan without a cloud
+  computer) and its upload's egress (today: Vector, up to one archive's worth per computer until the deletion date;
+  the rest as ordinary egress);
+- the retention: charged at the first download start, after the block's hold, so a tight final period grants fewer
+  paid days while the disk stays kept the whole window (the first deletion date stands); a start that fails after the
+  hold keeps its retention charge; after a move to a plan without a cloud computer it is charged to the current plan's
+  period;
+- which ended plans may download: today canceled and uncollected renewals (`payment_failed`, `action_required`,
+  `payment_pending`) may; refunded, lost-dispute, fraud-warning and Vector-ended plans may not;
+- before listing, confirm with OpenRouter that a key that expired and was switched off can still be read (its usage)
+  and have its limit changed: every download start depends on it, and answers "temporarily unavailable" otherwise;
+- rebuild the image (A58's image workflow) so a computer's hostd signs its heartbeats; until then today's images are
+  refused, and H1b's reading of `mode` needs the same rebuild.
+
 **Fair use.** A session that passes 600 page loads an hour, 5 GB (Max) or 15 GB (Ultra) of egress a day, or 30 minutes
 above 80% of the processor with no model request is stopped, the account's cloud computer is put on hold and you get an
 email. Release it from the owner's hosted flags once you have looked.
@@ -144,6 +173,9 @@ Preview environment that tests in Stripe test mode):
 4. **Files for download.** Session downloads use the `vector-media` bucket (`VECTOR_R2_MEDIA_*`). Add a lifecycle rule
    that deletes objects under `hosted/` after 2 days (the links last 24 hours), and keep it away from `playbooks/`.
    Account deletion also deletes an account's packed files itself, so a missing rule never keeps them (P8 review).
+   A session's download link leads to its files only while the bucket keeps them: once this rule removed them, the
+   link answers that they are no longer kept, even while an ended plan's disk is still inside its deletion date (H1a),
+   and the person asks for them again (a running session, or a new download-only start).
 5. **Listing.** `computer` is ready to list once the provider, the ledger and both keys are set. List it only after the
    computer-use build, the brand name and the outside security review of isolation and the viewer (contract §1.2),
    starting with `VECTOR_HOSTED_ALLOW_ACCOUNTS` set to your own account.

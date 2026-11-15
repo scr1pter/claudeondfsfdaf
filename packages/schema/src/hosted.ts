@@ -188,6 +188,15 @@ export const DOWNLOAD_LINK_MS = 24 * 3_600_000
  */
 export const BOOT_COMMAND = "/opt/vector/boot.sh"
 
+/**
+ * What a session is for (H1a). `job` is the default and is absent on older records. A `download` session only packs
+ * and uploads the computer's saved disk, for an account whose plan has ended (or no longer includes a cloud computer)
+ * while that disk is kept for download (§4.4): it runs no agent, no browser and no live view, lasts at most one block,
+ * and its run token is refused at chat and /models (S3).
+ */
+export const SESSION_MODES = ["job", "download"] as const
+export type SessionMode = (typeof SESSION_MODES)[number]
+
 /** A session as its owner sees it: states, times and counts only, never an amount (P1). */
 export type SessionView = {
   id: string
@@ -204,6 +213,8 @@ export type SessionView = {
   wrapBy?: number
   takeover?: { since: number; until: number }
   download?: { requestedAt: number; readyAt?: number }
+  /** Sent only for a download-only session (H1a): its files are packed for download and nothing else runs. */
+  mode?: "download"
   /**
    * The computer is waiting for the person (WP A56): its credential guard met a password, one-time-code or card field,
    * or a CAPTCHA, and handed the computer over. Sent only while the agent has control; taking over answers it.
@@ -278,6 +289,11 @@ export type HeartbeatAnswer = {
   browser: boolean
   /** The Ed25519 public key viewer tokens are checked with, base64url (32 bytes). */
   viewerKey: string
+  /**
+   * Sent only for a download-only session (H1a): start no agent, browser or viewer; pack and upload the disk when
+   * asked (`pack`, then `upload`), and nothing else. Such a session never gets a job.
+   */
+  mode?: "download"
   /** The job, until the daemon says it booted. */
   job?: { prompt: string; title?: string }
   /** The person asked for the session's files: pack them and report their size as `archiveBytes` (WP A54). */

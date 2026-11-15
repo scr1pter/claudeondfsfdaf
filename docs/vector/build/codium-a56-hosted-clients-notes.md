@@ -126,3 +126,9 @@ changed A56: hand-over alerts go out at most once per session in 10 minutes (`HA
 says "Vector reports N of M criteria met" and the composer no longer says a model from another lab checks each criterion;
 and `vercelCli` no longer uses `npx`: it installs the pinned CLI with npm, install scripts off and no secret in npm's
 environment, and runs it with the token alone.
+
+**Status, 15 Nov 2026 (Codium finish, H1a).** The server now has the download-only start for an ended plan's disk
+(`POST /api/hosted/sessions {mode: "download", computer}`; `codium-deviations.md` "Codium finish: H1 download-only start
+(15 Nov 2026)"). No client offers it yet: `decodeSession` in `packages/app/src/features/cloud/hosted/hosted-model.ts`
+ignores the session's new `mode` field, so a download session would show Watch and Take over, which the server refuses
+for it; §4.4's notice of the 14 days is not built either.

@@ -18,7 +18,7 @@ import {
 } from "./codium-pool.js"
 import { readSnapshot } from "./codium-snapshot.js"
 import { readModelSpendDay } from "./codium-spend-ledger.js"
-import { readSwitch } from "./codium-switches.js"
+import { readSwitch, type SwitchValue } from "./codium-switches.js"
 import {
   hostedAccess,
   hostedCaps,
@@ -28,8 +28,11 @@ import {
   hostedOpen,
   hostedSnapshot,
   hoursUsed,
+  requireHostedDownload,
   unavailable,
 } from "./hosted-entitlement.js"
+// hosted-provider.ts imports this module too: MAX_COMPUTERS is read only inside `downloadPricing`, at call time.
+import { MAX_COMPUTERS } from "./hosted-provider.js"
 import {
   BLOCK_HOLD_TTL_MS,
   BLOCK_MINUTES,
@@ -48,6 +51,7 @@ import {
   applyPoolDebits,
   holdPool,
   openRouterManagement,
+  readEntitlement,
   readModelPlanAccount,
   withCodiumLease,
 } from "./model-plan-account.js"
@@ -74,9 +78,16 @@ import { persistentStore } from "./persistent-store.js"
  * hold is given back, because a replaced key no longer spends anything and its debits would recover nothing. The
  * minutes count in the same period's hours.
  *
+ * Download-only blocks (H1a). An account whose plan ended (or no longer includes a cloud computer) may run one block to
+ * pack and upload a computer's kept disk. It is held and settled as any block, from the final period of the ended
+ * plan (`holdPool`'s final path, HOLD's final fence) or from the current period after a move to a plan without a
+ * computer; it is never renewed, and it reserves no plan hours (that period has none), only its own minutes.
+ *
  * Other charges. Snapshot storage and egress are charged nightly (WP A53 measures them), and an ended plan's disk
- * retention is charged once, at the end, to the final period, shortened to what that period can still cover. They
- * accrue before anything could hold them, so they are charged as debits of their own; each is a few cents a day.
+ * retention is charged once per computer, by its first download-only start, to the final period, shortened to what
+ * that period can still cover after the block's hold. They accrue before anything could hold them, so they are
+ * charged as debits of their own; each is a few cents a day. The egress of a download-only session's upload is not
+ * charged (it is set against the computer's next nightly egress reading, hosted-crons.ts): Vector pays it.
  *
  * True-up. Once the provider's actual cost of a charge is known (the nightly job), the charge can be lowered to that
  * cost plus the markup, never below the cost itself, and never raised: the pool's debit is lowered in place and the
@@ -90,8 +101,9 @@ import { persistentStore } from "./persistent-store.js"
  * the hold (anything beyond is an overrun debit on the current key); its hold lapses 30 minutes after it is placed,
  * well inside the carry true-up's retry window; it carries no run id, so the run ceiling and the run's pool binding are
  * about model requests only (a session's model requests carry their run through ADMIT); compute never counts against
- * the Brain share; and the daily share is checked before each hold (see `openBlock`). Only `MODEL_PLAN_RENEWING` from
- * `holdPool` is worth retrying.
+ * the Brain share; and the daily share is checked before each hold (see `openBlock`). A download-only block holds the
+ * same 20-minute worst case through `holdPool`'s final path, one per session, never renewed. Only
+ * `MODEL_PLAN_RENEWING` from `holdPool` is worth retrying.
  */
 
 const DAY_MS = 86_400_000
@@ -355,17 +367,21 @@ export function blockRef(session: string, block: number) {
  * charged rate with `holdPool`; then, in one step, reserves the block's minutes of the plan's hours and, for a first
  * block, one of the plan's computers. Anything refused after the hold gives the hold back. A renewal's previous block is
  * settled right after (or by `drainHostedSettles` if that fails).
+ *
+ * `download` (H1a) opens a download-only session's one block instead: the plan is checked for a download
+ * (`requireHostedDownload`), the hold comes from the ended plan's final period (or the current one after a move to a
+ * plan without a computer), and the block reserves its own minutes only, since that period includes no hours.
  */
 export async function openBlock(
   account: string,
-  input: { session: string; size: Hosted.Size; renew?: number },
+  input: { session: string; size: Hosted.Size; renew?: number; download?: true },
   options: LedgerOptions = {},
 ): Promise<HostedBlock> {
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
   if (!SESSION.test(input.session) || !Hosted.isSize(input.size))
     throw new ApiError(400, "HOSTED_REQUEST", "This cloud computer request is not valid.")
-  if (input.renew !== undefined && (!Number.isSafeInteger(input.renew) || input.renew < 0))
+  if (input.renew !== undefined && (!Number.isSafeInteger(input.renew) || input.renew < 0 || input.download))
     throw new ApiError(400, "HOSTED_REQUEST", "This cloud computer request is not valid.")
   if (!hostedLedgerConfigured()) throw unavailable()
   const first = input.renew === undefined
@@ -373,26 +389,22 @@ export async function openBlock(
   const service = await readSwitch("hosted", fetcher, { now: clock() })
   if (first && !(await hostedOpen(account, fetcher)))
     throw new ApiError(503, "HOSTED_UNAVAILABLE", "The cloud computer is not available on Vector yet.")
-  const snapshot = await hostedSnapshot(account, fetcher, clock())
-  const access = hostedAccess(snapshot, service === "off" ? "stop" : service, clock())
-  if (access !== "start" && (first || access !== "continue")) {
-    if (service !== "on" && (service !== "no-new" || first)) throw unavailable()
-    throw new ApiError(503, "MODEL_PLAN_RENEWING", "Your Vector Codium plan is renewing. Try again in a moment.", {
-      retryAfterSeconds: 30,
-    })
-  }
-  const caps = hostedCaps(snapshot, clock())!
-  if (!caps.sizes.includes(input.size))
-    throw new ApiError(403, "HOSTED_NOT_INCLUDED", "This computer size is not included in your plan.", {
-      detail: { perk: "computer", limit: "size", plan: "vector-200" },
-    })
+  const priced = input.download
+    ? await downloadPricing(account, service, fetcher, clock())
+    : await blockPricing(account, input.size, first, service, fetcher, clock())
+  const snapshot = priced.snapshot
   const holdMicro = blockHoldMicro(input.size)
   await requireDailyRoom(account, snapshot, holdMicro, fetcher, clock())
   const hold = await holdPool(account, microToUsd(holdMicro), BLOCK_HOLD_TTL_MS, "hosted", {
     fetcher,
     snapshot,
+    ...(priced.final ? { final: true as const } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
   })
+  if (priced.pool !== undefined && hold.pool !== priced.pool) {
+    await hold.release().catch(() => undefined)
+    throw unavailable()
+  }
   const startedAt = clock()
   const ref = blockRef(input.session, block)
   const weight = Hosted.SIZE_WEIGHT[input.size]
@@ -405,8 +417,8 @@ export async function openBlock(
     startedAt,
     minutes: 0,
     weight,
-    epoch: snapshot.meterEpoch,
-    periodEnd: snapshot.periodEnd,
+    epoch: priced.epoch,
+    periodEnd: priced.periodEnd,
     pool: hold.pool,
     ticket: hold.ticket,
     micro: hold.micro,
@@ -418,7 +430,7 @@ export async function openBlock(
       OPEN,
       5,
       hostedRunningKey(account),
-      hostedMinutesKey(account, snapshot.meterEpoch),
+      hostedMinutesKey(account, priced.epoch),
       hostedSettleKey(account),
       hostedSettleDueKey(),
       hostedLapseKey(),
@@ -427,14 +439,17 @@ export async function openBlock(
         account,
         session: input.session,
         prev: first ? -1 : input.renew,
-        computers: caps.computers,
-        cap: hostedMinutesCap(snapshot, startedAt),
+        computers: priced.computers,
+        // A download-only block reserves against no plan hours (H1a: that period includes none): its money, its
+        // computer's lease and its one-block life bound it. Its minutes still count in that period once it settles.
+        cap: input.download ? Number.MAX_SAFE_INTEGER : hostedMinutesCap(snapshot, startedAt),
         want: BLOCK_MINUTES,
         weight,
         holdMs: HOLD_MINUTES * 60_000,
         entry,
         runningAt: hold.expiresAt + DAY_MS,
-        minutesAt: hostedMinutesExpireAt(snapshot.periodEnd),
+        // A final period that already ended must never set the hash's lifetime in the past.
+        minutesAt: Math.max(hostedMinutesExpireAt(priced.periodEnd), startedAt + DAY_MS),
         settleAt: startedAt + 40 * DAY_MS,
       }),
     ],
@@ -457,6 +472,62 @@ export async function openBlock(
     startedAt,
     endsAt: startedAt + Number(granted) * 60_000,
     stopBy: startedAt + HOLD_MINUTES * 60_000,
+  }
+}
+
+/**
+ * A session block's plan checks (§4.4): a first block only while the plan is active, a renewal while it is active or
+ * renewing within the grace, neither while the `hosted` switch says otherwise; the size from the plan. The block is
+ * filed under the snapshot's period and counts against its hours and computers.
+ */
+async function blockPricing(
+  account: string,
+  size: Hosted.Size,
+  first: boolean,
+  service: SwitchValue,
+  fetcher: typeof fetch,
+  now: number,
+) {
+  const snapshot = await hostedSnapshot(account, fetcher, now)
+  const access = hostedAccess(snapshot, service === "off" ? "stop" : service, now)
+  if (access !== "start" && (first || access !== "continue")) {
+    if (service !== "on" && (service !== "no-new" || first)) throw unavailable()
+    throw new ApiError(503, "MODEL_PLAN_RENEWING", "Your Vector Codium plan is renewing. Try again in a moment.", {
+      retryAfterSeconds: 30,
+    })
+  }
+  const caps = hostedCaps(snapshot, now)!
+  if (!caps.sizes.includes(size))
+    throw new ApiError(403, "HOSTED_NOT_INCLUDED", "This computer size is not included in your plan.", {
+      detail: { perk: "computer", limit: "size", plan: "vector-200" },
+    })
+  return {
+    snapshot,
+    final: false,
+    pool: undefined,
+    epoch: snapshot.meterEpoch,
+    periodEnd: snapshot.periodEnd,
+    computers: caps.computers,
+  }
+}
+
+/**
+ * A download-only block's plan checks (H1a): the plan's answer for a download (`requireHostedDownload`). An ended
+ * plan's block is held from its final period and filed under that key's own period, so its minutes and debit live
+ * with the money that paid for them; after a move to a plan without a computer, under the current period.
+ */
+async function downloadPricing(account: string, service: SwitchValue, fetcher: typeof fetch, now: number) {
+  const plan = requireHostedDownload(await readEntitlement(account, fetcher, now), service)
+  const key = plan.final ? (await readModelPlanAccount(account, fetcher))?.key : undefined
+  if (plan.final && !key) throw unavailable()
+  return {
+    snapshot: plan.snapshot,
+    final: plan.final,
+    pool: key?.hash,
+    epoch: key ? `${key.subscription}:${key.start * 1000}` : plan.snapshot.meterEpoch,
+    periodEnd: key ? key.end * 1000 : plan.snapshot.periodEnd,
+    // Any plan's most: the computer's own lease, not the plan, bounds a download's computers at once.
+    computers: MAX_COMPUTERS,
   }
 }
 

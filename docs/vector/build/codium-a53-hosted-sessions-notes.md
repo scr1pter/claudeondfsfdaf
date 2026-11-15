@@ -139,3 +139,15 @@ caps and the disks kept for ended plans, and steps periods by 28 days; an ended 
 longer charged while no download-only start exists; a store fault after the first block charges nothing; a start whose
 outcome the provider could not tell is charged up to the computer's stop; every heartbeat must be signed by hostd's own
 key (`hosted:hostd:<sid>`); account deletion deletes the sessions' packed files (`hosted:archives:<account>`).
+
+**Status, 15 Nov 2026 (Codium finish, H1a).** The download-only start is built on the server:
+`POST /api/hosted/sessions {mode: "download", computer}` (`startHostedDownload`) lets an account whose plan ended (or
+no longer includes a cloud computer) run download-only sessions, one block each and one at a time per computer, on a
+computer whose disk is still inside its `hosted:disk-due` date, held from the final period; the computer is asked only
+to pack and upload, and the existing download link then works while the media bucket keeps the packed files, never
+past the date and never while frozen, after a lost dispute or while closing. Vector pays the uploads' egress up to one
+archive's worth per computer and window. Its first start for a computer charges `chargeRetention` (once per computer and period); the ended transition
+charges nothing. The reaper ends it after its one block or the upload, the provisioner leaves it running while the
+plan still allows it, and the nightly deletion now erases the packed files with the disks. Readings and owner questions:
+`codium-deviations.md` "Codium finish: H1 download-only start (15 Nov 2026)". Not built: the computer side (H1b), the
+image rebuild (owner) and any client surface.

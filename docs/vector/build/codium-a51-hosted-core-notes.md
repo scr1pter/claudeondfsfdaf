@@ -109,6 +109,9 @@ scratch config (Bun and node types) and are clean.
   `trueUpCharge` per line once it has the provider's usage (`computeCostMicro`); the drift check reads `periodCharges`.
   The hosted provisioner calls `chargeRetention` when a plan ends (days from `hostedDiskPolicy`) and deletes the disk
   at its `until`. Add `computer`'s readiness check in `perkServices` (provider, snapshot and `hostedLedgerConfigured()`).
+  15 Nov 2026 (Codium finish, H1a): the provisioner no longer calls it (P8 review); the first download-only start of
+  each computer does (`launchSession` in `hosted-sessions.ts`), and that start's block is held through `holdPool`'s
+  final path from the ended plan's final period (`codium-deviations.md` "Codium finish: H1 download-only start").
 - **A56:** the pre-start ceiling is the estimate's hosted form.
 - **A57:** call `eraseAccountHostedLedger(account)` after the hosted provisioner stopped the computers. Lines stay.
 - **A60 / legal read:** the privacy page's `#hosted-computer` should say the ledger keeps, per charge, the units, what

@@ -4,20 +4,31 @@ import { Hosted } from "../packages/schema/src/hosted"
 import { codiumKey } from "../api/_lib/codium-keys"
 import { hosted, PROVISIONERS } from "../api/_lib/codium-provisioners"
 import type { TransitionCause } from "../api/_lib/codium-provision"
-import { handleHostedSessions } from "../api/_lib/hosted-api"
+import { handleHostedHeartbeat, handleHostedSessionAction, handleHostedSessions } from "../api/_lib/hosted-api"
 import { applyHostedTransition, hostedRosterKey, reapHostedSessions, runHostedNightly } from "../api/_lib/hosted-crons"
 import { hostedAccount, hostedRunningKey, readLine } from "../api/_lib/hosted-ledger"
 import { computerName } from "../api/_lib/hosted-provider"
 import { HOSTED_DISK_GB_MAX } from "../api/_lib/hosted-rates"
-import { hostedDiskDueKey, hostedSessionKey, hostedSessionsKey, readSessionRecord } from "../api/_lib/hosted-sessions"
+import {
+  hostedDiskDueKey,
+  hostedDownloadEgressKey,
+  hostedDownloadUploadedKey,
+  hostedSessionKey,
+  hostedSessionsKey,
+  readSessionRecord,
+} from "../api/_lib/hosted-sessions"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
 import {
   ACCOUNT_ID,
   DAY,
   MINUTE,
+  R2_HOST,
+  daemonBeat,
+  endedWithDisk,
   hostedSessionEnvironment,
   hostedWorld,
   invoke,
+  startDownload,
   type HostedWorld,
 } from "./hosted-sessions-fixture"
 
@@ -136,7 +147,7 @@ describe("§4.4's cloud computer row", () => {
     expect((await start(w)).status).toBe(201)
   })
 
-  test("ended: sessions stop at once; the disks are kept 14 days, at Vector's cost while no download exists, then deleted", async () => {
+  test("ended: sessions stop at once; the disks are kept 14 days, charged nothing until a download starts, then deleted", async () => {
     const w = await hostedWorld(ledger)
     const session = await running(w)
     w.advance(3 * MINUTE)
@@ -146,8 +157,7 @@ describe("§4.4's cloud computer row", () => {
     expect(w.fakes.store.hash(hostedRosterKey()).has(ACCOUNT_ID)).toBe(false)
     const due = w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)!
     expect(due).toBe(w.fakes.clock.now + Hosted.ENDED_DISK_DAYS * DAY)
-    // No route lets an ended plan download its disk yet, so the final period is charged nothing for keeping it
-    // (P8 review; codium-deviations.md).
+    // The end itself charges nothing for keeping it: the first download-only start of the computer does (H1a).
     const key = w.fakes.store.get(codiumKey("account", ACCOUNT_ID))!
     const start = (JSON.parse(key) as { key: { start: number } }).key.start
     expect(await readLine(ACCOUNT_ID, `hr-${NAME()}-sub_renewing-${start}`, w.options)).toBeUndefined()
@@ -252,5 +262,131 @@ describe("§4.4's cloud computer row", () => {
     expect(JSON.parse(w.fakes.store.hash(hostedRosterKey()).get(ACCOUNT_ID)!)).toMatchObject({ plan: "vector-200" })
     expect((await start(w)).status).toBe(201)
     expect(HOSTED_DISK_GB_MAX).toBeGreaterThan(0)
+  })
+})
+
+// H1a: the download-only start's part in the row: what the provisioner leaves running, what the nightly job charges and
+// deletes. Fakes only.
+describe("download-only starts in §4.4's row (H1a)", () => {
+  const beat = (w: HostedWorld, id: string, body: Record<string, unknown>, fetcher = w.fetcher) =>
+    invoke((request, response) => handleHostedHeartbeat(request, response, { ...w.options, fetcher }), {
+      method: "POST",
+      authorization: w.provider.token(NAME())!,
+      body: daemonBeat(id, body),
+      query: { id },
+    })
+
+  async function uploaded(w: HostedWorld, bytes: number) {
+    const session = (await startDownload(w)).body.session as Hosted.SessionView
+    await beat(w, session.id, {})
+    const packed = await beat(w, session.id, { archiveBytes: bytes })
+    const key = decodeURIComponent(new URL(packed.body.upload.url).pathname.split("/").slice(2).join("/"))
+    w.bucket.set(key, bytes)
+    await beat(w, session.id, { uploaded: true })
+    return { session, key }
+  }
+
+  test("a replay of the ended transition leaves a running download alone; a freeze or a refund ends it", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const session = (await startDownload(w)).body.session as Hosted.SessionView
+    await applyHostedTransition({ account: ACCOUNT_ID, to: w.snapshot(), cause: "ended" }, w.options)
+    expect((await state(w, session.id)).state).toBe("running")
+    await transition(w, { state: "frozen", reason: "disputed" }, "disputed")
+    expect(await state(w, session.id)).toMatchObject({ state: "ended", reason: "frozen" })
+
+    const refunded = await hostedWorld(ledger)
+    await endedWithDisk(refunded)
+    const other = (await startDownload(refunded)).body.session as Hosted.SessionView
+    await transition(refunded, { state: "ended", reason: "refunded" }, "refunded")
+    expect(await state(refunded, other.id)).toMatchObject({ state: "ended", reason: "plan" })
+  })
+
+  test("the nightly egress charge leaves a download's upload to Vector and charges the rest", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    await uploaded(w, 2_000_000_000)
+    await reapHostedSessions(w.options)
+    w.provider.computers.get(NAME())!.egressBytes += 2_500_000_000
+    const nightly = await runHostedNightly(w.options)
+    expect(nightly.charged).toBe(1)
+    const lines = (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
+    expect(lines.filter((row) => row.kind === "egress").map((row) => row.units)).toEqual([0.5])
+    expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBe("0")
+    // No storage is charged for an ended plan's kept disk: its retention was.
+    expect(lines.filter((row) => row.kind === "storage")).toEqual([])
+    expect(lines.filter((row) => row.kind === "retention")).toHaveLength(1)
+  })
+
+  test("Vector pays at most one archive's worth of a computer's download uploads until its disk's date", async () => {
+    const w = await hostedWorld(ledger)
+    const due = (await endedWithDisk(w))!
+    // The largest packed files a computer may upload (S3's single PUT, which R2 shares).
+    const archive = 5 * 1024 ** 3
+    const bytes = 4_000_000_000
+    for (let round = 0; round < 3; round++) {
+      const { session } = await uploaded(w, bytes)
+      expect((await state(w, session.id)).download).toMatchObject({ bytes })
+      await reapHostedSessions(w.options)
+      expect(await state(w, session.id)).toMatchObject({ state: "ended", reason: "finished" })
+    }
+    // Every upload is counted until the deletion date; only the first archive's worth is set against the egress.
+    expect(w.fakes.store.get(hostedDownloadUploadedKey(ACCOUNT_ID, 1))).toBe(String(3 * bytes))
+    expect(w.fakes.store.expires.get(hostedDownloadUploadedKey(ACCOUNT_ID, 1))).toBe(due)
+    expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBe(String(archive))
+    w.provider.computers.get(NAME())!.egressBytes += 3 * bytes
+    expect((await runHostedNightly(w.options)).charged).toBe(1)
+    const lines = (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
+    expect(lines.filter((row) => row.kind === "egress").map((row) => row.units)).toEqual([(3 * bytes - archive) / 1e9])
+    expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBe("0")
+  })
+
+  test("at the date the disks and their packed files are deleted; the download link answers 404 or 410", async () => {
+    const w = await hostedWorld(ledger)
+    const deleted: string[] = []
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.host === R2_HOST && init?.method === "DELETE") {
+        const key = decodeURIComponent(url.pathname.split("/").slice(2).join("/"))
+        deleted.push(key)
+        w.bucket.delete(key)
+        return new Response(null, { status: 204 })
+      }
+      return w.fetcher(input, init)
+    }) as typeof fetch
+    const options = { ...w.options, fetcher }
+    const due = (await endedWithDisk(w))!
+    const { session, key } = await uploaded(w, 4096)
+    await reapHostedSessions(options)
+    expect(await state(w, session.id)).toMatchObject({ state: "ended", reason: "finished" })
+    const ask = () =>
+      invoke((request, response) => handleHostedSessionAction(request, response, "download", options), {
+        method: "POST",
+        authorization: w.desktopToken(),
+        body: {},
+        query: { id: session.id },
+      })
+    const follow = (url: string) =>
+      invoke((request, response) => handleHostedSessionAction(request, response, "download", options), {
+        method: "GET",
+        query: { id: session.id, t: new URL(url).searchParams.get("t")! },
+      })
+    const link = await ask()
+    expect(link.status).toBe(200)
+    expect(link.body.expiresAt).toBeLessThanOrEqual(due)
+    w.advance(due - w.fakes.clock.now + MINUTE)
+    expect((await follow(link.body.url)).status).toBe(404)
+    expect((await runHostedNightly(options)).deleted).toBe(1)
+    expect(deleted).toEqual([key])
+    expect(w.bucket.has(key)).toBe(false)
+    expect(w.provider.computers.size).toBe(0)
+    expect(w.fakes.store.get(hostedDownloadUploadedKey(ACCOUNT_ID, 1))).toBeUndefined()
+    expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBeUndefined()
+    // The record outlives the files for the drift check and the true-up; a link to them now leads nowhere.
+    const late = await ask()
+    expect(late.status).toBe(200)
+    const followed = await follow(late.body.url)
+    expect(followed.status).toBe(410)
+    expect(followed.body.error.code).toBe("HOSTED_DOWNLOAD_UNAVAILABLE")
   })
 })
