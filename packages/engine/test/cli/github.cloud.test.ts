@@ -5,7 +5,9 @@ import os from "node:os"
 import path from "node:path"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import {
+  artifactKey,
   bindRepository,
+  brainDownload,
   heartbeat,
   mintRunToken,
   settle,
@@ -294,6 +296,305 @@ describe("cloud command HTTP boundary", () => {
     expect(await heartbeat({ token: TOKEN, state: "starting", services: invalid.services })).toEqual({
       ok: false,
       stop: true,
+    })
+  })
+})
+
+async function authorized() {
+  const holder = createGithubSecrets()
+  await holder.load(channelEnv(), channel(runChannel))
+  expect(await holder.authorize(async () => true)).toBe(true)
+  return holder
+}
+const KEY = { key: Buffer.alloc(32, 7).toString("base64url"), keyId: "a".repeat(16) }
+const BRAIN_KEY = { key: Buffer.alloc(32, 9).toString("base64url"), keyId: "b".repeat(16) }
+const UPLOAD_ID = `vbu_${"u".repeat(32)}`
+// The step env a desktop Brain run's agent step receives (BT01): brainDownload reads its id only from here.
+const BRAIN_ENV = { VECTOR_THREAD: "dispatch-9", VECTOR_BRAIN_UPLOAD: UPLOAD_ID }
+// The largest answer the route can give: a 512 KiB upload plus its tag, and the Brain conversation key. Spec 2.13's
+// literals, not the client's formula, so a mistake in that formula fails here.
+const BRAIN_CIPHERTEXT = 699_072
+const BRAIN_RESPONSE = 703_168
+const largest = {
+  uploadId: UPLOAD_ID,
+  key: Buffer.alloc(32, 3).toString("base64url"),
+  aad: `vector-brain-upload-v1|11111111-1111-4111-8111-111111111111|301|3|${UPLOAD_ID}`,
+  nonce: Buffer.alloc(12, 4).toString("base64url"),
+  ciphertext: Buffer.alloc(512 * 1024 + 16, 5).toString("base64url"),
+  sha256: "c".repeat(64),
+  bytes: 512 * 1024,
+  approvedAt: NOW,
+  publicRepository: false,
+  artifactKey: BRAIN_KEY,
+}
+const padded = (value: unknown, size: number) => {
+  const text = JSON.stringify(value)
+  return new Response(text + " ".repeat(size - Buffer.byteLength(text)), {
+    headers: { "content-type": "application/json" },
+  })
+}
+
+describe("conversation and Brain key clients", () => {
+  test("artifact key sends only the run's own thread and decodes a strict key", async () => {
+    await using f = await fixture(() => Response.json(KEY))
+    const result = await artifactKey({
+      env: { VECTOR_THREAD: "7", VECTOR_BRAIN_UPLOAD: "" },
+      holder: await authorized(),
+      services: f.services,
+    })
+    expect(result).toEqual({ status: "ok", key: KEY })
+    expect(f.requests).toEqual([
+      { path: GithubAgents.ENDPOINT.artifactKey, body: { thread: "7" }, authorization: `Bearer ${TOKEN}` },
+    ])
+    expect(f.masks).toEqual([KEY.key])
+    expect(f.notices).toEqual([])
+  })
+  for (const [status, code, result, extra] of [
+    [400, "INVALID_REQUEST", "refused", {}],
+    [401, "RUN_TOKEN_INVALID", "refused", {}],
+    [401, "MODEL_PLAN_RUN_EXPIRED", "expired", {}],
+    [403, "ARTIFACT_KEY_NOT_ALLOWED", "not-allowed", {}],
+    [429, "RATE_LIMITED", "unavailable", {}],
+    ...["PERSISTENT_STORE_UNAVAILABLE", "RUN_ARTIFACTS_UNAVAILABLE", "CLOUD_AGENTS_UNAVAILABLE"].map(
+      (code) => [503, code, "unavailable", {}] as const,
+    ),
+    [403, "INVALID_REQUEST", "unavailable", {}],
+    [403, "ARTIFACT_KEY_NOT_ALLOWED", "unavailable", { limit: "hours" }],
+  ] as const)
+    test(`artifact key ${status} ${code}${Object.keys(extra).length ? " with limit" : ""} is ${result}`, async () => {
+      await using f = await fixture(() => Response.json(failure(code, extra), { status }))
+      const answer = await artifactKey({
+        env: { VECTOR_THREAD: "7" },
+        holder: await authorized(),
+        services: f.services,
+      })
+      expect(answer).toEqual({ status: result })
+      expect(f.requests).toHaveLength(1)
+      expect(f.masks).toEqual([])
+      expect(f.notices).toEqual([])
+      expect(JSON.stringify(answer)).not.toContain("PRIVATE SERVER DIAGNOSTIC")
+    })
+  test("malformed, oversized or redirected key answers grant nothing", async () => {
+    const answers = [
+      () => Response.json({ ...KEY, account: "private" }),
+      () => Response.json({ ...KEY, key: KEY.key.slice(1) }),
+      () => Response.json({ ...KEY, key: "A".repeat(42) + "B" }),
+      () => Response.json({ ...KEY, keyId: "A".repeat(16) }),
+      () => Response.json(failure("ARTIFACT_KEY_NOT_ALLOWED")),
+      () => new Response(null, { status: 200 }),
+      () => padded(KEY, 16_385),
+    ]
+    await using f = await fixture((index) => answers[index - 1]!())
+    const holder = await authorized()
+    for (const _ of answers)
+      expect(await artifactKey({ env: { VECTOR_THREAD: "7" }, holder, services: f.services })).toEqual({
+        status: "unavailable",
+      })
+    expect(f.requests).toHaveLength(answers.length)
+    // The cap itself: the same key with spaces up to exactly 16,384 bytes is read.
+    await using exact = await fixture(() => padded(KEY, 16_384))
+    expect(await artifactKey({ env: { VECTOR_THREAD: "7" }, holder, services: exact.services })).toEqual({
+      status: "ok",
+      key: KEY,
+    })
+    expect(f.masks).toEqual([])
+    let followed = 0
+    const target = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        followed++
+        return Response.json(KEY)
+      },
+    })
+    try {
+      await using moved = await fixture(() => Response.redirect(target.url.origin + "/key", 302))
+      expect(await artifactKey({ env: { VECTOR_THREAD: "7" }, holder, services: moved.services })).toEqual({
+        status: "unavailable",
+      })
+      expect(await brainDownload({ env: BRAIN_ENV, holder, services: moved.services })).toEqual({
+        status: "unavailable",
+      })
+      expect(moved.requests).toHaveLength(2)
+      expect(moved.masks).toEqual([])
+    } finally {
+      await target.stop(true)
+    }
+    expect(followed).toBe(0)
+  })
+  test("a key or Brain read that never answers is cut off, one without a caller signal still has its own, and an aborted one never asks", async () => {
+    await using f = await fixture()
+    const holder = await authorized()
+    const request = f.services.request
+    let asked = 0
+    f.services.request = () => {
+      asked++
+      return new Promise<Response>(() => {})
+    }
+    expect(
+      await artifactKey({
+        env: { VECTOR_THREAD: "7" },
+        holder,
+        services: f.services,
+        signal: AbortSignal.timeout(100),
+      }),
+    ).toEqual({ status: "unavailable" })
+    expect(
+      await brainDownload({ env: BRAIN_ENV, holder, services: f.services, signal: AbortSignal.timeout(100) }),
+    ).toEqual({ status: "unavailable" })
+    expect(asked).toBe(2)
+    // Without a caller signal each client still hands the transport post()'s own timeout signal (20 s by default).
+    const signals: (AbortSignal | null | undefined)[] = []
+    f.services.request = async (_, init) => {
+      signals.push(init.signal)
+      return Response.json(failure("RATE_LIMITED"), { status: 429 })
+    }
+    expect(await artifactKey({ env: { VECTOR_THREAD: "7" }, holder, services: f.services })).toEqual({
+      status: "unavailable",
+    })
+    expect(await brainDownload({ env: BRAIN_ENV, holder, services: f.services })).toEqual({ status: "unavailable" })
+    expect(signals).toHaveLength(2)
+    for (const signal of signals) {
+      expect(signal).toBeInstanceOf(AbortSignal)
+      expect(signal!.aborted).toBe(false)
+    }
+    f.services.request = request
+    const abort = new AbortController()
+    abort.abort()
+    expect(
+      await artifactKey({ env: { VECTOR_THREAD: "7" }, holder, services: f.services, signal: abort.signal }),
+    ).toEqual({ status: "unavailable" })
+    expect(await brainDownload({ env: BRAIN_ENV, holder, services: f.services, signal: abort.signal })).toEqual({
+      status: "unavailable",
+    })
+    expect(f.requests).toHaveLength(0)
+    expect(f.masks).toEqual([])
+  })
+  test("own-key, unauthorized, threadless and Brain runs make no key request, and no id makes no Brain read", async () => {
+    await using f = await fixture(() => Response.json(KEY))
+    const own = createGithubSecrets()
+    await own.load(channelEnv("own-key"), channel(ownChannel))
+    const pending = createGithubSecrets()
+    await pending.load(channelEnv(), channel(runChannel))
+    expect(pending.pendingRunToken()).toBe(TOKEN)
+    const holder = await authorized()
+    for (const unauthorized of [own, pending, createGithubSecrets()]) {
+      expect(await artifactKey({ env: { VECTOR_THREAD: "7" }, holder: unauthorized, services: f.services })).toEqual({
+        status: "absent",
+      })
+      expect(await brainDownload({ env: BRAIN_ENV, holder: unauthorized, services: f.services })).toEqual({
+        status: "absent",
+      })
+    }
+    for (const thread of [undefined, "", "7\n", "abc", "dispatch-0", "schedule-XYZ"])
+      expect(await artifactKey({ env: { VECTOR_THREAD: thread }, holder, services: f.services })).toEqual({
+        status: "absent",
+      })
+    // A desktop Brain run's conversation key comes only from brain-download (deviations, "2026-11-15 BT03" item 4).
+    for (const upload of [UPLOAD_ID, "malformed"])
+      expect(
+        await artifactKey({
+          env: { VECTOR_THREAD: "dispatch-9", VECTOR_BRAIN_UPLOAD: upload },
+          holder,
+          services: f.services,
+        }),
+      ).toEqual({ status: "brain-run" })
+    for (const uploadId of ["", "vbu_short", UPLOAD_ID + "\n", `vbu_${"u".repeat(33)}`, ` ${UPLOAD_ID}`])
+      expect(await brainDownload({ env: { VECTOR_BRAIN_UPLOAD: uploadId }, holder, services: f.services })).toEqual({
+        status: "absent",
+      })
+    // The id is never a parameter: a step env without VECTOR_BRAIN_UPLOAD has none to send.
+    expect(await brainDownload({ env: { VECTOR_THREAD: "dispatch-9" }, holder, services: f.services })).toEqual({
+      status: "absent",
+    })
+    expect(f.requests).toHaveLength(0)
+    expect(f.masks).toEqual([])
+  })
+  test("brain download sends only the step's own upload id, whose step never asks for the ordinary key, and decodes the largest approved envelope", async () => {
+    const withoutKey = { ...largest, artifactKey: undefined }
+    const answers = [largest, withoutKey]
+    expect(largest.ciphertext).toHaveLength(BRAIN_CIPHERTEXT)
+    await using f = await fixture((index) => Response.json(answers[index - 1]))
+    const holder = await authorized()
+    // The one variable that gives brainDownload its id is the one that keeps artifactKey from asking.
+    expect(await artifactKey({ env: BRAIN_ENV, holder, services: f.services })).toEqual({ status: "brain-run" })
+    expect(await brainDownload({ env: BRAIN_ENV, holder, services: f.services })).toEqual({
+      status: "ok",
+      download: largest,
+    })
+    expect(f.masks).toEqual([largest.key, BRAIN_KEY.key])
+    expect(await brainDownload({ env: BRAIN_ENV, holder, services: f.services })).toEqual({
+      status: "ok",
+      download: withoutKey,
+    })
+    expect(f.masks).toEqual([largest.key, BRAIN_KEY.key, largest.key])
+    expect(f.requests).toEqual(
+      Array(2).fill({
+        path: GithubAgents.ENDPOINT.brainDownload,
+        body: { uploadId: UPLOAD_ID },
+        authorization: `Bearer ${TOKEN}`,
+      }),
+    )
+    expect(f.notices).toEqual([])
+  })
+  for (const [status, code, result] of [
+    [400, "BRAIN_UPLOAD_INVALID", "refused"],
+    [401, "RUN_TOKEN_INVALID", "refused"],
+    [401, "MODEL_PLAN_RUN_EXPIRED", "expired"],
+    [503, "BRAIN_UPLOAD_UNAVAILABLE", "unavailable"],
+    [503, "ABUSE_PROTECTION_UNAVAILABLE", "unavailable"],
+    [503, "RUN_ARTIFACTS_UNAVAILABLE", "unavailable"],
+    [429, "RATE_LIMITED", "unavailable"],
+    [403, "ORIGIN_NOT_ALLOWED", "unavailable"],
+    [415, "CONTENT_TYPE_INVALID", "unavailable"],
+    [413, "BODY_TOO_LARGE", "unavailable"],
+    [405, "METHOD_NOT_ALLOWED", "unavailable"],
+    [400, "INVALID_JSON", "unavailable"],
+    [403, "ARTIFACT_KEY_NOT_ALLOWED", "unavailable"],
+    [401, "BRAIN_UPLOAD_INVALID", "unavailable"],
+  ] as const)
+    test(`brain download ${status} ${code} is ${result}`, async () => {
+      await using f = await fixture(() => Response.json(failure(code), { status }))
+      const answer = await brainDownload({ env: BRAIN_ENV, holder: await authorized(), services: f.services })
+      expect(answer).toEqual({ status: result })
+      expect(f.requests).toHaveLength(1)
+      expect(f.masks).toEqual([])
+      expect(f.notices).toEqual([])
+      expect(JSON.stringify(answer)).not.toContain("PRIVATE SERVER DIAGNOSTIC")
+    })
+  test("a Brain answer for another upload, with extra or out-of-range fields, or past its size cap grants nothing", async () => {
+    const answers = [
+      Response.json({ ...largest, uploadId: `vbu_${"v".repeat(32)}` }),
+      Response.json({ ...largest, account: "11111111-1111-4111-8111-111111111111" }),
+      Response.json({ ...largest, ticketHash: "d".repeat(64) }),
+      Response.json({ ...largest, bytes: 0 }),
+      Response.json({ ...largest, bytes: 512 * 1024 + 1 }),
+      Response.json({ ...largest, aad: "a".repeat(257) }),
+      Response.json({ ...largest, nonce: largest.nonce.slice(1) }),
+      Response.json({ ...largest, ciphertext: largest.ciphertext + "A" }),
+      Response.json({ ...largest, ciphertext: "A".repeat(22) }),
+      Response.json({ ...largest, ciphertext: largest.ciphertext.slice(0, -1) + "=" }),
+      Response.json({ ...largest, sha256: "C".repeat(64) }),
+      Response.json({ ...largest, publicRepository: "false" }),
+      Response.json({ ...largest, approvedAt: 0 }),
+      Response.json({ ...largest, key: "A".repeat(42) + "B" }),
+      Response.json({ ...largest, artifactKey: { ...BRAIN_KEY, account: "private" } }),
+      Response.json({ ...largest, artifactKey: { ...BRAIN_KEY, key: "A".repeat(42) + "B" } }),
+      padded(largest, BRAIN_RESPONSE + 1),
+    ]
+    await using f = await fixture((index) => answers[index - 1]!)
+    const holder = await authorized()
+    for (const _ of answers)
+      expect(await brainDownload({ env: BRAIN_ENV, holder, services: f.services })).toEqual({
+        status: "unavailable",
+      })
+    expect(f.requests).toHaveLength(answers.length)
+    expect(f.masks).toEqual([])
+    // The cap itself: the largest answer padded to exactly the cap is read, one byte more is not (above).
+    await using exact = await fixture(() => padded(largest, BRAIN_RESPONSE))
+    expect(await brainDownload({ env: BRAIN_ENV, holder, services: exact.services })).toEqual({
+      status: "ok",
+      download: largest,
     })
   })
 })

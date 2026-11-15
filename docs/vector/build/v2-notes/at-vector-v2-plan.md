@@ -169,13 +169,14 @@ Remaining:
 - The runner side of the session proof: the FD3 bridge (`github.sandbox.ts:626-637`) and the proof-checked copy into `vector-session` (`:785-790`, `:828-850`).
 - The workflow upload of `vector-session-<thread>` (`core/src/review/workflow.ts:702-703`).
 - Desktop preview and import (`desktop/src/main/github-agents-brain.ts:114,192,269,361`), with the engine's local `/experimental/brain/preview` and `/experimental/brain/run-proposals/import` routes.
-- BT03 (`brain-transport`): the Brain upload store and the live run reader are hardened and tested against real Redis, and with the switch off every Brain route answers 503 first (deviations, "2026-11-15 BT03"). The ordinary artifact key is now refused (403 `ARTIFACT_KEY_NOT_ALLOWED`) to every owner-desktop run, so the engine client in item 3 must take a Brain run's conversation key from `brain-download`'s `artifactKey`, never call artifact-key when `VECTOR_BRAIN_UPLOAD` is set, and treat that 403 as "no ordinary key" (the run then saves no session).
+- BT03 (`brain-transport`): the Brain upload store and the live run reader are hardened and tested against real Redis (and passed against the lane's hosted Valkey in vector-at-mention.yml 43675601284, job 132694938440), and with the switch off every Brain route answers 503 first (deviations, "2026-11-15 BT03"). The ordinary artifact key is now refused (403 `ARTIFACT_KEY_NOT_ALLOWED`) to every owner-desktop run, so the engine client in item 3 must take a Brain run's conversation key from `brain-download`'s `artifactKey`, never call artifact-key when `VECTOR_BRAIN_UPLOAD` is set, and treat that 403 as "no ordinary key" (the run then saves no session).
 
 **Missing: the Actions engine side does none of this yet.**
 1. **Save and restore.**
    - Nothing calls the codec: `encryptConversation`, `latestConversation` and `decryptConversation` are used only by the desktop.
    - The engine never calls `GithubAgents.ENDPOINT.artifactKey` (`github-agents.ts:38`). `github.cloud.ts` calls only mint, bind, heartbeat and settle (`:244,332,363,382`).
    - Add a key client in `github.cloud.ts` that uses the run token.
+     - BT04 (`brain-transport`) built it: `artifactKey` asks once with the authorized run token for the run's own thread, never on own key or a Brain run, and answers a closed status. Nothing calls it yet; save and restore are BT05 and BT06 (deviations, "2026-11-15 BT04").
    - Restore before the session starts (`github.agent.ts:459-461`): pick the newest artifact with `GITHUB_TOKEN` `actions: read`, decrypt, check `allowConversationRestore`, then import using `cli/cmd/import.ts`. Any failure falls back to the thread.
    - Save after the share flush and before `writeBundle` (`:559`): export, encrypt, write `vector-out/session.vsa`.
 2. **Runner attestation.** `GithubSessionProof.attestSessionArtifact` (`github.session-proof.ts:35`) has no caller. Call it right after the encrypted bytes are written. The `session-replaced` matrix scenario proves it once the lane is green (§1).
@@ -183,7 +184,8 @@ Remaining:
    - The App dispatch sends the input `brain_upload` (`api/_lib/github-app.ts:725`).
    - The v3 workflow declares only `mode, prompt, pr, code, ticket` (`workflow.ts:768-773`). GitHub rejects undeclared `workflow_dispatch` inputs with a 422, so every Brain-start dispatch would fail.
    - Fix: add the input (golden test), pass it to the agent step, and add a `brain-download` endpoint constant and engine client.
-   - BT01 (`brain-transport`) added the Codium input, the agent-step env `VECTOR_BRAIN_UPLOAD` and `ENDPOINT.brainDownload`. The engine client is still missing; the tests it must add are in deviations, "2026-11-14 BT01" item 7.
+   - BT01 (`brain-transport`) added the Codium input, the agent-step env `VECTOR_BRAIN_UPLOAD` and `ENDPOINT.brainDownload`. The tests the engine must add are in deviations, "2026-11-14 BT01" item 7.
+   - BT04 (`brain-transport`) added the engine client (`brainDownload`) and the local opener (`GithubBrain.openUpload`: AAD bound to the run's own repository and upload, AES-256-GCM, digest, size, current public policy, bundle schema), with the empty and malformed upload id half of those tests. The event gate, the call and the fixture half are BT07a (deviations, "2026-11-15 BT04").
    - Use the immutable `brain/bundle.json` as context, and collect model drafts into `brain/proposals.json` inside the encrypted manifest under the separately labeled Brain key.
 4. **Preview and import.** The desktop and UI exist, but no real run produces `session.vsa` or proposals yet. After items 1–3, add a CI case: a returned artifact, then the owner preview, then a one-shot import.
 5. Tests:
