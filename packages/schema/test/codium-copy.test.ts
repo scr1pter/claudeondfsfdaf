@@ -117,3 +117,44 @@ describe("Codium copy follows the server listing", () => {
     }
   })
 })
+
+// EV-08 (R-C7, Q11): Vector everywhere on every paid plan, shown only while the server lists it and Remote.
+describe("the everywhere perk", () => {
+  const copy = CodiumCopy.PERK_COPY.everywhere
+
+  test("every paid plan includes it with Remote listed; no headline, and the same tagline and caps", () => {
+    for (const plan of CodiumPlan.PLANS) {
+      expect(plan.price).toBeGreaterThan(0)
+      const view = CodiumCopy.tierView(plan.id, new Set<PerkId>(["remote", "everywhere"]), models)
+      const remote = CodiumCopy.tierView(plan.id, new Set<PerkId>(["remote"]), models)
+      expect(view.perks.filter((perk) => perk.id === "everywhere")).toEqual([
+        { id: "everywhere", label: copy.label, text: copy.text(ENTITLEMENTS[plan.id]) },
+      ])
+      expect(view.headlines.map((perk) => perk.id)).not.toContain("everywhere")
+      expect(CodiumCopy.tierView(plan.id, all, models).headlines.map((perk) => perk.id)).not.toContain("everywhere")
+      expect(view.tagline).toBe(remote.tagline)
+      expect(view.caps).toEqual(remote.caps)
+    }
+    // Structural, not per account: the plans with caps are exactly the four paid plans, so an account with no plan
+    // has no caps for `applies` to read and no tier view that could carry the perk.
+    expect(Object.keys(ENTITLEMENTS).sort()).toEqual(CodiumPlan.PLANS.map((plan) => plan.id).sort())
+  })
+
+  test("it needs Remote listed: alone it shows on no plan", () => {
+    expect(CodiumCopy.requires.everywhere).toEqual(["remote"])
+    for (const plan of CodiumPlan.PLANS)
+      expect(CodiumCopy.tierView(plan.id, new Set<PerkId>(["everywhere"]), models).perks).toEqual([])
+  })
+
+  test("its copy states no amount, says where the job runs and claims no computer Vector hosts", () => {
+    for (const plan of CodiumPlan.PLANS) {
+      const text = copy.text(ENTITLEMENTS[plan.id])
+      for (const value of [copy.label, text]) expect(value).not.toMatch(/\d|%|\$|credit|token/i)
+      expect(text).toContain("your own paired computer")
+      expect(text).toContain("Vector Remote")
+      expect(text).toContain("while that computer is online")
+      expect(text).not.toContain(CodiumCopy.COMPUTER_LABEL)
+      expect(text).not.toMatch(/hosted|cloud|Actions|GitHub|Slack|Linear|Jira/i)
+    }
+  })
+})

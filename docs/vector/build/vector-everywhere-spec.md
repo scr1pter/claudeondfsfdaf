@@ -253,6 +253,8 @@ Pure decision: `decideRoute(input)` in packages/schema/src/everywhere-policy.ts 
 | 6 | **Actions eligible**: the cloud-agents port is present, the source is enabled, the job body can go by reference (R-A4; before it, there is no Actions route for platform jobs), the repository has a binding whose account is the sponsor, with the App installed and in Codium mode as @vector records it (R-A9; before it, no Actions route), and the repository's live visibility, read with the App's single-repository token just before dispatch, is private (a failed read counts as public) | Go to step 7 |
 | 7 | **Queue**: the sponsor's computer connected in the last 30 days and "Wait for my computer" is on (default on). A job waits at most until its body would expire: 1 hour 55 minutes from intake, 10 minutes for Jira (4.4) | Refuse `no-place` with the reason that applies ("Your computer has not connected in 30 days.", "Wait for my computer is off.", and "or bind this repository for GitHub Actions" only once the Actions route exists) |
 
+*2026-11-15 note (EV-08), on step 3:* the `everywhere` perk now exists only as Codium listing vocabulary (`PERK_IDS`, `PERK_COPY.everywhere` on every paid plan, requiring `remote`). The router still reads `VECTOR_EVERYWHERE_ALLOW_ACCOUNTS`: Entitlements has no `everywhere` field, so `requireEntitlement(account, "everywhere")` does not exist. Listing waits for that plan check, and Codium's readiness for the perk stays false until the laptop route and the plan check are wired (api/_lib/everywhere/config.ts `LAPTOP_ROUTE_WIRED`). See vector-everywhere-deviations.md, "2026-11-15, EV-08".
+
 **Job states** (one Redis `EVAL` per transition, fenced by a version counter; api/_lib/everywhere/jobs.ts):
 
 ```
@@ -617,6 +619,8 @@ export type CloudEvents = {
 
 *2026-11-15 note (EV-07):* the `switch` port's comment above predates R-C6: Codium now lists `everywhere` (`on`, `no-new`, `stop`), so `switch("everywhere")` is the environment made stricter by Codium's record (absent reads `on`; `off`, unknown or unreadable reads `stop`), and `switch("remote")` reads Codium's `remote` switch. See vector-everywhere-deviations.md, "2026-11-15, EV-07".
 
+*2026-11-15 note (EV-08), on the `perk` field:* its comment assumes `requireEntitlement(account, "everywhere")`, which does not exist. R-C7's listing half is built (Codium's `everywhere` perk, display only); its runtime half is not. safePorts' `perk("everywhere")` still reads `VECTOR_EVERYWHERE_ALLOW_ACCOUNTS`, and `perk("remote")` is still false. See vector-everywhere-deviations.md, "2026-11-15, EV-08".
+
 ### 6.2 Platform adapters
 
 api/_lib/everywhere/platform.ts (VE-06). One file per platform under api/_lib/everywhere/<platform>/adapter.ts.
@@ -839,6 +843,7 @@ Each WP fits one agent. "Tests" names the files the WP adds; each runs alone, lo
 - **Legal and pages:** a privacy policy section for Slack, Linear and Jira data (what is stored, for how long, how to erase), a support page, and the legal read, alongside Codium's stored-data list. VE-44 drafts it in docs/vector/owner-actions/; the owner merges it into legal/privacy.astro after codium-track lands.
 - **Forward the requests** in section 11 to Codium, @vector, Hands and main's owners.
 - **Codium listing:** add the `everywhere` perk to the listing once Q11 is answered.
+  *2026-11-15 note (EV-08):* the perk exists, unlisted, on everywhere-finish. First approve its label and text (`PERK_COPY.everywhere` in packages/schema/src/codium-copy.ts). Do not set `CODIUM_LISTED_PERKS` for it until the plan check and the laptop route land: until then its readiness is false and listing it shows nothing. Then list it, with `MODEL_PLANS_ENABLED`, and add any plan copy (Q11).
 
 ## 11. Requests to other owners
 
@@ -855,6 +860,7 @@ Nothing here is edited by this branch. The owner forwards each request; the adap
 - **R-C6. A switch, with `stop`.** `everywhere` in `SWITCH_NAMES` with `VALUES.everywhere = ["on", "no-new", "stop"]`, mirroring `hosted`, and `everywhere` in the owner dashboard's `RuntimeSwitch.name` literal list (packages/schema/src/codium-owner.ts) and the dashboard itself, so the owner halts new and running jobs without a redeploy. A go-live prerequisite for G2 to G4.
   *2026-11-15 note (EV-07):* delivered on everywhere-finish: `everywhere` in SWITCH_NAMES and `VALUES.everywhere = ["on", "no-new", "stop"]` (api/_lib/codium-switches.ts, also exported read-only as `SWITCH_VALUES`), `RuntimeSwitch.name` (packages/schema/src/codium-owner.ts), the owner API's value check (codium-owner-api.ts now follows `SWITCH_VALUES`, so `everywhere` `off` answers 400) and the owner page's control. The dashboard follows SWITCH_NAMES unchanged. The owner sets the production value. See vector-everywhere-deviations.md, "2026-11-15, EV-07".
 - **R-C7. A perk.** `everywhere` in the entitlements and `CODIUM_LISTED_PERKS` per Q11, for `requireEntitlement(account, "everywhere")`.
+  *2026-11-15 note (EV-08):* only the listing half is delivered on everywhere-finish: `everywhere` in `PERK_IDS`, `PERK_COPY` (every paid plan, requires `remote`), the `everywhere` switch mapping in codium-perks.ts (`no-new` and `stop` hide it) and a readiness check (api/_lib/everywhere/config.ts `everywhereReady`) that stays false until the laptop route and a plan check are wired. Entitlements gains no field, so `requireEntitlement(account, "everywhere")` does not exist and router step 3 still reads `VECTOR_EVERYWHERE_ALLOW_ACCOUNTS`. Listing must wait for the runtime check. See vector-everywhere-deviations.md, "2026-11-15, EV-08".
 - **R-C8. Sources.** When the owner says yes: `slack`, `linear` and `jira` in `ENABLED_SOURCES` (packages/schema/src/codium-run-trigger.ts), so run tokens and run records from these sources are accepted. Both copies change together with R-A8.
 - **R-C9. Erase on account deletion.** codium-erase.ts imports api/\_lib/everywhere/erase.ts, a module that calls `registerErasePart({id: "everywhere", erase: eraseEverywhereAccount})`, so the part runs in `finishAccountDeletion` (Codium's `eraseAccountKeys` scans only the Codium key root, and a registration runs only if the deleting function's bundle imports it).
 - **R-C10 (later, Q7).** Phone passkey approvals for unattended sessions.

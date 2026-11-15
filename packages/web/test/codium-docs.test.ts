@@ -159,6 +159,23 @@ test("#hosted and the hosted perks never mention GitHub or Actions", () => {
   for (const text of texts) expect(text).not.toMatch(/github|actions/i)
 })
 
+test("EV-08: Vector everywhere is a feature of every plan with Remote listed, never a hosted perk", () => {
+  const copy = CodiumCopy.PERK_COPY.everywhere
+  const listed = codiumDocs(["remote", "everywhere"])
+  expect(listed.plans.map((plan) => plan.id)).toEqual(CodiumPlan.PLANS.map((plan) => plan.id))
+  for (const plan of listed.plans)
+    expect(plan.features.filter((perk) => perk.id === "everywhere")).toEqual([
+      { id: "everywhere", label: copy.label, text: copy.text(ENTITLEMENTS[plan.id]) },
+    ])
+  for (const without of [["everywhere"], []]) {
+    const ids = codiumDocs(without).plans.flatMap((plan) => plan.features.map((perk) => perk.id))
+    expect(ids).not.toContain("everywhere")
+  }
+  const full = codiumDocs([...PERK_IDS])
+  expect(full.hosted.map((perk) => perk.label)).not.toContain(copy.label)
+  for (const plan of full.plans) expect(plan.hostedLabels).not.toContain(copy.label)
+})
+
 test("Coming items are always tagged Coming, with no date, availability or provider claim", () => {
   const view = codiumDocs([])
   expect(view.coming.map((item) => [item.id, item.label, item.plans])).toEqual([

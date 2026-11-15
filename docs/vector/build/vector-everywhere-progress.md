@@ -1439,3 +1439,209 @@ and SHA-256 checked after each):
 | --- | --- | --- |
 | M8: `push: ["on", "no-new", "stop"]` in codium-switches.ts, page unchanged | CodiumOwner.test.ts 21/1 | :264 |
 | M9: codium-owner-api.ts audits "requested" before `prepare()` | codium-owner 35/1 | :181 |
+
+## EV-08: Codium `everywhere` perk for every paid plan, unlisted (2026-11-15)
+
+Base: HEAD `bd34820c` (EV-07, pushed), equal to `origin/everywhere-finish`.
+`git fetch origin release-finish main everywhere-finish codium-finish
+review-fixes` found `release-finish` still at `cf2373c4`, already merged
+(`git merge-base --is-ancestor` true), so no merge was needed; `main` is
+`58f85edc` and is not merged (PR #33 is not in). `git diff --stat
+origin/release-finish...origin/<b>` over the twelve EV-08 paths (five code
+files, seven test files) was empty for codium-finish `ab784e44`,
+review-fixes `1433d105` and main. EV-08 depends on EV-07 (the `everywhere`
+switch, in HEAD) and on no review-fixes or brain-transport work. The changes
+are in the working tree, not committed.
+
+Files changed (line numbers after EV-08):
+
+- packages/schema/src/codium-entitlements.ts:39: `"everywhere"` appended to
+  `PERK_IDS`.
+- packages/schema/src/codium-copy.ts: `requires.everywhere = ["remote"]`
+  (:15); `PERK_COPY.everywhere` (:142-149), `applies: every`, label "Vector
+  everywhere", the text for the owner to approve.
+- api/_lib/everywhere/config.ts: `LAPTOP_ROUTE_WIRED: boolean = false` (:244)
+  and `everywhereReady(config?, wired)` (:253-263); comments on
+  `allowAccounts` (:48-51) and `sponsorListed` (:229-232).
+- api/_lib/everywhere/ports.ts:55-58: comment only.
+- api/_lib/codium-perks.ts: the import (:18), `perkServices.everywhere`
+  with its WP comment (:88-93), `switches.everywhere` (:110).
+- packages/schema/test/codium-entitlements.test.ts: `["everywhere", []]` in
+  "a perk's numbers show only while it is listed" (:262); :312 `everywhere`
+  is in PERK_IDS once and adds no public field on any plan.
+- packages/schema/test/codium-copy.test.ts: describe "the everywhere perk"
+  (:122): :125 every paid plan includes it with Remote, no headline, the same
+  tagline and caps as Remote alone, and ENTITLEMENTS' keys are the four paid
+  plans (structural); :143 `requires.everywhere` is `["remote"]` and alone
+  it shows on no plan; :149 the copy rules.
+- packages/web/test/everywhere-config.test.ts: describe "the Codium perk's
+  readiness (EV-08)" (:277): :291 false today even fully configured, with
+  the default `wired`; :297 once wired, true with Slack, Linear, Jira or GitHub plus
+  Slack, false with nothing set and with each of seven variables removed;
+  :316 GitHub alone, GitHub with Slack incomplete, "TRUE" and a short cron
+  secret are false. Secrets generated in the test; fetch guard installed.
+- packages/web/test/codium-public.test.ts: the ten variables saved and
+  restored by beforeEach (:15-27); :132 "EV-08: everywhere lists only when
+  ready, with Remote listed and the everywhere switch on" (the owner's list
+  first; the real readiness false with every variable set; Remote required
+  and its switch; `no-new` and `stop` hide it; `off` and garbage list
+  nothing; perks-off; publicCodiumTiers' caps gain no field;
+  MODEL_PLANS_ENABLED=false).
+- packages/web/test/codium-docs.test.ts:162: a feature of all four plans
+  with Remote, none without it, never a hosted perk.
+- packages/web/src/components/marketing/codium/CodiumPricing.test.ts:238:
+  the comparison row once, its text four times on the page and on no card;
+  absent with Remote unlisted and with the empty listing.
+- packages/web/test/model-plan-status-api.test.ts: imports `ENTITLEMENTS`
+  and `PERK_COPY`; describe "the everywhere perk (EV-08)" (:611): a no-plan
+  account sees it listed with no plan or entitlements; a paid plan's
+  entitlements equal `publicEntitlements(plan, {remote})` and the perk
+  applies to its caps.
+- Docs: vector-everywhere-deviations.md (the EV-08 entry; a dated line under
+  EV-07's "A note for EV-08"), vector-everywhere-spec.md (dated notes after
+  the §3.4 table, after §6.1's code block, under §10 "Codium listing" and
+  under R-C7), vector-everywhere-handoff.md (a "Codium `everywhere` perk"
+  status bullet, CI pending; a "Left open by the repairs" item for the
+  runtime check; the owner's rules and decisions unchanged), this file.
+  v2-notes/v2-complete-plan.md and Codium's documents are not edited.
+
+No new env var, flag, route, dependency, install or generated file (no perk
+id appears in packages/client, packages/sdk, engine src or config.json).
+Nothing new becomes reachable on vectordev.ai. No test calls a real host.
+
+Checks (each through `vector-serial`, one file per run, `--timeout 30000`):
+
+| Check | Result |
+| --- | --- |
+| packages/schema test/codium-entitlements.test.ts at HEAD (baseline) | 14 pass, 0 fail, 531 assertions |
+| packages/schema test/codium-copy.test.ts at HEAD | 8 pass, 0 fail, 494 assertions |
+| packages/web test/codium-public.test.ts at HEAD | 13 pass, 0 fail, 82 assertions |
+| packages/web test/codium-docs.test.ts at HEAD | 12 pass, 0 fail, 9744 assertions |
+| packages/web src/components/marketing/codium/CodiumPricing.test.ts at HEAD | 15 pass, 0 fail, 206 assertions |
+| packages/web test/everywhere-config.test.ts at HEAD | 21 pass, 0 fail, 196 assertions |
+| packages/web test/model-plan-status-api.test.ts at HEAD | 22 pass, 0 fail, 222 assertions |
+| codium-entitlements.test.ts with EV-08 | 15 pass, 0 fail, 544 assertions |
+| codium-copy.test.ts with EV-08 | 11 pass, 0 fail, 574 assertions |
+| codium-public.test.ts with EV-08 | 14 pass, 0 fail, 102 assertions |
+| codium-docs.test.ts with EV-08 | 13 pass, 0 fail, 9772 assertions |
+| CodiumPricing.test.ts with EV-08 | 16 pass, 0 fail, 216 assertions |
+| everywhere-config.test.ts with EV-08 | 24 pass, 0 fail, 220 assertions |
+| model-plan-status-api.test.ts with EV-08 | 24 pass, 0 fail, 227 assertions |
+| Regressions, root (run from test/), HEAD and after, identical | api-module-loading 2/0/10 (the import graph changed); phone-app 10 pass 1 skip/0/95; remote-phone-api 8/0/37; codium-founding 24 pass 1 skip/0/215; ops-payment-pipeline 10/0/78; brain-vault-api 23/0/710; playbooks-api 15/0/177 |
+| Regressions, packages, HEAD and after, identical | web test/model-plans.test.ts 21/0/166; app src/phone/status.test.ts (`--isolate`) 11/0/57; core test/model-plan-status-compat.test.ts 4/0/73 |
+| packages/schema `bun typecheck` | exit 0 |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` (astro check, includes test/ and src/) | 0 errors, 0 warnings, 411 hints (unchanged from EV-07) |
+| packages/app, packages/core, packages/desktop `bun typecheck` | exit 0 each |
+| Prettier drift (lines prettier would change), HEAD and after | codium-copy.ts, codium-entitlements.ts, codium-perks.ts, both schema tests, CodiumPricing.test.ts, model-plan-status-api.test.ts, codium-docs.test.ts 0 and 0; config.ts 14 and 14; ports.ts 15 and 15; codium-public.test.ts 4 and 4; everywhere-config.test.ts 42 and 42 (none added; codium-docs.test.ts was 4 after the first draft, fixed and re-run) |
+| Diff guards | no personal path or email address; one added code line over 120 columns, the PERK_COPY text (a string literal prettier leaves whole, like the other texts in that object); only the twelve code and test paths and the four lane documents changed |
+| Cross-lane overlap | `git diff --stat origin/release-finish...origin/<b>` over the twelve paths empty for codium-finish `ab784e44`, review-fixes `1433d105`, main `58f85edc` |
+
+After the mutation runs, two test titles were shortened (codium-copy.test.ts:125, codium-docs.test.ts:162), the codium-docs `expect` was split into two lines and a comment in codium-public.test.ts:168 was rewrapped; each of those three files was re-run alone with the same counts as above, and the schema (exit 0) and web (0 errors, 0 warnings, 411 hints) typechecks were re-run after them. A second fetch at the end found every branch at the same SHA, and the cross-lane diff over the twelve paths was still empty.
+
+Mutations: /tmp/vector-v2/everywhere/ev08-mut/run.sh edits one code file in place, runs the affected files one at a time through the lock, then restores all five code files from saved copies. `restored-ok` (SHA-256 against pre.sha) after every mutation, and a final `sha256sum -c` passed for all five (results.txt).
+
+| Mutation | Result | Red cases |
+| --- | --- | --- |
+| M1: `requires.everywhere` dropped | codium-copy 10/1; codium-public 13/1; codium-docs 12/1; CodiumPricing 15/1 | codium-copy :143; codium-public :132; codium-docs :162; CodiumPricing :238 |
+| M2: the `everywhere` switch mapping dropped | codium-public 13/1 | :132 |
+| M3: the perkServices entry dropped | codium-public 13/1 | :132 (`perkServices.everywhere?.(fetch)` is undefined, not false) |
+| M4a: everywhereReady ignores the offer key | everywhere-config 23/1 | :299 |
+| M4b: everywhereReady ignores CRON_SECRET | everywhere-config 22/2 | :299, :318 |
+| M5: `applies` false for vector-10 (`c.rank > 1`) | codium-copy 10/1; codium-docs 12/1; CodiumPricing 15/1 | :125; :162; :238 |
+| M6: `everywhere` in HEADLINE_ORDER for vector-10 | codium-copy 10/1; CodiumPricing 15/1 | :125; :238 (its text then appears on the Plus card) |
+| M7: `LAPTOP_ROUTE_WIRED = true` | everywhere-config 23/1; codium-public 13/1 | :292; :132 |
+| M8: GitHub counts as an open platform | everywhere-config 23/1 | :318 |
+| M9: `remote`'s field shown when only `everywhere` is listed | codium-entitlements 13/2 | :245 (the `["everywhere", []]` row), :312 |
+
+Commit gate: not run in this step. The changes stay in the working tree for
+the lead's commit (`feat(codium): add the everywhere perk for every paid
+plan, unlisted`, staging the twelve code and test paths and the four lane
+documents explicitly; the body says no generated file was regenerated
+because no perk id appears in packages/client, packages/sdk, engine src or
+config.json). Before the push: repeat the cross-lane diff, `git fetch origin
+everywhere-finish`, the full `bun turbo typecheck --concurrency=2`.
+
+Deferred:
+
+- After the push, dispatch on `everywhere-finish`: vector-hosted-ci.yml (the
+  schema tests and the root suite, including api-module-loading; record its
+  run id before any re-dispatch), typecheck.yml and vector-everywhere.yml
+  (everywhere-config.test.ts and the api, schema, web and app typechecks).
+  Never vector-codium.yml before PR #33 is merged here. Then, in one docs
+  commit, add "## EV-08 push receipts" here and mark the handoff bullet "CI
+  green" with the run ids.
+- codium-public, codium-docs, CodiumPricing and model-plan-status-api run in
+  no lane workflow until vector-codium.yml is used after PR #33; their
+  receipts are the local runs above.
+- The runtime plan check (R-C7's runtime half) and the laptop route (VE-20,
+  VE-21), which set `LAPTOP_ROUTE_WIRED` true and update the cases that pin
+  readiness false with the default `wired` (everywhere-config.test.ts:291,
+  codium-public.test.ts:132). Handoff, "Left
+  open by the repairs".
+- Owner: approve the copy; list the perk only after the plan check lands.
+  VE-50: the live listing.
+- Request to Codium: annotate codium-build-spec.md:507 with `everywhere`;
+  settle switches separately in listedPerks as well as on the dashboard.
+
+### EV-08 review fixes (round one, 2026-11-15)
+
+Not committed; the changes stay in the working tree with the rest of EV-08.
+
+- api/_lib/everywhere/config.ts:253-263: `everywhereReady(config?, wired)`
+  returns false on `!wired` before `config ?? readConfig()`, so a listing
+  read parses no environment or offer key while the route is unwired.
+- packages/web/test/everywhere-config.test.ts: the
+  `expect(LAPTOP_ROUTE_WIRED).toBe(false)` line and its import dropped; the
+  behavioural cases at :291 stay.
+- packages/web/test/codium-public.test.ts:156: the service check gets
+  `codiumFakes().fetcher`, not the global `fetch`.
+- packages/web/test/model-plan-status-api.test.ts:70: the top-level
+  beforeEach resets `current.fetcher = fetch`.
+- Docs: the deviations entry's "Review findings (round one)" and owner
+  action 1 (E2 and narrower phrasings); two handoff "Left open by the
+  repairs" items (listedPerks per-switch settling, the copy's limits).
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-config.test.ts | 24 pass, 0 fail, 219 assertions (one assertion fewer) |
+| packages/web test/codium-public.test.ts | 14 pass, 0 fail, 102 assertions |
+| packages/web test/model-plan-status-api.test.ts | 24 pass, 0 fail, 227 assertions |
+| packages/web test/codium-docs.test.ts | 13 pass, 0 fail, 9772 assertions |
+| packages/web src/components/marketing/codium/CodiumPricing.test.ts | 16 pass, 0 fail, 216 assertions |
+| root test/api-module-loading.test.ts (from test/) | 2 pass, 0 fail, 10 assertions |
+| M7 re-run (`LAPTOP_ROUTE_WIRED = true`; config.ts restored, `sha256sum -c` OK) | everywhere-config 23/1 (:291); codium-public 13/1 (:132) |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` | 0 errors, 0 warnings, 411 hints |
+| Prettier drift, the four edited files | config.ts 14, everywhere-config.test.ts 42, codium-public.test.ts 4, model-plan-status-api.test.ts 0 (unchanged) |
+
+### EV-08 commit gate (2026-11-15)
+
+`git fetch origin release-finish main everywhere-finish codium-finish
+review-fixes` found release-finish `cf2373c4` (already merged), main
+`58f85edc` (PR #33 not on it) and everywhere-finish equal to HEAD
+`bd34820c`. The cross-lane diff over the twelve code and test paths was
+again empty for codium-finish `ab784e44`, review-fixes `1433d105` and main.
+Only the twelve EV-08 paths and the four lane documents were in the working
+tree, with nothing untracked. Re-run through `vector-serial`, one file at a
+time, `--timeout 30000`:
+
+| Check | Result |
+| --- | --- |
+| packages/schema test/codium-entitlements.test.ts | 15 pass, 0 fail, 544 assertions |
+| packages/schema test/codium-copy.test.ts | 11 pass, 0 fail, 574 assertions |
+| packages/web test/codium-public.test.ts | 14 pass, 0 fail, 102 assertions |
+| packages/web test/codium-docs.test.ts | 13 pass, 0 fail, 9772 assertions |
+| packages/web src/components/marketing/codium/CodiumPricing.test.ts | 16 pass, 0 fail, 216 assertions |
+| packages/web test/everywhere-config.test.ts | 24 pass, 0 fail, 219 assertions |
+| packages/web test/model-plan-status-api.test.ts | 24 pass, 0 fail, 227 assertions |
+| root test/api-module-loading.test.ts (from test/) | 2 pass, 0 fail, 10 assertions |
+| packages/schema `bun typecheck` | exit 0 |
+| API: packages/engine `bun typecheck --project ../../tsconfig.json` | exit 0 |
+| packages/web `bun typecheck` | 0 errors, 0 warnings, 411 hints |
+| packages/app `bun typecheck` | exit 0 |
+| Full `bun turbo typecheck --concurrency=2` | exit 0, 27 of 27 tasks (0 cached) |
+
+Committed as `feat(codium): add the unlisted everywhere perk to every paid
+plan`; the push and the run ids are recorded in "EV-08 push receipts" in the
+follow-up docs commit.

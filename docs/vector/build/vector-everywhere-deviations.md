@@ -622,6 +622,7 @@ Spec §11 R-C6 (:850), §3.2 step 3 (:153) and §5 E10. Line numbers are after t
 - The new Valkey case runs in vector-hosted-ci.yml (the root test/ suite, with Valkey).
 - CodiumOwner.test.ts runs in no lane workflow until vector-codium.yml is used after PR #33 merges, so its receipt is local.
 - **A note for EV-08 (R-C7).** If the `everywhere` perk is mapped to the `everywhere` switch in codium-perks.ts `switches` (:89), listedPerks lists it only while that switch reads `on`, so under `no-new` the perk would drop out of the listing. EV-08 should either not map it or decide that `no-new` hides it on purpose, as `hosted`'s `no-new` hides `computer`. The critique's further claim, that running jobs could then fail their perk check, is rejected: listedPerks is display-only (codium-perks.ts:107), and requireEntitlement reads only the `codium` switch (codium-entitlements.ts:47).
+  *2026-11-15 (EV-08):* mapped on purpose: `no-new` and `stop` hide the perk, and a stored `off` or a corrupt record empties the whole listing while `everywhere` is a candidate. See "2026-11-15, EV-08" below.
 
 ### Review findings (round one)
 
@@ -636,3 +637,84 @@ Spec §11 R-C6 (:850), §3.2 step 3 (:153) and §5 E10. Line numbers are after t
   A shared map remains open to Codium, as a follow-up to the requests above.
 - **SWITCH_VALUES is not frozen** (rejected). The export is typed `Readonly<Record<SwitchName, readonly SwitchValue[]>>`, so the compiler refuses any write, and a runtime write would need a cast. The only caller, the owner API, reads it. Freezing the record and each array would rewrite the `VALUES` block in Codium's file for a risk the types already block.
 - **The handoff bullet stays "CI pending" for now.** The push and the dispatches come after this step. The run ids replace "CI pending" in the docs commit with "## EV-07 push receipts", as Deferred in the progress entry plans.
+
+## 2026-11-15, EV-08: Codium's `everywhere` perk for every paid plan, unlisted (R-C7, Q11)
+
+Spec §11 R-C7 (:862), §10 Q11 (:832) and the owner action "Codium listing" (:845). Line numbers are after this package.
+
+### What changed
+
+- **The vocabulary** (packages/schema/src/codium-entitlements.ts:39). `PERK_IDS` gains `"everywhere"` last, so no existing listing, status or comparison row changes order. `Entitlements`, `ENTITLEMENTS` and `publicEntitlements` are unchanged: no new public field and no amount.
+- **The copy** (packages/schema/src/codium-copy.ts). `requires.everywhere = ["remote"]` (:15), because the laptop route needs Remote. `PERK_COPY.everywhere` (:142-149) is last, with `applies: every` (all four plans, vector-10/50/100/200, are paid). Label "Vector everywhere"; text "Ask Vector from an issue or a chat, and the job runs on your own paired computer through Vector Remote while that computer is online." The wording waits for the owner's approval. TAGLINES, HEADLINE_ORDER, COMING, FREE_WORKSPACE, EVERY_PLAN and tierView are unchanged.
+- **The readiness** (api/_lib/everywhere/config.ts, lane-owned). `LAPTOP_ROUTE_WIRED = false` (:244) and `everywhereReady(config?, wired = LAPTOP_ROUTE_WIRED)` (:253-263): `wired`, checked first so the configuration is read only once it is true, then the offer signing key with its key id, CRON_SECRET, and Slack, Linear or Jira open through `platformOn` (which also needs the flag with a usable data key). Comments only: `allowAccounts` (:48-51) and `sponsorListed` (:229-232) now say the allowlist is the router's only sponsor check until a plan check is wired.
+- **ports.ts, comment only** (api/_lib/everywhere/ports.ts:55-58): the allowlist is also the only grant. safePorts is unchanged.
+- **Codium's listing** (api/_lib/codium-perks.ts): imports `everywhereReady` (:18); `perkServices.everywhere = () => everywhereReady()` with a WP comment (:88-93); `switches.everywhere = "everywhere"` (:110). Not added to `trackB` or `app`. listedPerks itself is unchanged.
+
+### Behaviour
+
+listedPerks lists `everywhere` only when every one of these holds, in this order:
+
+1. `MODEL_PLANS_ENABLED` is true. It is off by default, and while it is off no store read happens.
+2. `CODIUM_LISTED_PERKS` names `everywhere` (owner only). While it is unset there are no candidates and no reads.
+3. Codium's `codium` switch is `on`.
+4. `everywhere` is not in perks-off.
+5. `everywhereReady()` is true. It is false today in every configuration, because `LAPTOP_ROUTE_WIRED` is false. Once that is true it also needs VECTOR_EVERYWHERE_ENABLED=true with a usable data key, the offer signing key and its key id, CRON_SECRET, and Slack, Linear or Jira open.
+6. Codium's `everywhere` switch reads `on`. `no-new` and `stop` hide the perk. A stored `off` or a corrupt record makes readSwitch throw, which empties the whole listing.
+7. `remote` is listed, with its own readiness and switch, through the requires fixpoint.
+
+Prerenders (`runtime: false`) list nothing. No admission changes: requireEntitlement, the router and `ports.perk` (ports.ts:65, still the VECTOR_EVERYWHERE_ALLOW_ACCOUNTS allowlist) are not touched, so listing can never let anyone start a job.
+
+### Deviations
+
+- **Readiness has a wiring conjunct that is false today** (critique, taken). A check on configuration alone could pass while no job can run in production: productionPorts (runtime.ts:16-18) is still safePorts, so presence answers offline, the offer answers unavailable and `perk("remote")` is false (ports.ts:59-68); api/_lib/everywhere/adapters/ holds only account.ts (no VE-20 adapter); the desktop's OFFER_KEYS is empty; the Actions fallback stays reserved (R-C8). With every variable set the perk would then list on every paid plan while every job is refused or queued, the purchase promise perkServices' own comment forbids (codium-perks.ts:23-27). `LAPTOP_ROUTE_WIRED` is a code fact, not configuration: the package that wires VE-20 and VE-21 and the plan check sets it true and updates the cases that pin readiness false with the default `wired` (everywhere-config.test.ts:291, codium-public.test.ts:132).
+- **The wiring constant lives in config.ts, not runtime.ts** (critique's placement, rejected). runtime.ts builds productionJobEvents and the Slack, Linear and Jira routes when it loads (runtime.ts:50-54) and imports the store, adapters and jobs modules, so importing it into codium-perks.ts would load all of that into every model-plans config, status and phone read. ports.ts imports authority.ts, which imports store.ts. config.ts imports only schema/everywhere.ts, crypto.ts (and http.ts through it) and signature.ts. A check on productionPorts' stubs by identity was not possible either: safePorts builds fresh closures on every call. The constant sits next to readConfig, and its comment names what flips it.
+- **R-C7's runtime half is not built, and listing waits for it** (critique, taken). Entitlements gains no `everywhere` field, so `requireEntitlement(account, "everywhere")` does not exist. Reasons: the brief scopes the perk to listing vocabulary; a new field would touch Codium's NO_CAPS (codium-snapshot.ts:190) and publicEntitlements; stored snapshots without the field would read "not included" until reconcile rewrote them. Router step 3 still reads VECTOR_EVERYWHERE_ALLOW_ACCOUNTS (empty means nobody), so a paying customer outside it would be refused `not-in-plan`. That is why the plan check is part of `LAPTOP_ROUTE_WIRED`'s meaning, why the owner action says not to list the perk yet, and why the follow-up is in the handoff's "Left open by the repairs". Recommendation for it: treat a sponsor as holding `everywhere` when `requireEntitlement(account, "remote")` passes and `PERK_COPY.everywhere.applies(snapshot.caps)` holds. Whether a plan check replaces or joins the allowlist at go-live is the owner's call; EV-08 stays neutral. No §8 package owns the check yet; VE-20, which wires the `remote` perk, is the natural place.
+- **GitHub alone does not count** (critique, taken). readConfig marks GitHub ready with no settings (config.ts:156-161), but in production the GitHub handoff answers handled:false until Q13/R-A6 (github/adapter.ts:68-70 needs `binding.laptopFirst`, which the @vector RepoBinding does not have). everywhereReady checks `platformOn` over Slack, Linear and Jira only. Pinned: GitHub alone is false, and so is GitHub with Slack listed but missing a setting (everywhere-config.test.ts:316).
+- **CRON_SECRET is not what keeps the perk off** (critique, taken; the plan's claim is corrected). It is shared with the existing crons (vercel.json:526+: free-models, shares, model-plans and others) and very likely already set in production, and EV-04's cron entry exists (vercel.json:560). The conjunct stays, because a perk whose jobs are never swept is also a purchase promise, but the real off-switches are `LAPTOP_ROUTE_WIRED`, VECTOR_EVERYWHERE_ENABLED with its data key, and CODIUM_LISTED_PERKS.
+- **The switch mapping is on purpose.** It answers EV-07's note (above). `no-new` and `stop` take the perk out of the listing, as `hosted`'s `no-new` hides `computer`. A running job is unaffected: listedPerks is display only, and requireEntitlement reads only `codium`. Side effect (critique, taken): a stored `off` or a corrupt `everywhere` record makes readSwitch throw, and that empties the whole listing, including `remote`, `github-agents` and `computer`, whenever `everywhere` is a candidate. It is the same blast radius EV-07 recorded for the owner dashboard. Pinned (codium-public.test.ts:132: `off` and `garbage` list nothing) and added to the request to Codium below.
+- **Requiring Remote also requires the phone app's origin** (critique, taken). perkServices.remote (codium-perks.ts:61) needs `remoteConfigured()` and VECTOR_PHONE_APP_ORIGIN, so `everywhere` lists only where Remote lists, although the laptop route needs no phone. Accepted: Remote is the route, and Codium does not list Remote without its phone app. A laptop-only requirement would need a perk of its own.
+- **The copy states its condition** (critique, taken in part). The text says the job runs "while that computer is online". "An issue" covers Linear and Jira issues; GitHub issues come only with laptop-first. The text names no platform. Platform coverage at listing time, and that macOS and Windows laptop jobs edit but run no checks (no unattended shell there), are for the owner to decide when approving the copy. Pinned: no digit, `%`, `$`, credit or token; no hosted, cloud, Actions or platform name; not COMPUTER_LABEL (codium-copy.test.ts:149).
+- **How "an account with no plan does not have it" is shown.** No per-account check exists for this perk, so the brief's case has two proxies. Structurally, ENTITLEMENTS' keys are exactly the four paid plans (codium-copy.test.ts:125). Through the status API (model-plan-status-api.test.ts:611), an account with no plan and the perk listed gets `listed` but no `plan` and no `entitlements`, while a paid account's entitlements equal `publicEntitlements(plan, {remote})` and the perk `applies` to its caps. The planned `publicEntitlements("none" as PlanId)` case was dropped: it exercises only the `!caps` guard and needs a cast (critique, taken).
+- **The pricing case asserts on text, not the label** (critique, taken). Cards render headline texts only (CodiumPricing.tsx:284), so the case checks that the perk's text is on no card and appears exactly four times on the page, all in the comparison row.
+- **Placement.** `everywhere` is appended last in PERK_IDS, PERK_COPY and `switches`.
+- **A wider import graph.** codium-perks.ts now also imports everywhere/config.ts, which brings in schema/everywhere.ts, everywhere/crypto.ts (with http.ts) and signature.ts. There is no cycle; test/api-module-loading.test.ts covers the graph.
+- **Readers of `listed`.** packages/web/src/lib/model-plans.ts:93 refuses unknown `listed` ids, so a stale browser tab could fail once the perk is listed; listing is a later env change, long after the deploy. The core status reader (packages/core/src/model-plan-status.ts:280) and the phone (packages/app/src/phone/status.ts:42) drop unknown ids, and the released 1.99.111 and 1.99.112 status decoders do not read `listed`.
+- **One added line over 120 columns.** The PERK_COPY text is a string literal prettier leaves whole, like the other texts in the same object (:29, :71, :77, :83).
+
+### Not changed
+
+- requireEntitlement, the router, ports.ts behaviour, `Entitlements`, `ENTITLEMENTS`, NO_CAPS.
+- TAGLINES, HEADLINE_ORDER, `trackB`, `app` and listedPerks itself.
+- The desktop settings tab, which stays hidden until the perk is listed (Phase S).
+- Tokenomics and benchmark files.
+- No env var, flag, route, dependency, install or generated file. No perk id appears in packages/client, packages/sdk, engine src or config.json.
+- Nothing new is reachable on vectordev.ai: the label and text ship in the existing pricing and docs bundles and render only when listed, which needs the owner's env change.
+
+### Coordination
+
+- **Codium-area files.** These are Codium's files built in this lane under the lead's brief, as EV-04 to EV-07 were. At the package's working-tree check, `git diff --stat origin/release-finish...origin/<b>` over the twelve paths (the five code files and seven test files) was empty for codium-finish `ab784e44`, review-fixes `1433d105` and main `58f85edc`. The commit step repeats it.
+- **Request to Codium.** Annotate codium-build-spec.md:507 (the `PerkId` list) with `everywhere`: requires `remote`, mapped to the `everywhere` switch, readiness false until the laptop route and a plan check are wired ("2026-11-15, EV-08"). Extend the existing request to settle each switch separately (EV-07) to listedPerks: one unreadable switch record empties the whole listing. EV-08 edits neither.
+
+### Owner actions
+
+1. Approve the label and text (`PERK_COPY.everywhere`), including the platforms it may name, the macOS and Windows limit, and E2 (only the sponsor's own linked account can start a job; Q2, no teammate allowlist), which the draft does not state. Alternatives to offer at that review, none applied without the owner: name Slack, Linear and Jira once their go-lives are known, instead of "an issue or a chat" (GitHub issues start no laptop job until Q13/R-A6); "Ask Vector from an issue or a chat with your linked account, …"; and a note that on macOS and Windows a job edits but runs no checks.
+2. Do not set CODIUM_LISTED_PERKS for `everywhere` until the plan check and the laptop route land. Until then its readiness is false and listing it shows nothing.
+3. Then list it, with MODEL_PLANS_ENABLED, and add any plan copy (Q11).
+
+### Decisions (critique)
+
+All eleven points are taken, except the placement of the wiring check in runtime.ts (rejected above, with the check placed in config.ts instead). The two spec notes sit after the §3.4 routing table and after §6.1's code block, each naming the row or field it refers to. The path count is twelve: five code files and seven test files, with model-plan-status-api.test.ts added for the no-plan proxy. The readiness function has no return annotation; `LAPTOP_ROUTE_WIRED` is annotated `boolean` so the parameter it defaults reads as a switch, not the literal `false`.
+
+### Review findings (round one)
+
+- **`everywhereReady` read the configuration before checking `wired`** (two findings, fixed). The default parameter `config = readConfig()` ran before the body, so every listing read with `everywhere` as a candidate parsed the whole environment, including `createPrivateKey` on the offer signing key, although `wired` is false and decides the result. The config parameter is now optional and the body returns false on `!wired` before `config ?? readConfig()` (config.ts:253-263). The test signatures are unchanged. The short-circuit itself is not pinned by a test: it changes no result, and observing that readConfig is not called would need a spy on a module function.
+- **The `LAPTOP_ROUTE_WIRED` assertion** (fixed). `expect(LAPTOP_ROUTE_WIRED).toBe(false)` repeated the source literal. It is dropped, with its import; the behavioural cases (fully configured readiness with the default `wired` is false, everywhere-config.test.ts:291; the real perkServices entry is false, codium-public.test.ts:156) still pin it. Mutation M7 (`LAPTOP_ROUTE_WIRED = true`) re-run after the change: everywhere-config 23/1 (:291) and codium-public 13/1 (:132).
+- **The service check took the global `fetch`** (fixed). codium-public.test.ts:156 now passes `codiumFakes().fetcher`, so a later readiness probe that fetches would hit the fake store, not a real host.
+- **`current.fetcher` leaked out of the EV-08 describe** (fixed). The top-level beforeEach in model-plan-status-api.test.ts (:63-72) now resets `current.fetcher = fetch` before each case; describe-level beforeEach hooks (:198) still run after it and set their own.
+- **The copy does not state GitHub's or macOS and Windows' limits, nor E2** (two findings, no code change). The wording is the owner's to approve, so it is unchanged. Owner action 1 now names E2 and offers the narrower phrasings (Slack, Linear and Jira by name once their go-lives are known; "with your linked account").
+- **One bad `everywhere` switch record empties the whole listing** (no change). Recorded above under "The switch mapping is on purpose" and pinned; the request to settle each switch separately in listedPerks is in "Coordination" and is now also in the handoff's "Left open by the repairs", so it is not lost before the owner lists `everywhere`.
+
+### Deferred verification
+
+- The packages/web codium files (codium-public, codium-docs, CodiumPricing) and model-plan-status-api.test.ts run in vector-codium.yml only after PR #33 is merged here; until then their receipts are local. everywhere-config.test.ts runs in vector-everywhere.yml, and the schema tests in vector-hosted-ci.yml.
+- VE-50: the live listing, after the owner approves the copy and lists the perk.

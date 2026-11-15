@@ -52,7 +52,10 @@ export type Ports = {
   readonly switch: (name: "everywhere" | "remote") => Promise<SwitchState>
 }
 
-/** Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk. */
+/**
+ * Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk. It is also the
+ * only grant: Codium's `everywhere` perk only lists (EV-08) until a plan check replaces or joins the allowlist here.
+ */
 export function safePorts(config: EverywhereConfig = readConfig()): Ports {
   return {
     accountAuthority: missingAccountAuthority,

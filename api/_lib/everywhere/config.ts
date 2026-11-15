@@ -45,7 +45,10 @@ export type EverywhereConfig = {
   readonly enabled: boolean
   /** Platforms listed in VECTOR_EVERYWHERE_PLATFORMS whose own settings are present; empty while the feature is off. */
   readonly platforms: ReadonlySet<PlatformId>
-  /** Vector accounts allowed before the `everywhere` perk exists; empty means nobody. Lowercase. */
+  /**
+   * Vector accounts the router admits as sponsors (3.4 step 3); empty means nobody. Lowercase. Codium's `everywhere`
+   * perk only lists (EV-08), so this stays the router's only sponsor check until a plan check is wired.
+   */
   readonly allowAccounts: ReadonlySet<string>
   /** The data key ring, current key first; empty while the feature is off. */
   readonly dataKeys: readonly DataKey[]
@@ -223,7 +226,36 @@ export function platformOn(config: EverywhereConfig, platform: PlatformId): bool
   return config.enabled && config.platforms.has(platform)
 }
 
-/** Whether a sponsor is listed in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS (before the `everywhere` perk exists, 3.4 step 3). */
+/**
+ * Whether a sponsor is listed in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS: the router's only sponsor check (3.4 step 3) until
+ * a plan check is wired, because Codium's `everywhere` perk only lists (EV-08).
+ */
 export function sponsorListed(config: EverywhereConfig, account: string): boolean {
   return ACCOUNT_ID_PATTERN.test(account) && config.allowAccounts.has(account.toLowerCase())
+}
+
+/**
+ * Whether production can run a paying customer's job. False while productionPorts (runtime.ts) keeps safePorts'
+ * presence, offer and Remote perk stubs (VE-20, VE-21) and router step 3 admits sponsors only through
+ * VECTOR_EVERYWHERE_ALLOW_ACCOUNTS, with no plan check (R-C7's runtime half). The package that wires both sets it true.
+ * It lives here, not in runtime.ts, because Codium's listing imports this module and runtime.ts builds the platform
+ * routes when it loads.
+ */
+export const LAPTOP_ROUTE_WIRED: boolean = false
+
+/**
+ * Codium's listing readiness for the `everywhere` perk (codium-perks.ts; EV-08). Display only: the intake gates above
+ * are unchanged. Ready once a customer could start a job and see it end: the route is wired, offers can be signed, the
+ * sweep can run, and Slack, Linear or Jira is open. GitHub alone does not count, because its handoff answers
+ * handled:false until @vector's laptop-first option exists (Q13, R-A6). `wired` is checked before the configuration is
+ * read, so a listing read with `everywhere` as a candidate parses no environment (or offer key) while it is false.
+ */
+export function everywhereReady(config?: EverywhereConfig, wired = LAPTOP_ROUTE_WIRED) {
+  if (!wired) return false
+  const settings = config ?? readConfig()
+  return (
+    settings.offer !== undefined &&
+    settings.cronSecret !== undefined &&
+    (["slack", "linear", "jira"] as const).some((platform) => platformOn(settings, platform))
+  )
 }
