@@ -48,7 +48,13 @@ export type AccountApiDeps = {
   /** For `requireAccountUser`'s call to the account service. */
   readonly fetcher?: typeof fetch
   readonly now?: () => number
-  /** The platforms' OAuth exchanges: Slack's (VE-11) and Linear's (VE-12) are added here when they exist. */
+  /**
+   * Replaces the default exchanges, oauth-exchanges.ts `platformExchanges`: Slack's install (VE-11) and Linear's
+   * install and sign-in link (VE-12), built per request for each platform in `config.platforms` (listed in
+   * VECTOR_EVERYWHERE_PLATFORMS with complete settings, and empty while the feature is off). In identity.ts
+   * `finishOAuth`, a platform that is not on (`platformOn`) answers 404 first; one that is on but has no exchange for
+   * the purpose answers 501 EVERYWHERE_UNAVAILABLE.
+   */
   readonly exchanges?: OAuthExchanges
   readonly notify?: Notifier
   /** The jobs module's eraser; the default is jobs.ts `jobEraser` over this store (VE-05). */

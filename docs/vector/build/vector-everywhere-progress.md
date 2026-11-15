@@ -2,8 +2,40 @@
 
 The handoff, detailed contract and accepted decisions remain in
 `vector-everywhere-handoff.md`, `vector-everywhere-spec.md` and
-`vector-everywhere-deviations.md`. This continuation uses isolated branch
-`build-everywhere`; nothing is merged to main or registered with a platform.
+`vector-everywhere-deviations.md`. The 2026-11-12 continuation used branch
+`build-everywhere`. The lane now works on `everywhere-finish`, cut from
+`release-finish` (PR #33) at `0ee486e3`. Nothing reaches main except through
+the lead's PR merges, and nothing is registered with a platform.
+
+## Tier B status at 0ee486e3 (2026-11-15)
+
+Each row was re-read in the code at `0ee486e3`, and line numbers are at that
+commit. It was re-checked after merging `release-finish` `cf2373c4` into
+`everywhere-finish` (merge `5733ceea`): no cited file changed. F =
+review:everywhere:fit, C = review:everywhere:correctness-security
+(v2-notes/connect-everywhere-review-findings.md). EV-xx names this lane's
+packages. This table supersedes v2-notes/v2-complete-plan.md §4.2, which still
+lists C3 to C6 as remaining; that plan is the lead's record and is not edited
+here.
+
+| Finding | Status | Evidence (file:line) | Next |
+| --- | --- | --- | --- |
+| C1, valid repositories declined as not mapped | Fixed, `bc6ed6cfd` | packages/desktop/src/main/everywhere-git.ts:17 (`core.symlinks`), :18 (`extensions.partialclone`), :23 (`remote.*.gh-resolved`, `promisor`, `partialclonefilter`); the decline reasons are `MAPPING_LOG` at everywhere-runner.ts:91-95, logged at :160; test everywhere-git.test.ts:23 | none |
+| C2, numeric cooldown scores | Fixed, `40e708614` | api/_lib/everywhere/store.ts:250-255 (`storeScore`); linear/cooldown.ts:12; jira/client.ts:18; test packages/web/test/everywhere-cooldown.test.ts:36 | none |
+| C3, a failed settle after a push reported as nothing published | Delivered (everywhere-runner-delivery.md) | packages/desktop/src/main/everywhere-runner.ts:288-292 (the uncertainty receipt is persisted before the push); :300 (the push takes an independent signal); :306-313 (a confirmed `changes` result is remembered and delivered); :327 (the catch path re-delivers the publication) | none |
+| C4, a Linear refresh can break the install | Delivered | api/_lib/everywhere/linear/credentials.ts:95-97 (the rotated pair is saved as `verification: "pending"` before `viewer`) | none |
+| C5, ledger release in `finally` | Delivered (everywhere-runner-delivery.md) | everywhere-runner.ts:334-336 (release in try/catch, `active.delete` in `finally`); recovery releases in `finally` at :360-362 (`recover()` at :354) | none |
+| C6, a 1 MB cap on the whole stream buffer | Delivered (everywhere-runner-delivery.md) | packages/desktop/src/main/everywhere-engine.ts:75 (2-MiB response cap), :111 (8-MiB per-event cap), :121 (pending-buffer bound) | none |
+| C7, the GitHub status lock is never released | Open | api/_lib/everywhere/github/status.ts:23 (`"1"`, `onlyNew`, 30 s, never released); the pattern to copy is slack/adapter.ts:88-97 (a token plus `swapValue`) | EV-02 |
+| C8, `bodySha256` is optional | Open | packages/schema/src/everywhere.ts:674-675 (optional), :679 (`decodeGithubReference`); api/_lib/everywhere/github/adapter.ts:79-80 (passed through); packages/desktop/src/main/everywhere-github.ts:39-41 (an unedited `updated_at` is accepted instead of the hash) | EV-02 |
+| C test gap, the runner abort matrix | Mostly covered | packages/desktop/src/main/everywhere-runner.test.ts:296, :305, :324-358, :360-416, :419, :461, :488, :505. Missing: answers to the `pushing` report (everywhere-runner.ts:286) and after the push is admitted | EV-03 |
+| F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`) |
+| F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
+| F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
+| F4, erase registration and the sweep cron | Registration done; cron open | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`); the vercel.json `crons` (:526) have no `/api/everywhere/sweep` | EV-04 (R-C11) |
+| F5, an engine test imports desktop | Accepted; deviation entry | packages/engine/test/everywhere/unattended-session.test.ts:9 | done in EV-01 |
+| F6, a second keep-awake owner | Open (unwired) | packages/desktop/src/main/everywhere-awake.ts:2-13 calls `start`/`stop` itself; the shared blocker is keep-awake.ts:394 (`setDesktopWorkBlocker`) and :453 (`whileDesktopWorks`), set at index.ts:640-651 | EV-18 |
+| `75532fc36` (not a finding) | Account authority wired | api/_lib/everywhere/runtime.ts:16-18 (`productionPorts` returns `codiumAccountAuthority`); adapters/account.ts:2 (`tombstoneKey`), :7-13 | none |
 
 ## Current software CI checkpoint (2026-11-12)
 
@@ -333,3 +365,62 @@ The final production boundary received two read-only reviews. The storage/deleti
 Those were scoped local receipts. Their outstanding hosted requirement is now closed by the exact-source CI checkpoint at the top of this journal, including actual Redis execution of the locally skipped admission/link/tombstone, readiness, wrong-type/canonical-counter and revocation-concurrency cases. No local Redis was started. No paid inference, real native workspace, owner computer, registration, deployment, PR or main change was used.
 
 P3, P4, Surfaces and go-live remain held for their specified merges and owner actions. The real mode-separated Codium tombstone port is missing here and fails closed; tests inject it explicitly. Native uncertainty/process-death reconciliation is not automatic. Minimal closing/account/epoch security metadata may remain after private data is purged; external provider work already delivered and out-of-band reinstalls cannot be canceled by a final preflight. Those native acceptance/retention/reconciliation questions remain actual live gates, not passing software evidence.
+
+## EV-01: docs refresh (2026-11-15)
+
+Docs plus one JSDoc comment; no runtime, flag, route, page, generated file or
+dependency change, so no test was added.
+
+Before the edits, `release-finish` had moved from `0ee486e3` to `cf2373c4`.
+It was merged into `everywhere-finish` as `5733ceea` (no conflicts; no lane
+file, cited file, package.json or bun.lock among the incoming changes). The
+API typecheck passed after the merge (exit 0).
+
+Files changed:
+
+- api/_lib/everywhere/account-api.ts: the `AccountApiDeps.exchanges` JSDoc
+  (:51, now :51-57) names `platformExchanges` and says when oauth-finish
+  answers 404 (a platform that is not on) and 501 (a platform that is on with
+  no exchange for the purpose). Only comment lines changed.
+- vector-everywhere-handoff.md: the 2026-11-12 status paragraph now names the
+  merged branches and the current vehicle (PR #33, then `everywhere-finish`);
+  the Codium deletion-port bullet notes `75532fc36`; the runner bullet lists
+  the abort cases that exist and the ones EV-03 adds; Build order item 2 says
+  the Slack and Linear exchanges exist, with the 404 and 501 answers; a dated
+  "Later phases" note; the unknown-fields item says `decodeJobRecord` refuses
+  them; a dated CI note (every run on `everywhere-finish` is a
+  workflow_dispatch until a pull request from it is open); a dated annotation
+  after the owner's rules.
+- vector-everywhere-spec.md: the status line (:3), the push instruction (:16)
+  and a dated note after Stage A (:686). :803 (Q1) and :879 (review-fixes
+  FIT-5) are untouched.
+- vector-everywhere-progress.md: the opening paragraph, the "Tier B status at
+  0ee486e3" table above, and this entry.
+- vector-everywhere-deviations.md: the F5 entry and the EV-01 decisions.
+
+Checks (each through the lane's `vector-serial` lock, one at a time):
+
+| Check | Result |
+| --- | --- |
+| API typecheck, `bun typecheck --project ../../tsconfig.json` in packages/engine, after the merge | exit 0 |
+| The same, after the edits | exit 0, 22 s |
+| The same, after the review fixes (the JSDoc's 404/501 wording) | exit 0, 17 s |
+| packages/engine test/compliance/upstream-free.test.ts, with a clean inherited environment (`env -i`, fresh HOME under /tmp/vector-v2/everywhere/) | 12 pass, 0 fail, 53 assertions |
+| The same file with this session's own environment | 11 pass, 1 fail, 53 assertions: "a GitHub token does not take the default model from an OpenAI key" resolved `amazon-bedrock` instead of `openai`, which this shell's inherited environment selects; the name scans all pass, and the clean run above passes |
+| Prettier on account-api.ts | the file already differed from prettier at HEAD (46 diff lines); the same 46 after the edit, none in the new comment |
+| Diff guards | 5 files; no added personal path, email address or new code line over 120 columns |
+
+EV-01 is merge commit `5733ceea` plus one docs commit. The full turbo
+typecheck and the CI dispatches run with the push, and their run ids go in the
+next progress entry (EV-02's). typecheck.yml (the brief's CI) does not run the
+API typecheck: its matrix is app, cloud, desktop and engine `bun typecheck`
+plus the vectorscope-eval job. vector-everywhere.yml's `api` typecheck entry
+(:130-132) is the hosted proof of the API typecheck and of the F5 mitigation,
+so the first push of `everywhere-finish` should dispatch both workflows on
+that ref.
+
+Other facts checked: `build-everywhere` is still on origin (`5053d490`) and is
+merged into this branch, as are `vector-everywhere` (`890bb072`) and
+`v2-everywhere` (`40e70861`). review-fixes' FIT-5 commit had not landed (not
+an ancestor of HEAD, and review-fixes is not on origin), so spec :879 was left
+alone.

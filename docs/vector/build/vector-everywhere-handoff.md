@@ -4,7 +4,7 @@ This build moves to a new agent. Start here, then read the contract (`vector-eve
 
 ## Current continuation status (2026-11-12)
 
-This section supersedes the original handoff status below. The continuation is in isolated worktree `/workspace/vector-build-everywhere`, branch `build-everywhere`, originally based on `vector-everywhere` at `f9b19a041`. **Reviewed P1c/P2 software at `15e92e6ac9d75885f53e1edc3ff2712ad5eb9c85` has been pushed normally to `vector-everywhere` and passes dedicated and general CI.** No main push, PR or platform registration is authorized by this checkpoint.
+This section supersedes the original handoff status below. The 2026-11-12 continuation ran on branch `build-everywhere`, based on `vector-everywhere` at `f9b19a041`. **Reviewed P1c/P2 software at `15e92e6ac9d75885f53e1edc3ff2712ad5eb9c85` was pushed normally to `vector-everywhere` and passed dedicated and general CI.** No main push, PR or platform registration is authorized by this checkpoint. *2026-11-15:* `build-everywhere`, `vector-everywhere` and `v2-everywhere` are now merged history inside PR #33 (head branch `release-finish`), and the isolated worktree this paragraph used to name is gone. The current vehicle is PR #33, then this lane's branch `everywhere-finish`, which was cut from `release-finish` at `0ee486e3` (see "Tier B status at 0ee486e3" in vector-everywhere-progress.md).
 
 **Latest P2 checkpoint:** VE-10 through VE-13 and the whole-phase authority repairs passed the affected local checks and two read-only production reviews. The first phase CI exposed a real cooldown response-contract defect: native Redis `ZSCORE` may return a number. Commit `15e92e6ac` repaired that parser and added numeric/string/malformed response cases; root batch084 passed the focused tests and API types. Exact-source hosted results are now:
 
@@ -36,12 +36,19 @@ Independent review and re-review closed the five reported P1c findings; the opti
 **Current gates and remaining coverage:**
 
 - **Whole-P2 software checks are qualified locally and in CI.** Exact authorized active-to-closing CAS, private installation epochs, record/index writes, exact link/mapping admission, canonical counter/type preflight, actor404 privacy and native generation receipts are implemented and reviewed. Native revocation has pending/confirmed/uncertain phases: another eraser cannot permit reconnect while an old operation may be in flight. Uncertain outcomes erase local content and credentials while retaining minimal closing metadata; owner GET/202 exposes `review-native-revocation`, and retries cannot assert native confirmation. Confirmed cleanup interruptions remain visible with `retry-disconnect`. There is no automatic process-death/native reconciliation in this phase.
-- **The actual Codium deletion adapter remains a prerequisite gate.** The trusted port must provide the correct mode-separated read-only tombstone key; missing authority fails closed, including audit writes to unverified accounts. Local erasure does not require that active-account adapter. This branch does not import Codium's tombstone implementation and does not claim that integration is qualified. Permanent minimal account/epoch markers prevent delayed write resurrection.
+- **The actual Codium deletion adapter remains a prerequisite gate.** The trusted port must provide the correct mode-separated read-only tombstone key; missing authority fails closed, including audit writes to unverified accounts. Local erasure does not require that active-account adapter. This branch does not import Codium's tombstone implementation and does not claim that integration is qualified. Permanent minimal account/epoch markers prevent delayed write resurrection. *2026-11-15:* the port is now wired. `productionPorts` returns `codiumAccountAuthority` (api/_lib/everywhere/runtime.ts:16-18), which takes Codium's `tombstoneKey` (api/_lib/everywhere/adapters/account.ts:2, :7-13; commit `75532fc36`). The integration is still unqualified against a live deletion.
 
 - Earlier general-CI wording and Localmode fixture failures were repaired in `565c03ea8` and are covered by the successful final-source general run above; older-head receipts are retained as history.
 - Dedicated run `43228105045` exercised the new fences on healthy digest-pinned Valkey 7.2.14: erased-link/deleting-account admission before quota/index writes, readiness bounds and erasure, wrong-type unchanged poststate, in-flight native-revocation cleanup, `00`/`01` counter refusal, native-resource reservations, Jira drafts, delivery/claim/slot races and cooldown maximum ordering. The locally skipped Redis cases therefore have actual hosted proof at the final source. VE-10 remains an injected port with no real App registration. Linear directory distribution, native payload/permission qualification and the private result surface remain explicit gates.
 - Component tests do not qualify a real laptop, relay, platform app or Actions workflow. The explicit safe-worktree capability, its physical placement, signing-key handoff and R-M2 offline shell remain unwired/unproven here. R-M3's screened outward Brain audience remains a separate prerequisite; VE-08 proves personal-fact exclusion, not that entire audience contract.
-- Dedicated runner cases for every server `stop`/`lost`/404/409 variant, five minutes of failed heartbeat acknowledgements and question rejection are still missing. Existing cases cover user Stop, toggle-off, deadline, interruption recovery and permission rejection. Complete that matrix with the later integration/journey qualification before activating the laptop route.
+- **Runner abort matrix (2026-11-15, re-read at `0ee486e3`).** Most cases exist in packages/desktop/src/main/everywhere-runner.test.ts:
+  - every approval rejected (:296), and an engine question rejected (:305);
+  - a server `stop` and `lost` answered to `started` and `heartbeat` (:324-358);
+  - the actual jobs client's HTTP 404 and 409 on `started` and `heartbeat` (:360-416);
+  - five minutes without a heartbeat acknowledgement (:419), and an acknowledgement keeping a live job past the first lease boundary (:461);
+  - toggle-off, Stop and the deadline (:488), and recovery (:505).
+
+  Still missing: `stop`, `lost`, 404 and 409 answered to the `pushing` report (everywhere-runner.ts:286) and after the push is admitted. Lane package EV-03 adds them. Complete the matrix before activating the laptop route.
 - P3, P4, Surfaces and go-live retain their specified merge and owner gates. No registration, credentials/settings change, paid inference, PR, release or main merge occurred in this continuation.
 
 **What Vector everywhere is:** an @Vector bot on GitHub, Slack, Linear and Jira that is local-first.
@@ -74,13 +81,14 @@ Independent review and re-review closed the five reported P1c findings; the opti
 ## Build order
 
 1. **Phase P1c:** VE-06, VE-07 and VE-08 are implemented with local scoped validation and reviewed repairs. Finish the exact-head hosted qualification described above before the next package build. The production jobs API now has all five event hooks; no platform or relay adapter is activated.
-2. **Phase P2, the platform intakes:** VE-10 GitHub, VE-11 Slack, VE-12 Linear, VE-13 Jira (VE-13 starts by re-reading the Atlassian pages). The real OAuth exchanges for Slack and Linear plug into `createAccountApi({exchanges})`. Until they exist, `oauth-finish` answers 501 for those platforms.
+2. **Phase P2, the platform intakes:** VE-10 GitHub, VE-11 Slack, VE-12 Linear, VE-13 Jira (VE-13 starts by re-reading the Atlassian pages). Built. The real OAuth exchanges exist (corrected 2026-11-15). `platformExchanges` (api/_lib/everywhere/oauth-exchanges.ts:7) builds Slack's install exchange and Linear's install and sign-in-link exchanges for each platform in `config.platforms`, that is listed in VECTOR_EVERYWHERE_PLATFORMS with complete settings while the feature is on (config.ts:159-163). `createAccountApi` uses it unless a test injects `exchanges` (api/_lib/everywhere/account-api.ts:333). `oauth-finish` answers 404 for a platform that is not on (`platformOn`, config.ts:222; identity.ts:1455), and 501 `EVERYWHERE_UNAVAILABLE` for a platform that is on but has no exchange for that purpose: Slack has no sign-in-link exchange, and GitHub and Jira have none (identity.ts:1456-1458).
 3. **Final review** of the whole branch (`a6db1513d..HEAD`), then repair.
 4. **Later phases wait,** as the contract says:
    - Phase 3 (VE-20 to VE-22, laptop route): after `codium` merges.
    - Phase 4 (VE-30 to VE-33, Actions fallback and GitHub laptop-first): after `vector-at-mention` merges, plus Codium's A59. VE-30 also adds the Actions settle transition.
    - Phase S (VE-40 to VE-44, surfaces): lands as one piece after the next large merge.
    - VE-50 (go-live): runs with the owner after each platform is registered.
+   - *2026-11-15:* `codium` (`1ce8f5f3`) and `vector-at-mention` (`c0d10fb8`) are in this lane's base (`release-finish`, PR #33). Their merge into `main` waits for PR #33, which needs the owner's yes. The lane builds Phases 3, 4 and S on that base behind the flag; the go-live gates in spec §7, Codium's A59, R-A6/Q13 and the owner actions are unchanged.
 
 Each phase was built one WP at a time: build it, run its own test files, typecheck, commit. Then three reviews ran across the phase, one repair commit followed, then a push and CI. Keep that pattern; it found real issues in both phases.
 
@@ -104,13 +112,14 @@ Each phase was built one WP at a time: build it, run its own test files, typeche
 Each item below is also in the deviations log.
 
 - **Records that don't decode.** A job record that doesn't decode keeps its index place and is skipped and logged. It is not removed, because it may be a newer deployment's live job after a rollback.
-- **Unknown fields.** `decodeJobRecord` keeps unknown fields so a write-back doesn't drop them.
+- **Unknown fields (corrected 2026-11-15).** `decodeJobRecord` refuses a stored record that has any field it does not know (api/_lib/everywhere/jobs.ts:286-289), because this code writes back the record it decoded and would otherwise drop a newer deployment's fields. Such a record is one that does not decode (item above): `readJob` throws for it (:391-392) and routes answer 503, and the sweep skips and logs it in its index place, as the deviations log's VE-03 to VE-05 review-fixes entry says.
 - **Secret scan.** `decodeSettle` has no secret scan, because the server sanitizes again in `renderResult`.
 - **Codium's ErasePart shape.** The contract's guess was wrong; it is `{id, configured(), requires?, erase(account, context)}`, and `EVERYWHERE_ERASE_PART` follows it. Codium registers it in its own file (R-C9).
 - **Native disconnect revocation:** the production Slack factory now opens and revokes only its own sealed bot token before erasure. Custom injected exchange transports own their revocation port; Linear now seals rotating credential pairs and revokes its own refresh grant; Jira remains in its later package scope.
 
 ## How CI runs on this branch
 
+- *2026-11-15:* on `everywhere-finish`, none of the workflows the lane uses (vector-everywhere.yml, typecheck.yml, test.yml, vector-hosted-ci.yml, vector-at-mention.yml) has a push trigger for the branch, so every run is a `workflow_dispatch` on `everywhere-finish` until a pull request from `everywhere-finish` is open; then each workflow's `pull_request` trigger also runs (test.yml always, typecheck.yml for a pull request into `main`, the lane workflows by their paths). The rest of this section describes the retired `vector-everywhere` branch.
 - The `Vector everywhere` lane runs on every push to this branch, with Redis, and covers every `everywhere` test file plus the typechecks.
 - Also dispatch the general checks:
 
@@ -145,3 +154,5 @@ Read failures with `gh run view <id> -R scr1pter/claudeondfsfdaf --log-failed`. 
   - Never start or restart the Vector app.
   - Never operate the owner's real computer in tests.
 - **Copy:** make no public or comparative claims, and no claim of parity with any other product, without the owner's yes.
+
+*Annotation (2026-11-15, by the everywhere-finish lane; the owner's rules above and the "Owner decisions" line "nothing lands on `main` without the owner's yes" are unchanged):* `main` changes only through the lead's merge of a reviewed PR, with the owner's yes (PR #33 from `release-finish` first, then one from `everywhere-finish`). Lanes push only to their own branch (this lane: `everywhere-finish`, fast-forward only) and never open or merge PRs.
