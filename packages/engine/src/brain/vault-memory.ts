@@ -67,12 +67,20 @@ export const files = Effect.fnUntraced(function* (input: Services) {
   ]
   for (const place of places) {
     const file = yield* BrainExport.collect({ brain, knowledge, place, scope: "repository", skills: input.skills })
-    const suffix = `repository-${createHash("sha256").update(place.repository).digest("hex").slice(0, 24)}.json`
+    const name = `repository-${createHash("sha256").update(place.repository).digest("hex").slice(0, 24)}`
     const { skills, ...memory } = file
-    const append = (section: Vault.Section, text: string) => out.push({ path: `${section}/${suffix}`, section, text,
-      repository: place.repository, worktree: place.root })
+    const append = (section: Vault.Section, text: string, part = 1) =>
+      out.push({
+        path: `${section}/${name}${part > 1 ? `-${part}` : ""}.json`,
+        section,
+        text,
+        repository: place.repository,
+        worktree: place.root,
+      })
     if (file.entries.some((entry) => !entry.file)) append("memory", json(memory))
-    if (skills?.length) append("skills", json({ ...memory, entries: [], documents: [], skills }))
+    restorable(skills ?? []).forEach((part, index) =>
+      append("skills", json({ ...memory, entries: [], documents: [], skills: part }), index + 1),
+    )
     if (input.workflow) {
       const insights = BrainTransfer.insights(yield* input.workflow.insights(place))
       if (insights.rows.length) append("insights", JSON.stringify(insights))
@@ -80,6 +88,39 @@ export const files = Effect.fnUntraced(function* (input: Services) {
   }
   return { files: out, here }
 })
+
+/** Characters of skills JSON in one file, under the 2 MB one restore request takes (the server's IMPORT_CHARS). */
+export const SKILLS_CHARS = 1_500_000
+
+/**
+ * A repository's learned skills as a backup holds them, in files a restore can each send whole (R45-10). A restore
+ * reads only the skills in use or waiting for review, and never their evidence (BrainExport.skills), so archived,
+ * superseded and held skills and every skill's evidence stay out. Each part keeps under SKILLS_CHARS of JSON: a skill's
+ * paths have no length limit, so no count of skills alone bounds the file. Skills in use come before those waiting
+ * for review, each kept in the brain's own order: a restore takes at most a repository's pending limit of proposals
+ * (B10-3), so the ones it keeps are the ones the person had approved.
+ */
+function restorable(skills: readonly BrainExport.Item[]) {
+  const parts: BrainExport.Item[][] = []
+  let size = 0
+  const kept = [
+    ...skills.filter((skill) => skill.status === "active"),
+    ...skills.filter((skill) => skill.status === "proposed"),
+  ]
+  for (const skill of kept) {
+    const item = { ...skill, evidence: [] }
+    const length = JSON.stringify(Schema.encodeSync(BrainExport.Item)(item)).length + 1
+    const last = parts.at(-1)
+    if (last && size + length <= SKILLS_CHARS) {
+      last.push(item)
+      size += length
+      continue
+    }
+    parts.push([item])
+    size = length
+  }
+  return parts
+}
 
 /** What restoring one memory file did; `unreadable` when it is not a memory file this version of Vector reads. */
 export type Restored =

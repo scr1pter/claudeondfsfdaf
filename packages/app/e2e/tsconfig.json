@@ -25,6 +25,7 @@
     "./regression/race.spec.ts",
     "./regression/playbooks-settings.spec.ts",
     "./regression/hosted-result-note.spec.ts",
+    "./regression/codium-vault-sections.spec.ts",
     "./regression/github-agents.spec.ts",
     "./regression/connected-tools.spec.ts",
     "./regression/directory-review.spec.ts",

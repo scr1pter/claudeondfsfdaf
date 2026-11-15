@@ -427,10 +427,10 @@ export const VaultRestoreCommand = effectCmd({
     const opened = yield* openFor({ store, local, backend, adopt: true })
     const read = yield* promise(() => VaultBackup.read({ store, opened, ...(args.id ? { version: args.id } : {}) }))
     const services = yield* VaultMemory.services()
-    const total = { restored: 0, active: 0, pinned: 0, waiting: 0, known: 0, refused: 0, unreadable: 0, documents: 0 }
+    const results: Restoring[] = []
     for (const { file, bytes: content } of read.files) {
       const done =
-        (file.section === "memory" || file.section === "skills" || file.section === "insights")
+        file.section === "memory" || file.section === "skills" || file.section === "insights"
           ? yield* VaultMemory.restore(services, {
               text: content.toString("utf8"),
               section: file.section,
@@ -438,26 +438,15 @@ export const VaultRestoreCommand = effectCmd({
               ...(file.worktree !== undefined ? { worktree: file.worktree } : {}),
             })
           : ({ unreadable: true } as const)
-      if (done.unreadable) {
-        total.unreadable++
-        continue
-      }
-      total.restored += done.restored
-      total.active += done.active
-      total.pinned += done.pinned
-      total.waiting += done.waiting
-      total.known += done.known
-      total.refused += done.refused
-      total.documents += done.documents
+      results.push({ section: file.section, done })
     }
+    const total = restoreTotals(results)
     UI.println(
       UI.Style.TEXT_SUCCESS_BOLD +
         `Restored ${total.restored} entr${total.restored === 1 ? "y" : "ies"} from version ${read.manifest.id}` +
         UI.Style.TEXT_NORMAL,
     )
-    UI.println(
-      `${total.active} in use${total.pinned ? ` (${total.pinned} pinned)` : ""}, ${total.waiting} waiting for your review as before.`,
-    )
+    UI.println(restoredLine(total))
     const left = [
       total.known ? `${total.known} already in memory here` : undefined,
       total.refused ? `${total.refused} refused (forgotten here, or past what may wait for review)` : undefined,
@@ -480,6 +469,68 @@ export const VaultRestoreCommand = effectCmd({
       )
   }),
 })
+
+/** One file of a version and what restoring it did. */
+export type Restoring = { readonly section: string; readonly done: VaultMemory.Restored }
+
+/**
+ * The restore's tally, as the desktop counts it (vault-backup.ts, R45-25): the engine brings learned skills and
+ * workflow insights back as proposals whatever they were, answering them as waiting, so they are counted apart from
+ * memory's in use, pinned and waiting, never as "waiting for your review as before" (B10).
+ */
+export function restoreTotals(results: readonly Restoring[]) {
+  const total = {
+    restored: 0,
+    active: 0,
+    pinned: 0,
+    waiting: 0,
+    skills: 0,
+    insights: 0,
+    known: 0,
+    refused: 0,
+    unreadable: 0,
+    documents: 0,
+  }
+  for (const { section, done } of results) {
+    if (done.unreadable) {
+      total.unreadable++
+      continue
+    }
+    total.restored += done.restored
+    total.known += done.known
+    total.refused += done.refused
+    total.documents += done.documents
+    if (section === "skills" || section === "insights") {
+      total[section] += done.restored
+      continue
+    }
+    total.active += done.active
+    total.pinned += done.pinned
+    total.waiting += done.waiting
+  }
+  return total
+}
+
+/**
+ * What came back, as Settings → Memory → Backup says it (memory-backup-model.ts restoreLine): "as before" is memory's,
+ * and a restore of learned content only names no memory.
+ */
+export function restoredLine(total: {
+  readonly active: number
+  readonly pinned: number
+  readonly waiting: number
+  readonly skills: number
+  readonly insights: number
+}) {
+  const memory = total.active || total.pinned || total.waiting || !(total.skills || total.insights)
+  const parts = [
+    memory ? `${total.active} in use${total.pinned ? ` (${total.pinned} pinned)` : ""}` : undefined,
+    memory ? `${total.waiting} waiting for your review as before` : undefined,
+    total.skills ? `${total.skills} learned skill${total.skills === 1 ? "" : "s"} to review` : undefined,
+    total.insights ? `${total.insights} workflow insight${total.insights === 1 ? "" : "s"} to review` : undefined,
+  ].filter((part): part is string => part !== undefined)
+  return `${parts.join(", ")}.`
+}
 
 export const VaultForgetCommand = effectCmd({
   instance: () => process.env[ChildEnvironment.AGENT_MARKER] === undefined,

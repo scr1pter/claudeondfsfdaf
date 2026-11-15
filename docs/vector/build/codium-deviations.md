@@ -3884,3 +3884,283 @@ inventory. Findings, repairs and tests are in `codium-p7-repairs.md` ("A45 Setti
 - No flag, setting, route, listing, price or public page changed, and no SDK or generated output, so `MODEL-PLANS.md`
   and the owner-actions files are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none.
+
+## Codium finish: B10 acceptance (15 Nov 2026)
+
+Track B B10 ("Add `skills` and `insights` sections to the vault manifest (restored as drafts for review); main-built
+readers refuse with "update Vector" via `minReader`", `codium-build-spec.md:949`). The checkpoint's B10 row asks to
+"validate all lanes together and execute native/browser acceptance" (`codium-track-b-checkpoint.md:17`). R45a and R45b
+are its base (`codium-track-b-checkpoint.md:31-34`; this addendum's R45-10 line says "splitting or capping learned
+files is B10's design"). Read and built on `codium-finish` `4bd146e7`, PR #33 unmerged. Scratch was under
+`/tmp/vector-v2/codium/b10/`, and the tests' `TMPDIR` and fresh roots under `/tmp/vector-v2/codium-finish/b10/`.
+Reviewed uncommitted at `4bd146e7`; that review's findings and what was done with each are under "Review fixes"
+below.
+
+**Contract readings**
+
+- **A version-1 reader refuses the whole version (R1).** `minReader` gates the whole version in the header its tag binds
+  (core `vault/format.ts:48`), and B10 chose it so "older readers must not silently omit those sections"
+  (`schema/vault.ts:16`). A main-built reader therefore refuses a learned backup outright, memory included, with core's
+  "This backup was made by a newer version of Vector. Update Vector to restore it." It still restores a memory-only
+  version, which asks for reader 1. The Backup page's partial note ("Parts of this backup need a newer Vector; update
+  Vector to restore them too.") is a different path: a reader-2 build skipping a section it does not know, which
+  `minReader` allows (`totals.newer`), or a file the engine refuses (`totals.unreadable`). Both paths are tested. The
+  task's "refuses the newer sections … and still restores memory" is read as these two facts.
+- **The version-1 reader is this build with two constants put back (R2).** These are the reader-side constants that
+  `3b1ce6d5` changed: `READER` 1 and `SECTIONS` `["memory"]`. They are mocked in a test file of their own, before
+  anything that reads them loads. Every desktop test file runs in a process of its own (`scripts/test.ts` and the
+  Codium CI picker), so no other file sees the mock. The writer's `MIN_READER` and `LEARNED_READER` are unchanged, so
+  the bytes are a current build's. With `SECTIONS` `["memory"]`, the desktop's restore loop is the pre-B10 loop. A
+  historical binary was not run.
+- **A fresh profile (R3).** The desktop test runs two computers. Each has its own engine process, with its own HOME and
+  XDG folders, on the same repository directory. Computer B has its own `userData` (its store file is removed and a new
+  folder is used) and a new sealing key, so the restore needs the recovery code, as on another computer. The route
+  test, which runs in one process with one brain, uses a second, empty git repository instead.
+- **"No learner stats are seeded" (R4)** means all of these hold on the restoring side:
+  - `GET /memory/workflow` has no arm in any tier.
+  - Each restored skill has uses `{loads, passes, fails, ignored, reverts}` all 0, `helpful` 0, `harmful` 0 and no
+    `approvedBy`.
+  - Workflow history arrives only as a lesson proposal ("Imported workflow observation for thorough work …").
+- **Browser (R5).** The vault bridge is desktop-only (`memory.tsx` shows the Backup tab only when `platform.vault` is
+  set), so the e2e mock-server app cannot reach the page. `e2e/fixtures/vault-sections.html`/`.jsx` renders the real
+  `SettingsMemoryBackup` and its real `restoreLine` against a stand-in bridge. The stand-in answers exactly what the
+  desktop's real controller answered in `vault-sections.test.ts`:
+  - the learned version: `restored 4, active 1, skills 2, insights 1`, all else 0;
+  - the version with an unknown section: `known 1, newer true`, all else 0.
+  The "update Vector" refusal is core's text. This is not the running app. The fixtures build only into `dist-e2e`
+  (`e2e/vite.config.ts`), never into the app or website.
+- **Spec typecheck (R6).** The app's `bun typecheck` (`tsgo -b`) does not cover `e2e/`. `typecheck:e2e`
+  (`tsgo -p e2e/tsconfig.json`) does, for the files its `include` names, so the spec was added there (one line). That
+  typecheck ran locally only: no job of this lane runs it.
+- **CLI roundtrip (R7).** `vector vault backup/restore --github` has no knob for a local remote or API, so a run at
+  process level would reach github.com. The CLI case drives the CLI's own git runner (`gitRunner(Git.run)`) and
+  `VaultGitHub.store` over a local bare repository with sectioned files, and the CLI's restore tally and line as
+  exported functions. `VaultRestoreCommand`'s handler and `VaultMemory.files` are not run inside the CLI's process. The
+  brain side of the CLI restore is `VaultMemory.restore`, the function the route calls, and the route test covers it.
+- **Insights on the backup side (R8).** No route records workflow runs. `memory-vault.test.ts` runs with the preload's
+  in-memory brain and `resetDatabase` after each case. A `BrainWorkflow` runtime there would need a file database that
+  `resetDatabase` unlinks under the listener, so the route test does not record runs. Instead it restores an insights
+  file shaped like `BrainTransfer.insights` output. The backup side (`GET /memory/backup` carrying an `insights`
+  section from recorded runs) is covered by the desktop test. There, the engine fixture records eight checked runs
+  through `BrainWorkflow` over the same brain file its server reads.
+
+**Findings (each fixed here with its own regression test)**
+
+- **B10-1. Confirmed: `vector vault restore` called learned skills and insights "waiting for your review as before".**
+  - Cause: `VaultMemory.restore` answers a learned file as `waiting = restored` (`vault-memory.ts`, learned branch).
+    The CLI added that to `total.waiting` and printed "N waiting for your review as before". R45-25 fixed the same
+    thing on the desktop only.
+  - Repair (`cli/cmd/vault.ts:430-449`, `:474-533`): the tally is `restoreTotals` and the line is `restoredLine`, both
+    exported. The tally counts learned sections in `skills` and `insights`, never in active, pinned or waiting.
+    The line is the Backup page's rule: "as before" is memory's, a learned-only restore names no memory, and then
+    come "N learned skill(s) to review" and "N workflow insight(s) to review". "Left out:", the skipped note and the
+    documents note are unchanged.
+  - Tests: `test/cli/vault.test.ts:205` (the tally, with each learned file answered as waiting) and `:236` (the line).
+    The red run is HEAD, where neither export exists. Mutation: dropping the learned `continue` in `restoreTotals`
+    fails `:205`.
+- **B10-2 (R45-10). Confirmed by measurement: a skills backup could pass the engine's restore limit.**
+  - Cause: the backup listed every skill row with its evidence (`BrainExport.collect`, `skills.list(place, "all")`).
+    The desktop sends a learned file whole, and the route refuses more than `IMPORT_CHARS` (2,097,152 characters).
+  - Worst case built through the routes (`memory-vault.test.ts:269`):
+    - 50 skills in use (`SkillStore.KEEP.skills`), one archived, and 20 waiting (`BrainSkill.LIMIT.pending`);
+    - each with a 200-character description and a 4,000-character procedure, about 3,900 characters of it `"\` pairs
+      that JSON escapes;
+    - each with 20 paths (`LIMIT.paths`) of about 1,200 characters. `safePath` does not limit a path's length, so no
+      count of skills alone bounds the file.
+  - Measured: at HEAD, one file of 2,329,515 characters, which never restores. After the repair, two files of 1,474,680
+    and 819,282 characters, 2,293,962 together. Leaving out the non-restorable rows alone (the plan's repair) would
+    still be past the limit, so the file is split as well.
+  - Repair (`vault-memory.ts:72-123`): `restorable` keeps only skills in use or waiting, the ones a restore reads
+    (`BrainExport.skills`), without their evidence, which a restore never reads. It puts the skills in use before the
+    ones waiting, each in the brain's own order (why: B10-3), and cuts them into parts of at most `SKILLS_CHARS`
+    (1,500,000) characters of JSON. The parts are `skills/repository-<24 hex>.json`, then `-2.json` and
+    so on.
+  - What is unchanged: `vector memory export`, `BrainExport`, the route schemas, the SDK and openapi, so no generator
+    ran.
+  - Edge case: a single skill larger than `SKILLS_CHARS` still goes in a file of its own. Only an import of almost 2 MB
+    could make one, and its restore would count it unreadable.
+  - Red run: the case fails at HEAD's `vault-memory.ts` on "more than one file" (one file is received).
+- **B10-3. Confirmed, not changed: a restore brings back at most 20 skills per repository.**
+  - Cause: `importText` proposes every restored skill (`core/src/brain/export.ts:299`), and `BrainSkill.propose`
+    refuses once 20 proposed or held skills wait in the repository (`skill.ts:928-935`, `LIMIT.pending` 20).
+  - Effect: a backup with 50 skills in use restores 20 proposals. The other 50 of the worst case count as "refused
+    (forgotten here, or past what may wait for review)". Pinned by `memory-vault.test.ts:269`: 20 restored, 50 refused.
+  - Which 20 come back. The brain lists skills newest first (`BrainSkill.list`, `skill.ts:761`), so a backup in that
+    order puts the person's unapproved drafts first, and the restore's 20 would be mostly those. The backup therefore
+    holds the skills in use before the skills waiting (`restorable`, B10-2), so a restore that stops at the limit
+    keeps the approved ones. `:269` asserts the backup's order (50 in use, then 20 waiting) and that every one of the
+    20 restored was in use. With the brain's order put back, `:269` fails.
+  - The spec's "restored as drafts for review" names no number. Whether a restore should take more drafts is a product
+    decision (For the lead).
+- **B10-4. Confirmed: "Show versions" on a new computer could fail in git.**
+  - Cause: the desktop's `versions()` reads `store.list()` and `store.readKey()` at once (`vault-backup.ts:467`). Core's
+    GitHub store did not share an overlapping read (`vault/github.ts`, `sync`), so a new computer's empty copy was set
+    up and fetched twice in one directory.
+  - Seen in the native test: `Vector could not set up its copy of the vault: fatal: cannot copy
+    '…/templates/hooks/pre-commit.sample' to '…/vault-cache/github/octo/brain-vault.git/hooks/pr…'`.
+  - Repair (`core/src/vault/github.ts:131-143`): reads that overlap share one in-flight read (`fetchTree`), and it
+    clears when it settles.
+  - Test: `core/test/vault/github.test.ts:212`. With a git that does not block, it requires one `init`, one
+    `ls-remote` and one `fetch` for both reads. At HEAD each ran twice (red); after the repair it passes. The desktop
+    test passes through the same path.
+
+**Tests**
+
+- New `packages/desktop/src/main/vault-sections.test.ts`, one case, 52 expectations, about 7 s. It runs the real
+  `startVault`, `vaultKeys` and `vaultSecrets`, and the real `vault-github.ts` with its git. Only `githubVaultStore`'s
+  test options are set: a local bare remote, `https://api.github.test`, and a privacy check that answers 404. Electron
+  and the billing window are mocked as in `vault-runtime.test.ts`, and the default scrypt cost is 2^17. The case:
+  1. A memory-only backup asks for reader 1, with sections `["memory"]`.
+  2. After two approved skills (one private) and eight checked runs, the backup asks for reader 2, with sections
+     memory, skills and insights. The skills file keeps `private` on exactly the private skill.
+  3. Computer B: Show versions answers `mine: false`; restoring without the code answers `needsCode`; with the code it
+     restores with the totals above.
+  4. On B's engine: the same project id, no skill in use, both skills `proposed` with privacy kept, R4's empty stats, the
+     lesson proposal, and the personal memory.
+  5. A version with a `journal` section restores the memory beside it, with `newer: true`.
+  6. Every privacy check went to the test API.
+- New `packages/desktop/src/main/vault-sections-reader-one.test.ts`, one case, 8 expectations (R2). A learned backup
+  answers exactly the "Update Vector" text and nothing reaches the engine. A memory-only backup restores.
+- New `packages/engine/test/fixture/vault-profile.ts`, used by the desktop test. It is `Server.listen` on loopback, and
+  a `workflow <directory>` line on stdin records eight checked, priced build-agent runs through `BrainWorkflow`. When
+  stdin closes (the test stops it, or the test process dies) it stops its listener and exits.
+- The engine child's setup:
+  - spawned like `vector-account.integration.test.ts`: `run --conditions=browser`, cwd the profile home, a
+    `VECTOR_CREDENTIAL_KEY` with `VECTOR_REQUIRE_SECURE_CREDENTIAL_STORE=1`, and models fetch, plugins, channel
+    database, project config and embeddings off;
+  - its environment inherits only `PATH`, Windows' system variables (`SystemRoot`, `SystemDrive`, `windir`, `ComSpec`,
+    `PATHEXT`), the temp folders and `LANG`, so no credential, proxy or `VECTOR_*` setting of the computer reaches it;
+    `HTTP(S)_PROXY` points at `127.0.0.1:9` with `NO_PROXY` set to loopback;
+  - each engine is kept as it starts (`Promise.allSettled`), so `afterAll` stops one that started when the other failed;
+  - git is isolated with `/dev/null`, as `vault-github.test.ts` does;
+  - `ConfigManaged`'s managed-config directory is not redirected. The engine reads the computer's real one, as the
+    precedent does.
+- `packages/engine/test/server/memory-vault.test.ts`: 6 cases before, 8 after. The new cases are `:269` (B10-2 and
+  B10-3) and `:353` (a skills file from repository A restored into an empty repository B with an insights file:
+  answers `restored 2, active 0, waiting 2`; R4 on B).
+- `packages/engine/test/cli/vault.test.ts`: 2 cases before, 5 after. The new cases are `:103` (learned sections keep
+  their section, repository and worktree through git and ask for reader 2; memory alone asks for reader 1; memory with
+  only skills, and memory with only insights, each ask for reader 2), `:205` and `:236`.
+- `packages/core/test/vault/github.test.ts`: 8 cases before, 9 after (`:212`).
+- New `packages/app/e2e/regression/codium-vault-sections.spec.ts`, four cases:
+  - the learned restore's exact line: "… 1 in use, 0 waiting for your review as before, 2 learned skills to review, 1
+    workflow insight to review.";
+  - another computer: Restore is disabled until the recovery code is entered, and the code reaches the bridge;
+  - the "Parts of this backup need a newer Vector; update Vector to restore them too." note;
+  - the "Update Vector" refusal as the alert, with no notice.
+  Its path names codium, so the picker always selects it.
+- Mutations, each reverted and checked with `git diff --stat`:
+  - the desktop loop counting learned files as waiting fails the desktop test;
+  - the CLI tally doing the same fails `cli/vault.test.ts:205`;
+  - `VaultMemory.restore` answering learned files as active fails both learned route cases;
+  - core's writer always writing `MIN_READER` fails the reader-one test;
+  - `importText` dropping `private` fails both learned route cases.
+- A test-writing hazard found on the way. In Bun 1.3.14, `toMatchObject` replaces each property it matched with an
+  asymmetric matcher in the received object (probe: `{code: "ABCD"}` reads back as `{code: {}}`). The desktop test
+  reads the recovery code before any matcher. No other desktop test reads a property after matching it with
+  `expect.any` (grep).
+
+**Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`:
+- desktop (with `--no-env-file`): `vault-sections.test.ts` 1/0, `vault-sections-reader-one.test.ts` 1/0,
+  `vault-backup.test.ts` 24/0, `vault-runtime.test.ts` 1/0 and `vault-github.test.ts` 11/0;
+- engine: `test/server/memory-vault.test.ts` 8/0 and `test/cli/vault.test.ts` 5/0;
+- core: `test/vault/github.test.ts` 9/0 and `test/vault/vault.test.ts` 18/0;
+- `bun typecheck` in app, desktop, engine and core, and `bun run typecheck:e2e` in app, all clean;
+- prettier on the new files, and on the blocks added to the existing ones (those files were not prettier-clean at
+  HEAD, R45-23, and their other lines are left as they were);
+- `git diff --check`.
+- Checked again the same day, before the commit. The JSON helpers in the new route and desktop cases had read
+  responses `as any`. They now read `Record<string, unknown>`, and each caller names the shape it reads (AGENTS.md).
+  Everything below ran again and passed:
+  - desktop: `vault-sections.test.ts` 1/0, `vault-sections-reader-one.test.ts` 1/0, `vault-backup.test.ts` 24/0,
+    `vault-runtime.test.ts` 1/0 and `vault-github.test.ts` 11/0;
+  - engine: `memory-vault.test.ts` 8/0 and `cli/vault.test.ts` 5/0;
+  - core: `vault/github.test.ts` 9/0, `vault/vault.test.ts` 18/0 and `local-mode/sources.test.ts` 16/0;
+  - typechecks:
+    - `bun typecheck` in app, desktop, engine and core, and app `typecheck:e2e`;
+    - the full `bun turbo typecheck --concurrency=2`, 27/27, with desktop, core and engine run uncached after the
+      edit;
+    - the api tree, `bun typecheck --project ../../tsconfig.json` from `packages/engine`.
+- Checked again after the review fixes, the same day:
+  - desktop: `vault-sections.test.ts` 1/0 (52 expectations), and no engine fixture process left after it;
+    `vault-sections-reader-one.test.ts` 1/0;
+  - engine: `memory-vault.test.ts` 8/0 and `cli/vault.test.ts` 5/0; the mutation putting the brain's order back in
+    `restorable` fails `memory-vault.test.ts:269`;
+  - core: `vault/github.test.ts` 9/0;
+  - the fixture's exit on a closed stdin, as above;
+  - typechecks: `bun typecheck` in core, engine and desktop, and the api tree (`bun typecheck --project
+    ../../tsconfig.json` from `packages/engine`), all clean. The app was not touched by the fixes. The desktop's
+    `tsgo -b` leaves out `src/**/*.test.ts`, so both new desktop test files were also checked with a scratch config
+    under `/tmp/vector-v2/codium-finish/b10/` (the desktop's own options, with bun and node types): `vault-sections.test.ts`
+    is clean; `vault-sections-reader-one.test.ts` has two type-only mismatches that Bun does not check and that no CI
+    job typechecks (`:36` compares the mocked `SECTIONS` with `["memory"]`, whose declared type is the three-section
+    tuple; `:62` answers the codium status with `{}`). Left as they are;
+  - prettier on the two new files the fixes touched, clean.
+Never run locally: Playwright.
+
+**Only in CI:** the browser spec (Codium browser specs job); the Codium tests job over the changed files; typecheck.yml;
+vector-hosted-ci.yml's Hosted tests (desktop `vault-*`, which includes both new desktop files, and core `test/vault/`);
+and the first Windows and macOS runs of the desktop test that spawns the engine, which is test.yml's at the lead's
+end-of-lane run.
+
+**Plan and critique.** Taken from the critique:
+- the worst case measured and B10-2 split, not only filtered;
+- the restore-side cap of 20 recorded as B10-3;
+- the CLI tally extracted and tested with a learned file answered as waiting, with the loop mutation;
+- no `BrainWorkflow` runtime or database flag in `memory-vault.test.ts` (R8);
+- the engine child spawned as the proven precedent;
+- `vault-runtime.ts` left unchanged, with `startVault` driven through a mocked `vault-github` that keeps the real store
+  and git;
+- one engine process per computer, seeded over stdin instead of restarted;
+- the unknown-section case folded into the one test;
+- the CLI case kept short;
+- a fourth browser case for the other computer;
+- the exact totals named as the native test's;
+- the one-line `e2e/tsconfig.json` edit.
+Not taken as written:
+- `os.devNull` for git's global config. The desktop's vault tests use `/dev/null` and run on Windows in test.yml.
+- `--preload @opentui/solid/preload`. The precedent and the fixture start without it.
+- Redirecting the managed-config directory. The precedent does not, and recorded above as not isolated.
+- `NetworkGuard` in the fixture. Raw sockets are not a path these routes use, and the dead proxy covers fetch.
+Found while building: B10-4, and the Bun matcher hazard.
+
+**Review fixes (15 Nov 2026).** A review of this package before its commit raised ten non-blocking findings; none was
+blocking.
+- `restorable` kept the brain's newest-first order, so a restore stopping at 20 kept mostly unapproved drafts. Fixed:
+  skills in use come first (B10-2, B10-3), and `memory-vault.test.ts:269` asserts the order and that the 20 restored
+  were in use. Red with the old order.
+- `restorable` was exported with no caller outside `files`. Fixed: no longer exported; the tests import only
+  `SKILLS_CHARS`.
+- Core's new store-level `read` was shadowed by `push`'s `read` (`read-tree`). Fixed: renamed `fetchTree`.
+- A backup with skills only, or insights only, beside memory was never shown to ask for reader 2. Fixed: the CLI
+  roundtrip (`cli/vault.test.ts:103`) now backs up each and expects `LEARNED_READER` with exactly those sections.
+- The desktop test's `afterAll` used `else`. Fixed: an early `continue`.
+- If one engine failed to start, `Promise.all` left the other unassigned and running. Fixed: `Promise.allSettled`,
+  each engine kept as it starts, then the first rejection rethrown.
+- The engine fixture outlived a closed stdin because the listener kept it running. Fixed: after the stdin loop it
+  stops the listener, disposes its runtime and exits. Checked by starting it with stdin at `/dev/null`: it printed its
+  address and exited 0 within 4 s.
+- The engine child inherited the computer's credentials (anything not `VECTOR_*` or `*_proxy`). Fixed: an allowlist
+  (`PATH`, `SystemRoot`, `SystemDrive`, `windir`, `ComSpec`, `PATHEXT`, `TEMP`, `TMP`, `TMPDIR`, `LANG`), matched
+  without regard to case for Windows, plus the values the test sets.
+- This record said it was left uncommitted, which the commit would make false. Fixed: it names the state at review.
+- The CLI cases never run `VaultRestoreCommand`'s handler, so its section dispatch (`cli/cmd/vault.ts:431-441`, an
+  unknown section answered unreadable) has no test. Not changed, kept as R7. A handler case needs a seam in `storeFor`
+  for a local remote and API, plus the owner gate and the local key file, which is a product change for a coverage
+  note. The same dispatch on the desktop (a `journal` section restoring the memory beside it with `newer`) is covered
+  by `vault-sections.test.ts`, and the brain side (`VaultMemory.restore`) by the route test.
+
+**For the lead.**
+- A backup now carries only the skills in use or waiting, without evidence, which the owner's A60 read of the privacy
+  draft's `#vault` should know.
+- B10-3: a restore takes at most 20 skill proposals per repository. The backup puts skills in use first, so the 20
+  kept are ones the person had approved.
+- `Backed up N memory files` in the CLI and on the desktop counts learned files as memory files (R45-35 kept the
+  desktop wording).
+- Held skills (hidden characters, instruction-like text) never enter a backup.
+- The desktop test spawns engine processes; its first Windows and macOS run is the lead's test.yml. Nothing in it is
+  skipped by platform.
+- R45-23's B10 lines at `vault-memory.ts:72-73` and `cli/cmd/vault.ts:433` were rewritten here, prettier-clean.
+
+No flag, setting, listing, route, schema, price or public page changed, and no SDK or generated output, so
+`MODEL-PLANS.md` and the owner-actions files are unchanged. Edits to `api/_lib/model-plan-*.ts`: none.

@@ -129,8 +129,18 @@ export function store(options: {
   }
 
   // The branch as GitHub has it now, fetched into the local copy. Read once per store, and again after each push.
+  // Reads that overlap share one (B10): the Backup page lists the versions and reads the key at once, and two reads
+  // of a new copy would each set it up and fetch into it, where git refuses one of them.
+  let reading: Promise<Map<string, Entry>> | undefined
   const sync = async () => {
     if (tree) return tree
+    reading ??= fetchTree().finally(() => {
+      reading = undefined
+    })
+    return reading
+  }
+
+  const fetchTree = async () => {
     await init()
     const listed = await git(["ls-remote", options.remote, BRANCH])
     if (listed.exitCode !== 0)

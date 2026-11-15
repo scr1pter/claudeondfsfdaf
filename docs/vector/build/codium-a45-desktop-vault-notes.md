@@ -97,6 +97,15 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
   GitHub's real API, Brain Vault on Vector against the deployed Vault API (A44's tests drive A43's client against the
   routes), safeStorage sealing in a packaged app, and the nightly timer in a running app.
 
+- **Status on 15 Nov 2026 (Codium finish B10).**
+  - Settings → Memory → Backup's restore lines get a browser run in CI through
+    `packages/app/e2e/regression/codium-vault-sections.spec.ts`. It renders the real page on a fixture with a stand-in
+    bridge (`e2e/fixtures/vault-sections.jsx`) whose answers are the native test's. CI ids follow in
+    `codium-track-b-checkpoint.md`.
+  - The native roundtrip (`vault-sections.test.ts`) ran locally only. It covers `startVault`, the sealed key and the
+    desktop's git against real engine processes and a local bare repository.
+  - Still not exercised: the running Electron app, real safeStorage, real GitHub, and GitHub's API.
+
 ## Left for others, and owner decisions
 
 - **Owner decision:** the Backup tab and its GitHub backend show on every plan now, as §1.1 lists "back up to my own

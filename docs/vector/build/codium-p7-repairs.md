@@ -193,6 +193,19 @@ searched for vault, backup and restore lines:
   rows can pass 2 MB. Backup checks no size, so such a backup would hold a skills file that never restores. Not
   measured; recorded for B10 (split skills files at backup, or cap them). The learned-sections test does not prove the
   bound.
+  - Status, 15 Nov 2026 (Codium finish B10): confirmed by measurement, and repaired.
+    - Measured: a worst case built through the routes (50 skills in use, one archived, 20 waiting, each with the longest
+      description and procedure and 20 paths of about 1,200 characters) gave one skills file of 2,329,515 characters
+      at `4bd146e7`, past `IMPORT_CHARS` (2,097,152).
+    - Repair in `engine/src/brain/vault-memory.ts` (`restorable`, `SKILLS_CHARS`): a backup now holds only the skills
+      in use or waiting, without evidence, cut into files of at most 1,500,000 characters. The worst case gives two
+      files, of 1,474,680 and 819,282 characters, and both restore.
+    - Test: `engine/test/server/memory-vault.test.ts` "a skills backup holds only what a restore brings back, without
+      evidence, in files under the restore limit (R45-10)". It fails at HEAD's `vault-memory.ts` (one file).
+    - Also recorded there: a restore takes at most 20 skill proposals per repository (B10-3, not changed). The backup
+      puts the skills in use before those waiting, so the 20 a restore keeps are approved ones; the same test asserts
+      it.
+    - Evidence: `codium-deviations.md`, "Codium finish: B10 acceptance (15 Nov 2026)". CI pending.
 - **R45-11. The GitHub backend.** Confirmed. The privacy check is unauthenticated with `redirect: "manual"`, and only a
   404 or `private: true` passes (core `github.ts:60-87`); it runs before every push (`:182`). git runs with
   `untrustedChildEnvironment(process.env)`, which drops `VECTOR_*_TOKEN`, `_KEY`, `_SECRET` and `_PASSWORD`
