@@ -29,10 +29,12 @@ function distinct(values: ReadonlyArray<string>) {
   return new Set(values).size === values.length
 }
 
-// What an action may do. Through Phase C only `read` (maps to the requester's `read` rules) and `write` (maps to the
-// requester's `edit`) exist. `run`, `network`, `post`, `screen` and `cloud` arrive with the work package that first
-// needs one, and the hub refuses any effect it does not know.
-export const Effect = Schema.Literals(["read", "write"]).annotate({ identifier: "Connect.Effect" })
+// What an action may do. `read` maps to the requester's `read` rules and `write` to its `edit` rules. `cloud` (CW-23)
+// sends your code or a screen to a Vector cloud service: the hub accepts it only in an action whose adapter declared
+// it, with the service's name, when the hub was built, and asks `connect_cloud` on every hand-off, naming where the code
+// goes. `run`, `network`, `post` and `screen` arrive with the work package that first needs one, and the hub refuses any
+// effect it does not know.
+export const Effect = Schema.Literals(["read", "write", "cloud"]).annotate({ identifier: "Connect.Effect" })
 export type Effect = typeof Effect.Type
 
 // Where a member's code runs: this machine, the user's own accounts (their GitHub Actions, for example), or
@@ -56,6 +58,19 @@ export type SendsTo = typeof SendsTo.Type
 export function isLocal(sendsTo: SendsTo | undefined) {
   return sendsTo === "this-computer" || (sendsTo?.startsWith("model-server:") ?? false)
 }
+
+/**
+ * The Vector cloud service a `cloud` action sends your code or a screen to, in plain words. Vector code fixes it when
+ * the adapter is built, never a model, and the `connect_cloud` question names it. A blank name, or one with a
+ * bidirectional or zero-width character, is refused, so the question cannot "name" a destination a person cannot read.
+ */
+export const CloudDestination = Schema.String.annotate({ identifier: "Connect.CloudDestination" }).check(
+  Schema.isLengthBetween(1, 200),
+  Schema.isPattern(NoControl),
+  Schema.isPattern(/\S/),
+  Schema.isPattern(/^[^\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+$/),
+)
+export type CloudDestination = typeof CloudDestination.Type
 
 export const Kind = Schema.Literals([
   "agent",
@@ -456,8 +471,15 @@ export interface Progress extends Schema.Schema.Type<typeof Progress> {}
 
 // A consent the hub asks in the requester's session. `connect` (pattern `vectorscope.review`) is allowed by default;
 // `connect_model` (pattern `<provider>/<model>`) asks once per request and names the model, where the diff goes and
-// the cap; `connect_write` asks every time, so it never offers "Always allow".
-export const ConsentPermission = Schema.Literals(["connect", "connect_model", "connect_write"]).annotate({
+// the cap; `connect_write` asks every time, so it never offers "Always allow"; `connect_cloud` (pattern
+// `<member>.<action>`) asks on every hand-off of a `cloud` action, never offers "Always allow", and names the Vector
+// cloud service the code goes to.
+export const ConsentPermission = Schema.Literals([
+  "connect",
+  "connect_model",
+  "connect_write",
+  "connect_cloud",
+]).annotate({
   identifier: "Connect.ConsentPermission",
 })
 export type ConsentPermission = typeof ConsentPermission.Type
@@ -472,6 +494,7 @@ export const Consent = Schema.Struct({
   maxCostUsd: optional(Schema.Finite.check(Schema.isGreaterThan(0))),
   findings: optional(Schema.Array(FindingID).check(Schema.isMaxLength(MAX_FINDINGS))),
   diff: optional(Schema.String),
+  destination: optional(CloudDestination),
 })
   .annotate({ identifier: "Connect.Consent" })
   .check(
@@ -484,6 +507,20 @@ export const Consent = Schema.Struct({
       consent.permission !== "connect_model" || (consent.model !== undefined && consent.sendsTo !== undefined)
         ? true
         : "connect_model names the model and where the diff goes.",
+    ),
+    Schema.makeFilter(
+      (consent: {
+        permission: ConsentPermission
+        always: ReadonlyArray<string>
+        message: string
+        destination?: CloudDestination
+      }) =>
+        consent.permission !== "connect_cloud" ||
+        (consent.always.length === 0 &&
+          consent.destination !== undefined &&
+          consent.message.includes(consent.destination))
+          ? true
+          : "connect_cloud is asked every time, is never saved, and its message names where the code goes.",
     ),
   )
 export interface Consent extends Schema.Schema.Type<typeof Consent> {}

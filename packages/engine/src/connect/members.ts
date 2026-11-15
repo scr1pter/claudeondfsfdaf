@@ -114,9 +114,9 @@ const decode = Schema.decodeUnknownOption(Connect.Member)
 /**
  * The list, in a fixed order: adapters, the agents, the helpers, the desktop's own work, the members reached through
  * a tool, skills, saved workflows and MCP servers. With Vector Local on, a member that is otherwise ready but runs in
- * a cloud or sends code past this computer and the listed model servers reads "off"; an MCP server keeps MCP's own
- * status, because MCP applies Vector Local to its servers itself. Each id appears once (the first source wins), and a
- * member the schema does not accept is left out.
+ * a cloud, sends code past this computer and the listed model servers, or has a `cloud` action reads "off"; an MCP
+ * server keeps MCP's own status, because MCP applies Vector Local to its servers itself. Each id appears once (the
+ * first source wins), and a member the schema does not accept is left out.
  */
 export function compose(sources: Sources): Connect.Member[] {
   const candidates: MemberInput[] = [
@@ -140,10 +140,15 @@ export function compose(sources: Sources): Connect.Member[] {
   })
 }
 
-/** Applies Vector Local to a member that is otherwise ready. */
+/** Applies Vector Local to a member that is otherwise ready. One with a `cloud` action is off whole. */
 export function gate(member: MemberInput, local: boolean): MemberInput {
   if (member.state !== "ready") return member
-  const gated = ConnectPolicy.localGate({ local, place: member.place, sendsTo: member.sendsTo })
+  const gated = ConnectPolicy.localGate({
+    local,
+    place: member.place,
+    sendsTo: member.sendsTo,
+    effects: member.actions?.flatMap((action) => action.effects),
+  })
   return gated.state === "ready" ? member : { ...member, state: "off", reason: gated.reason }
 }
 

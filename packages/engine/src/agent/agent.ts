@@ -359,6 +359,7 @@ const layer = Layer.effect(
           vector_cloud_environment: "ask",
           vector_cloud_hosting: "ask",
           connect_write: "ask",
+          connect_cloud: "ask",
           connect_model: "ask",
           external_directory: {
             "*": "ask",

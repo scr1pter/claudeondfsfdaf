@@ -119,10 +119,14 @@ const listed: ConnectAdapter.Adapter = {
   describe: () => Effect.succeed({ ...member("listed"), reach: "none", actions: undefined }),
 }
 
-const graph = (flags: Partial<RuntimeFlags.Info>, mcp?: Layer.Layer<MCP.Service>) =>
+const graph = (
+  flags: Partial<RuntimeFlags.Info>,
+  mcp?: Layer.Layer<MCP.Service>,
+  adapters: readonly ConnectAdapter.Adapter[] = [fake("vectorscope"), fake("other"), listed],
+) =>
   AppNodeBuilder.build(
     LayerNode.group([
-      ConnectHub.nodeWith([fake("vectorscope"), fake("other"), listed]),
+      ConnectHub.nodeWith([...adapters]),
       Permission.node,
       Session.node,
       SpendGuard.node,
@@ -134,6 +138,20 @@ const graph = (flags: Partial<RuntimeFlags.Info>, mcp?: Layer.Layer<MCP.Service>
 
 const it = testEffect(graph({ experimentalConnect: true }))
 const off = testEffect(graph({ experimentalConnect: false }))
+
+// A member whose review was declared, when the hub was built, to send code to a Vector cloud service (CW-23). No real
+// member declares one in this build; this fake only does what `fake` does.
+const HOSTED = "Vector's test cloud"
+const declared: Partial<Record<Connect.ActionID, string>> = { review: HOSTED }
+const hosted: ConnectAdapter.Adapter = { ...fake("hosted"), cloud: declared }
+const cloudy = testEffect(graph({ experimentalConnect: true }, undefined, [fake("vectorscope"), fake("other"), hosted]))
+const clouded = (id: string) =>
+  member(id, ["read", "cloud"], {
+    actions: [
+      { id: "review", title: "Review", effects: ["read", "cloud"], background: false, result: "review" },
+      { id: "fix", title: "Fix", effects: ["read", "write", "cloud"], background: false, result: "fix" },
+    ],
+  })
 
 const model = { providerID: ProviderV2.ID.make("local-test"), modelID: ModelV2.ID.make("fixture") }
 
@@ -906,7 +924,7 @@ describe("checks before anything is asked", () => {
     }),
   )
 
-  it.instance("any effect other than read or write is refused with no ask", () =>
+  it.instance("an unknown or undeclared effect is refused with no ask", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup()
       const { asks, ask } = asker()
@@ -1367,6 +1385,163 @@ describe("consent", () => {
         before.map((session) => session.id),
       )
       expect(yield* sessions.messages({ sessionID: requester.id })).toEqual(messages)
+    }),
+  )
+})
+
+describe("the cloud effect (CW-23)", () => {
+  const toHosted = (sessionID: SessionID, directory: string) => review(sessionID, directory, { to: "hosted" })
+  const cloudAsks = (asks: Ask[]) => asks.filter((item) => item.permission === "connect_cloud")
+
+  cloudy.instance(
+    "an action declared cloud when the hub was built asks connect_cloud on every hand-off, naming where the code goes, before the adapter starts",
+    () =>
+      Effect.gen(function* () {
+        const { directory, hub, requester } = yield* setup()
+        script.describe = clouded
+        const { asks, ask } = asker()
+        const before: string[][] = []
+        script.handle = () =>
+          Effect.sync(() => {
+            before.push(asks.map((item) => item.permission))
+            return clean()
+          })
+        for (const _ of [1, 2]) {
+          const run = yield* hub.run({ request: toHosted(requester.id, directory), call: { ask } })
+          expect(run.result?.state).toBe("completed")
+        }
+        expect(asks.map((item) => item.permission)).toEqual(["connect", "connect_cloud", "connect", "connect_cloud"])
+        expect(before[0]).toEqual(["connect", "connect_cloud"])
+        for (const item of cloudAsks(asks)) {
+          expect(item.always).toEqual([])
+          expect(item.patterns).toEqual(["hosted.review"])
+          expect(item.metadata).toMatchObject({ destination: HOSTED, member: "hosted" })
+          expect(String(item.metadata.description)).toContain(HOSTED)
+          // No client's auto-accept or "Always allow" may answer it.
+          expect(PermissionPolicy.canAutoApprove(item.permission, item.always, item.patterns)).toBe(false)
+          expect(PermissionPolicy.canAlwaysApprove(item.permission, item.always, item.patterns)).toBe(false)
+        }
+
+        seen.length = 0
+        const declined = yield* hub.run({
+          request: toHosted(requester.id, directory),
+          call: asker((request) => (request.permission === "connect_cloud" ? "no" : "yes")),
+        })
+        expect(declined.result?.refusal).toBe("denied")
+        expect(seen).toEqual([])
+      }),
+  )
+
+  cloudy.instance("no rule, saved approval or auto-accept answers connect_cloud", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup([
+        { permission: "*", pattern: "*", action: "allow" },
+        { permission: "connect_cloud", pattern: "*", action: "allow" },
+      ])
+      script.describe = clouded
+      const permissions = yield* Permission.Service
+      const pending = () =>
+        pollWithTimeout(
+          permissions.list().pipe(Effect.map((list) => list.find((item) => item.permission === "connect_cloud"))),
+          "connect_cloud was not asked through Permission",
+        )
+      const first = yield* hub.run({ request: toHosted(requester.id, directory) }).pipe(Effect.forkChild)
+      const asked = yield* pending()
+      expect(asked.always).toEqual([])
+      expect(asked.patterns).toEqual(["hosted.review"])
+      yield* permissions.reply({ requestID: asked.id, reply: "always" })
+      expect((yield* Fiber.join(first)).result?.state).toBe("completed")
+      expect((yield* permissions.approved()).some((rule) => rule.permission === "connect_cloud")).toBe(false)
+
+      // The "always" reply kept nothing: the next hand-off asks again.
+      const second = yield* hub.run({ request: toHosted(requester.id, directory) }).pipe(Effect.forkChild)
+      const again = yield* pending()
+      yield* permissions.reply({ requestID: again.id, reply: "reject" })
+      expect((yield* Fiber.join(second)).result?.refusal).toBe("denied")
+      expect(seen).toHaveLength(1)
+
+      // A deny refuses before any question, blanket or for this member's own pattern, and nothing starts.
+      const sessions = yield* Session.Service
+      for (const pattern of ["*", "hosted.review"]) {
+        const denied = yield* sessions.create({
+          permission: [{ permission: "connect_cloud", pattern, action: "deny" }],
+        })
+        yield* say(denied.id, "review")
+        const { asks, ask } = asker()
+        const ruled = yield* hub.run({ request: toHosted(denied.id, directory), call: { ask } })
+        expect(ruled.result?.refusal).toBe("permission")
+        expect(asks).toEqual([])
+        expect((yield* permissions.list()).some((item) => item.permission === "connect_cloud")).toBe(false)
+      }
+      expect(seen).toHaveLength(1)
+    }),
+  )
+
+  cloudy.instance("cloud stays refused with no ask unless that action was declared when the hub was built", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup()
+      const { asks, ask } = asker()
+      script.describe = clouded
+      // `other` declared nothing, so its cloud effect is refused.
+      const other = yield* hub.run({ request: review(requester.id, directory, { to: "other" }), call: { ask } })
+      expect(other.result?.refusal).toBe("effect")
+      // `hosted` declared its review, not its fix.
+      const fixing = { ...fix(requester.id, directory, "cr_missing", ["f1"]), to: "hosted" } as ConnectHub.StartRequest
+      expect((yield* hub.run({ request: fixing, call: { ask } })).result?.refusal).toBe("effect")
+      // A declaration added after the hub was built widens nothing.
+      const late = yield* Effect.sync(() => {
+        declared.fix = HOSTED
+      }).pipe(
+        Effect.andThen(hub.run({ request: fixing, call: { ask } })),
+        Effect.ensuring(
+          Effect.sync(() => {
+            delete declared.fix
+          }),
+        ),
+      )
+      expect(late.result?.refusal).toBe("effect")
+      // A declared action that describes itself without `cloud` does not start on read alone.
+      script.describe = (id) => member(id, ["read"])
+      const silent = yield* hub.run({ request: toHosted(requester.id, directory), call: { ask } })
+      expect(silent.result?.refusal).toBe("effect")
+      expect(asks).toEqual([])
+      expect(seen).toEqual([])
+
+      // Only the hub asks connect_cloud: an adapter that asks it fails its run.
+      script.describe = clouded
+      script.handle = (_request, context) =>
+        context
+          .ask(ConnectPolicy.cloudConsent({ member: "Hosted", pattern: "hosted.review", destination: HOSTED }))
+          .pipe(Effect.as(clean()))
+      const selfAsked = yield* hub.run({ request: toHosted(requester.id, directory), call: { ask } })
+      expect(selfAsked.result?.state).toBe("failed")
+      expect(cloudAsks(asks)).toHaveLength(1)
+    }),
+  )
+
+  cloudy.instance("Vector Local turns a cloud action off, and an after-run review never sends to a cloud", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup()
+      const { asks, ask } = asker()
+      script.describe = clouded
+      const local = yield* withLocal(hub.run({ request: toHosted(requester.id, directory), call: { ask } }))
+      expect(local.result?.refusal).toBe("unavailable")
+      expect(local.result?.summary).toContain("Off in Vector Local")
+      expect(ConnectMembers.gate(clouded("hosted"), true)).toMatchObject({ state: "off" })
+      expect(ConnectMembers.gate(clouded("hosted"), false).state).toBe("ready")
+      expect(asks).toEqual([])
+      expect(seen).toEqual([])
+
+      const { ops } = recorder()
+      const automatic = yield* hub.run({
+        request: toHosted(requester.id, directory),
+        call: { ask, promptOps: ops, unattended: true, afterRunCurrent: Effect.succeed(true) },
+      })
+      expect(automatic.result?.refusal).toBe("permission")
+      // The cloud consent refused it, not an earlier check: its message names the destination.
+      expect(automatic.result?.summary).toContain(HOSTED)
+      expect(cloudAsks(asks)).toEqual([])
+      expect(seen).toEqual([])
     }),
   )
 })

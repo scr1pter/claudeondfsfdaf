@@ -56,12 +56,14 @@ import type { RunBudget } from "@vectordevai/schema/run-budget"
 //
 // A hand-off starts from an agent's tool call, a workflow stage or a person, never from a member. Before anything is
 // asked the hub checks, in order: the member and its action exist; every effect the member declared is one connect
-// accepts (`read`, `write`) and the requester's own rules do not deny the permission it maps to; the member is ready
-// (Vector Local included); for a review, the per-request cap and the requester's read rules over every file the
-// reviewer could read (the repository from its top level, not only the folder the review starts in). Only then does
-// it ask `connect` in the requester's session, and hand the work to the adapter with a context that asks the rest
-// (`connect_model`, `connect_write`) and reports progress. The adapter reaches the prompt loop only through a helper
-// handle that accepts the run's own hidden helper sessions, and only the vectorscope adapter gets one.
+// accepts (`read`, `write`, and `cloud` only for an action its adapter declared when the hub was built) and the
+// requester's own rules do not deny the permission it maps to; the member is ready (Vector Local included); for a
+// review, the per-request cap and the requester's read rules over every file the reviewer could read (the repository
+// from its top level, not only the folder the review starts in). Only then does it ask `connect` in the requester's
+// session, then `connect_cloud` for a cloud action, every time and naming where the code goes, and hand the work to the
+// adapter with a context that asks the rest (`connect_model`, `connect_write`) and reports progress. The adapter
+// reaches the prompt loop only through a helper handle that accepts the run's own hidden helper sessions, and only the
+// vectorscope adapter gets one.
 //
 // Results persist with the session: the caller saves `metadata(run)` in the `connect` tool part, and `get`, `runs`,
 // `since` and `fix` find a run there after a restart. Only a `connect` tool part in an assistant message counts: a
@@ -350,6 +352,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const scope = yield* Scope.Scope
       const adapters = yield* Effect.all(factories)
       const byID = new Map(adapters.map((adapter) => [adapter.id, adapter]))
+      // Each adapter's cloud actions, read once here: nothing it describes or changes later widens them.
+      const clouds = new Map(
+        adapters.map((adapter) => [
+          adapter.id,
+          new Map(
+            Object.entries(adapter.cloud ?? {}).filter(
+              (entry): entry is [Connect.ActionID, Connect.CloudDestination] =>
+                Schema.is(Connect.ActionID)(entry[0]) && Schema.is(Connect.CloudDestination)(entry[1]),
+            ),
+          ),
+        ]),
+      )
 
       const ledger = yield* InstanceState.make<State>(() =>
         Effect.succeed({ runs: new Map<string, Entry>(), models: new Set<string>() }),
@@ -725,10 +739,19 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               "permission",
               "Connect writes only after asking you each time, and this build cannot yet keep a rule or a saved approval from answering that question, so connect did not write anything.",
             )
+          if (
+            checked.permission === "connect_cloud" &&
+            !PermissionPolicy.requiresApproval(checked.permission, [], checked.patterns)
+          )
+            return yield* refusal(
+              "permission",
+              "Connect sends your code to a Vector cloud service only after asking you each time, and this build cannot yet keep a rule or a saved approval from answering that question, so connect sent nothing.",
+            )
           const state = yield* InstanceState.get(ledger)
           const requestID = entry.run.request.requestID
           const key = `${checked.permission}\u0000${checked.patterns.join("\u0000")}`
-          // `connect` is asked once per run, `connect_model` once per request for each model, `connect_write` always.
+          // `connect` is asked once per run, `connect_model` once per request for each model, `connect_write` and
+          // `connect_cloud` always.
           if (checked.permission === "connect" && entry.asked.has(key)) return
           if (
             !entry.call.unattended &&
@@ -739,7 +762,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           const ask = {
             permission: checked.permission,
             patterns: [...checked.patterns],
-            always: checked.permission === "connect_write" ? [] : [...checked.always],
+            always:
+              checked.permission === "connect_write" || checked.permission === "connect_cloud"
+                ? []
+                : [...checked.always],
             metadata: {
               description: checked.message,
               runID: entry.run.id,
@@ -750,11 +776,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               ...(checked.maxCostUsd !== undefined ? { maxCostUsd: checked.maxCostUsd } : {}),
               ...(checked.findings ? { findings: [...checked.findings] } : {}),
               ...(checked.diff !== undefined ? { diff: checked.diff } : {}),
+              ...(checked.destination ? { destination: checked.destination } : {}),
             },
           }
           if (entry.call.unattended) {
             // Explicit after-run configuration authorizes the read hand-off, never an explicit deny or any write.
             // Model consent still uses the real saved approvals; preflight cannot create an ask or auto-answer it.
+            // `connect_write` and `connect_cloud` are never answered for after-run work.
             const allowed =
               checked.permission === "connect"
                 ? checked.patterns.every(
@@ -937,11 +965,16 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         if (!action || member.id !== adapter.id)
           return yield* refusal("unknown", `${member.title || request.to} has no ${request.action} action.`)
         const rules = yield* rulesOf(requester, session)
+        // A cloud action is the build-time declaration's, never the description's alone (narrowing checks both agree).
+        const destination = clouds.get(adapter.id)?.get(action.id)
+        const cloud =
+          destination !== undefined ? { pattern: `${request.to}.${request.action}`, destination } : undefined
         // The member's declared effects, checked as declared, before the schema and before any question.
         const narrowed = ConnectPolicy.narrowing({
           effects: action.effects,
           ruleset: rules,
           patterns: entry.call.touches,
+          ...(cloud ? { cloud } : {}),
         })
         if (!narrowed.ok) return yield* narrowed.refusal
         if (Option.isNone(decodeMember(member)))
@@ -1015,7 +1048,12 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         if (source?.result && request.action === "fix") {
           const chosen = new Set(request.findings)
           const touched = ConnectPolicy.fixTouches(source.result.findings.filter((item) => chosen.has(item.id)))
-          const checked = ConnectPolicy.narrowing({ effects: action.effects, ruleset: rules, patterns: touched })
+          const checked = ConnectPolicy.narrowing({
+            effects: action.effects,
+            ruleset: rules,
+            patterns: touched,
+            ...(cloud ? { cloud } : {}),
+          })
           if (!checked.ok) return yield* checked.refusal
         }
         const ask = asker(entry, requester.sessionID ?? entry.directory?.sessionID, rules)
@@ -1029,6 +1067,15 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               : `Fix findings from ${request.run} with ${member.title}.`,
           ...(member.sendsTo ? { sendsTo: member.sendsTo } : {}),
         })
+        // Asked on every hand-off of a cloud action, before the adapter starts, and never deduplicated.
+        if (cloud)
+          yield* ask(
+            ConnectPolicy.cloudConsent({
+              member: member.title,
+              pattern: cloud.pattern,
+              destination: cloud.destination,
+            }),
+          )
         const ledgerState = yield* InstanceState.get(ledger)
         const read = yield* spendOf(requester.sessionID)
         // A background run may outlive the turn that started it, so it is capped as a review outside the run: at what
@@ -1109,7 +1156,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           requestID: request.requestID,
           directory: request.directory,
           abort: entry.controller.signal,
-          ask,
+          ask: (consent) =>
+            consent.permission === "connect_cloud"
+              ? Effect.die(new Error("Only the hub asks connect_cloud, once per hand-off before the adapter starts."))
+              : ask(consent),
           progress: (update) => progress(entry, update),
           working: (cap) =>
             Effect.gen(function* () {

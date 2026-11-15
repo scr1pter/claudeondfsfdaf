@@ -55264,7 +55264,7 @@
       },
       "ConnectEffect": {
         "type": "string",
-        "enum": ["read", "write"]
+        "enum": ["read", "write", "cloud"]
       },
       "ConnectResultKind": {
         "type": "string",

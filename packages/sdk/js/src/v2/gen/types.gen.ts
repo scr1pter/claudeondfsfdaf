@@ -7929,7 +7929,7 @@ export type ConnectReach = "connect" | "ui" | "none" | string
 
 export type ConnectActionId = "review" | "fix"
 
-export type ConnectEffect = "read" | "write"
+export type ConnectEffect = "read" | "write" | "cloud"
 
 export type ConnectResultKind = "review" | "fix"
 
