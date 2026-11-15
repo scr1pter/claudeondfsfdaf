@@ -1,13 +1,28 @@
 import { describe, expect, test } from "bun:test"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { PlaybookCheck } from "@vectordevai/core/playbooks/check"
 import { PlaybookCommands } from "@vectordevai/core/playbooks/commands"
 
-// WP A36: the skill command allowlist a playbook is checked against. The first block is the learned skills' own command
-// cases (Track B's packages/core/test/brain/skill-commands.test.ts, `simple`, `check` and `helper`), run unchanged
-// against this branch's copy, so the copy cannot drift from the list it stands in for until B01 makes it a re-export.
-// The second block is the playbook check built on it.
+// WP A36: the skill command allowlist a playbook is checked against. Since the Codium finish review (R36) it is a
+// re-export of the learned skills' own list (BrainSkill, section 2.3), so there is one list; the first block still runs
+// BrainSkill's command cases (packages/core/test/brain/skill-commands.test.ts) through the playbook module. The second
+// block is the playbook check built on it.
 
 describe("the skill command allowlist (same cases as BrainSkill)", () => {
+  test("the allowlist is BrainSkill's own, not a copy", () => {
+    expect(PlaybookCommands.TARGETS).toBe(BrainSkill.TARGETS)
+    expect(PlaybookCommands.DENY_WORDS).toBe(BrainSkill.DENY_WORDS)
+    expect(PlaybookCommands.CHECK_ENV).toBe(BrainSkill.CHECK_ENV)
+    expect(PlaybookCommands.simple).toBe(BrainSkill.simple)
+    expect(PlaybookCommands.helper).toBe(BrainSkill.helper)
+    expect(PlaybookCommands.check).toBe(BrainSkill.check)
+    expect(PlaybookCommands.allowed("bun test")).toBe(true)
+    expect(PlaybookCommands.allowed("git status")).toBe(true)
+    expect(PlaybookCommands.allowed("git push")).toBe(false)
+    expect(PlaybookCommands.allowed("cat .env")).toBe(false)
+    expect(PlaybookCommands.allowed("make deploy")).toBe(false)
+  })
+
   test("a simple command is one command with nothing around it, and plain leading assignments", () => {
     expect(PlaybookCommands.simple("bun test")).toBe(true)
     expect(PlaybookCommands.simple("CI=1 NODE_ENV=test bun test")).toBe(true)

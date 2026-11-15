@@ -3538,3 +3538,120 @@ under two minutes), but the run is not green under the lane rule, because of the
      could assert that a plain `vector export` output contains a child's title and mailbox text, and a `--sanitize`
      output does not. It starts `vector serve`, so it runs only in CI. It is left for the lead or a later package.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
+
+## P6 review addendum (15 Nov 2026)
+
+Contract readings from the A36 Playbooks server review (Codium finish R36). The findings, repairs and tests are in
+`codium-p6-repairs.md` ("A36 Playbooks server (P6 addendum, 15 Nov 2026)"). Read on `codium-finish` `2924d94b`; scratch
+and the fresh XDG and `TMPDIR` roots were under `/tmp/vector-v2/codium/r36/`.
+
+- **One allowlist (B01's item).** `packages/core/src/playbooks/commands.ts` re-exports BrainSkill's `TARGETS`,
+  `DENY_WORDS`, `CHECK_ENV`, `simple`, `helper` and `check` and keeps `allowed`. The comment-stripped diff showed no
+  behavioural difference, so no list had to be chosen. `CHECK_ENV` is re-exported too, so the module's exports are
+  unchanged. A plain `export { ... } from "../brain/skill"` keeps BrainSkill's own docs and is neither an alias nor a
+  star import.
+- **What loading BrainSkill costs.** The check's static import graph grows from 9 to 61 relative core modules, among
+  them `brain/database` (`#sqlite`, drizzle, the migrations), `flag/*` and `global.ts`. A probe that imported the
+  module from `test/` with `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `TMPDIR` and `HOME`
+  all under the scratch root found that, at HEAD, `check.ts` created no folder. After the change it creates exactly
+  these: `<XDG_DATA_HOME>/vector`, `<XDG_DATA_HOME>/vector/log`, `<XDG_DATA_HOME>/vector/repos`,
+  `<XDG_CONFIG_HOME>/vector`, `<XDG_STATE_HOME>/vector`, `<XDG_CACHE_HOME>/vector/bin` and `<TMPDIR>/vector`
+  (`packages/core/src/global.ts:10-29,35-43`). It also sets Flock's global state folder in memory (`:33`). Nothing was
+  written under `HOME`. Bun's own transpiler cache also lands under `XDG_CACHE_HOME/bun` when that variable is set,
+  with or without this change. One import each took 238 ms before and 324 ms after (indicative). So
+  `script/playbooks-publish.ts check` still needs no settings and reaches no network, but it now creates Vector's own
+  folders, as any Vector command does. The script header and MODEL-PLANS.md say so. The consumers are the script, the
+  root test and core `install.ts` through the engine and CLI, which already load these modules. No browser bundle
+  imports `check.ts` or `commands.ts`. Local root and core runs of this package set all four XDG roots and `TMPDIR`.
+- **Models only as Codium roles.** This reads B07's "`codium:floor|default|ceiling` resolve per tier" and the A36
+  notes' "models only as `codium:floor|default|ceiling`" as: wherever the saved schema names a model (`defaults.model`,
+  an agent stage's `model`, its verifier's `model`), a playbook names either nothing or exactly one of the three roles.
+  A concrete model would pin one provider or one plan's model for everyone who installs it, past the per-plan role
+  resolution. An omitted model is allowed and left to the runner. `agent`, `effort` and `isolation` are not restricted:
+  the engine still checks the agent against its catalog (`runs.ts:200`). The rule runs at publish and at install (the
+  client runs the same `validate`). `runs.ts:202` holds the same pattern and still refuses a role outside a personal
+  Vector Playbook, so the two are kept equal by hand (For the lead). No playbook is published, so no installed file is
+  affected.
+- **A hash field is its record's name.** §4.6 does not list the `playbooks` key; A36's reading (field = name) is now
+  enforced on read. A record under another field is never listed, signed, counted toward `Playbooks.MAX_LISTED` or
+  `Playbooks.MINIMUM`, or shown by `list`. `withdraw <field>` still removes it, and the answer names no version
+  because the record does not decode under that name. `api/_lib/web-push.ts` `readSubscriptions` (`record.id === id`)
+  is the same pattern. No further code was added for stray fields: only a hand edit makes one. A stray field stays in
+  the hash and in `HGETALL`'s answer until it is withdrawn by its field name, but it counts nowhere: no playbook path
+  calls `HLEN`.
+- **A withdraw removes the version floor; content stays immutable.** "A published version never changes" (A36 notes,
+  MODEL-PLANS.md) holds: the bucket refuses other content at any key it holds. "The library never goes back to an older
+  version" holds only while a playbook stays published. After a withdraw the library holds no record, so the script
+  accepts any version. A version below the withdrawn one, with new content at a new key, would be uploaded and
+  recorded, because the HEAD/ETag check guards only keys that already exist. The engine client compares SHA-256 values
+  (`packages/engine/src/orchestration/playbooks.ts:55`), not versions, so it would offer that lower version as a
+  change. The repair is advice only: `withdraw` prints the withdrawn version and says to publish above it. The owner
+  step "after a withdraw, publish only above the version the script names" is in the A36 notes and MODEL-PLANS.md. A
+  floor read from the bucket (a signed LIST of `playbooks/<name>/`) is not built here.
+- **Renewing past the grace.** §4.4's Playbooks row is on while renewing. Within the renewal grace (120 minutes by
+  default) a renewing plan downloads. Past it, before reconcile catches up, the route gives the shared 503
+  `MODEL_PLAN_RENEWING` (retry after 30 s) that the snapshot gives every perk. Now tested.
+- **The 401 code.** Run tokens, Basic auth and a website session get 401 `CLI_TOKEN_INVALID`, as `api/account/profile.ts:28`
+  and `api/support/bug-report.ts:99` answer a missing account token. No new code was added for "wrong kind of token".
+- **S8.** The route's only outbound call is the store; signing is local. The script's HEAD and PUT and the client's
+  download all use `redirect: "error"`. The client takes only `https` links without credentials
+  (`Playbooks.decodeLinks`, `packages/schema/src/playbooks.ts:77`) and sends no account header to them
+  (`install.ts:13`). The R2 host comes from the signer, never from the store.
+- **Still open.** The estimate API's `{kind: "playbook"}` band (`api/_lib/model-plan-estimate.ts:275`), publishing any
+  playbook and listing the perk (the owner's). Commands written as plain text outside code spans and fenced blocks are
+  still not parsed; the owner reviews every playbook.
+- **Review of this package (15 Nov 2026).** Eight non-blocking points, read against the code:
+  1. The immutability test's title still said the library never goes back. Taken: renamed (R36-4).
+  2. Loading BrainSkill creates Vector's folders under whatever XDG roots or `HOME` the runner has, and `test/` has no
+     preload that sets them. Kept as recorded above. Splitting the allowlist into a module with no database imports
+     (for example `brain/skill-commands.ts`, re-exported by `skill.ts` and `commands.ts`) is the brain lane's (For the
+     lead, item 1). Until then every local root and core run sets the four XDG roots and `TMPDIR`.
+  3. The 50-name cap was checked against `readPlaybooks`' sliced answer. Taken: `publish` checks the cap only for a
+     name with no record (R36-15, with a regression). The reviewer's "`HLEN` still counts stray fields" does not
+     apply: no playbook path calls `HLEN` (the reading above).
+  4. The P1 check was only a word scan. Taken: each refusal's whole body is compared with the contract's exact detail
+     (R36-13), and a mutation shows the scan alone would miss an extra figure.
+  5. The `allowed` loop restated the implementation. Taken: explicit cases (R36-1).
+  6. The new `install.test.ts` lines were not prettier-wrapped. Taken: those lines now match prettier's output; the
+     rest of the file keeps its style.
+  7. `ROLE` copies the engine's pattern (`packages/engine/src/orchestration/runs.ts:202`). Kept: one exported
+     constant (for example `Playbooks.CODIUM_ROLE` in `packages/schema/src/playbooks.ts`) used by both files waits for
+     one owner of both (For the lead, item 2). An equality test was not added, because the engine's pattern is an
+     inline literal that a test could only copy.
+  8. The withdraw read's `.catch(() => undefined)` swallows every error. Kept: `readPlaybook` throws only the store's
+     503 (`api/_lib/persistent-store.ts:10,18,20`; `decodePlaybookRecord` answers undefined on any malformed record
+     and never throws), so catching only that error would change nothing today and would add a rethrow after the
+     `HDEL`. The comment at `script/playbooks-publish.ts:155-156` now says so.
+- **Plan and critique.** All of the critique's points were taken: the full folder list, `TMPDIR` in every root and
+  core run, the read before `HDEL` cannot stop the pull, the past-grace renewing case, one scratch root, a dated B07
+  line in `codium-track-b-checkpoint.md`, the engine test marked local only, the plain re-export, no web test (perk
+  listing is unchanged), the stray-field reading, and the lower-version consequence. The plan's `HGETALL` store-fake
+  case is in `test/roadmap-fixture.ts`. The CI receipt is folded into the lane commit that follows the runs, not a
+  receipt-only push.
+- **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`:
+  - root: `playbooks-api` (15 before, 17 after), `api-module-loading`, `roadmap-api` and `brain-vault-api`;
+  - core: `playbooks/commands` (11, then 12), `playbooks/check` (new, red then 3), `playbooks/install` (3, then 4) and
+    `brain/skill-commands` (6);
+  - engine: `orchestration/playbooks` (2);
+  - four mutations, each restored;
+  - `bun typecheck` in core and schema, and the api tree;
+  - a scratch typecheck of the script and the root test;
+  - `prettier --check`;
+  - re-run before the commit (15 Nov 2026): all of the above files again, plus root `account-delete` and engine
+    `server/httpapi-workflow`, and `bun typecheck` in engine too (`codium-p6-repairs.md`, A36 addendum);
+  - after the review fixes (15 Nov 2026): root `playbooks-api` (red, then 17), the four core files, one more mutation,
+    `bun typecheck` in core and the api tree, the scratch typecheck and `prettier --check` (the A36 addendum's "Review
+    fixes" paragraph).
+- **Only in CI:** Vector Codium and typecheck.yml, both pending. The Valkey block of `roadmap-api.test.ts` was skipped
+  here. The HttpApi exerciser's `experimental.playbooks.install.invalid` scenario and the engine playbooks test are not
+  selected by the picker (they are unchanged), so the engine install path has only the local receipt.
+- **For the lead.**
+  1. A lighter allowlist module would keep the publish check from loading the Brain database and `global.ts`. It would
+     mean moving `simple`, `helper`, `check` and their lists out of `packages/core/src/brain/skill.ts`, the brain lane's
+     file, into a module with no database imports, which `skill.ts` and `commands.ts` both re-export. Not done here.
+  2. `ROLE` in `packages/core/src/playbooks/check.ts:137` and the pattern at
+     `packages/engine/src/orchestration/runs.ts:202` should become one export once someone owns both files.
+  3. F28 is still open; it has its own package.
+  4. Re-measure the picker's selection before the dispatch. This package adds one new core test file and changes
+     `test/roadmap-fixture.ts`, which `test/*.test.ts` already covers.
+- Edits to `api/_lib/model-plan-*.ts`: none.

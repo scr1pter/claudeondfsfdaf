@@ -9,8 +9,8 @@ import { WorkflowSpec } from "../orchestration/spec"
 // The check every playbook passes before it is published (WP A36, `script/playbooks-publish.ts`). A playbook is a saved
 // workflow: its stages are prompts the agent reads, so the commands it names are the code spans in its text. Every one
 // of them must pass the skill command allowlist (`commands.ts`); every other code span must be a file inside the
-// repository. Track B adds its workflow schema check on top once that schema is published; until then the file only has
-// to be one JSON object.
+// repository. The file is then a saved workflow (`WorkflowSpec.parse`, source "saved") that nests only other Vector
+// Playbooks and names a model only as a Codium role (`codium:floor`, `codium:default` or `codium:ceiling`).
 //
 // What is refused, in any string of the file (object keys too):
 // - hidden characters (zero-width, bidirectional controls, tag characters), which a reviewer would not see;
@@ -123,11 +123,41 @@ export function validate(input: {
   walk(document, "", 0)
   if (issues.length) return { ok: false, issues }
   const workflow = WorkflowSpec.parse(document, { source: "saved" })
-  if (!workflow.ok) issues.push(...workflow.issues)
-  else if (workflow.spec.stages.some((stage) => "workflow" in stage && !Playbooks.validName(stage.workflow)))
+  if (!workflow.ok) return { ok: false, issues: workflow.issues }
+  if (workflow.spec.stages.some((stage) => "workflow" in stage && !Playbooks.validName(stage.workflow)))
     issues.push({ path: "/stages", message: "A Vector Playbook may nest only other personal Vector Playbooks." })
+  issues.push(...modelIssues(workflow.spec))
   if (issues.length) return { ok: false, issues }
   return { ok: true, name: input.name, commands: [...commands].sort(), files: [...files].sort() }
+}
+
+// A playbook runs on the plan of whoever installs it, so it names a model only as a Codium role, which the engine
+// resolves for that plan (packages/engine/src/orchestration/runs.ts holds the same pattern). Any other model would pin
+// one provider's model or one plan's model for everyone. A stage or verifier without a model is left to the runner.
+const ROLE = /^codium:(?:floor|default|ceiling)$/
+
+function modelIssues(spec: WorkflowSpec.Spec): Issue[] {
+  return [
+    { path: "/defaults/model", model: spec.defaults?.model },
+    ...spec.stages.flatMap((stage, index) =>
+      "prompt" in stage
+        ? [
+            { path: `/stages/${index}/model`, model: stage.model },
+            { path: `/stages/${index}/verify/model`, model: stage.verify?.model },
+          ]
+        : [],
+    ),
+  ].flatMap((entry) =>
+    entry.model === undefined || ROLE.test(entry.model)
+      ? []
+      : [
+          {
+            path: entry.path,
+            message:
+              "A Vector Playbook names a model only as a Codium role: codium:floor, codium:default or codium:ceiling.",
+          },
+        ],
+  )
 }
 
 function strings(

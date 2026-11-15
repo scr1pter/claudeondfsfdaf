@@ -7,13 +7,17 @@
 //   bun script/playbooks-publish.ts withdraw <name> --mode live|test
 //
 // A playbook is one saved-workflow JSON file named after the playbook: vector-<words>.json. `check` runs the publish
-// check alone (packages/core/src/playbooks/check.ts) and needs no settings, so CI and the playbooks' own repository can
-// run it on every change: every command the playbook names must pass the skill command allowlist. `publish` runs the
+// check alone (packages/core/src/playbooks/check.ts) and needs no settings or network, so CI and the playbooks' own
+// repository can run it on every change: every command the playbook names must pass the skill command allowlist, and
+// every model is a Codium role. Loading the check creates Vector's own data, config, state, cache and temporary
+// folders (core's global.ts, through the learned skills' allowlist), as any Vector command does. `publish` runs the
 // same check, uploads the file once to the media bucket (VECTOR_R2_ACCOUNT_ID and VECTOR_R2_MEDIA_*) at
 // playbooks/<name>/<version>.json (playbooks/test/… for the test store) through a presigned upload that signs its exact
 // size, and then records it in the library of one Stripe mode's Codium store (KV_REST_API_URL and KV_REST_API_TOKEN, or
 // UPSTASH_REDIS_REST_*). A published version never changes, in the library or the bucket: a fix is a higher version.
-// `withdraw` stops new download links at once; a link already given expires within 10 minutes. No setting is printed.
+// `withdraw` stops new download links at once; a link already given expires within 10 minutes. It names the withdrawn
+// version, and a later publish should go above it: the library no longer holds that version to refuse a lower one.
+// No setting is printed.
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
@@ -147,11 +151,17 @@ export async function runPlaybooksPublish(input: PlaybooksPublishArguments, opti
       ]
     }
     case "withdraw": {
-      const removed = await withdrawPlaybook(input.name, { mode: input.mode, fetcher })
+      const store = { mode: input.mode, fetcher }
+      // The version is read only to name it: a store that cannot answer must never stop the pull itself. readPlaybook
+      // throws only the store's 503 (a malformed record decodes to undefined), so this catch drops nothing else.
+      const record = await readPlaybook(input.name, store).catch(() => undefined)
+      if (!(await withdrawPlaybook(input.name, store)))
+        return [`${input.name} was not published (${input.mode} store).`]
+      const expiry = `no new download links; links already given expire within ${Playbooks.LINK_SECONDS / 60} minutes.`
+      if (!record) return [`${input.name} is withdrawn (${input.mode} store): ${expiry}`]
+      // Once withdrawn, the library no longer holds this version to refuse a lower one.
       return [
-        removed
-          ? `${input.name} is withdrawn (${input.mode} store): no new download links; links already given expire within ${Playbooks.LINK_SECONDS / 60} minutes.`
-          : `${input.name} was not published (${input.mode} store).`,
+        `${input.name} ${record.version} is withdrawn (${input.mode} store): ${expiry} To publish it again, use a version above ${record.version}.`,
       ]
     }
     case "publish":
@@ -180,12 +190,13 @@ async function publish(
     throw new Error("Publishing needs the Codium store: set KV_REST_API_URL and KV_REST_API_TOKEN.")
   const sha256 = createHash("sha256").update(bytes).digest("hex")
   const store = { mode: input.mode, fetcher: options.fetcher }
-  const plan = publishPlan(await readPlaybook(name, store), { name, version: input.version, sha256 })
+  const current = await readPlaybook(name, store)
+  const plan = publishPlan(current, { name, version: input.version, sha256 })
   if (plan.kind === "refused") throw new Error(plan.message)
   if (plan.kind === "same")
     return [`${name} ${input.version} is already published with this file (${input.mode} store).`]
-  const library = await readPlaybooks(store)
-  if (!library.some((record) => record.name === name) && library.length >= Playbooks.MAX_LISTED)
+  // Only a new name needs room: a published one is in the library even when it sorts past the listing's first 50.
+  if (!current && (await readPlaybooks(store)).length >= Playbooks.MAX_LISTED)
     throw new Error(
       `The library holds ${Playbooks.MAX_LISTED} playbooks, the most one listing names. Withdraw one first.`,
     )

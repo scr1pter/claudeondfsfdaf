@@ -9,7 +9,8 @@ import { presignR2, r2Configured, validR2Key } from "./r2-presign.js"
  * Vector Playbooks on the server (WP A36): the library of published playbooks and the download links Pro and up get.
  *
  * - The library is one hash under the Codium prefix, `playbooks`: field = playbook name, value = the published version's
- *   record `{v, name, version, sha256, bytes, key, publishedAt}`. Only the owner's publish script writes it.
+ *   record `{v, name, version, sha256, bytes, key, publishedAt}`. Only the owner's publish script writes it. A record
+ *   filed under a field other than its own name is never read, so withdrawing a name always takes it out.
  * - Each version's file is an object in the media bucket at `playbooks/<name>/<version>.json` (test mode:
  *   `playbooks/test/<name>/<version>.json`, so a test publish can never replace a live file), written once. The server
  *   never reads it: a link is a 10-minute presigned GET (`r2-presign.ts`), and the client checks the SHA-256 the listing
@@ -77,27 +78,34 @@ export function decodePlaybookRecord(value: unknown, mode: StripeMode = stripeMo
   }
 }
 
-/** The published playbooks, by name, at most `Playbooks.MAX_LISTED`. Malformed records are left out. */
+/**
+ * The published playbooks, by name, at most `Playbooks.MAX_LISTED`. Malformed records, and records filed under a field
+ * that is not their own name, are left out, so each name is listed once and `withdrawPlaybook` always removes it.
+ */
 export async function readPlaybooks(options: Store = {}): Promise<PlaybookRecord[]> {
-  const values = await persistentStore(["HVALS", playbooksKey(options.mode)], options.fetcher ?? fetch)
-  if (!Array.isArray(values)) throw unavailable()
-  const byName = new Map<string, PlaybookRecord>()
-  for (const value of values) {
-    const record = decodePlaybookRecord(value, options.mode)
-    if (!record) continue
-    const seen = byName.get(record.name)
-    if (!seen || Playbooks.compareVersions(record.version, seen.version) > 0) byName.set(record.name, record)
-  }
-  return [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : 1)).slice(0, Playbooks.MAX_LISTED)
+  const flat = await persistentStore(["HGETALL", playbooksKey(options.mode)], options.fetcher ?? fetch)
+  if (!Array.isArray(flat)) throw unavailable()
+  return flat
+    .flatMap((field, index) => {
+      if (index % 2) return []
+      const record = decodePlaybookRecord(flat[index + 1], options.mode)
+      return record && record.name === field ? [record] : []
+    })
+    .sort((a, b) => (a.name < b.name ? -1 : 1))
+    .slice(0, Playbooks.MAX_LISTED)
 }
 
-/** One playbook's published record, or undefined when it is not published (or its record is malformed). */
+/**
+ * One playbook's published record, or undefined when it is not published, its record is malformed or the record under
+ * that name is another playbook's.
+ */
 export async function readPlaybook(name: string, options: Store = {}) {
   if (!Playbooks.validName(name)) return undefined
-  return decodePlaybookRecord(
+  const record = decodePlaybookRecord(
     await persistentStore(["HGET", playbooksKey(options.mode), name], options.fetcher ?? fetch),
     options.mode,
   )
+  return record?.name === name ? record : undefined
 }
 
 /**
@@ -126,8 +134,11 @@ export function playbookLinks(records: readonly PlaybookRecord[], now = Date.now
 
 /**
  * What publishing `candidate` would do next to the current record: `new` (first version, or a higher one), `same` (this
- * exact version and file are already published) or a refusal. A published version never changes and the library never
- * goes back to an older version: a fix, or a return to older content, is a higher version.
+ * exact version and file are already published) or a refusal. A published version never changes, and while a playbook
+ * stays published the library never goes back to an older version: a fix, or a return to older content, is a higher
+ * version. A withdrawn playbook has no current record, so this answers `new` for any version: the bucket still refuses
+ * other content at any key it holds (the publish script's HEAD check), and `withdraw` prints the withdrawn version so
+ * the next publish can go above it.
  */
 export function publishPlan(
   current: PlaybookRecord | undefined,
