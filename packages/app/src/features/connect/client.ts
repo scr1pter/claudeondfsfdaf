@@ -43,8 +43,8 @@ export function createConnectClient(client: Pick<VectorClient, "connect">) {
       )
       return (await decoders()).run(result.data)
     },
-    async cancel(runID: string, sessionID?: string) {
-      const result = await client.connect.cancel({ runID, sessionID }, { throwOnError: true })
+    async cancel(runID: string, sessionID?: string, signal?: AbortSignal) {
+      const result = await client.connect.cancel({ runID, sessionID }, { throwOnError: true, signal })
       if (typeof result.data !== "boolean") throw new Error("The engine returned an invalid cancellation response.")
       return result.data
     },
