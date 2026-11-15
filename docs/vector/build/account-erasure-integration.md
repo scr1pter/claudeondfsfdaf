@@ -72,3 +72,22 @@ Logs: `account-deadline-clock-fix.log` (stalled isolated attempt), `account-dead
 `account-deletion-http-fixture-full.log` under the coordinator's `release-audit-20261114` evidence directory. The
 disposable-Valkey case remains explicitly unexecuted locally. No new API code or public contract changed in this
 fixture repair.
+
+## Real-supervisor deletion contract
+
+`test/account-delete.test.ts`, describe "cloud workspaces against the real supervisor", runs the website's staged
+deletion through the real `handleAccountDelete` and `handleAccountDeletions` handlers against the workspace host's own
+`createWorkspaceService` and `WorkspaceStore` (packages/cloud-workspaces) on SQLite in a temporary directory, in place
+of the fixture's fake host. On the host side only the container runtime is a stand-in (no Docker); the website side
+keeps deletionWorld's service fakes and injected revoke, forget and sign-in, and the model origin is never called. It
+proves that the gateway's signed `/accounts/close` fences the account on the host (a signed list then answers 403
+`ACCOUNT_CLOSED`); that the identity goes while one workspace's volume refuses erasure; that the follow-up pass reads
+the host's own `remaining` and stays pending at stage `check` with `workspaces, codium, keys` until the host's reaper
+erases that volume, then finishes, after which a signed close answers `{ "closed": true, "remaining": 0 }`; and that a
+host restart between the deletion and the follow-up pass keeps the fence (403 before any new close) and the leftover
+workspace, which the restarted reaper finds through the persisted `closed_account` row and erases. The first case also
+removes the account's revocation mark before the final pass: the pass's injected revoke (the fixture's `markRevoked`)
+writes it again and the deletion still finishes (DP-2's check-pass re-assert, with the fixture's revoke; not the real
+revocation write). The real revocation store write is not exercised here, nor are the real runtime's container and
+volume removal under runsc and the quota driver, or a deployed host behind ingress (cloud-workspaces.md, "Operator
+setup"). Local run, Bun 1.3.14, from `test`: 41 pass, 1 Valkey-only skip, 0 fail.

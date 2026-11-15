@@ -306,3 +306,64 @@ Follow-ups:
 - WS-02's case (3), removing the mark during the long wait, can now run on this branch: its "only if WS-03 has landed" condition holds.
 - WS-05 can word the `v2-integration.md` status as "revocation re-asserted in the check pass, stopping at `revoke` when the write fails (WS-03; PR #33's DP-2 fix `cbf83048` is the best-effort form)".
 - When `main` (with PR #33) is merged in, the lead resolves the one `api/_lib/codium-erase.ts` hunk as D8 says, keeps one copy of the identical test (a) hunks, and takes `8233cf72`'s comment as it comes.
+
+### WS-02: staged deletion against the real supervisor (2026-11-15)
+
+What landed:
+
+- `test/account-delete.test.ts`: a new describe, "cloud workspaces against the real supervisor", appended after the final describe. WS-03's DP-2 describe is now the final one, so this is the position the package and the shared-file rule ask for. The only edits above it are imports: `mkdtempSync` and `rmSync`, `tmpdir`, `join`, `createWorkspaceService` with `type WorkspaceRuntime`, `WorkspaceStore`, and `signWorkspaceRequest` beside the existing `verifyWorkspaceRequest`.
+- Its describe-local `realSupervisor(w)` boots the host's own `createWorkspaceService` and `WorkspaceStore` on SQLite in a `mkdtemp` directory, with the nonce database beside it. It passes `WORKSPACES_SECRET`, `now: w.clock`, and a loopback model origin under `allowHttp: true` whose fetch throws and counts calls. The runtime is inline, with the exact shape of `fixture()` in `packages/cloud-workspaces/test/service.test.ts` (create, start, inspect, stop, remove, health, snapshot, request). It keeps one data volume per workspace and forgets it only when `remove` is passed `deleteData`; a workspace in its `stuck` set refuses `remove`. The helper's fetcher hands every request for `WORKSPACES_HOST` to `service.fetch(new Request(input, init))` and everything else to `w.fetcher`. `restart()` closes both databases, reopens them from the same directory and runs `recover()`, in main.ts's order. Both it and `dispose()` close through one `shut()`, which closes the store in a `finally` after the service and first sets a `closed` flag that `restart()` clears only once the new pair is open; `dispose()` skips `shut()` while that flag is set and removes the directory in a `finally`.
+- Test (1), "a staged deletion closes the account on the host, and its follow-up pass waits for the host's own erase, restoring a removed revocation mark":
+  - two workspaces are created by signed `POST /workspaces` and listed `running`, and one is marked stuck;
+  - `deleteRoute` answers 200 and the identity goes; a signed `GET /workspaces` then answers 403 `ACCOUNT_CLOSED` (service.ts's `isClosed` check); after `settle()` the store and the runtime hold only the stuck workspace;
+  - after `DELETION_RECHECK_MS` the cron answers `pending: 1`, and the tombstone has attempts 1, stage `check` and failed `workspaces, codium, keys`;
+  - with the volume freed, the host's `reap()` resolves and erases it (store and volumes empty);
+  - case (3): the `vector:cli-revoked` mark is removed, and after `deletionRetryMs(1)` the cron answers `checked: 1`, the mark is back, nothing is due, `leftovers` holds only kept keys, and a signed close answers 202 `{ closed: true, remaining: 0 }`;
+  - deletionWorld's fake host saw no request, and the model fetch was never called.
+- Test (2), "a host restarted before the follow-up pass still refuses the account and holds the deletion until it erases": the same setup and deletion, then `restart()` before the check pass. The restarted host still answers 403 `ACCOUNT_CLOSED` before any new close and still holds the stuck workspace. Right after the restart, with the volume still stuck, `reap()` rejects with "still need cleanup": the restarted reaper finds the account through the persisted `closed_account` row alone, before any new close. The check pass then answers `pending: 1` (its close runs `INSERT OR IGNORE` and starts another cleanup, which the stuck volume stops again). With the volume freed, the restarted reaper erases the workspace through the `closed_account` table. The next pass answers `checked: 1`, and a signed close answers 202 `{ closed: true, remaining: 0 }`.
+- `account-erasure-integration.md` gains "Real-supervisor deletion contract": one paragraph naming the describe, what it proves, what it does not cover, and the run's result line.
+
+Not repeated, on purpose: the close semantics `packages/cloud-workspaces/test/service.test.ts` already pins (fence and erase; `remaining` and the reaper's loud failure; the upper-case signed id; the fence across a cleanup retry). So there is no upper-case id and no model 401 here, and the only reap-rejects assertion is test (2)'s, right after a restart and before any new close, which service.test.ts does not cover (its restarts check only the 403). The new cases add only what joins the two halves: the gateway's signature verified by the host, the host's real `remaining` driving `requireErased`, the host's reaper unblocking the check pass, and the fence and the leftover surviving a restart.
+
+Decisions:
+
+- The stuck workspace fails at `remove` (its data volume), not at `stop`. service.test.ts's `remaining` case already covers a failing stop, and this matches the fake-host case's "keeps failing to erase one workspace's volume".
+- Direct `service.fetch` rather than `Bun.serve` on `127.0.0.1:0`: no abort or deadline path is exercised here, and the deadline path already has its real-HTTP case ("a host that never answers stops their part by the deletion's deadline"). `new Request(input, init)` keeps the path, method, headers, body and signal for both fetch call shapes.
+- `seedEverything` runs first, so `leftovers` is checked with the real host in the loop.
+- No product code changed: no case exposed a defect.
+
+Local evidence (uncommitted tree on `7c73b34b`, Bun 1.3.14, every Bun command through the workload lock, one file per process, `--timeout 30000`; the counts are from the run after the round-one review fixes below):
+
+- `account-delete.test.ts` (from `test`): 41 pass, 1 skip (the Valkey-only describe, still skipped locally), 0 fail, 1294 assertions, 2.13 s. WS-03's commit gate was 39 pass, 1 skip, 1216 assertions. From the JUnit report, test (1) takes 69 ms and test (2) 57 ms, far under `test.yml`'s default 5 s per test (that step runs all of `test/` in one process).
+- `account-delete-api.test.ts`: 8 pass, 52 assertions, unchanged.
+- Hosted API typecheck from `packages/engine` (`bun typecheck --project ../../tsconfig.json`): clean. It does not cover this file: the root `tsconfig.json` includes only `api/**`, so `test/` has no typecheck project. As an extra check, a scratch tsconfig outside the tree (the root one plus Bun's types, including only `test/account-delete.test.ts`) typechecks the whole file with 0 errors, so the inline runtime matches `WorkspaceRuntime`.
+- Prettier (through the lock): the import lines and the new describe are Prettier's output. The file's remaining differences are pre-existing lines this package does not touch (around lines 327, 938, 941 and 1088-1132).
+- Mutations, each from a scratch copy, restored and confirmed byte for byte with `cmp`:
+  - M1, service.ts's close answers `remaining: 0`: both new tests fail at the first check pass (`checked: 1` instead of `pending: 1`), and the other 39 pass;
+  - M2, WS-03's revoke step dropped from `checkAccountDeletion`: test (1) fails at the final pass (still `pending: 1`), test (2) passes, and WS-03's tests (a) and (b) fail; 38 pass;
+  - M3, the `closed_account` INSERT dropped: both new tests fail at the 403 (the host answers 200);
+  - M4, reap's closed-account loop skipped: test (1) fails right after `reap()`, because the workspace is still in the store, and test (2) fails earlier, at its reap-rejects assertion right after the restart (re-run after the review fixes; the other 39 pass).
+- Merge prediction: `git merge-tree --write-tree --name-only` of this tree (as a dangling commit on `7c73b34b`):
+  - against `origin/release-finish` (`cf2373c4`) it merges cleanly;
+  - against `origin/review-fixes` (`1433d105`) it conflicts in the same three files as `7c73b34b` alone (`.github/workflows/vector-workspaces.yml`, `api/_lib/codium-erase.ts` and this file). `test/account-delete.test.ts` and `account-erasure-integration.md` merge cleanly, so WS-02 adds no conflict.
+- Logs under `/tmp/vector-v2/workspaces-finish/`: `ws02-account-delete.log`, `ws02-account-delete-new.log` (the describe alone), `ws02-account-delete-junit.log` with `ws02-account-delete.junit.xml`, `ws02-account-delete-api.log`, `ws02-api-typecheck.log`, `ws02-scratch-typecheck.log`, `ws02-prettier.ts`, and `ws02-mutation-m1.log` to `ws02-mutation-m4.log`; after the review fixes, `ws02-fix-account-delete.log`, `ws02-fix-account-delete-new.log`, `ws02-fix-account-delete-junit.log` with `ws02-fix-account-delete.junit.xml`, `ws02-fix-api-typecheck.log`, `ws02-fix-scratch-typecheck.log` (its config is `ws02-tsconfig/tsconfig.json`), `ws02-fix-prettier.ts` and `ws02-fix-mutation-m4.log`.
+
+CI: the package's CI gate is **blocked, not green**, per the lane precondition: `git ls-tree origin/main .github/workflows/vector-workspaces.yml` is still empty at `58f85edc`, and PR #33 has not merged (D12). The commit gate dispatches `vector-workspaces.yml` and `typecheck.yml` on `workspaces-finish` after its push; their run ids are recorded separately, as WS-03's were.
+
+Deviations:
+
+- D11: case (3) is folded into test (1) instead of being a third test. The mark is removed, not lapsed through its TTL (WS-03's test (a) covers the 101-day lapse), and "the long wait" is the first `deletionRetryMs(1)` backoff after the host erases. The pass's revoke is `cronRoute`'s injected `markRevoked`, so the case shows, with the real host in the loop, that the check pass writes the mark again before the cloud-agents part erases. It does not exercise `revokeAccountTokens` or the Upstash write, so it is not DP-2 end to end; the title says "restoring a removed revocation mark" for that reason.
+- D12: the done-when asks for a green `vector-workspaces.yml` dispatch, or blocked per the CI precondition; it is recorded as blocked. WS-01's and WS-03's dispatches from this branch were accepted and ran green (D1's supersession). Whether that satisfies the gate while the file is absent from `main` is the lead's call. Once WS-02 is pushed, a dispatch of `vector-workspaces.yml` and `typecheck.yml` on `workspaces-finish` is a fact for "Evidence scope" (WS-05(b)), not the gate. Rechecked after the review fixes: `main` is still `58f85edc` and the file is still absent there.
+
+Review fixes, round one (seven non-blocking findings, all taken; no disagreement, so no new deviation):
+
+- `restart()` and `dispose()` share `shut()`, which closes the store in a `finally` after the service, so a rejecting `service.close()` no longer leaves the SQLite handle open while the directory is removed. A `closed` flag set before the close and cleared only after `open()` succeeds keeps `dispose()` from closing a pair a failed restart already closed, so a second close error cannot hide the first failure.
+- Single-use values inlined: `create()` returns the id straight from the response after `settle()`, and test (1) asserts the listed states without a `states` binding. `raw` and `method` are each used twice and stay.
+- Test (2) gains `await expect(host.service.reap()).rejects.toThrow("still need cleanup")` right after `restart()`, before the cron pass, so the restarted reaper is shown to find the account from the persisted `closed_account` row alone; its summary above is reworded to match, since the post-restart pass's close also inserts the row and starts a cleanup.
+- Test (2) also asserts the final signed close's 202, as test (1) does.
+- `account-erasure-integration.md`: the stand-in sentence is scoped to the host side (the website side keeps deletionWorld's service fakes and the injected revoke, forget and sign-in), and the "(DP-2)" tag now says it is the check-pass re-assert with the fixture's revoke, not the real revocation write, matching D11. The helper's own comment takes the same "on the host side" scope.
+
+Follow-ups:
+
+- The parts of the erase still unverified, all owner-gated ("Operator setup"): the real runtime's container and volume removal under runsc with a volume driver that enforces the quota, the real revocation store write (`revokeAccountTokens`), and the deployed host's request path behind TLS ingress.
+- The commit stages exactly `test/account-delete.test.ts`, `docs/vector/build/account-erasure-integration.md` and `docs/vector/build/cloud-workspaces.md`, as `test(workspaces): exercise staged account deletion against the real workspace supervisor`, with the two attribution trailers on separate lines (check with `git interpret-trailers --parse`), and the full typecheck runs before the push.
