@@ -363,3 +363,61 @@ The rest of the review's test gap and spec §5 E8 ("everywhere-runner.test.ts (e
 - **Taken.** The abort check inside the fake `push` of :690 and :747 proved nothing in the ambiguous variants: a failed `expect` there throws, the fake throws anyway, and the runner's catch takes the same path. Each fake now records `abortedDuringPush`, asserted after `offer()` resolves (two findings, one fix). Mutation M6 (progress.md, EV-03) drops the abort on a non-continue heartbeat: with the pre-review cases the ambiguous variants stayed green; with these they are red. Also taken: the fallback sentence under "The fix", the narrower option (b) and the commit-body note under the brief conflict, the PR-suppression shape and E10 under the draft PR, the receipt-clearing consequence under the 200 `stop` settle, and the progress entry's wording (the EV-02 receipts now under their own heading).
 - **Not changed, for the lead.** The three held settles after a 404/409 on `pushing` (:611; options (a)-(c) above); the draft PR after a stop heard during the push (:308); a 200 `stop` settle counting as delivered (:63; needs the server change in the finding left open).
 - **Not changed, follow-up.** The no-safe-worktree (:166) and needs-approval (:272) single settles, as recorded under "Same class, left open": the review places them in a follow-up, each routed through `settled = await deliver({...})` with a case that loses the first acknowledgement and expects two identical attempts.
+
+## 2026-11-15, EV-04: the sweep cron, store-free while off (R-C11)
+
+Spec §11 R-C11, the cron half of review-findings fit item 4 (F4), and v2-complete-plan §4.2's F4 row ("owner activation note"). Line numbers are after this package.
+
+### The cron
+
+- **The entry.** vercel.json `crons` gains one object, `{"path": "/api/everywhere/sweep", "schedule": "* * * * *"}`, at :559-562, right after `/api/hosted/reaper` (:555-558). No other key changed (`git diff -U0 vercel.json` is four added lines). `functions` holds only api/design-lab/serve.ts and needs no entry: api/everywhere/sweep.ts already exports `maxDuration = 60` and `default createSweep()`, and is unchanged.
+- **A Codium-area file.** Spec §6.4 (:650) lists vercel.json under Codium, and R-C11 is a request to Codium. EV-04 builds it in this lane under the brief, as one object inserted after `/api/hosted/reaper`, so a conflict can only arise if codium-finish (or review-fixes) also adds a cron at that spot. At EV-04's working-tree check, `git diff --stat origin/release-finish...origin/codium-finish -- vercel.json` and the same for `origin/review-fixes` were both empty; the commit step repeats both checks right before the push.
+- **When it runs.** Only once the owner deploys a commit that contains it (main deploys on merge). Until then the lazy sweeps of spec 3.4 are the only sweeps.
+- **Known gap: nothing outside this lane's tests pins the cron.** vercel.json is not in vector-everywhere.yml's `pull_request` paths, and packages/web/test/codium-configuration.test.ts filters crons by prefix (:59 model-plans, :70 vault, :73 hosted and ops, :82 account), so it ignores `/api/everywhere/` and only checks that `api/everywhere/sweep.ts` exists (:85-88). A later PR that edits only vercel.json and drops the cron would not run everywhere-sweep.test.ts's vercel.json case. The workflow's paths belong to review-fixes (FIT-4), so EV-04 does not edit the workflow; adding `vercel.json` to the lane's paths is a request to the FIT-4 owner.
+
+### Store-free while off (the contract is silent; this is a deviation)
+
+- **Before EV-04.** switch.ts:59 reads the flag off as `stop`. An authorised call to the sweep while off would have swept every live job with `stop` (a store read per minute), and `configuredPlatforms` (runtime.ts:24-31) builds no adapter while off, so no reply could post. The cron never existed, so this never ran. With every production default and no KV settings, an off call answered 503 `PERSISTENT_STORE_UNAVAILABLE` (observed with mutation M1 below).
+- **Now.** api/_lib/everywhere/sweep.ts keeps `requireMethod` (405) and the exact CRON_SECRET bearer check (401 `CRON_UNAUTHORIZED`) first, then answers 200 `{enabled: false}` when `config.enabled` is false (:29), before `readEverywhereSwitch`, `deps.stopped`, `productionContext()` (store construction), `sweepDue`, `postPending` and `productionPlatforms`. The comment at :27-28 says the sweep deliberately skips the flag-off `stop` that readEverywhereSwitch would read. The on path is unchanged and still answers `{ended, posted}`.
+- **The bearer is checked even while off.** With CRON_SECRET unset the answer is always 401, so an unauthenticated caller never learns whether the feature is on.
+- **Supersedes, while off, spec 3.2 step 3** ("waiting jobs expired" under `stop`) for the cron only: with the flag off, the cron expires nothing. switch.ts's header says so (:13-14). The jobs API still answers `stop` (below), so no laptop work goes on.
+
+### What turning the flag off does now
+
+- **Laptops.** The jobs API answers before any store read (jobs-api.ts:127): report and heartbeat get `{action: "stop"}` (:277), settle and decline get `{action: "stop"}` (:296, :258), claim gets 409 (:241), pending gets `action: "stop"` (:311). Laptops abort without pushing (E10).
+- **Bodies** expire by `TIMING.bodyTtlMs` (2 h; `KEEP_MS.jobBody`).
+- **Records** stay in their state (`claimed`, `running`, `waiting`, ...) until the next enabled sweep ends them and posts the reply, or until `KEEP_MS.job` (30 days) removes them. A laptop told `stop` aborts, but its record stays `claimed` or `running`; the next enabled sweep then ends it as `lost` and posts the "stopped answering" reply, possibly days later. That reply is misleading, since the server stopped the work. If 30 days pass first, no reply ever posts.
+- **Index entries** of records that vanished go at a later enabled sweep (jobs.ts:1406-1410).
+- **Replies** still queued in `jobs:posts` wait for the next enabled sweep.
+- **The data key.** config.ts keeps one data key (`dataKeys` is `[key]`, :195). Rotating VECTOR_EVERYWHERE_DATA_KEY while records or queued replies are live (also while off) leaves them unreadable to the next enabled sweep. Do not rotate it while records are live.
+
+### The safe turn-off and turn-on orders (activation note; EV-24 copies it into the owner docs)
+
+Turning off:
+
+1. Set Codium's `everywhere` runtime switch to `stop` (EV-07, R-C6).
+2. Let the sweep run under `stop`. Wait at least 2 minutes: `SWITCH_CACHE_MS` is 30 s per instance (codium-switches.ts:24) and the cron runs each minute. Each sweep ends at most 200 jobs (jobs.ts:1468), so wait one more minute per further 200 live jobs. Under `stop` the sweep ends live jobs at once (waiting ones expire, the rest are cancelled, jobs.ts:1331-1334) and posts their replies in the same run; platform errors retry each minute.
+3. Unset VECTOR_EVERYWHERE_ENABLED.
+
+- **Graceful variant.** `no-new` until live jobs end, then `stop`, then unset the flag.
+- **Flag first.** Unsetting the flag first also stops all work, but the replies wait until the flag is on again, and they then say `lost` (above), or never post after 30 days.
+- **Until EV-07 lands** Codium has no `everywhere` switch (SWITCH_NAMES, codium-switches.ts:7), so the only way to turn off is to unset the flag, with the flag-first consequences. R-C6 is a G2-G4 prerequisite (spec :703); G1 (GitHub) does not list it, so for G1 the safe order does not exist until EV-07.
+- **Both orders meet EV-03's open finding.** A publication settle answered 200 `stop` is not recorded (jobs-api.ts:296, :301) and the desktop clears its receipt, so the reply names no branch or PR. EV-04 does not build that follow-up; it stays open (deviations log, EV-03, "Finding left open").
+
+Turning back on:
+
+1. Set VECTOR_EVERYWHERE_ENABLED (the same data key as before).
+2. Set Codium's `everywhere` switch back to `on`. After the safe order it is still `stop`, so setting the flag alone takes no work.
+
+### Decisions
+
+- **The off body is `{enabled: false}`, not `{ended: 0, posted: 0}`,** so a cron log tells "off" from "nothing due" (mutation M4 pins it).
+- **Tests use the real `readConfig` for each off reading** (no settings; the flag without a data key; the flag `false`; a placeholder data key that `parseDataKey` refuses), not a hand-built config. The off case also mounts the real FakeStore and adapter with the production switch reader, so the unchanged `FakeStore.commands` count and job record are evidence alongside the throwing stubs.
+- **The production switch reader case is a deliberate tripwire for EV-07** (everywhere-sweep.test.ts:231). With the feature on it reads `on` with no I/O, under the fetch guard, only because Codium's SWITCH_NAMES has no `everywhere` (R-C6). Its first assertion is that SWITCH_NAMES lacks `everywhere`, so EV-07 fails on that named precondition, not on a cancelled job, and updates the case.
+- **codium-configuration.test.ts is not edited** (brief, scope 4). It passes alone (11 pass) and stays green when the cron is removed (mutation M8).
+- **switch.ts gains one comment clause** (:13-14): while the flag is off the sweep answers `{enabled: false}` before reading the switch, so the cron expires no waiting job. switch.ts is outside the brief's file list; the change is a comment only, so a reader of switch.ts alone sees the EV-04 behaviour.
+
+### Deferred verification
+
+- After the owner's deploy, Vercel's cron log shows 200 `{enabled: false}` every minute while off. That needs CRON_SECRET set in production (an owner action); without it every invocation answers 401.
+- At go-live (VE-50), a laptop that dies mid-job gets `lost` within about 6 minutes (`TIMING.leaseMs` 5 minutes plus one cron minute).

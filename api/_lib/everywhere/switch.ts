@@ -10,7 +10,8 @@ import type { EverywhereConfig } from "./config.js"
  * The `everywhere` switch is the environment first: anything but VECTOR_EVERYWHERE_ENABLED=true with a usable data key
  * reads `stop`. Codium's switch can only make it stricter. Codium has no `everywhere` switch until R-C6; the seam reads
  * it as soon as Codium's SWITCH_NAMES lists it, with no change here. Codium's `off` reads `stop`, and a switch that
- * cannot be read reads `stop`: the switches fail closed.
+ * cannot be read reads `stop`: the switches fail closed. While the flag is off the sweep cron (sweep.ts) answers
+ * `{enabled: false}` before reading this, so the cron expires no waiting job then (EV-04).
  *
  * Relay presence ignores Codium's `remote` switch, so the router reads it here too (E10).
  */

@@ -7,6 +7,10 @@ import { productionContext, productionPlatforms } from "./runtime.js"
 import { bearerMatches } from "./signature.js"
 import { readEverywhereSwitch } from "./switch.js"
 
+/**
+ * The per-minute sweep cron (vercel.json, R-C11). Order: the method, then the exact CRON_SECRET bearer, then the off
+ * answer, then the `everywhere` switch, the due jobs and the reply outbox.
+ */
 export function createSweep(deps: {
   readonly config?: () => EverywhereConfig
   readonly context?: () => JobsContext
@@ -20,6 +24,9 @@ export function createSweep(deps: {
       const authorization = request.headers.authorization
       if (!bearerMatches(typeof authorization === "string" ? authorization : undefined, config.cronSecret))
         throw new ApiError(401, "CRON_UNAUTHORIZED", "This endpoint is restricted.")
+      // While off, the sweep skips the `stop` that readEverywhereSwitch would read and builds no store: laptops hear
+      // `stop` from the jobs API, bodies expire by TTL, and live records end at the next enabled sweep (EV-04).
+      if (!config.enabled) return json(response, 200, { enabled: false })
       const context = deps.context ?? productionContext
       const stop = deps.stopped ? await deps.stopped() : await readEverywhereSwitch(config) === "stop"
       const ended = await sweepDue(context(), { stop })

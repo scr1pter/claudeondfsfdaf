@@ -32,7 +32,7 @@ here.
 | F1, the lane does not know v2 | Partly fixed | paths added at .github/workflows/vector-everywhere.yml:53 (`codium-keys.ts`) and :55 (`integrations/linear/**`); the push trigger still names `vector-everywhere` (:15), and packages/web/test/everywhere-lane.test.ts:156 pins it | review-fixes FIT-4 (not yet on `release-finish`) |
 | F2, the local-run.test.ts comment | Fixed by the merge | packages/engine/test/local-mode/local-run.test.ts:1358-1359 carry process-finish `d2156cb2d`'s two-line comment | none |
 | F3, docs do not match the code | Corrected by EV-01 | Corrected: handoff :7, :39, :44, :77, :107; spec :3, :16; api/_lib/everywhere/account-api.ts:51 (now the comment at :51-57). Annotated, the owner's text kept: handoff :100 and :130-131 (a dated note at the end of "Rules"), spec :686. Left: spec :803 (Q1, owner-confirmed) | spec :879 is review-fixes FIT-5 (not yet on `release-finish`) |
-| F4, erase registration and the sweep cron | Registration done; cron open | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`); the vercel.json `crons` (:526) have no `/api/everywhere/sweep` | EV-04 (R-C11) |
+| F4, erase registration and the sweep cron | Registration done; cron added by EV-04 (working tree, CI pending), runs after the owner's deploy | api/_lib/codium-erase.ts:21 (import), :278 (in `ERASE_PARTS`, :244), :294 (`codium` requires `"everywhere"`). EV-04: vercel.json:559-562 (`/api/everywhere/sweep`, `* * * * *`); api/_lib/everywhere/sweep.ts:29 (200 `{enabled: false}` after the 405 and 401 checks, before any switch, store or platform call); tests packages/web/test/everywhere-sweep.test.ts (the `counting` helper at :101, five cases at :125, :176, :204, :231, :251) | EV-04's commit and dispatches (vector-everywhere.yml, typecheck.yml). Request to review-fixes (FIT-4): add `vercel.json` to vector-everywhere.yml's `pull_request` paths (deviations log, EV-04, known gap) |
 | F5, an engine test imports desktop | Accepted; deviation entry | packages/engine/test/everywhere/unattended-session.test.ts:9 | done in EV-01 |
 | F6, a second keep-awake owner | Open (unwired) | packages/desktop/src/main/everywhere-awake.ts:2-13 calls `start`/`stop` itself; the shared blocker is keep-awake.ts:394 (`setDesktopWorkBlocker`) and :453 (`whileDesktopWorks`), set at index.ts:640-651 | EV-18 |
 | `75532fc36` (not a finding) | Account authority wired | api/_lib/everywhere/runtime.ts:16-18 (`productionPorts` returns `codiumAccountAuthority`); adapters/account.ts:2 (`tombstoneKey`), :7-13 | none |
@@ -696,3 +696,153 @@ Deferred:
   after a stop, cancel, lost job or sponsor 404 (server reply, permanent
   pending receipts, the 32-receipt starvation); the no-safe-worktree and
   needs-approval single settles.
+
+## EV-03 push receipts (recorded 2026-11-15)
+
+At `9426c945` (EV-03, pushed), all workflow_dispatch on `everywhere-finish`,
+read with the GitHub tools on 2026-11-15 (during EV-04). Observed conclusions
+only; nothing was re-run.
+
+- vector-everywhere 43675734861: success. This was EV-03's last "done when"
+  item.
+- typecheck 43675742876: success.
+- vector-hosted-ci 43675737368: success. No vector-codium run was dispatched
+  at `9426c945`, so it was not cancelled. `9426c945` contains EV-02, so this
+  run also closes EV-02's open hosted item (packages/schema
+  test/everywhere.test.ts).
+- vector-at-mention 43675740147: failure, 1 of 10 jobs: 132695367914,
+  "sandbox (codium, success, bun)", at "Run the unprivileged probe" (then
+  "Observe the synthetic probe report" and "Assert isolation, crash protection
+  and cleanup"). The same job and step as EV-01's 132645692417 and EV-02's
+  132672693929, inherited from the base; @vector's sandbox probe, not a lane
+  file. The other nine jobs succeeded.
+
+## EV-04: sweep cron, store-free while off (2026-11-15)
+
+Base: HEAD `9426c945` (EV-03, pushed), equal to `origin/everywhere-finish`.
+`git fetch origin release-finish main everywhere-finish` found
+`release-finish` still at `cf2373c4`, already merged (`5733ceea`), so no merge
+was needed. EV-04 depends on no review-fixes commit and no brain-transport
+work. `git diff --stat origin/release-finish...origin/review-fixes` and
+`...origin/codium-finish`, each limited to the three EV-04 files, were empty.
+The commit gate (2026-11-15) committed these changes as one commit; the
+push and the dispatches follow (Deferred).
+
+Files changed:
+
+- vercel.json: one added object at :559-562, `/api/everywhere/sweep` every
+  minute, right after `/api/hosted/reaper`. `git diff -U0 vercel.json` is four
+  added lines and no removals; crons go from 15 to 16.
+- api/_lib/everywhere/sweep.ts: a JSDoc on `createSweep` naming the order
+  (:10-13), and the off answer (:27-29): 200 `{enabled: false}` after the 405
+  and 401 checks, before any switch read, store construction or platform.
+  No export, type, import, env var or route changed.
+- packages/web/test/everywhere-sweep.test.ts: three imports (`SWITCH_NAMES`
+  from codium-switches; `ENV_NAMES`, `readConfig` and the `EverywhereConfig`
+  type from config; `everywhereEnv`), the `counting` helper (:101) and five
+  cases: :125 (off: four real off
+  readings with throwing deps, then the real FakeStore and adapter with the
+  production switch reader, then every production default, then the next
+  enabled sweep ends the job `lost` and posts), :176 (wrong, missing or
+  non-Bearer authorization and POST, on and off, and CRON_SECRET unset),
+  :204 (on: the switch read once; `stop` cancels a claimed job that is not
+  due and posts its reply), :231 (on, the production switch reader reads `on`
+  with no I/O until R-C6; its first assertion, :233, is that Codium's
+  SWITCH_NAMES lacks `everywhere`), :251 (vercel.json has exactly one sweep
+  cron, every minute, matched by pathname). The six existing cases are
+  unchanged.
+- api/_lib/everywhere/switch.ts: one comment clause in the header (:13-14,
+  review round one): while the flag is off the sweep answers
+  `{enabled: false}` before reading the switch. Comment only; outside the
+  brief's file list (deviations log, EV-04, Decisions).
+- Docs: vector-everywhere-deviations.md (the EV-04 entry, with the turn-off
+  and turn-on orders), vector-everywhere-spec.md (dated notes at 3.4 and
+  R-C11), vector-everywhere-handoff.md (a "Current gates" bullet; the owner's
+  rules unchanged), this file (the F4 row, the EV-03 receipts and this entry).
+  v2-notes/v2-complete-plan.md is not edited.
+
+No page, route, flag, generated file, dependency or install. The cron runs
+only once the owner deploys a commit that contains it; while
+VECTOR_EVERYWHERE_ENABLED is off (the default) it makes no store, switch,
+platform or network call and still requires the exact CRON_SECRET bearer.
+No test calls a real host: the fetch guard and loopback harness only.
+
+Checks (each through `vector-serial`, one file per run):
+
+| Check | Result |
+| --- | --- |
+| packages/web test/everywhere-sweep.test.ts at HEAD, before any change | 6 pass, 0 fail, 34 assertions (the plan's baseline) |
+| packages/web test/everywhere-sweep.test.ts with EV-04 | 11 pass, 0 fail, 96 assertions, 0.33 s; the same after the prettier pass on the new block. After review round one (the SWITCH_NAMES precondition): 11 pass, 0 fail, 97 assertions, 0.33 s |
+| packages/web test/codium-configuration.test.ts (not edited) | 11 pass, 0 fail, 59 assertions (58 at HEAD; its :85-88 loop checks one more cron file, api/everywhere/sweep.ts); the same after review round one |
+| API typecheck (packages/engine, `bun typecheck --project ../../tsconfig.json`) | exit 0; again exit 0 after review round one |
+| packages/web `bun typecheck` (astro check, includes test/) | 0 errors, 0 warnings, 410 hints, 288 files; the same after review round one |
+| Prettier drift (lines prettier 3.6.2 would change), HEAD then now | sweep.ts 16 then 16; everywhere-sweep.test.ts 42 then 42 (the new block is prettier-clean); after review round one the same, and switch.ts 0 then 0 |
+| Diff guards | no personal path or email address; no new line over 120 columns |
+| Root tests reading vercel.json (codium-outbox :745, codium-replay :896-898, hosted-jobs :1042, hosted-copy :199, legacy-desktop-access :71, ops-screens :401) | not run locally: each uses `toContainEqual`, a filter or `redirects`/`rewrites`, so one added cron cannot change them; vector-hosted-ci.yml runs them |
+| Full `bun turbo typecheck --concurrency=2` (commit gate) | exit 0, 27 of 27 tasks (25 cached); at the gate everywhere-sweep.test.ts again 11 pass, 0 fail, 97 assertions, codium-configuration.test.ts 11 pass, 0 fail, 59 assertions, the API and packages/web typechecks exit 0 |
+
+Mutations: each is a patch under /tmp/vector-v2/everywhere/ev04-mut/
+(make.py builds them), applied with `git apply`, the one test file run, then
+`git apply -R`; the three files' SHA-256 sums matched post.sha after every
+run. Both passes (before and after the prettier pass) gave the same red sets.
+Review round one re-ran the same patches plus M9 against the updated test
+file (/tmp/vector-v2/everywhere/ev04-mut-r1/run.sh), with four files' sums
+(also codium-switches.ts) matching pre.sha after every run; the red sets
+were the same. Line numbers below are the current ones:
+
+| Mutation | Result | Red cases |
+| --- | --- | --- |
+| M1: no early return | 10 pass, 1 fail | :125. With only production defaults the off call answers 503 `PERSISTENT_STORE_UNAVAILABLE` (scratch defaults.test.ts; 200 `{enabled: false}` without M1) |
+| M2: early return before the bearer check | 10 pass, 1 fail | :176 (the off config and CRON_SECRET-unset off cases answer 200) |
+| M3: early return after the switch read | 10 pass, 1 fail | :125 ("switch" recorded) |
+| M4: off body `{ended: 0, posted: 0}` | 10 pass, 1 fail | :125 |
+| M5: `const stop = false` (switch ignored) | 10 pass, 1 fail | :204 (the `stop` variant) |
+| M6: schedule `*/5 * * * *` | 10 pass, 1 fail | :251 |
+| M8: the cron entry removed | 10 pass, 1 fail; codium-configuration.test.ts 11 pass, 0 fail | :251; codium-configuration does not pin this cron (deviations log, EV-04, known gap) |
+| M9 (review round one): Codium's SWITCH_NAMES gains `everywhere` (codium-switches.ts:7, scratch only) | 10 pass, 1 fail | :231, at its precondition (:233, "Expected: false, Received: true"), not at the job state |
+
+M7 (a second entry with a query string) was dropped as the critique
+suggested: :251 filters by pathname, so it catches that by construction.
+
+Plan critique, points taken (moved here from the deviations log in review
+round one, since they are bookkeeping, not decisions): the real-store off
+variant (:125 mounts `context: f.context` with the FakeStore and the
+production switch reader, so the unchanged `FakeStore.commands` count and
+job record are evidence, not only the throwing stubs); an enabled mount with
+the production switch reader (:231); the four activation points (late or
+missing `lost` replies, the turn-on order, the data key, G1 before EV-07);
+the Codium-area note and the repeated diff checks; the workflow-paths gap;
+CRON_SECRET in the deferred note; the dated spec notes at 3.4 (:273) and
+R-C11 (:850); the EV-03 run ids under their own heading, observed
+conclusions only.
+
+Review round one (non-blocking findings, all taken): the critique and
+commit-step bookkeeping moved out of the deviations entry (here and under
+Deferred); the SWITCH_NAMES precondition at :233 (M9); the spec citations
+re-found by their text (§6.4's Codium row is :650 and the G2 Slack row :703,
+after EV-04's note at :273), and switch.ts:58 is now :59 after the header
+clause; that header clause; the EV-03 receipts named for the commit body and
+the commit-step receipts listed under Deferred.
+
+Deferred:
+
+- EV-04's commit: one commit, explicit paths, the trailers as two lines of
+  one `-m` (RULES-v2's form, checked with `git log -1 --format=%B | tail
+  -3`). Its body says that it also records EV-03's dispatched run
+  conclusions (the "EV-03 push receipts" section above), and that the cron
+  runs only once the owner deploys.
+- Right before the commit, re-find the spec citations by their text (:273,
+  :650, :703, :850). Right before the push, repeat the codium-finish and
+  review-fixes diff checks for vercel.json, then the full turbo typecheck
+  and the push.
+- Then the dispatches on `everywhere-finish`: vector-everywhere.yml and
+  typecheck.yml; vector-hosted-ci.yml too (it runs the root vercel.json
+  tests), only while no vector-codium run is in progress, since they share a
+  concurrency group (vector-hosted-ci.yml:45-47). Never vector-codium.yml.
+  EV-04 is done only once vector-everywhere.yml is green. Then record the
+  commit SHA, the turbo typecheck result and the vector-everywhere.yml and
+  typecheck.yml run ids in the F4 row and the next entry, and mark the F4
+  row done.
+- Request to review-fixes (FIT-4): `vercel.json` in vector-everywhere.yml's
+  `pull_request` paths.
+- Owner: CRON_SECRET in production, and the deploy that starts the cron.
