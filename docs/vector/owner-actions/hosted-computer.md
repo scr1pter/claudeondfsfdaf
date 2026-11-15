@@ -150,7 +150,15 @@ start", R2-R4):
 - before listing, confirm with OpenRouter that a key that expired and was switched off can still be read (its usage)
   and have its limit changed: every download start depends on it, and answers "temporarily unavailable" otherwise;
 - rebuild the image (A58's image workflow) so a computer's hostd signs its heartbeats; until then today's images are
-  refused, and H1b's reading of `mode` needs the same rebuild.
+  refused, and H1b's reading of `mode` needs the same rebuild;
+- H1b (`codium-deviations.md` "Codium finish: H1 computer", R4): a rebuilt image reaches a computer only when its disk
+  is made again, because a resumed computer keeps its whole saved disk. A download-only session on an ended plan's kept
+  disk therefore runs the hostd that disk was made with. A disk made before signed heartbeats cannot complete a
+  download: every beat is refused, and the session ends with no files after its block and the retention were charged.
+  Yours to decide: whether a download start should be refused, or not charged, when the computer's last reported image
+  generation is unknown or below the signed-beat floor. No per-computer generation record exists yet, and the
+  server-side image floor (H2a) is not built; when it is, it must not block download-only starts. The lane also tracks
+  this as a defect for a later server package (`codium-a53-hosted-sessions-notes.md`, "Not done").
 
 **Fair use.** A session that passes 600 page loads an hour, 5 GB (Max) or 15 GB (Ultra) of egress a day, or 30 minutes
 above 80% of the processor with no model request is stopped, the account's cloud computer is put on hold and you get an

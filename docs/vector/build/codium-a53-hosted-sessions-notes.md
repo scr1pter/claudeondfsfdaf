@@ -131,6 +131,14 @@ process to rule out an import-cycle failure (`codium-provisioners.ts` now import
 - `computer` stays unlisted: listing waits on Vercel's written OK, the computer-use build, the brand name and the
   security review (contract §1.2).
 - bun.lock was not touched. Nothing was pushed or deployed.
+- 15 Nov 2026 (Codium finish, H1b review), a defect for a later server package: a download-only start on a disk made
+  before signed heartbeats is charged its block and the 14-day retention, then every beat is refused
+  (`requireDaemonBeat`) and the person gets no files. Until a per-computer generation record exists, the start should
+  keep its hold and charge only the minutes that ran (M8), and charge the retention only after the first accepted
+  heartbeat. A second one: while a beat says `uploaded` the server only HEADs the object, so a HEAD that never confirms
+  strands the session for its block; a definitive rejection (404, or a size other than `archiveBytes`) should answer
+  `pack` or `upload`, which H1b's hostd already acts on. `codium-deviations.md` "Codium finish: H1 computer
+  (15 Nov 2026)", O4 and O6, and the 15 Nov H1b row in "Lane status (8 Nov 2026)".
 
 **Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
 changed A53 in seven places: the nightly job stores the egress reading as soon as it charged (no double charge after a
@@ -151,3 +159,17 @@ charges nothing. The reaper ends it after its one block or the upload, the provi
 plan still allows it, and the nightly deletion now erases the packed files with the disks. Readings and owner questions:
 `codium-deviations.md` "Codium finish: H1 download-only start (15 Nov 2026)". Not built: the computer side (H1b), the
 image rebuild (owner) and any client surface.
+
+**Status, 15 Nov 2026 (Codium finish, H1b).** The computer side of the download-only start is built
+(`packages/hosted-computer/src/daemon.ts`). Once an answer says `mode: "download"` before any job started, hostd starts
+no agent, browser or recorder and writes no viewer state. It packs and uploads the disk when asked, drops its copy after
+the PUT, and keeps reporting `uploaded` with the size, so the heartbeat's HEAD check (A53's files flow) is retried until
+it confirms and the reaper then ends the session as finished. A `pack` or `upload` answered to a beat that said
+`uploaded` (today's server sends none) makes it pack the disk again and upload anew. It reports `done` only when the
+session is over. No
+server change: H1a already sends a download session no job, so no hostd starts the agent for one. H1b reaches only
+computers whose disk is made from an image built after it. A disk made before signed heartbeats cannot complete a
+download (every beat is refused) and is still charged the block and the retention; that is open for the owner and a
+later server package ("Not done" above). Real computers are unverified until the image is rebuilt and a disk is made
+from it.
+`codium-deviations.md` "Codium finish: H1 computer (15 Nov 2026)".

@@ -2309,6 +2309,19 @@ unchanged.
   "P4 review decisions" below. With P4d, P4 is closed for A21 to A28; its open items are listed in
   `codium-p4-repairs.md` ("P4 summary"). At the time of this record (8 Nov 2026) P4d's changes were not yet committed;
   the package that pushes them adds a dated line here with the commit sha and its Vector Codium run id and conclusion.
+- **15 Nov 2026 (Codium finish, H1b review): open defect, a download-only start that cannot run is still charged.**
+  H1a's start path (`startHostedDownload` in `api/_lib/hosted-sessions.ts`) holds and charges the block and the 14-day
+  retention without knowing whether the computer's hostd signs its heartbeats. On a disk made before signed heartbeats
+  every beat is refused (`requireDaemonBeat`, `hosted-sessions.ts:1412`), hostd stops, and the person gets no files
+  after paying for them. It fails closed (no agent starts, S7 holds). Until a per-computer generation record exists, a
+  later server package should not charge such a session for what it never delivered. The review proposed leaving a
+  download start uncharged until its first accepted heartbeat, or releasing the hold when the session ends with no
+  `readyAt`. Lane reading: M8 keeps the hold before the start and also charges every minute the computer ran at no less
+  than cost, so the block's minutes stay charged (closed at the stop, as `endHostedSession` does). What can wait for the
+  first accepted heartbeat is the retention charge, which already goes uncharged when no download start happens (P8).
+  Ending the session at its first refused beat keeps those minutes short. Who pays a download start's block stays the
+  owner's question (H1a). No H1b code change. The owner bullet in `owner-actions/hosted-computer.md` stays; tracked in
+  `codium-a53-hosted-sessions-notes.md` ("Not done") and "Codium finish: H1 computer (15 Nov 2026)", O6.
 
 ## P4 review decisions (8 Nov 2026)
 
@@ -5065,3 +5078,255 @@ the added lines were wrapped. Only in CI, as above.
 
 Edits to `api/_lib/model-plan-*.ts`: `api/_lib/model-plan-account.ts` (`holdPool`'s `final` option and validation,
 `currentPoolCredential` holding the usual path unchanged, `finalPoolCredential`).
+
+**H1a's CI receipts (recorded by Codium finish H1b, 15 Nov 2026)**
+
+For `ae7280f8` (this section's commit), read from the runs' jobs and logs:
+
+- Vector Codium run 43746787694 (18 jobs): every job passed or was skipped by `services_only` (Hosted services'
+  typecheck and Hosted tests) except Codium tests job 132911745874, which failed only at "Run HttpApi exerciser gates"
+  with `summary pass=359 fail=0 skip=0 missing=4 extra=0` and exactly the four review-memory lines (`MISS DELETE
+  /experimental/review-memory/previews/{previewId}`, `MISS GET /experimental/review-memory`, `MISS POST
+  /experimental/review-memory/confirm`, `MISS POST /experimental/review-memory/prepare`). Its "Run the Codium test
+  files" and "Check generated client" steps passed, so the run is green under the lane's baseline rule. The per-file
+  lines of H1a's test files were not read, so no per-file count is claimed. Hosted services / Cloud computer image
+  (Docker) job 132911746168 and Codium browser specs job 132911746084 passed.
+- typecheck.yml run 43746790825: success.
+- vector-hosted-ci.yml run 43747724868: all 12 jobs passed; Hosted tests job 132914610646 ends "Hosted: 150/150 test
+  files passed", and its Cloud computer image (Docker) job 132914610309 passed.
+
+## Codium finish: H1 computer (15 Nov 2026)
+
+Package H1b, the computer half of H1 (the section above is the server half): hostd reads H1a's `mode: "download"`
+and, in such a session, starts nothing a job runs and only packs and uploads the computer's disk. Built on
+`codium-finish` `ae7280f8` (H1a; equal to origin/codium-finish; PR #33 unmerged: origin/main `58f85edc`,
+origin/release-finish `cf2373c4`). Scratch under `/tmp/vector-v2/codium/h1b/`. Not committed by this build step; CI ids
+follow in a dated line.
+
+**What landed**
+
+- `packages/hosted-computer/src/daemon.ts`:
+  - The header (`:22-28`) describes the download-only session.
+  - `downloadOnly` (`:98-99`) is set in `apply` (`:268`) by an answer with `mode: "download"` while no job has started
+    (`!this.booted`), and is never unset.
+  - `apply` writes no viewer state while download-only (`:269-273`). A `stopping` or `ended` answer still finishes the
+    session first. A download-only session then goes to `download` (`:276`), and nothing below runs: the browser,
+    recording, the job's start, a take-over, wrap-up and the job path's files.
+  - `packWhenAsked` (`:348`) is the job path's pack block, moved; it now takes whether the answer asked (`answer.pack`)
+    instead of the answer. The job path calls it at `:324`, `download` at `:379` and `:381`.
+  - `download` (`:373`) does nothing once finishing. Until the upload went through it packs when asked and uploads to
+    the answer's link when a copy exists. After a successful PUT it drops the copy (`discard`), then sets `uploaded` and
+    reports at once. `archive` keeps the dropped copy's entry, so every later report carries `archiveBytes` and
+    `uploaded: true`. After that only a `pack` or `upload` answered to a beat that said `uploaded` does anything: it
+    packs the disk again and uploads the new size to the next link (review round, F1).
+  - `tick` hands the report it sent to `apply` (`:250-252`), so `download` can tell which beat an answer answers. No new
+    export and no public signature change. `DaemonDeps` and the controls are unchanged, and so are `finish`, `report`,
+    `status` and `acting`.
+- `packages/hosted-computer/src/hostd.ts:54-57`: header documentation only. Every spawn (`Agent.start`,
+  `Browser.start` and its guard, the recorder, `writeViewerState`) is reached only through the daemon. `packWork`
+  (`:339`) and `api.upload` are reused as they are.
+- Tests: `test/daemon.test.ts` "download-only sessions (H1b)" (8 cases) and four more assertions on the existing
+  job-session case "asked for the files, hostd packs them…"; `test/hostd.test.ts` one case in "the agent's socket"
+  with a real `Daemon`.
+- Not changed: `api/_lib/hosted-sessions.ts` (R4), the schema (H1a's `mode` is enough), `image/boot.sh`,
+  `image/boot-lib.sh`, the Dockerfile, `nftables.conf`, `viewer-proxy.ts` and every workflow. No new setting, flag,
+  credential, environment variable or host. S7 holds: `agentEnv` and the firewall are untouched, and the only link is
+  the existing presigned PUT.
+
+**Readings**
+
+- **R1, where the mode comes from: the heartbeat answers only.** boot.sh passes exactly `--run-host <host> --session
+  <id>` and `parseArgs` refuses anything else (`hostd.ts:65`). hostd starts nothing before its first answer: `main`
+  makes the socket, then ticks. So the task's "start or heartbeat answer" is read as the first answer that says so.
+  boot.sh still starts the display, VNC and the viewer proxy before hostd (`boot.sh:71-74`), since the mode is not known
+  at boot. In a download session hostd never writes `VIEWER_STATE`. `/run/vector` is a fresh tmpfs every boot
+  (`boot-lib.sh:75`), and with no state file the proxy closes every connection with "token refused"
+  (`viewer-proxy.ts:155`, `:258`). The server mints no viewer token for a download session either (H1a, `issueViewer`).
+- **R2, when a session is download-only.** From the first answer with `mode: "download"` before any job started, for the
+  rest of the session. The mode then wins over a job, `browser: true`, a take-over or wrapping in the same or a later
+  answer, and an answer without the mode does not undo it. A session whose job already started stays a job session, so
+  a later download answer cannot leave a running agent without its pause, wrap-up and browser controls. The server
+  makes both cases unreachable, because `mode` is fixed when the record is made.
+- **R3, how a download session ends (the critique's major point, taken).** hostd never reports `done` from the files
+  path. After a successful PUT it drops its copy and keeps reporting `uploaded: true` with `archiveBytes` on every beat,
+  and it packs or uploads nothing more unless an answer to such a beat asks for the files again (review round, F1).
+  While `beat.uploaded` is set and `readyAt` is not, the server HEADs the object
+  on each beat against the kept size (`hosted-sessions.ts:1521`; the size comes from the previous beat when this one has
+  none, `:1497`). So a HEAD that failed or timed out is tried again on the next beat, never taken for acceptance. Once
+  it confirms, `readyAt` is set and the reaper ends the session as "finished" (`hosted-crons.ts:361`), which is the
+  task's "ends the session as finished". hostd finishes, and then reports `done`, only on `stopping`, `ended` or a FINAL
+  refusal.
+  - Rejected, the plan's version (report `done` once the server stopped asking). On a download session the server's
+    "no pack, no upload" answer means either accepted or a failed HEAD, and `done` ends the session "finished" on the
+    same reaper line with no files and a block paid for nothing. On success, `done` adds nothing to `readyAt`.
+  - Dropping the copy right after the PUT keeps up to 5 GiB off the system disk (`/var/lib/vector/pack`, which boot.sh
+    also removes on every boot, `boot.sh:68`). The review round weighed keeping it instead (F1): the reaper stops the
+    computer as soon as the upload is confirmed (`endHostedSession` calls `stopHostedComputer`), usually before hostd
+    sees `ended`, so a copy kept until `finish()` would stay in nearly every saved disk.
+- **R4, the image-generation check is not added; H1a already covers "must not start the agent".**
+  - (a) In every hostd since A54 only `answer.job` starts the agent, and the browser and recorder start only after it
+    (`daemon.ts:286-293`). H1a never sends a download session a job, a browser or hook data. `startHostedDownload`
+    writes no job key, the job read is skipped for download (`hosted-sessions.ts:1508`), `browser` is false (`:1461`)
+    and the hooks are skipped (`:1571`). H1a's `test/hosted-sessions-api.test.ts:691` pins this, including a beat that
+    says booted (`:723-724`). So no hostd, old or new, starts the agent for a download session. The daemon case
+    "answers without a mode or a job start nothing of the agent, even when they ask for the files" pins the daemon's
+    side. It runs H1b's daemon on mode-less answers, so it covers the shared path, not an old build.
+  - (b) There is no per-computer generation record to check. The generation lives only in the session's beat
+    (`hosted-sessions.ts:1498`), which expires with the session. The first generation with this mode is not known
+    either: the owner picks `generation` when building the image, and no image has been built.
+  - (c) Refusing would strand an ended plan's files until its disk is deleted, against §4.4.
+  - (d) Corrected after the critique: H1b reaches only computers whose disk is made from an image built after H1b. A
+    resumed computer restores its whole saved disk, `/opt/vector` included, so a newer image reaches a computer that
+    already has a disk only when its disk is made again ("A54 Image and hostd", "Reinstalls verified system
+    components"). Download-only sessions run on ended plans' existing disks, so each runs the hostd its disk was made
+    with. A signed hostd from before H1b completes a download without starting anything of a job. It writes the viewer
+    state, but no token is ever issued, and it drops its copy once the server stops asking, so one failed HEAD loses
+    that session's files (O1). A disk made before signed heartbeats cannot complete one: `requireDaemonBeat` refuses
+    every beat (`hosted-sessions.ts:1412`), hostd takes the 403 as FINAL and finishes, and the session ends at its
+    block's end or on a lost heartbeat with no files, after H1a charged the block and the retention. That fails closed
+    (no agent) but charges the person. Open, server side or owner (`owner-actions/hosted-computer.md`, the H1b bullet):
+    should a download start be refused, or left unpaid, when the computer's last reported generation is unknown or
+    below the signed-beat floor? Not fixed here.
+  - For later packages (H2a): the image floor (`VECTOR_HOSTED_MIN_GENERATION`, not built) must exempt download-only
+    starts, or a disk below it can never be downloaded. Any per-computer generation record it adds is what a download
+    check would read.
+- **R5, `finish()` stays shared.** Its uid-10001 kill sweep with its 3-second grace, the wipe of an empty browser
+  profile and the skipped recording flush are harmless in a download session.
+- **R6, failures.** A failed pack is tried again on the next answer that asks for one, since the server keeps asking
+  while it has no size. A failed upload is tried again with the next link: the next beat reports the size without
+  `uploaded`, so the server signs another. The session's one block bounds both. Pinned by "a failed pack is tried again
+  when asked again, and a failed upload with the next link".
+- **R7, H1a's R12 (whether the provider still has the disk before the hold): declined here.** The task limits H1b's
+  edits to `api/_lib/hosted-sessions.ts` to the generation check, and a `provider.list` read before the hold is server
+  work. It is left to the owner or a later server package.
+
+**Critique points taken and rejected**
+
+- Taken (major): R3 as above. hostd never reports `done` from the files path, keeps `uploaded`, and drops the copy after
+  the PUT. The first case was rewritten, the retry case added and the mutations adjusted.
+- Taken (major): R4(d), the reach of a rebuilt image and the disks from before signed beats, here and in the a53, a54,
+  MODEL-PLANS and owner-actions lines.
+- Taken: H2a phrased as a requirement handed on, not an existing rule; R12 declined explicitly (R7); the oversized pack
+  recorded (O2); the mode-less case renamed and cited for the shared path only; the hostd case kept short (a real
+  `Daemon` driving `createAgentApi`: 409 on git, status not booted, nothing started); no return types on the new
+  methods.
+- Partly taken: the critique suggested keeping the job path inline. It stays inline except the pack block, which both
+  paths now call (`packWhenAsked`, moved), so the pack logic is not written twice. The extended job-session case
+  pins the job path's own files behaviour: no `done`, still acting, and once the copy is dropped, no `uploaded` or
+  `archiveBytes`.
+
+**Review round (15 Nov 2026)**
+
+Five non-blocking findings. Each was read against the code; "taken" names its regression test.
+
+- F1 (`daemon.ts`: the copy dropped at once, `uploaded` never re-uploaded): confirmed, taken in part. With today's
+  server a HEAD that never confirms strands the session for its block (O4), and nothing on the computer alone can fix
+  that: while hostd reports `uploaded` the server never signs another link. Taken: a `pack` or `upload` answered to a
+  beat that said `uploaded` is read as a rejection, and hostd packs the disk again and uploads anew. Nothing writes
+  `/data/work` in a download session, so the new pack holds the same files. An answer to a beat from before the upload
+  went through is stale and changes nothing. That is why `tick` now hands `apply` the report it sent. Without it, a
+  30-second beat sent during the PUT could come back with a link after the PUT finished and start a second upload of up
+  to 5 GiB. The copy is now dropped before `uploaded` is set, so a new pack never races the old copy's discard. Not
+  taken: keeping the copy until `finish()`, for the reason under R3. Also handed on, as O4: the server-side rejection.
+  The reviewer's aside that the job path recovers is not confirmed. After the job path drops its copy the server's kept
+  size stays (`hosted-sessions.ts:1497`), so it answers `upload`, not `pack`, and the job path cannot use it (O1).
+  Tests: "asked for the files again after a beat that said uploaded, it packs again and uploads anew" and "a
+  request for the files answered to a beat from before the upload went through changes nothing". The first case now
+  ends on the answer today's server gives while it has not confirmed the upload.
+- F2 (`daemon.test.ts`: the mode-less case is not old-image coverage): confirmed, taken. The case's comment now says it
+  runs H1b's daemon and cites `test/hosted-sessions-api.test.ts:691` as the guarantee for older images. Comment only.
+- F3 (the charged download on a disk from before signed heartbeats is tracked only as an owner choice): confirmed,
+  taken in the records. The owner bullet stays. A dated "Not done" line is added in
+  `codium-a53-hosted-sessions-notes.md`, and a row in "Lane status (8 Nov 2026)", handing the fix to a later server
+  package. Partly disagreed: the finding's
+  two fixes (no charge until the first accepted heartbeat, or releasing the hold) would leave the minutes the computer
+  ran unpaid, and M8 charges every hosted minute at no less than cost. The row hands on what fits M8: hold the block
+  as now, charge only the minutes that ran, and charge the retention only after the first accepted heartbeat. O6. No
+  code change.
+- F4 (O2: a pack over 5 GiB is attempted on every beat): confirmed, not changed, as the finding recommends. Skipping
+  later attempts needs `packWork`'s rejection to carry a size marker across the hostd and daemon boundary. `packWork`
+  runs `setpriv` and `tar` as the agent user, so no local test reaches that marker. The person's outcome stays the same
+  (no files, one block), and `reapDownload` applies no fair-use check to a download session (`hosted-crons.ts:345`), so
+  the repeated packs cannot put the computer on hold. The "too large" report in O2 is the fix.
+- F5 (`hostd.test.ts`: the socket case writes a full `DaemonDeps`): confirmed, not changed. The literal goes straight
+  into `new Daemon(...)`, so the typecheck fails it as soon as `DaemonDeps` changes, and it cannot drift silently.
+  Moving `world()` into a shared helper would rewrite `daemon.test.ts`'s harness in a fix round for style alone.
+
+**Observations (not changed)**
+
+- O1, an A53 server gap, now narrower. After an `uploaded` beat, a job session's hostd (and a pre-H1b hostd on a
+  download session) drops its copy as soon as the server answers neither pack nor upload, and a failed HEAD answers the
+  same (`hosted-sessions.ts:1521`). The server then keeps signing links hostd cannot use, because the kept size stays
+  and `beat.uploaded` is gone. H1b's download path no longer depends on that answer (R3). For job sessions the fix
+  (answer `upload` again, or an explicit acceptance in the answer) is server and schema work outside H1b's files.
+- O2, a work folder over 5 GiB. `packWork` refuses it (`hostd.ts:339`), so no size is reported, and the server keeps
+  answering `pack` (`hosted-sessions.ts:1556`). hostd then packs again on every answer until the block ends, and a
+  download-only session pays its block with nothing to download. No schema field says "too large". A later package
+  should let hostd report it, so the server can end the session early and say why. The review round left the daemon
+  as it is (F4).
+- O3, a download session's socket. The agent's socket stays up with no agent behind it. `acting()` is false, so git is
+  refused (409) and computer actions answer that the computer is paused (`computer.ts:103`).
+- O4, a check that never confirms (review round, F1). While a beat says `uploaded`, today's server only HEADs the
+  object (`hosted-sessions.ts:1521`) and never asks for the files again. If the object is missing despite the PUT's 2xx,
+  or its `content-length` differs from the kept size, every later HEAD fails the same way. The download session then
+  runs to the end of its block, and the person pays for the block and the retention with no files. H1b's hostd is
+  ready for a server-only fix: a `pack` or `upload` answered to a beat that said `uploaded` makes it pack the disk again
+  and report the new size without `uploaded`, so the next link is signed for that size. Handed to a later server and
+  schema package: answer a definitive rejection (HEAD 404, or a length other than `archiveBytes`) with `pack` or
+  `upload`, or add an explicit acceptance or rejection field to the heartbeat answer. A timed-out or failed HEAD should
+  stay a retry. No image rebuild is needed for hostds built with H1b.
+- O5, a lost early beat (seen while writing the review round's tests; not changed). `tick()` called after a beat's loop
+  has ended but before its `finally` clears `ticking` only sets `again`, which nothing reads any more. The beat it asked
+  for then goes out with the next 30-second beat instead of at once. That delays reporting and loses nothing. It is
+  older than H1b, so the test fake only awaits a hook that returns a promise, and every older case keeps its timing.
+- O6, the charged download that cannot run (review round, F3): R4(d) above. It is now tracked as a defect in the lane
+  status ("Lane status (8 Nov 2026)", the 15 Nov H1b row) and in `codium-a53-hosted-sessions-notes.md` ("Not done").
+
+**Not built**
+
+- Client surfaces (H1c) and the 14-day notice (H1a's "Not built").
+- The image rebuild: an owner step (`owner-actions/hosted-computer.md`, the "Download-only starts (H1a)" list).
+
+**Unverified on a real computer.** Real-microVM behaviour is unverified until three things happen: the owner rebuilds
+the image (A58's image workflow), runs `vector-codium-e2e.yml` with `hosted: true`, and a computer's disk is made from
+that image (R4(d)). That covers the firewall on the provider's kernel, the real viewer proxy refusing a download
+session's connections, and `packWork` and the PUT against the real bucket.
+
+**Ran locally** (through `vector-serial`, one file at a time from `packages/hosted-computer` with `--timeout 30000`,
+after the last code edit):
+- `test/daemon.test.ts` 17/0 (9 at HEAD, 8 new) and `test/hostd.test.ts` 17/0 (16 at HEAD, 1 new), re-run after the
+  review round.
+- Regressions: `test/recording.test.ts` 7/0 (it drives `Daemon`), `test/source.test.ts` 3/0, and `test/image.test.ts`
+  21 pass, 3 skip (Docker, CI).
+- `bun typecheck` in `packages/hosted-computer` (`tsgo --noEmit`, src and tests): clean.
+- `bun run build`, then `node --check` on `dist/hostd.mjs` and `dist/viewer-proxy.mjs`, and importing `dist/hostd.mjs`
+  under Node (`main` does not run on import): pass.
+- Mutations, each restored afterwards (re-run on the review round's code):
+  - writing the viewer state in download mode fails 3 cases;
+  - dropping the download early return fails 4 (the agent starts) and the hostd socket case;
+  - dropping the `finishing` guard fails the refusal case;
+  - the latch without `!this.booted` fails the job-session case;
+  - not setting `uploaded` after the PUT fails 4;
+  - dropping the size with the copy fails 4;
+  - packing before the `finishing` check fails the refusal case;
+  - review round: dropping the stale check (`!report.uploaded`) fails the stale-answer case; ignoring a request after
+    `uploaded`, or packing again without clearing the dropped copy's entry, fails the re-pack case. The order of
+    `discard` before `uploaded` is defensive and no case pins it: the race it closes needs a server that rejects.
+- No other package was touched, so no other package typecheck ran. The full-tree typecheck and the api tree run before
+  the push.
+- Added lines are kept to 120 characters. No `prettier --write`: the edited files were not prettier-clean at HEAD.
+
+**Only in CI.**
+- The Docker image job, which builds the bundle with this daemon and boots the image: "Hosted services / Cloud computer
+  image (Docker)" in Vector Codium and "Cloud computer image (Docker)" in vector-hosted-ci.yml.
+- vector-hosted-ci.yml's Hosted tests, which run every `packages/hosted-computer` test file.
+- The typecheck matrix.
+
+Dispatches after the lead's commit, in order: Vector Codium on `codium-finish` with `base: "origin/release-finish"`,
+then typecheck.yml, then vector-hosted-ci.yml once the Vector Codium run has finished.
+
+**For the lead.** None in another lane's files. Records also touched: `codium-a53-hosted-sessions-notes.md`,
+`codium-a54-hosted-image-notes.md`, `codium-p8-repairs.md`, `docs/vector/MODEL-PLANS.md` and
+`docs/vector/owner-actions/hosted-computer.md`.
+
+Edits to `api/_lib/model-plan-*.ts`: none.

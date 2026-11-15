@@ -120,3 +120,17 @@ resume after, also on failure).
 - No image was built, pushed or baked; no microVM was started.
 - The git-token route, the agent-side wiring and recording uploads (above).
 - bun.lock gains only the new workspace's entry. Nothing was pushed or deployed.
+
+**Status, 15 Nov 2026 (Codium finish, H1b).** `daemon.ts` gained the download-only session (H1a's `mode: "download"`):
+from an answer that says so before any job started, hostd starts no agent, browser, guard or recorder and writes no
+viewer state, so the viewer proxy refuses every connection. It packs `/data/work` and uploads it when asked, drops the
+copy after the PUT and keeps reporting `uploaded` with the size until the server confirms the upload and ends the
+session; a `pack` or `upload` answered to a beat that said `uploaded` makes it pack again and upload anew (today's
+server sends none). The job path's pack step is now `packWhenAsked`, shared by both paths and otherwise unchanged.
+`hostd.ts` changed only in its header. The image, `boot.sh`, `boot-lib.sh` and the firewall are unchanged, and no
+credential or host was added. A rebuilt image reaches a computer only when its disk is made again, so H1b reaches ended
+plans' kept disks only if they were made from an image built after it. The server-side image floor is still not built;
+when it is (H2a), it must exempt download-only starts. Tests here: `daemon.test.ts` 17 pass (8 new), `hostd.test.ts` 17
+pass (1 new), `recording`, `source` and `image` (`21 pass, 3 skip`) unchanged; typecheck, `bun run build` and
+`node --check` clean. The Docker job and the real-microVM check are CI and owner steps. `codium-deviations.md`
+"Codium finish: H1 computer (15 Nov 2026)".
