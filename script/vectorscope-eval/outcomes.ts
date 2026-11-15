@@ -1,6 +1,15 @@
 #!/usr/bin/env bun
-import { createHmac, randomBytes } from "node:crypto"
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { createHmac, createPrivateKey, hkdfSync, randomBytes } from "node:crypto"
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { Option, Schema } from "effect"
@@ -10,6 +19,7 @@ import {
   DEFAULT_SLACK,
   proportion,
   severityGradient,
+  wilson,
   type Proportion,
   type SeverityGradient,
 } from "../../packages/core/src/review/eval"
@@ -67,7 +77,8 @@ import { OUTCOME_LEDGER_FILE, publicKey, PUBLIC_KEY_ENV, seal, unseal, type Seal
 //            sealed to PUBLIC_KEY_ENV. It refuses to start in GitHub Actions, whose logs are public, and checks the
 //            key before any read. It prints counts only.
 //   open     On the owner's machine: unseals a ledger, refuses an expired one, and writes the report (and, with
-//            --ledger, the ledger itself) to a directory outside every git work tree.
+//            --ledger, the ledger itself) to a directory outside every git work tree. With --audit it also writes
+//            VS-46d's audit sample for the owner to label by hand, and --labels reads those answers back.
 //
 // Schema 2 (addendum B §1.8 and §1.9: VS-46c and VS-46d as one schema change) keeps every v1 field with its v1 value
 // and adds what their report sections need: per-PR line counts, a second, filtered follow-up-fix label (blame with -w,
@@ -127,6 +138,20 @@ export const MEASUREMENT_RULE: Readonly<MeasurementRule> = Object.freeze({
   replicates: 2000,
 })
 export type MeasurementVerdict = "underpowered" | "beats-size" | "no-better-than-size" | "undecided"
+// VS-46d item 1's label audit (addendum B §1.9; SF-05a). `open --audit` writes AUDIT_FILE beside the report: a seeded
+// sample of up to AUDIT_DRAW positive and AUDIT_DRAW negative PRs on the filtered follow-up-fix label, for the owner to
+// answer by hand on their own machine. `open --labels` reads the answers back. The filtered label counts as audited once
+// at least AUDIT_PER_LABEL of each are answered, so up to AUDIT_DRAW − AUDIT_PER_LABEL of each may be skipped.
+export const AUDIT_FILE = "outcomes-audit.json"
+export const AUDIT_SCHEMA = "vectorscope-outcomes-audit/1"
+export const AUDIT_PER_LABEL = 50
+export const AUDIT_DRAW = 60
+export const AUDIT_QUESTION = `Did a commit merged within ${MATURITY_DAYS} days after this PR fix a defect this PR introduced? Set fixInducing to true or false, or leave it null to skip this PR (at most ${AUDIT_DRAW - AUDIT_PER_LABEL} of each label). For a positive, its filtered and unfiltered fixes say where the label looked: check that a fix changes behaviour this PR added, not only formatting, comments or where code sits.`
+// The HKDF info auditKey derives the audit's key with: changing it redraws every sample.
+export const AUDIT_INFO = "vectorscope-outcomes audit ids/1"
+// A labels file larger than this is refused before it is read. A sample's own file, at most 2 × AUDIT_DRAW entries,
+// stays far below it.
+export const MAX_LABELS_BYTES = 4 * 1024 * 1024
 // How far after `now` a ledger's collection time may be and still open: the clock at collection against this one.
 export const CLOCK_SKEW_MS = 300_000
 // At most this many GitHub requests per collection. A PR that cannot be read within it is marked truncated.
@@ -667,6 +692,24 @@ export function hashLogin(login: string, key: Uint8Array): string {
 // hash in the ledger with them.
 export function hashName(kind: "path" | "fn", text: string, key: Uint8Array): string {
   return createHmac("sha256", key).update(`${kind}\0${text}`).digest("hex").slice(0, 16)
+}
+
+// VS-46d item 1's audit key: HKDF-SHA256 over the owner's private key, read as its PKCS#8 DER so every PEM encoding of
+// one key gives one audit key. `open` derives it in memory from the key it already reads to unseal, and never stores or
+// prints it. So a ledger's sample is the same on every open, a PR keeps its id in every ledger of the repository sealed
+// to that key, and nobody who holds only the public key or these files can tell which PRs a sample will draw: a PR
+// author cannot steer a PR into or out of the audit. A new owner key draws a new sample, whose answers are given anew.
+export function auditKey(pem: string): Uint8Array {
+  return new Uint8Array(
+    hkdfSync("sha256", createPrivateKey(pem).export({ type: "pkcs8", format: "der" }), "", AUDIT_INFO, 32),
+  )
+}
+
+// A PR's audit id: the first 16 hex characters of an HMAC-SHA256 of its repository (lowercased) and number under the
+// audit key. It is the join key between the sample and the owner's answers, not a pseudonym: the sample keeps each PR's
+// number and fix days beside it.
+function auditId(repository: string, number: number, key: Uint8Array) {
+  return createHmac("sha256", key).update(`pr\0${repository.toLowerCase()}\0${number}`).digest("hex").slice(0, 16)
 }
 
 /**
@@ -2120,6 +2163,46 @@ const LedgerEntries = Schema.Struct({
 )
 const decodeLedger = Schema.decodeUnknownOption(LedgerEntries)
 const decodeLedgerV1 = Schema.decodeUnknownOption(LedgerEntriesV1)
+// The owner's answers to an audit sample (`open --labels`): the file `open --audit` wrote, answered by hand. Only these
+// fields are read.
+const AuditLabelsFile = Schema.Struct({
+  schema: Schema.Literal(AUDIT_SCHEMA),
+  repository: Schema.String,
+  expires: IsoDate,
+  entries: Schema.Array(Schema.Struct({ id: Hash, fixInducing: Schema.NullOr(Schema.Boolean) })).check(
+    Schema.makeFilter((entries) => entries.length <= MAX_LEDGER_PULLS),
+  ),
+})
+const decodeAuditLabels = Schema.decodeUnknownOption(AuditLabelsFile)
+
+// The owner's answers for this ledger's repository and when the file holding them expires, or why they cannot be read:
+// not JSON, malformed, another repository's, expired (it names PRs, and carries the expiry of the ledger it was drawn
+// from), or naming one PR twice.
+export function auditLabels(
+  text: string,
+  repository: string,
+  now: number,
+): { answers: AuditLabels; expires: string } | string {
+  const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text)
+  if (Option.isNone(parsed)) return "the labels file is not valid JSON"
+  const file = decodeAuditLabels(parsed.value)
+  if (Option.isNone(file))
+    return `the labels file is not a ${AUDIT_SCHEMA} file with an expiry and, on each entry, an audit id and a fixInducing of true, false or null`
+  if (file.value.repository.toLowerCase() !== repository.toLowerCase())
+    return `the labels file is for ${JSON.stringify(file.value.repository)}, not ${repository}`
+  if (now >= Date.parse(file.value.expires))
+    return `the labels file expired on ${file.value.expires.slice(0, 10)}: delete it`
+  const ids = file.value.entries.map((entry) => entry.id)
+  if (new Set(ids).size !== ids.length) return "the labels file names one PR twice"
+  return {
+    answers: new Map(
+      file.value.entries.flatMap((entry): [string, boolean][] =>
+        entry.fixInducing === null ? [] : [[entry.id, entry.fixInducing]],
+      ),
+    ),
+    expires: file.value.expires,
+  }
+}
 
 // Why a ledger cannot be opened now, or undefined. The bounds are checked because anyone with the public key can seal
 // a payload: a collection time in the future, or an expiry more than LEDGER_DAYS after it, is refused, and so is any
@@ -2220,10 +2303,12 @@ export interface OutcomeReport {
   }
   // VS-46c's measurement: a schema-2 ledger in the full decision only.
   measurement?: Measurement
+  // VS-46d items 1 to 4 (SF-05a): a schema-2 ledger in the full decision only, as the measurement.
+  labelQuality?: LabelQuality
   split: Record<"agent" | "agent-signal" | "bulk", Record<Outcome, number>>
   cycle: { n: number; p50: number; p90: number } | null
   // A schema-1 ledger only: it has none of the fields the schema-2 sections read, so each says so, whatever the volume
-  // decision. SF-05a and SF-05b add their own sections to that list.
+  // decision. VS-46c's and SF-05a's sections are in that list; SF-05b adds its own.
   unavailable?: typeof V1_UNAVAILABLE
   problems: string[]
 }
@@ -2283,15 +2368,104 @@ export interface Measurement {
   reasons: string[] // why it is underpowered, in fixed wording
 }
 
+// VS-46d item 1 (SF-05a). One fix the sample shows for a PR, within MATURITY_DAYS of its merge: its fix commit's day,
+// its days after the merge, the lines it blamed on the PR and how it was labelled a fix.
+export interface AuditFix {
+  date: string
+  days: number
+  lines: number
+  kind: "label" | "title"
+}
+
+// One sampled PR. `id` is the join key the owner's answers are read by; `pr` is there so the owner can find the PR.
+export interface AuditEntry {
+  id: string
+  pr: number
+  label: "positive" | "negative" // on the filtered label: a fixesFiltered entry within MATURITY_DAYS, or none
+  filtered: AuditFix[]
+  unfiltered: AuditFix[]
+  fixInducing: boolean | null // the owner's answer: null until answered, or skipped
+}
+
+// What `open --audit` writes. Read back as labels, only schema, repository, expires and each entry's id and fixInducing
+// count; the rest may be changed or deleted.
+export interface AuditSample {
+  schema: typeof AUDIT_SCHEMA
+  repository: string
+  branch: string
+  collectedAt: string
+  expires: string // the ledger's expiry, or a labels file's when answers were carried in from it and it expires sooner
+  question: string
+  population: { positives: number; negatives: number }
+  entries: AuditEntry[] // positives, then negatives, each in id order
+}
+
+// The owner's answers by audit id, with unanswered (null) entries left out.
+export type AuditLabels = ReadonlyMap<string, boolean>
+
+export interface LabelAudit {
+  // The filtered label's population, as the measurement reads it, and the not-reverted PRs the mark left out of it.
+  population: { positives: number; negatives: number; filteredIncomplete: number }
+  sample: { positives: number; negatives: number } // what a sample draws: up to AUDIT_DRAW of each
+  // With a labels file: the answered sampled PRs of each label and what the answers give.
+  labels?: {
+    positives: number
+    negatives: number
+    precision: Proportion // fix-inducing among the answered positives
+    omission: Proportion // fix-inducing among the answered negatives: the label's miss rate
+    // Weighted by the population's positives and negatives; the value needs AUDIT_PER_LABEL answers of each.
+    recall: { value: number | null; interval: [number, number] | null }
+    ignored: number // answers whose id is not in this sample
+    cycle: Cycle
+  }
+  audited: boolean // at least AUDIT_PER_LABEL answered positives and AUDIT_PER_LABEL answered negatives
+}
+
+// One side of a band's fix-edited lines per kLOC added (item 4).
+export interface DensitySide {
+  pulls: number
+  added: number
+  lines: number
+  perKloc: number | null // null with no line added
+}
+
+export interface DensityRow {
+  filtered: DensitySide // the filtered label over its population
+  unfiltered: DensitySide // VS-46a's label over the PRs not reverted within MATURITY_DAYS
+  cycle: Cycle // over the unfiltered side's PRs, which hold the filtered side's
+}
+
+export interface LabelQuality {
+  audit: LabelAudit
+  // Item 2, over every fix commit the scan labelled: those with no deleted line, and with no deleted code line.
+  untraceable: { commits: number; unfiltered: Proportion; filtered: Proportion }
+  // Item 3, over the filtered label's population: the kinds of every line the unfiltered label blamed on it within
+  // MATURITY_DAYS, the lines the filtered label blames on it, and those it gained (filtered less code).
+  reattribution: {
+    pulls: number
+    filteredIncomplete: number
+    lines: number
+    kinds: LedgerLineKinds
+    filtered: number
+    gained: number
+    cycle: Cycle
+  }
+  density: Record<RiskBand | "all", DensityRow> // item 4
+}
+
 /**
  * The internal report (D12). Truncated PRs are left out of every count but the totals. Rates come from settled
  * human-stratum findings; a cell over fewer than MIN_SETTLED settled findings, or MIN_PULLS PRs or reviews, keeps its
  * count and interval and shows no rate. Below MIN_VOLUME settled human-stratum findings on PRs merged in the 90 days
  * before collection, only the gradient, its sensitivity row, the split and the counts are reported. In the full
  * decision a schema-2 ledger also gets VS-46c's measurement, under the rule sealed in it (MEASUREMENT_RULE when it has
- * none); it never changes the ledger.
+ * none), and VS-46d's label quality: `audit` is a sample auditSample drew from this ledger and the owner's answers to
+ * it, without which every follow-up-fix rate is unaudited. It never changes the ledger.
  */
-export function outcomeReport(ledger: OutcomeLedger | OutcomeLedgerV1): OutcomeReport {
+export function outcomeReport(
+  ledger: OutcomeLedger | OutcomeLedgerV1,
+  audit?: { sample: AuditSample; labels: AuditLabels },
+): OutcomeReport {
   // Every v1 section reads only v1 fields, whichever schema the ledger has.
   const all: readonly LedgerPullV1[] = ledger.pulls
   const collected = Date.parse(ledger.collectedAt)
@@ -2312,6 +2486,8 @@ export function outcomeReport(ledger: OutcomeLedger | OutcomeLedgerV1): OutcomeR
     return found ? { p50: found.p50, p90: found.p90 } : null
   }
   const overall = spread(pulls.map((pull) => pull.cycleHours))
+  // A schema-2 ledger's label populations, computed once for the measurement and the label sections.
+  const v2 = ledger.schema === LEDGER_SCHEMA ? { ledger, populations: labelPopulations(ledger) } : undefined
   const base = {
     repository: ledger.repository,
     branch: ledger.branch,
@@ -2450,7 +2626,12 @@ export function outcomeReport(ledger: OutcomeLedger | OutcomeLedgerV1): OutcomeR
       cycle: cycleOf(reviewed.map((pull) => pull.number)),
     },
     bands: bandsOf(matured, cycleOf),
-    ...(ledger.schema === LEDGER_SCHEMA ? { measurement: measurementOf(ledger, cycleOf) } : {}),
+    ...(v2
+      ? {
+          measurement: measurementOf(v2.ledger, v2.populations, cycleOf),
+          labelQuality: labelQualityOf(v2.ledger, v2.populations, cycleOf, audit),
+        }
+      : {}),
   }
 }
 
@@ -2518,6 +2699,11 @@ function fixed(pull: LedgerPullV1, days: number) {
   return (pull.fixes ?? []).some((fix) => fix.days <= days)
 }
 
+// VS-46d's filtered label within `days` of the merge.
+function filteredFixed(pull: LedgerPull, days: number) {
+  return (pull.fixesFiltered ?? []).some((fix) => fix.days <= days)
+}
+
 // A label's share of `group` in each window, with no rate shown under MIN_PULLS PRs.
 function windows<T extends LedgerPullV1>(group: readonly T[], test: (pull: T, days: number) => boolean) {
   return Object.fromEntries(
@@ -2557,34 +2743,24 @@ interface Ranked {
  * Reverts decide when both the low and the high band expect at least MIN_EXPECTED reverts; the filtered label decides
  * otherwise. The verdict reads the deciding label's capture at the rule's overhead.
  */
-function measurementOf(ledger: OutcomeLedger, cycleOf: (numbers: Iterable<number>) => Cycle): Measurement {
+function measurementOf(
+  ledger: OutcomeLedger,
+  populations: Populations,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): Measurement {
   const rule = ledger.rule ?? MEASUREMENT_RULE
-  const ranked = ledger.pulls.flatMap((pull): Ranked[] =>
-    !pull.truncated && pull.matured && pull.band !== undefined && pull.score !== undefined
-      ? [
-          {
-            pull,
-            band: pull.band,
-            score: pull.score,
-            lines: (pull.added ?? 0) + (pull.deleted ?? 0),
-            moved: pull.band !== likelyBand(pull.score),
-          },
-        ]
-      : [],
-  )
-  const filtered = (pull: LedgerPull, days: number) => (pull.fixesFiltered ?? []).some((fix) => fix.days <= days)
-  const kept = ranked.filter((entry) => !reverted(entry.pull, MATURITY_DAYS))
-  const complete = kept.filter((entry) => entry.pull.filteredIncomplete !== true)
   const labels = {
-    revert: labelMeasure(ranked, (entry) => reverted(entry.pull, MATURITY_DAYS), rule, cycleOf),
-    filtered: labelMeasure(complete, (entry) => filtered(entry.pull, MATURITY_DAYS), rule, cycleOf),
+    revert: labelMeasure(populations.ranked, (entry) => reverted(entry.pull, MATURITY_DAYS), rule, cycleOf),
+    filtered: labelMeasure(populations.complete, (entry) => filteredFixed(entry.pull, MATURITY_DAYS), rule, cycleOf),
   }
   const deciding =
     labels.revert.low.expected >= MIN_EXPECTED && labels.revert.high.expected >= MIN_EXPECTED ? "revert" : "filtered"
   const decided = labels[deciding]
   const interval = decided.capture.find((row) => row.overhead === rule.overhead)?.interval ?? null
   const reasons = [
-    ranked.length < MIN_MATURED ? `fewer than ${MIN_MATURED} matured PRs with a band (${ranked.length})` : undefined,
+    populations.ranked.length < MIN_MATURED
+      ? `fewer than ${MIN_MATURED} matured PRs with a band (${populations.ranked.length})`
+      : undefined,
     decided.low.expected < MIN_EXPECTED || decided.high.expected < MIN_EXPECTED
       ? `fewer than ${MIN_EXPECTED} expected positives in the low or the high band`
       : undefined,
@@ -2600,26 +2776,26 @@ function measurementOf(ledger: OutcomeLedger, cycleOf: (numbers: Iterable<number
       (name) => rule[name] !== MEASUREMENT_RULE[name],
     ),
     base: {
-      pulls: ranked.length,
-      cycle: cycleOf(ranked.map((entry) => entry.pull.number)),
+      pulls: populations.ranked.length,
+      cycle: cycleOf(populations.ranked.map((entry) => entry.pull.number)),
       subjects: {
         commits: ledger.subjects.commits,
         fix: cell(ledger.subjects.fix, ledger.subjects.commits, MIN_PULLS),
         revert: cell(ledger.subjects.revert, ledger.subjects.commits, MIN_PULLS),
       },
       reverted: windows(
-        ranked.map((entry) => entry.pull),
+        populations.ranked.map((entry) => entry.pull),
         reverted,
       ),
       fixed: windows(
-        kept.map((entry) => entry.pull),
+        populations.kept.map((entry) => entry.pull),
         fixed,
       ),
       filtered: windows(
-        complete.map((entry) => entry.pull),
-        filtered,
+        populations.complete.map((entry) => entry.pull),
+        filteredFixed,
       ),
-      filteredIncomplete: kept.length - complete.length,
+      filteredIncomplete: populations.kept.length - populations.complete.length,
     },
     labels,
     deciding,
@@ -2633,6 +2809,28 @@ function measurementOf(ledger: OutcomeLedger, cycleOf: (numbers: Iterable<number
             : "undecided",
     reasons,
   }
+}
+
+// The labels' populations, which the measurement, the audit and the label sections share: `ranked` holds the matured PRs
+// with a band that no read cut short (the revert label's), `kept` those not reverted within MATURITY_DAYS (the
+// unfiltered fix label's), and `complete` those not marked filteredIncomplete either (the filtered label's).
+function labelPopulations(ledger: OutcomeLedger) {
+  const ranked = ledger.pulls.flatMap((pull): Ranked[] =>
+    !pull.truncated && pull.matured && pull.band !== undefined && pull.score !== undefined
+      ? [
+          {
+            pull,
+            band: pull.band,
+            score: pull.score,
+            lines: (pull.added ?? 0) + (pull.deleted ?? 0),
+            moved: pull.band !== likelyBand(pull.score),
+          },
+        ]
+      : [],
+  )
+  const kept = ranked.filter((entry) => !reverted(entry.pull, MATURITY_DAYS))
+  const complete = kept.filter((entry) => entry.pull.filteredIncomplete !== true)
+  return { ranked, kept, complete }
 }
 
 // The band the likelihood score alone gives, as riskOf reads it at the default cutpoints readPull uses: a score exactly
@@ -2813,6 +3011,207 @@ function seeded(seed: number) {
   }
 }
 
+/**
+ * VS-46d item 1's sample (addendum B §1.9; SF-05a): the filtered label's population, as the measurement reads it, split
+ * into its positives and negatives, each ordered by audit id (then PR number) and cut to its first AUDIT_DRAW. To
+ * anyone without the key, ordering by a keyed hash makes each cut a uniform random sample (bottom-k). It is the same on
+ * every open, and a PR's id is the same in every ledger of the repository sealed to the same key, so a later ledger's
+ * sample keeps each earlier-drawn PR that still ranks within its cut. It never changes the ledger.
+ */
+export function auditSample(ledger: OutcomeLedger, key: Uint8Array): AuditSample {
+  const fixesOf = (fixes: readonly (LedgerFix | LedgerFilteredFix)[] | undefined): AuditFix[] =>
+    (fixes ?? [])
+      .filter((fix) => fix.days <= MATURITY_DAYS)
+      .map((fix) => ({ date: ledger.fixCommits[fix.commit].date, days: fix.days, lines: fix.lines, kind: fix.kind }))
+  const complete = labelPopulations(ledger).complete
+  const drawn = (label: AuditEntry["label"]) =>
+    complete
+      .filter((entry) => filteredFixed(entry.pull, MATURITY_DAYS) === (label === "positive"))
+      .map(
+        (entry): AuditEntry => ({
+          id: auditId(ledger.repository, entry.pull.number, key),
+          pr: entry.pull.number,
+          label,
+          filtered: fixesOf(entry.pull.fixesFiltered),
+          unfiltered: fixesOf(entry.pull.fixes),
+          fixInducing: null,
+        }),
+      )
+      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.pr - b.pr))
+  const positives = drawn("positive")
+  const negatives = drawn("negative")
+  return {
+    schema: AUDIT_SCHEMA,
+    repository: ledger.repository,
+    branch: ledger.branch,
+    collectedAt: ledger.collectedAt,
+    expires: ledger.expires,
+    question: AUDIT_QUESTION,
+    population: { positives: positives.length, negatives: negatives.length },
+    entries: [...positives.slice(0, AUDIT_DRAW), ...negatives.slice(0, AUDIT_DRAW)],
+  }
+}
+
+/**
+ * VS-46d items 1 to 4 (addendum B §1.9; SF-05a) on the labels' populations, as the measurement reads them: the label
+ * audit, the untraceable share, the filter's reattribution, and fix-edited lines per kLOC added by band.
+ */
+function labelQualityOf(
+  ledger: OutcomeLedger,
+  populations: Populations,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+  audit: { sample: AuditSample; labels: AuditLabels } | undefined,
+): LabelQuality {
+  return {
+    audit: auditOf(populations, cycleOf, audit),
+    untraceable: untraceableOf(ledger.fixCommits),
+    reattribution: reattributionOf(populations, cycleOf),
+    density: densityOf(populations, cycleOf),
+  }
+}
+
+type Populations = ReturnType<typeof labelPopulations>
+
+// Item 1: precision and the miss rate over the answered sampled PRs of each label, and recall weighted by the
+// population, because the sample is stratified. Only answers to this ledger's own sample count, so the estimate stays a
+// stratified random sample; the rest are counted as ignored.
+function auditOf(
+  populations: Populations,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+  audit: { sample: AuditSample; labels: AuditLabels } | undefined,
+): LabelAudit {
+  const positives = populations.complete.filter((entry) => filteredFixed(entry.pull, MATURITY_DAYS)).length
+  const negatives = populations.complete.length - positives
+  const base = {
+    population: { positives, negatives, filteredIncomplete: populations.kept.length - populations.complete.length },
+    sample: { positives: Math.min(AUDIT_DRAW, positives), negatives: Math.min(AUDIT_DRAW, negatives) },
+  }
+  if (!audit) return { ...base, audited: false }
+  const answered = (label: AuditEntry["label"]) =>
+    audit.sample.entries.filter((entry) => entry.label === label && audit.labels.has(entry.id))
+  const inducing = (entries: readonly AuditEntry[]) =>
+    entries.filter((entry) => audit.labels.get(entry.id) === true).length
+  const sampled = new Set(audit.sample.entries.map((entry) => entry.id))
+  const yes = answered("positive")
+  const no = answered("negative")
+  const audited = yes.length >= AUDIT_PER_LABEL && no.length >= AUDIT_PER_LABEL
+  return {
+    ...base,
+    labels: {
+      positives: yes.length,
+      negatives: no.length,
+      precision: cell(inducing(yes), yes.length, AUDIT_PER_LABEL),
+      omission: cell(inducing(no), no.length, AUDIT_PER_LABEL),
+      recall: recallOf(
+        positives,
+        negatives,
+        { count: inducing(yes), total: yes.length },
+        { count: inducing(no), total: no.length },
+        audited,
+      ),
+      ignored: [...audit.labels.keys()].filter((id) => !sampled.has(id)).length,
+      cycle: cycleOf([...yes, ...no].map((entry) => entry.pr)),
+    },
+    audited,
+  }
+}
+
+// Recall on a stratified sample: P·p / (P·p + N·q), where p is the fix-inducing share of the answered positives, q of
+// the answered negatives, and P and N are the population's positives and negatives. Recall rises with p and falls with
+// q, so its interval is composed from the two strata's Wilson intervals at 1 − (1 − DEFAULT_CONFIDENCE) / 2: both hold
+// at once with at least DEFAULT_CONFIDENCE (Bonferroni), and so does the composed interval. It is not a Wilson
+// interval of its own. With no fix-inducing PR anywhere, the lower end is 0 and the upper 1.
+function recallOf(
+  positives: number,
+  negatives: number,
+  yes: { count: number; total: number },
+  no: { count: number; total: number },
+  audited: boolean,
+): { value: number | null; interval: [number, number] | null } {
+  const confidence = 1 - (1 - DEFAULT_CONFIDENCE) / 2
+  const p = wilson(yes.count, yes.total, confidence)
+  const q = wilson(no.count, no.total, confidence)
+  const recall = (precision: number, missed: number) => {
+    const found = positives * precision
+    return found + negatives * missed > 0 ? found / (found + negatives * missed) : null
+  }
+  return {
+    value: audited ? recall(yes.count / yes.total, no.count / no.total) : null,
+    interval: p && q ? [recall(p[0], q[1]) ?? 0, recall(p[1], q[0]) ?? 1] : null,
+  }
+}
+
+// Item 2: the fix commits that deleted no line, which the unfiltered label cannot trace to a PR, and those that deleted
+// no code line (add-only, or deleting only blank or comment lines), which the filtered label cannot. Over every fix
+// commit the scan labelled, from the window's first merge to MATURITY_DAYS after its last.
+function untraceableOf(commits: readonly LedgerFixCommit[]) {
+  const share = (test: (commit: LedgerFixCommit) => boolean) =>
+    cell(commits.filter(test).length, commits.length, MIN_PULLS)
+  return {
+    commits: commits.length,
+    unfiltered: share((commit) => commit.deleted.code + commit.deleted.blank + commit.deleted.comment === 0),
+    filtered: share((commit) => commit.deleted.code === 0),
+  }
+}
+
+// Item 3: the kinds of every line the unfiltered label blamed on the filtered population's PRs within MATURITY_DAYS,
+// and the lines the filtered label blames on the same PRs. Every such fix carries its kinds: only a PR marked
+// filteredIncomplete may lack them, and none is in this population.
+function reattributionOf(populations: Populations, cycleOf: (numbers: Iterable<number>) => Cycle) {
+  const pulls = populations.complete.map((entry) => entry.pull)
+  const fixes = pulls.flatMap((pull) => (pull.fixes ?? []).filter((fix) => fix.days <= MATURITY_DAYS))
+  const kinds = fixes.reduce(
+    (sum, fix) => ({
+      code: sum.code + (fix.deleted?.code ?? 0),
+      blank: sum.blank + (fix.deleted?.blank ?? 0),
+      comment: sum.comment + (fix.deleted?.comment ?? 0),
+      whitespace: sum.whitespace + (fix.deleted?.whitespace ?? 0),
+      moved: sum.moved + (fix.deleted?.moved ?? 0),
+    }),
+    { code: 0, blank: 0, comment: 0, whitespace: 0, moved: 0 },
+  )
+  const filtered = pulls
+    .flatMap((pull) => (pull.fixesFiltered ?? []).filter((fix) => fix.days <= MATURITY_DAYS))
+    .reduce((sum, fix) => sum + fix.lines, 0)
+  return {
+    pulls: pulls.length,
+    filteredIncomplete: populations.kept.length - populations.complete.length,
+    lines: fixes.reduce((sum, fix) => sum + fix.lines, 0),
+    kinds,
+    filtered,
+    gained: filtered - kinds.code,
+    cycle: cycleOf(pulls.map((pull) => pull.number)),
+  }
+}
+
+// Item 4: each label's fix-edited lines within MATURITY_DAYS per 1,000 lines added, by band and over every band.
+function densityOf(
+  populations: Populations,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): Record<RiskBand | "all", DensityRow> {
+  const side = (entries: readonly Ranked[], fixes: (pull: LedgerPull) => readonly LedgerFixV1[] | undefined) => {
+    const added = entries.reduce((sum, entry) => sum + (entry.pull.added ?? 0), 0)
+    const lines = entries
+      .flatMap((entry) => (fixes(entry.pull) ?? []).filter((fix) => fix.days <= MATURITY_DAYS))
+      .reduce((sum, fix) => sum + fix.lines, 0)
+    return { pulls: entries.length, added, lines, perKloc: added ? (lines * 1000) / added : null }
+  }
+  const row = (test: (entry: Ranked) => boolean): DensityRow => {
+    const kept = populations.kept.filter(test)
+    return {
+      filtered: side(populations.complete.filter(test), (pull) => pull.fixesFiltered),
+      unfiltered: side(kept, (pull) => pull.fixes),
+      cycle: cycleOf(kept.map((entry) => entry.pull.number)),
+    }
+  }
+  return {
+    low: row((entry) => entry.band === "low"),
+    medium: row((entry) => entry.band === "medium"),
+    high: row((entry) => entry.band === "high"),
+    all: row(() => true),
+  }
+}
+
 // The share of `fixes` among `among`, by severity, through VS-45's severityGradient. A share over fewer than
 // MIN_SETTLED findings keeps its count and interval and shows no value; the steps' own intervals decide the trend.
 function gradientOf(
@@ -2935,15 +3334,28 @@ export function renderOutcomes(report: OutcomeReport): string {
     : []
   const measured =
     report.measurement && report.bands
-      ? measurementLines(report.measurement, report.bands, cycle)
+      ? measurementLines(report.measurement, report.bands, cycle, report.labelQuality?.audit)
       : { before: [], after: [] }
-  // A schema-1 ledger: each VS-46c section says it is unavailable, whatever the volume decision.
+  const labelled = report.labelQuality ? labelLines(report.labelQuality, cycle) : []
+  // A schema-1 ledger: each VS-46c and VS-46d section says it is unavailable, whatever the volume decision.
   const unavailable = report.unavailable
-  const legacy = unavailable ? MEASUREMENT_SECTIONS.flatMap((heading) => ["", heading, "", unavailable]) : []
+  const legacy = unavailable
+    ? [...MEASUREMENT_SECTIONS, ...LABEL_SECTIONS].flatMap((heading) => ["", heading, "", unavailable])
+    : []
   const problems = report.problems.length
     ? ["", "## Problems", "", ...report.problems.map((problem) => `- ${problem}`)]
     : []
-  return [...header, ...measured.before, ...lines, ...full, ...measured.after, ...legacy, ...problems, ""].join("\n")
+  return [
+    ...header,
+    ...measured.before,
+    ...lines,
+    ...full,
+    ...measured.after,
+    ...labelled,
+    ...legacy,
+    ...problems,
+    "",
+  ].join("\n")
 }
 
 // VS-46c's report sections, in their order. A schema-1 ledger prints each with V1_UNAVAILABLE.
@@ -2953,6 +3365,15 @@ const MEASUREMENT_SECTIONS = [
   "## Capture against size",
   "## Measurement verdict",
   "## Depth and reach",
+] as const
+
+// VS-46d items 1 to 4's sections (SF-05a), in their order, after VS-46c's. A schema-1 ledger prints each with
+// V1_UNAVAILABLE.
+const LABEL_SECTIONS = [
+  "## Label audit",
+  "## Untraceable fixes",
+  "## Filter reattribution",
+  "## Fix-edited lines per kLOC",
 ] as const
 
 // The band table's separation, read on one v1 label (item 2). The too-few sentence is VS-46a's.
@@ -2977,13 +3398,17 @@ function measurementLines(
   measurement: Measurement,
   bands: NonNullable<OutcomeReport["bands"]>,
   cycle: (value: Cycle) => string,
+  audit: LabelAudit | undefined,
 ) {
   const base = measurement.base
   const labels = measurement.labels
   const rule = measurement.rule
   const name = { revert: "revert", filtered: "filtered follow-up fix" } as const
-  // The deciding follow-up-fix label carries its caveat wherever the verdict is read from it.
-  const flag = measurement.deciding === "filtered" ? " (SZZ-based, size-biased, unaudited)" : ""
+  // The deciding follow-up-fix label carries its caveat wherever the verdict is read from it, and VS-46d's audit (SF-05a)
+  // lifts only the filtered label's mark.
+  const audited = audit?.audited === true
+  const mark = audited ? "audited" : "unaudited"
+  const flag = measurement.deciding === "filtered" ? ` (SZZ-based, size-biased, ${mark})` : ""
   const keys = ["revert", "filtered"] as const
   const byWindow = (record: Record<(typeof LABEL_WINDOWS)[number], Proportion>) =>
     LABEL_WINDOWS.map((days) => `${days} d ${formatCell(record[days])}`).join(", ")
@@ -3000,12 +3425,12 @@ function measurementLines(
     "",
     `- Base-branch subjects: ${base.subjects.commits} first-parent commits in the merge window; fix-prefixed ${formatCell(base.subjects.fix)}, revert-prefixed ${formatCell(base.subjects.revert)}.`,
     `- Reverted, over all ${base.pulls}: ${byWindow(base.reverted)}.`,
-    `- Unfiltered follow-up fix (VS-46a's label), over the ${base.fixed[90].total} not reverted within ${MATURITY_DAYS} days: ${byWindow(base.fixed)}.`,
-    `- Filtered follow-up fix (VS-46d's label: blame with -w, -M and -C, code lines only), over the ${base.filtered[90].total} not reverted within ${MATURITY_DAYS} days and not marked filteredIncomplete (${base.filteredIncomplete} marked, left out): ${byWindow(base.filtered)}.`,
+    `- Unfiltered follow-up fix (VS-46a's label; unaudited), over the ${base.fixed[90].total} not reverted within ${MATURITY_DAYS} days: ${byWindow(base.fixed)}.`,
+    `- Filtered follow-up fix (VS-46d's label: blame with -w, -M and -C, code lines only; ${mark}), over the ${base.filtered[90].total} not reverted within ${MATURITY_DAYS} days and not marked filteredIncomplete (${base.filteredIncomplete} marked, left out): ${byWindow(base.filtered)}.`,
     `- Expected positives, low / high band: revert ${expected(bands.expected.revert)}, unfiltered follow-up fix ${expected(bands.expected.unfiltered)}, filtered follow-up fix ${expected({ low: labels.filtered.low.expected, high: labels.filtered.high.expected })}.`,
     measurement.deciding === "revert"
       ? `- Deciding label: revert, which carries no blame-size bias: both the low and the high band expect at least ${MIN_EXPECTED} reverts. Both labels are reported, and the band table's separation reads reverts too.`
-      : `- Deciding label: filtered follow-up fix, SZZ-based, size-biased and unaudited (VS-46d's audit has not run). Reverts decide only when both the low and the high band expect at least ${MIN_EXPECTED} reverts, and here they do not. Both labels are reported. The band table's separation reads only v1 fields, so it uses the unfiltered follow-up-fix label.`,
+      : `- Deciding label: filtered follow-up fix, SZZ-based, size-biased and ${audited ? "audited (VS-46d's audit: see Label audit)" : audit?.labels ? "unaudited (VS-46d's audit has too few answers: see Label audit)" : "unaudited (VS-46d's audit has not run)"}. Reverts decide only when both the low and the high band expect at least ${MIN_EXPECTED} reverts, and here they do not. Both labels are reported. The band table's separation reads only v1 fields, so it uses the unfiltered follow-up-fix label.`,
     "",
     "## Minimum detectable effect",
     "",
@@ -3076,6 +3501,83 @@ function measurementLines(
   return { before, after }
 }
 
+/**
+ * VS-46d items 1 to 4's sections (addendum B §1.9; SF-05a), after VS-46c's: the label audit, untraceable fixes, the
+ * filter's reattribution, and fix-edited lines per kLOC. No sentence here says that anything is ruled out for good.
+ */
+function labelLines(quality: LabelQuality, cycle: (value: Cycle) => string) {
+  const audit = quality.audit
+  const answers = audit.labels
+  const population = audit.population
+  const moved = quality.reattribution
+  const kinds = moved.kinds
+  const mark = audit.audited ? "audited" : "unaudited"
+  const bonferroni = 1 - (1 - DEFAULT_CONFIDENCE) / 2
+  const small =
+    population.positives < AUDIT_PER_LABEL || population.negatives < AUDIT_PER_LABEL
+      ? ` This population has ${population.positives} positives and ${population.negatives} negatives, so the audit cannot reach that yet.`
+      : ""
+  const covered =
+    "Every follow-up-fix rate in this report is unaudited, those without a mark of their own included: the filtered label's minimum detectable effect row and capture table, and, on the unfiltered label, the band table's Fixed 30 d and Fixed 90 d columns, the escapes and the later-fixed shares."
+  const status = !answers
+    ? `Unaudited: no labels file was given (open --labels <file>).${small} ${covered}`
+    : audit.audited
+      ? `Audited: ${answers.positives} answered positives and ${answers.negatives} answered negatives, at least ${AUDIT_PER_LABEL} of each. The filtered label's rates in this report are audited, its minimum detectable effect row and capture table included, and those with a mark read audited. The unfiltered label (VS-46a's) is not covered by this sample, so its rates stay unaudited, those without a mark of their own included: the band table's Fixed 30 d and Fixed 90 d columns, the escapes and the later-fixed shares.`
+      : `Unaudited: the audit needs at least ${AUDIT_PER_LABEL} labelled positives and ${AUDIT_PER_LABEL} labelled negatives; it has ${answers.positives} and ${answers.negatives}.${small} ${covered}`
+  const recall = answers?.recall
+  const ofLines = (count: number) => `${count} (${share(moved.lines ? count / moved.lines : null)})`
+  const kloc = (added: number) => (added / 1000).toFixed(2)
+  const perKloc = (value: number | null) => (value === null ? "n/a" : value.toFixed(2))
+  const density = (name: string, row: DensityRow) =>
+    `| ${name} | ${row.filtered.pulls} | ${kloc(row.filtered.added)} | ${row.filtered.lines} | ${perKloc(row.filtered.perKloc)} | ${row.unfiltered.pulls} | ${kloc(row.unfiltered.added)} | ${row.unfiltered.lines} | ${perKloc(row.unfiltered.perKloc)} | ${cycle(row.cycle)} |`
+  return [
+    "",
+    "## Label audit",
+    "",
+    `VS-46d item 1: a hand audit of the filtered follow-up-fix label, which is primary on schema 2. Its population is the filtered label's own, as the base rates count it: the ${population.positives + population.negatives} matured PRs with a band not reverted within ${MATURITY_DAYS} days and not marked filteredIncomplete (${population.filteredIncomplete} marked, left out), ${population.positives} positive (a filtered fix within ${MATURITY_DAYS} days) and ${population.negatives} negative. open --audit writes a seeded sample of up to ${AUDIT_DRAW} of each to ${AUDIT_FILE}, ordered by a hash keyed with the owner's private key, for the owner to answer by hand on this machine, and open --labels <file> reads the answers back. Here a sample draws ${audit.sample.positives} positives and ${audit.sample.negatives} negatives. The audit needs at least ${AUDIT_PER_LABEL} answers of each, so up to ${AUDIT_DRAW - AUDIT_PER_LABEL} of each may be skipped.`,
+    "",
+    status,
+    ...(answers && recall
+      ? [
+          "",
+          `- Precision (fix-inducing among the labelled positives): ${formatCell(answers.precision)}.`,
+          `- Missed (fix-inducing among the labelled negatives: the label's miss rate): ${formatCell(answers.omission)}.`,
+          `- Recall, weighted by this population's ${population.positives} positives and ${population.negatives} negatives: ${share(recall.value)}${recall.interval ? ` [${percent(recall.interval[0])}, ${percent(recall.interval[1])}]` : ""}. The interval is composed from each label's ${(bonferroni * 100).toFixed(1)}% Wilson interval, so both hold at once with at least ${whole(DEFAULT_CONFIDENCE)} confidence (Bonferroni); it is not a Wilson interval of its own. Below ${AUDIT_PER_LABEL} answers of either label only the interval is shown.`,
+          `- ${answers.ignored} labels name no PR in this sample and were ignored; a null answer counts as unlabelled.`,
+          `- Cycle p50 / p90 over the labelled PRs: ${cycle(answers.cycle)} h.`,
+        ]
+      : []),
+    "",
+    "Internal (D12): these rates compare this repository's label with its owner's reading of its own PRs. They are not comparable with published SZZ figures or with any other population.",
+    "",
+    "## Untraceable fixes",
+    "",
+    `VS-46d item 2: a fix commit that deletes no line blames no PR, so a label cannot see it. Of the ${quality.untraceable.commits} fix commits the scan labelled (from the window's first merge to ${MATURITY_DAYS} days after its last), those that deleted no line at all, which the unfiltered label cannot trace: ${formatCell(quality.untraceable.unfiltered)}; those that deleted no code line, which the filtered label cannot trace: ${formatCell(quality.untraceable.filtered)}. The filtered count adds the fixes that delete only blank or comment lines to the add-only ones. These count fix commits, not PRs, so they carry no cycle time. Unaudited: the audit samples PRs, not fix commits.`,
+    "",
+    "## Filter reattribution",
+    "",
+    `VS-46d item 3: the filtered label (blame with -w, -M and -C, code lines only) is primary on schema 2, and the unfiltered label keeps VS-46a's counts, so the change shows here. Over the ${moved.pulls} PRs of the filtered label's population (${moved.filteredIncomplete} marked filteredIncomplete, left out; cycle p50 / p90 ${cycle(moved.cycle)} h), the unfiltered label blamed ${moved.lines} deleted lines on them within ${MATURITY_DAYS} days.`,
+    "",
+    `- By kind: code ${ofLines(kinds.code)}, still the PR's under the filter; whitespace ${ofLines(kinds.whitespace)}, put elsewhere by -w; moved ${ofLines(kinds.moved)}, put elsewhere by -M and -C; comment ${ofLines(kinds.comment)} and blank ${ofLines(kinds.blank)}, dropped as comment-only or blank lines.`,
+    `- Split into whitespace, comment and move: whitespace ${ofLines(kinds.whitespace)}, comment ${ofLines(kinds.comment)}, move ${ofLines(kinds.moved)}. Blank lines, ${ofLines(kinds.blank)}, are dropped by the blank and comment filter, not put elsewhere by -w, so they stand on their own.`,
+    `- Reattributed or dropped: ${ofLines(moved.lines - kinds.code)}.`,
+    `- The filtered label blames ${moved.filtered} lines on these PRs: the ${kinds.code} code lines it keeps, and ${moved.gained} gained, lines the unfiltered blame put on other commits.`,
+    "",
+    "No interval: lines cluster within fix commits. Unaudited: these count the two labels' blamed lines, which the audit does not sample.",
+    "",
+    "## Fix-edited lines per kLOC",
+    "",
+    `VS-46d item 4: each label's fix-edited lines within ${MATURITY_DAYS} days per 1,000 lines added, by band, so a band's fix volume is read against its size. Filtered: the filtered label's lines over its population. Unfiltered: VS-46a's label's lines over the matured PRs with a band not reverted within ${MATURITY_DAYS} days. The cycle time is over the unfiltered columns' PRs, which hold the filtered columns'.`,
+    "",
+    "| Band | Filtered PRs | kLOC added | Filtered fix-edited lines | Per kLOC | Unfiltered PRs | kLOC added | Unfiltered fix-edited lines | Per kLOC | Cycle p50 / p90 (h) |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...RISK_BANDS.map((band) => density(band, quality.density[band])),
+    density("all", quality.density.all),
+    "",
+    `Lines added count only a PR's reviewed files, as riskFeatures counts them for the band, while a fix's blamed lines count every file it edited, skipped files such as lockfiles and generated files included, so fixes that edit skipped files read higher here. No interval: lines cluster within fix commits. The filtered columns are ${mark}; the unfiltered columns are unaudited.`,
+  ]
+}
+
 // A capture row's band-minus-size difference and its interval, in capture-share points.
 function difference(row: CaptureRow) {
   if (row.difference === null) return "n/a"
@@ -3132,7 +3634,7 @@ function hours(value: number) {
 // Command line
 
 const USAGE = `Usage: bun script/vectorscope-eval/outcomes.ts collect --repository <owner/name> --repo-dir <clone> --since <YYYY-MM-DD> --out <dir> [options]
-       bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger]
+       bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger] [--audit] [--labels <file>]
 
 Run only after Q30 is answered, on a repository the owner nominates. Never in GitHub Actions.
 
@@ -3148,7 +3650,10 @@ collect:
                              The ledger is sealed to ${PUBLIC_KEY_ENV}.
 open:
   --ledger                   Also write the ledger itself, beside the report
+  --audit                    Also write ${AUDIT_FILE}: a seeded sample of PRs to label by hand (never overwritten)
+  --labels <file>            Your answers to that sample, read only; outside every git work tree
   A ${LEDGER_SCHEMA_V1} ledger opens read-only, as v1: its schema-2 sections print as unavailable.
+  The audit sample and your answers name PRs: keep them on this machine and delete them when they expire.
 `
 
 const OPTIONS = {
@@ -3161,6 +3666,8 @@ const OPTIONS = {
   "agent-prs": { type: "string" },
   out: { type: "string" },
   ledger: { type: "boolean" },
+  audit: { type: "boolean" },
+  labels: { type: "string" },
   help: { type: "boolean" },
 } as const
 
@@ -3188,7 +3695,12 @@ export async function main(
       "The outcome ledger never runs in GitHub Actions: its logs are public. Run it on the owner's machine.",
     )
   if (command === "collect" && !rest.length) return collectCommand(values, { ...deps, env, now })
-  if (command === "open" && rest.length === 3) return openCommand(rest, values.ledger === true, now)
+  if (command === "open" && rest.length === 3)
+    return openCommand(
+      rest,
+      { ledger: values.ledger === true, audit: values.audit === true, labels: values.labels },
+      now,
+    )
   return usage("Give collect with its options, or open with three paths.")
 }
 
@@ -3259,11 +3771,26 @@ async function collectCommand(
   }
 }
 
-function openCommand(paths: readonly string[], withLedger: boolean, now: number) {
+function openCommand(
+  paths: readonly string[],
+  options: { ledger: boolean; audit: boolean; labels: string | boolean | undefined },
+  now: number,
+) {
   const [file = "", keyFile = "", directory = ""] = paths
   const target = realPath(directory)
   if (!outsideRepository(target, realPath(REPO_ROOT)) || insideWorkTree(target))
     return usage("The directory must be outside the VectorScope checkout and every other git work tree.")
+  // parseArgs, not strict, reads a bare --labels as true and takes a following option as its value: neither is a path.
+  if (
+    options.labels !== undefined &&
+    (typeof options.labels !== "string" || !options.labels || options.labels.startsWith("-"))
+  )
+    return usage("Give --labels as the path of your labels file.")
+  const labelsFile = typeof options.labels === "string" ? realPath(options.labels) : undefined
+  if (labelsFile !== undefined && (!outsideRepository(labelsFile, realPath(REPO_ROOT)) || insideWorkTree(labelsFile)))
+    return usage(
+      "--labels must be outside the VectorScope checkout and every git work tree, so the owner's answers are never committed.",
+    )
   const sealedText = readText(resolve(file))
   if (sealedText === undefined) return refuse(1, `Cannot read the sealed file ${resolve(file)}. Nothing was written.`)
   const pem = readText(resolve(keyFile))
@@ -3282,14 +3809,70 @@ function openCommand(paths: readonly string[], withLedger: boolean, now: number)
   const legacy = obj(decoded.value).schema === LEDGER_SCHEMA_V1
   const problem = legacy ? v1LedgerProblem(decoded.value, now) : ledgerProblem(decoded.value, now)
   if (problem) return refuse(1, `The ledger cannot be opened: ${problem}. Nothing was written.`)
+  if (legacy && (options.audit || labelsFile !== undefined))
+    return refuse(
+      1,
+      `--audit and --labels need a ${LEDGER_SCHEMA} ledger: a ${LEDGER_SCHEMA_V1} ledger has no filtered label to audit. Nothing was written.`,
+    )
   // ledgerProblem or v1LedgerProblem checked every entry the report reads.
   const ledger = decoded.value as OutcomeLedger | OutcomeLedgerV1
+  if (labelsFile !== undefined && (statSync(labelsFile, { throwIfNoEntry: false })?.size ?? 0) > MAX_LABELS_BYTES)
+    return refuse(1, `The labels file is too large: more than ${MAX_LABELS_BYTES} bytes. Nothing was written.`)
+  const labelsText = labelsFile === undefined ? undefined : readText(labelsFile)
+  if (labelsFile !== undefined && labelsText === undefined)
+    return refuse(1, `Cannot read the labels file ${labelsFile}. Nothing was written.`)
+  const labels = labelsText === undefined ? undefined : auditLabels(labelsText, ledger.repository, now)
+  if (typeof labels === "string") return refuse(1, `The labels cannot be read: ${labels}. Nothing was written.`)
+  // lstat, not exists: a symbolic link by that name, even a dangling one, is refused too, so the write cannot follow it.
+  if (options.audit && lstatSync(join(target, AUDIT_FILE), { throwIfNoEntry: false }))
+    return refuse(
+      1,
+      `${join(target, AUDIT_FILE)} already exists and may hold your answers: it is never overwritten. Nothing was written.`,
+    )
+  // The audit key exists only here, in memory, for one draw; only a schema-2 ledger gets this far with either option.
+  const sample =
+    ledger.schema === LEDGER_SCHEMA && (options.audit || labels) ? auditSample(ledger, auditKey(pem)) : undefined
+  const report = outcomeReport(ledger, sample && labels ? { sample, labels: labels.answers } : undefined)
+  // A new sample keeps the answers it is given, and expires no later than the file they came from.
+  const written =
+    sample && options.audit
+      ? labels
+        ? {
+            ...sample,
+            expires: Date.parse(labels.expires) < Date.parse(sample.expires) ? labels.expires : sample.expires,
+            entries: sample.entries.map((entry) => ({ ...entry, fixInducing: labels.answers.get(entry.id) ?? null })),
+          }
+        : sample
+      : undefined
   mkdirSync(target, { recursive: true, mode: 0o700 })
-  writePrivate(join(target, REPORT_FILE), renderOutcomes(outcomeReport(ledger)))
-  if (withLedger) writePrivate(join(target, OUTCOME_LEDGER_FILE), JSON.stringify(ledger, null, 2) + "\n")
+  writePrivate(join(target, REPORT_FILE), renderOutcomes(report))
+  if (options.ledger) writePrivate(join(target, OUTCOME_LEDGER_FILE), JSON.stringify(ledger, null, 2) + "\n")
+  // "wx" creates the file exclusively (O_EXCL), so neither a file nor a link that appeared after the check is
+  // overwritten or followed: the write fails instead.
+  if (written) writePrivate(join(target, AUDIT_FILE), JSON.stringify(written, null, 2) + "\n", "wx")
+  const wrote = [REPORT_FILE, ...(options.ledger ? [OUTCOME_LEDGER_FILE] : []), ...(written ? [AUDIT_FILE] : [])]
+  const gradient = sample !== undefined && report.volume.decision === "gradient-only"
+  const dropped =
+    written && labels
+      ? [...labels.answers.keys()].filter((id) => !written.entries.some((entry) => entry.id === id)).length
+      : 0
   return {
     code: 0,
-    stdout: `Wrote ${withLedger ? `${REPORT_FILE} and ${OUTCOME_LEDGER_FILE}` : REPORT_FILE} to ${target}. The ledger expires on ${ledger.expires.slice(0, 10)}: delete these files by then.${legacy ? ` It is a ${LEDGER_SCHEMA_V1} ledger, opened read-only as v1: its schema-2 sections are unavailable.` : ""}\n`,
+    stdout: `Wrote ${wrote.length > 1 ? `${wrote.slice(0, -1).join(", ")} and ${wrote.at(-1)}` : REPORT_FILE} to ${target}. The ledger expires on ${ledger.expires.slice(0, 10)}: delete these files by then.${legacy ? ` It is a ${LEDGER_SCHEMA_V1} ledger, opened read-only as v1: its schema-2 sections are unavailable.` : ""}${
+      written
+        ? ` Answer each fixInducing in ${AUDIT_FILE} (at least ${AUDIT_PER_LABEL} of each label) and pass the file back with --labels. It and your answers name PRs: keep them on this machine, and delete them by ${written.expires.slice(0, 10)}.`
+        : ""
+    }${
+      dropped
+        ? ` ${dropped} of your answers name no PR in the new sample and were not carried into it; your labels file still holds them.`
+        : ""
+    }${
+      gradient
+        ? labels
+          ? ` The labels were checked but not used: this report is gradient-only (fewer than ${MIN_VOLUME} settled human-stratum findings on PRs merged in the ${MATURITY_DAYS} days before collection), and the label sections follow the full report's volume rule.`
+          : ` This report is gradient-only, so it has no label section yet: the label sections follow the full report's volume rule.`
+        : ""
+    }\n`,
     stderr: "",
   }
 }
@@ -3331,9 +3914,9 @@ function realPath(path: string): string {
 }
 
 // Written for the owner alone (mode 0600, kept when the file already existed): the ledger and its report keep PR
-// numbers, which identify people (I-3, I-4).
-function writePrivate(file: string, text: string) {
-  writeFileSync(file, text, { mode: 0o600 })
+// numbers, which identify people (I-3, I-4). With flag "wx" an existing file, or a link, fails the write instead.
+function writePrivate(file: string, text: string, flag = "w") {
+  writeFileSync(file, text, { mode: 0o600, flag })
   chmodSync(file, 0o600)
 }
 

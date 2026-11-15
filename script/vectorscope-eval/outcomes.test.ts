@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { createHash, generateKeyPairSync } from "node:crypto"
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, hkdfSync } from "node:crypto"
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -20,12 +21,21 @@ import {
   SUMMARY_MARKER,
   type FindingMarker,
 } from "../../packages/core/src/review/state"
-import { DEFAULT_CONFIDENCE, wilson } from "../../packages/core/src/review/eval"
+import { DEFAULT_CONFIDENCE, proportion, wilson } from "../../packages/core/src/review/eval"
 import { RISK_CUTPOINTS, riskOf, type RiskBand, type RiskFeatures } from "../../packages/core/src/review/risk"
 import type { PriorFinding, ReviewState } from "../../packages/core/src/review/types"
 import { UNTRUSTED_GIT, untrustedGitEnv } from "./dataset"
 import {
   agentStratum,
+  AUDIT_DRAW,
+  AUDIT_FILE,
+  AUDIT_INFO,
+  AUDIT_PER_LABEL,
+  AUDIT_QUESTION,
+  AUDIT_SCHEMA,
+  auditKey,
+  auditLabels,
+  auditSample,
   bulkResolved,
   collect,
   findingOutcome,
@@ -50,6 +60,7 @@ import {
   MIN_SETTLED,
   MAX_FILTERED_BLAME_LINES,
   MAX_FIX_LOCATIONS,
+  MAX_LABELS_BYTES,
   MAX_LEDGER_PULLS,
   MIN_VOLUME,
   NOT_FIX_LABEL,
@@ -69,6 +80,9 @@ import {
   WRITER_PERMISSIONS,
   Z_ALPHA,
   Z_POWER,
+  type AuditEntry,
+  type AuditLabels,
+  type AuditSample,
   type GitHubRead,
   type LedgerFinding,
   type LedgerFix,
@@ -1487,14 +1501,15 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
       "## Resolution",
       "## Risk band against post-merge outcomes",
       ...MEASUREMENT_HEADINGS.slice(2),
+      ...LABEL_HEADINGS,
       "## Problems",
     ])
-    // The same ledger read as schema 1: every v1 section as before, and each VS-46c section unavailable.
+    // The same ledger read as schema 1: every v1 section as before, and each VS-46c and VS-46d section unavailable.
     const legacy = renderOutcomes(outcomeReport(v1Of(full)))
     expect(sectionDigests(v1Only(legacy))).toEqual(V1_DIGESTS.full)
     expect(v1Only(legacy)).toBe(v1Only(text))
     expect(legacy).toContain(
-      `${MEASUREMENT_HEADINGS.map((heading) => `\n${heading}\n\n${V1_UNAVAILABLE}\n`).join("")}\n## Problems\n`,
+      `${[...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS].map((heading) => `\n${heading}\n\n${V1_UNAVAILABLE}\n`).join("")}\n## Problems\n`,
     )
     expect(legacy).not.toContain("## Schema 2 sections")
   })
@@ -2022,7 +2037,8 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
     expect(current.stdout).not.toContain("read-only")
     const report = readFileSync(join(root, "legacy-opened", REPORT_FILE), "utf8")
     expect(v1Only(report)).toBe(readFileSync(join(root, "current-opened", REPORT_FILE), "utf8"))
-    for (const heading of MEASUREMENT_HEADINGS) expect(report).toContain(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
+    for (const heading of [...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS])
+      expect(report).toContain(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
     expect(report).not.toContain("## Schema 2 sections")
     // Written back as it was read: still schema 1, never upgraded.
     expect(readFileSync(join(root, "legacy-opened", OUTCOME_LEDGER_FILE), "utf8")).toBe(
@@ -2139,12 +2155,9 @@ describe("the measurement rule (VS-46c)", () => {
       "## Severity gradient",
       "## Risk band against post-merge outcomes",
     ]
-    expect(
-      [...order, ...MEASUREMENT_HEADINGS.slice(2), "## Problems"].map((heading) => problem.indexOf(`\n${heading}\n`)),
-    ).toEqual(
-      [...order, ...MEASUREMENT_HEADINGS.slice(2), "## Problems"]
-        .map((heading) => problem.indexOf(`\n${heading}\n`))
-        .toSorted((a, b) => a - b),
+    const after = [...MEASUREMENT_HEADINGS.slice(2), ...LABEL_HEADINGS, "## Problems"]
+    expect([...order, ...after].map((heading) => problem.indexOf(`\n${heading}\n`))).toEqual(
+      [...order, ...after].map((heading) => problem.indexOf(`\n${heading}\n`)).toSorted((a, b) => a - b),
     )
     expect(problem.indexOf("\n## Outcome base rates\n")).toBeGreaterThan(0)
 
@@ -2530,7 +2543,7 @@ describe("the measurement rule (VS-46c)", () => {
     for (const text of texts) {
       expect(text).not.toContain("never enable")
       expect(text).not.toContain("history risk areas for it")
-      for (const heading of ["## Risk band against post-merge outcomes", ...MEASUREMENT_HEADINGS])
+      for (const heading of ["## Risk band against post-merge outcomes", ...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS])
         expect(section(text, heading)).not.toMatch(/\bnever\b/i)
     }
     expect(texts[0]).toContain("\n## Risk band against post-merge outcomes\n")
@@ -2586,6 +2599,7 @@ describe("the measurement rule (VS-46c)", () => {
       "## Resolution",
       "## Risk band against post-merge outcomes",
       ...MEASUREMENT_HEADINGS,
+      ...LABEL_HEADINGS,
     ])
       expect(report).toContain(`\n${heading}\n`)
     expect(report).toContain("Verdict: beats-size")
@@ -2609,6 +2623,722 @@ describe("the measurement rule (VS-46c)", () => {
     )
   })
 })
+
+// VS-46d items 1 to 4 (addendum B §1.9; SF-05a) over synthetic schema-2 histories and the collected filter, move and
+// add-only histories. Every labels file here is a fixture: the owner's hand labels stay outside the repository.
+describe("the label audit and label quality (VS-46d, SF-05a)", () => {
+  const quality = (ledger: OutcomeLedger, audit?: { sample: AuditSample; labels: AuditLabels }) =>
+    outcomeReport(ledger, audit).labelQuality!
+  const keyFile = join(root, "audit.pem")
+  writeFileSync(keyFile, OWNER.privateKey)
+  const sealTo = (name: string, payload: unknown) => {
+    const path = join(root, name)
+    writeFileSync(
+      path,
+      JSON.stringify(seal({ [OUTCOME_LEDGER_FILE]: Buffer.from(JSON.stringify(payload)) }, OWNER.publicKey)),
+    )
+    return path
+  }
+  // Read through the decoder open uses, so the answers are what `open --labels` would read.
+  const labelsOf = (file: unknown) => {
+    const read = auditLabels(JSON.stringify(file), REPOSITORY, NOW + DAY)
+    if (typeof read === "string") throw new Error(read)
+    return read.answers
+  }
+
+  test("the audit sample is seeded and deterministic, with stable hashed ids", async () => {
+    const ledger = measured(BEATS)
+    const sample = auditSample(ledger, KEY)
+    expect(sample).toMatchObject({
+      schema: AUDIT_SCHEMA,
+      repository: REPOSITORY,
+      branch: "main",
+      collectedAt: ledger.collectedAt,
+      expires: ledger.expires,
+      question: AUDIT_QUESTION,
+    })
+    // The filtered label's own population: the measurement's.
+    const filtered = outcomeReport(ledger).measurement!.labels.filtered
+    expect(sample.population).toEqual({ positives: filtered.positives, negatives: filtered.pulls - filtered.positives })
+    expect(sample.population).toEqual({ positives: 100, negatives: 300 })
+    const positives = sample.entries.filter((entry) => entry.label === "positive")
+    const negatives = sample.entries.filter((entry) => entry.label === "negative")
+    expect([positives.length, negatives.length]).toEqual([AUDIT_DRAW, AUDIT_DRAW])
+    expect(sample.entries).toEqual([...positives, ...negatives])
+    for (const group of [positives, negatives])
+      expect(group.map((entry) => entry.id)).toEqual(group.map((entry) => entry.id).toSorted())
+    const ids = sample.entries.map((entry) => entry.id)
+    expect(ids.every((id) => /^[0-9a-f]{16}$/.test(id))).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const entry of sample.entries) {
+      expect(Object.keys(entry)).toEqual(["id", "pr", "label", "filtered", "unfiltered", "fixInducing"])
+      expect(entry.fixInducing).toBeNull()
+    }
+    // A positive shows its fixes with the fix commit's day; a negative has no filtered fix within 90 days.
+    expect(positives[0].filtered).toEqual([{ date: "2026-07-10", days: 5, lines: 1, kind: "label" }])
+    expect(positives[0].unfiltered).toEqual([{ date: "2026-07-10", days: 5, lines: 1, kind: "label" }])
+    expect(negatives.every((entry) => !entry.filtered.length && !entry.unfiltered.length)).toBe(true)
+    // The keyed hash orders the draw, not the PR numbers.
+    const lowest = ledger.pulls
+      .filter((pull) => (pull.fixesFiltered ?? []).length > 0)
+      .map((pull) => pull.number)
+      .toSorted((a, b) => a - b)
+      .slice(0, AUDIT_DRAW)
+    expect(positives.map((entry) => entry.pr).toSorted((a, b) => a - b)).not.toEqual(lowest)
+
+    // A rerun, and the same PRs in reverse order, draw the same sample.
+    expect(JSON.stringify(auditSample(ledger, KEY))).toBe(JSON.stringify(sample))
+    expect(JSON.stringify(auditSample({ ...ledger, pulls: ledger.pulls.toReversed() }, KEY))).toBe(
+      JSON.stringify(sample),
+    )
+    // A later ledger with 20 more PRs: every PR keeps its id, and each earlier PR it draws was in the earlier sample.
+    const later = auditSample(measured([...BEATS, { band: "low", lines: 10, count: 20, fixed: 10 }]), KEY)
+    const before = new Map(sample.entries.map((entry) => [entry.pr, entry.id]))
+    const earlier = new Set(ledger.pulls.map((pull) => pull.number))
+    expect(later.population).toEqual({ positives: 110, negatives: 310 })
+    for (const entry of later.entries.filter((item) => earlier.has(item.pr)))
+      expect(before.get(entry.pr)).toBe(entry.id)
+    expect(later.entries.some((entry) => !earlier.has(entry.pr))).toBe(true)
+    // Another key, or another repository, draws other ids; the repository is read case-insensitively.
+    const disjoint = (other: AuditSample) => other.entries.every((entry) => !ids.includes(entry.id))
+    expect(disjoint(auditSample(ledger, new Uint8Array(32).fill(8)))).toBe(true)
+    expect(disjoint(auditSample({ ...ledger, repository: "acme/gadgets" }, KEY))).toBe(true)
+    expect(auditSample({ ...ledger, repository: "Acme/Widgets" }, KEY).entries).toEqual(sample.entries)
+
+    // Reverted and filteredIncomplete PRs are never drawn, and a label with fewer than AUDIT_DRAW PRs is taken whole:
+    // 30 of these 40 high PRs are fixed, 4 of them among the 5 reverted, and the first 3 fixed are marked.
+    const mixed = measured([
+      { band: "high", lines: 1000, count: 40, fixed: 30, reverted: 5 },
+      { band: "low", lines: 10, count: 100 },
+    ])
+    const marked = new Set(
+      mixed.pulls
+        .filter((pull) => (pull.fixesFiltered ?? []).length > 0)
+        .slice(0, 3)
+        .map((pull) => pull.number),
+    )
+    const small = auditSample(
+      {
+        ...mixed,
+        pulls: mixed.pulls.map((pull) =>
+          marked.has(pull.number) ? { ...pull, filteredIncomplete: true as const } : pull,
+        ),
+      },
+      KEY,
+    )
+    const reverted = new Set(mixed.pulls.filter((pull) => pull.revertedDays !== undefined).map((pull) => pull.number))
+    expect(reverted.size).toBe(5)
+    expect(small.entries.some((entry) => reverted.has(entry.pr) || marked.has(entry.pr))).toBe(false)
+    expect(small.population).toEqual({ positives: 23, negatives: 109 })
+    expect(small.entries.filter((entry) => entry.label === "positive").length).toBe(23)
+    expect(small.entries.filter((entry) => entry.label === "negative").length).toBe(AUDIT_DRAW)
+
+    // The audit key comes from the private key itself: one key whatever its PEM encoding, another for another key, and
+    // none that a holder of the public key, or of the PEM text alone, could derive.
+    const key = auditKey(OWNER.privateKey)
+    expect(key.length).toBe(32)
+    expect(auditKey(createPrivateKey(OWNER.privateKey).export({ type: "pkcs1", format: "pem" }).toString())).toEqual(
+      key,
+    )
+    const stranger = generateKeyPairSync("rsa", { modulusLength: 2048 })
+      .privateKey.export({ type: "pkcs8", format: "pem" })
+      .toString()
+    expect(auditKey(stranger)).not.toEqual(key)
+    const derived = (material: Buffer | string) => new Uint8Array(hkdfSync("sha256", material, "", AUDIT_INFO, 32))
+    for (const material of [
+      createPublicKey(OWNER.publicKey).export({ type: "spki", format: "der" }),
+      createPublicKey(OWNER.publicKey).export({ type: "pkcs1", format: "der" }),
+      OWNER.publicKey,
+      OWNER.privateKey,
+    ])
+      expect(key).not.toEqual(derived(material))
+
+    // Through open: two runs into two directories write the same file, the sample the owner's key draws.
+    const sealedFile = sealTo("audit-twice.sealed.json", ledger)
+    for (const name of ["audit-one", "audit-two"])
+      expect(
+        await main(["open", sealedFile, keyFile, join(root, name), "--audit"], { now: NOW + DAY, env: {} }),
+      ).toMatchObject({ code: 0, stderr: "" })
+    const text = readFileSync(join(root, "audit-one", AUDIT_FILE), "utf8")
+    expect(readFileSync(join(root, "audit-two", AUDIT_FILE), "utf8")).toBe(text)
+    expect(text).toBe(JSON.stringify(auditSample(ledger, key), null, 2) + "\n")
+  })
+
+  test("without a labels file every follow-up-fix rate is unaudited", () => {
+    const report = outcomeReport(measured(BEATS))
+    expect(report.labelQuality!.audit).toEqual({
+      population: { positives: 100, negatives: 300, filteredIncomplete: 0 },
+      sample: { positives: AUDIT_DRAW, negatives: AUDIT_DRAW },
+      audited: false,
+    })
+    const text = renderOutcomes(report)
+    const audit = section(text, "## Label audit")
+    expect(audit).toContain(
+      "Unaudited: no labels file was given (open --labels <file>). Every follow-up-fix rate in this report is unaudited, those without a mark of their own included: the filtered label's minimum detectable effect row and capture table, and, on the unfiltered label, the band table's Fixed 30 d and Fixed 90 d columns, the escapes and the later-fixed shares.",
+    )
+    expect(audit).toContain("Here a sample draws 60 positives and 60 negatives.")
+    expect(audit).not.toContain("- Precision")
+    expect(audit).not.toContain("This population has")
+    const rates = section(text, "## Outcome base rates")
+    expect(rates).toContain("- Unfiltered follow-up fix (VS-46a's label; unaudited), over the 400 not reverted")
+    expect(rates).toContain("code lines only; unaudited), over the 400 not reverted")
+    expect(rates).toContain(
+      "- Deciding label: filtered follow-up fix, SZZ-based, size-biased and unaudited (VS-46d's audit has not run).",
+    )
+    expect(section(text, "## Measurement verdict")).toContain(
+      "on the filtered follow-up fix (SZZ-based, size-biased, unaudited) label",
+    )
+    expect(section(text, "## Capture against size")).toContain(
+      "\nFiltered follow-up fix (SZZ-based, size-biased, unaudited): 100 positives",
+    )
+    expect(section(text, "## Risk band against post-merge outcomes")).toContain(
+      "on the unfiltered follow-up-fix (SZZ-based, size-biased, unaudited) label",
+    )
+    expect(section(text, "## Untraceable fixes")).toContain("Unaudited: the audit samples PRs, not fix commits.")
+    expect(section(text, "## Filter reattribution")).toContain("Unaudited: these count the two labels' blamed lines")
+    expect(section(text, "## Fix-edited lines per kLOC")).toContain(
+      "The filtered columns are unaudited; the unfiltered columns are unaudited.",
+    )
+    expect(text).not.toMatch(/(?<!un)audited/i)
+    // A gradient-only report adds no label section.
+    const gradient = renderOutcomes(outcomeReport({ ...measured(BEATS), findings: [] }))
+    expect(gradient).not.toContain("## Label audit")
+    expect(v1Only(gradient)).toBe(gradient)
+    // A population with fewer positives than the audit needs says so.
+    expect(section(renderOutcomes(outcomeReport(measured(FEW))), "## Label audit")).toContain(
+      "Unaudited: no labels file was given (open --labels <file>). This population has 5 positives and 395 negatives, so the audit cannot reach that yet.",
+    )
+  })
+
+  test("a fixture labels file gives precision, the miss rate and weighted recall with Wilson intervals", async () => {
+    const ledger = measured(BEATS)
+    const sample = auditSample(ledger, KEY)
+    // 40 of the first 50 positives and 5 of the first 50 negatives are fix-inducing; the last 10 of each are skipped, and
+    // three answers name no sampled PR.
+    const answers = (label: AuditEntry["label"], index: number) =>
+      index >= AUDIT_PER_LABEL ? null : label === "positive" ? index < 40 : index < 5
+    const answered = labelsFrom(sample, answers)
+    const foreign = ["a", "b", "c"].map((digit) => ({ id: digit.repeat(16), fixInducing: true }))
+    const labels = labelsOf({ ...answered, entries: [...answered.entries, ...foreign] })
+    const audit = quality(ledger, { sample, labels }).audit
+    expect(audit.audited).toBe(true)
+    expect(audit.labels).toMatchObject({ positives: 50, negatives: 50, ignored: 3 })
+    expect(audit.labels!.precision).toEqual(proportion(40, 50))
+    expect(audit.labels!.omission).toEqual(proportion(5, 50))
+    // Recall weights each label by this population's 100 positives and 300 negatives: 100 × 0.8 / (100 × 0.8 + 300 × 0.1).
+    expect(audit.labels!.recall.value).toBeCloseTo(80 / 110, 12)
+    // Composed from the 97.5% Wilson intervals of 40/50 and 5/50, so both hold at once with at least 95% (Bonferroni).
+    expect(audit.labels!.recall.interval![0]).toBeCloseTo(RECALL_INTERVAL[0], 6)
+    expect(audit.labels!.recall.interval![1]).toBeCloseTo(RECALL_INTERVAL[1], 6)
+    const text = renderOutcomes(outcomeReport(ledger, { sample, labels }))
+    const section1 = section(text, "## Label audit")
+    expect(section1).toContain("Audited: 50 answered positives and 50 answered negatives, at least 50 of each.")
+    expect(section1).toContain("- Precision (fix-inducing among the labelled positives): 40/50 80.0% [")
+    expect(section1).toContain(
+      "- Missed (fix-inducing among the labelled negatives: the label's miss rate): 5/50 10.0% [",
+    )
+    expect(section1).toContain(
+      `- Recall, weighted by this population's 100 positives and 300 negatives: 72.7% [${(RECALL_INTERVAL[0] * 100).toFixed(1)}%, ${(RECALL_INTERVAL[1] * 100).toFixed(1)}%]. The interval is composed from each label's 97.5% Wilson interval, so both hold at once with at least 95% confidence (Bonferroni); it is not a Wilson interval of its own.`,
+    )
+    expect(section1).toContain(
+      "- 3 labels name no PR in this sample and were ignored; a null answer counts as unlabelled.",
+    )
+    // The audit lifts the filtered label's marks only.
+    expect(section(text, "## Measurement verdict")).toContain(
+      "on the filtered follow-up fix (SZZ-based, size-biased, audited) label",
+    )
+    const rates = section(text, "## Outcome base rates")
+    expect(rates).toContain(
+      "- Deciding label: filtered follow-up fix, SZZ-based, size-biased and audited (VS-46d's audit: see Label audit).",
+    )
+    expect(rates).toContain("code lines only; audited), over the 400 not reverted")
+    expect(rates).toContain("- Unfiltered follow-up fix (VS-46a's label; unaudited), over the 400 not reverted")
+    expect(section(text, "## Risk band against post-merge outcomes")).toContain(
+      "on the unfiltered follow-up-fix (SZZ-based, size-biased, unaudited) label",
+    )
+    expect(section(text, "## Fix-edited lines per kLOC")).toContain(
+      "The filtered columns are audited; the unfiltered columns are unaudited.",
+    )
+
+    // One answer short of 50 negatives: not audited, recall shows only its interval, and the mark stays.
+    const short = labelsOf(
+      labelsFrom(sample, (label, index) => (label === "negative" && index === 0 ? null : answers(label, index))),
+    )
+    const unaudited = quality(ledger, { sample, labels: short }).audit
+    expect(unaudited.audited).toBe(false)
+    expect(unaudited.labels).toMatchObject({ positives: 50, negatives: 49 })
+    expect(unaudited.labels!.recall.value).toBeNull()
+    expect(unaudited.labels!.recall.interval).not.toBeNull()
+    expect(unaudited.labels!.omission.value).toBeNull()
+    const shortText = renderOutcomes(outcomeReport(ledger, { sample, labels: short }))
+    expect(section(shortText, "## Label audit")).toContain(
+      "Unaudited: the audit needs at least 50 labelled positives and 50 labelled negatives; it has 50 and 49. Every follow-up-fix rate",
+    )
+    expect(section(shortText, "## Measurement verdict")).toContain("(SZZ-based, size-biased, unaudited) label")
+    // The audit ran, with too few answers: SF-04's "has not run" is only for a report without labels.
+    expect(section(shortText, "## Outcome base rates")).toContain(
+      "- Deciding label: filtered follow-up fix, SZZ-based, size-biased and unaudited (VS-46d's audit has too few answers: see Label audit).",
+    )
+    expect(shortText).not.toContain("audit has not run")
+    // Skips within the margin still audit: every one of the 60 answered but one.
+    const skipped = labelsOf(labelsFrom(sample, (label, index) => (index === 7 ? null : label === "positive")))
+    expect(quality(ledger, { sample, labels: skipped }).audit).toMatchObject({
+      audited: true,
+      labels: { positives: AUDIT_DRAW - 1, negatives: AUDIT_DRAW - 1 },
+    })
+    // No fix-inducing answer on either label: audited, but recall has no value, and its interval runs from 0 to 1.
+    const none = labelsOf(labelsFrom(sample, () => false))
+    const empty = quality(ledger, { sample, labels: none }).audit
+    expect(empty).toMatchObject({ audited: true, labels: { positives: AUDIT_DRAW, negatives: AUDIT_DRAW } })
+    expect(empty.labels!.recall).toEqual({ value: null, interval: [0, 1] })
+    expect(section(renderOutcomes(outcomeReport(ledger, { sample, labels: none })), "## Label audit")).toContain(
+      "100 positives and 300 negatives: n/a [0.0%, 100.0%]. The interval",
+    )
+    // Answers on one label only: no stratum interval for the other, so recall has no interval, and no bracket is printed.
+    const oneSided = labelsOf(labelsFrom(sample, (label) => (label === "positive" ? true : null)))
+    const lopsided = quality(ledger, { sample, labels: oneSided }).audit
+    expect(lopsided).toMatchObject({ audited: false, labels: { positives: AUDIT_DRAW, negatives: 0 } })
+    expect(lopsided.labels!.recall).toEqual({ value: null, interval: null })
+    expect(section(renderOutcomes(outcomeReport(ledger, { sample, labels: oneSided })), "## Label audit")).toContain(
+      "100 positives and 300 negatives: n/a. The interval",
+    )
+
+    // The same answers through open --labels, against the sample the owner's key draws.
+    const owned = auditSample(ledger, auditKey(OWNER.privateKey))
+    const ownedFile = labelsFrom(owned, answers)
+    const labelsFile = join(root, "audit-answers.json")
+    writeFileSync(labelsFile, JSON.stringify(ownedFile, null, 2))
+    const target = join(root, "audit-labelled")
+    const opened = await main(
+      ["open", sealTo("audit-labels.sealed.json", ledger), keyFile, target, "--labels", labelsFile],
+      {
+        now: NOW + DAY,
+        env: {},
+      },
+    )
+    expect(opened).toMatchObject({ code: 0, stderr: "" })
+    expect(section(readFileSync(join(target, REPORT_FILE), "utf8"), "## Label audit")).toBe(
+      section(renderOutcomes(outcomeReport(ledger, { sample: owned, labels: labelsOf(ownedFile) })), "## Label audit"),
+    )
+    expect(readdirSync(target)).toEqual([REPORT_FILE])
+  })
+
+  test("the untraceable share: fix commits that delete no line, or no code line", async () => {
+    const repo = addOnlyRepo("add-only")
+    const ledger = await collect(filterInput([]), {
+      github: fakeGitHub(repo.world).github,
+      git: localGit(repo.dir),
+      now: NOW,
+      key: KEY,
+    })
+    expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    // #41 only adds a line, #42 deletes only #40's comment line, and #43 edits one of #40's code lines.
+    expect(ledger.fixCommits.map((commit) => commit.deleted)).toEqual([
+      { code: 0, blank: 0, comment: 0 },
+      { code: 0, blank: 0, comment: 1 },
+      { code: 1, blank: 0, comment: 0 },
+    ])
+    const pull = ledger.pulls.find((entry) => entry.number === 40)!
+    expect(pull.fixes).toEqual([
+      {
+        days: 40,
+        lines: 1,
+        kind: "label",
+        commit: 1,
+        deleted: { code: 0, blank: 0, comment: 1, whitespace: 0, moved: 0 },
+      },
+      {
+        days: 60,
+        lines: 1,
+        kind: "label",
+        commit: 2,
+        deleted: { code: 1, blank: 0, comment: 0, whitespace: 0, moved: 0 },
+      },
+    ])
+    expect(pull.fixesFiltered!.map((fix) => [fix.days, fix.lines, fix.commit])).toEqual([[60, 1, 2]])
+    const full = fullOf(ledger)
+    expect(ledgerProblem(full, NOW)).toBeUndefined()
+    expect(quality(full).untraceable).toEqual({
+      commits: 3,
+      unfiltered: { ...proportion(1, 3), value: null },
+      filtered: { ...proportion(2, 3), value: null },
+    })
+    const text = section(renderOutcomes(outcomeReport(full)), "## Untraceable fixes")
+    expect(text).toContain("Of the 3 fix commits the scan labelled")
+    expect(text).toContain("those that deleted no line at all, which the unfiltered label cannot trace: 1/3 [")
+    expect(text).toContain("those that deleted no code line, which the filtered label cannot trace: 2/3 [")
+    expect(text).toContain(
+      "The filtered count adds the fixes that delete only blank or comment lines to the add-only ones.",
+    )
+  })
+
+  test("the filter's reattribution split, on SF-03's moved-lines and filter histories", async () => {
+    const moveRepoOf = moveRepo("reattribution-move")
+    const moved = fullOf(
+      await collect(filterInput([]), {
+        github: fakeGitHub(moveRepoOf.world).github,
+        git: localGit(moveRepoOf.dir),
+        now: NOW,
+        key: KEY,
+      }),
+    )
+    expect(ledgerProblem(moved, NOW)).toBeUndefined()
+    expect(quality(moved).reattribution).toMatchObject({
+      pulls: 3,
+      filteredIncomplete: 0,
+      lines: 2,
+      kinds: { code: 0, blank: 0, comment: 0, whitespace: 0, moved: 2 },
+      filtered: 2,
+      gained: 2,
+    })
+    const movedText = section(renderOutcomes(outcomeReport(moved)), "## Filter reattribution")
+    expect(movedText).toContain(
+      "- Split into whitespace, comment and move: whitespace 0 (0.0%), comment 0 (0.0%), move 2 (100.0%).",
+    )
+    expect(movedText).toContain("- Reattributed or dropped: 2 (100.0%).")
+    expect(movedText).toContain(
+      "- The filtered label blames 2 lines on these PRs: the 0 code lines it keeps, and 2 gained, lines the unfiltered blame put on other commits.",
+    )
+
+    const filterRepoOf = filterRepo("reattribution-filter")
+    const filter = fullOf(
+      await collect(filterInput([10, 12, 14]), {
+        github: fakeGitHub(filterRepoOf.world).github,
+        git: localGit(filterRepoOf.dir),
+        now: NOW,
+        key: KEY,
+      }),
+    )
+    expect(ledgerProblem(filter, NOW)).toBeUndefined()
+    // T5's pinned kinds: #10's 5 + 1 + 1 lines and #11's 2 + 1; the filtered label gives #10 5 and #11 1.
+    expect(quality(filter).reattribution).toMatchObject({
+      pulls: 6,
+      filteredIncomplete: 0,
+      lines: 10,
+      kinds: { code: 5, blank: 1, comment: 2, whitespace: 2, moved: 0 },
+      filtered: 6,
+      gained: 1,
+    })
+    const text = section(renderOutcomes(outcomeReport(filter)), "## Filter reattribution")
+    expect(text).toContain(
+      "- By kind: code 5 (50.0%), still the PR's under the filter; whitespace 2 (20.0%), put elsewhere by -w; moved 0 (0.0%), put elsewhere by -M and -C; comment 2 (20.0%) and blank 1 (10.0%), dropped as comment-only or blank lines.",
+    )
+    expect(text).toContain(
+      "- Split into whitespace, comment and move: whitespace 2 (20.0%), comment 2 (20.0%), move 0 (0.0%). Blank lines, 1 (10.0%), are dropped by the blank and comment filter, not put elsewhere by -w, so they stand on their own.",
+    )
+    expect(text).toContain("- Reattributed or dropped: 5 (50.0%).")
+    expect(text).toContain("No interval: lines cluster within fix commits.")
+    // A PR marked filteredIncomplete leaves the split, and is counted.
+    const marked = {
+      ...filter,
+      pulls: filter.pulls.map((entry) =>
+        entry.number === 11 ? { ...entry, filteredIncomplete: true as const } : entry,
+      ),
+    }
+    expect(ledgerProblem(marked, NOW)).toBeUndefined()
+    expect(quality(marked).reattribution).toMatchObject({
+      pulls: 5,
+      filteredIncomplete: 1,
+      lines: 7,
+      kinds: { code: 4, blank: 1, comment: 2, whitespace: 0, moved: 0 },
+      filtered: 5,
+      gained: 1,
+    })
+    expect(section(renderOutcomes(outcomeReport(marked)), "## Filter reattribution")).toContain(
+      "(1 marked filteredIncomplete, left out;",
+    )
+  })
+
+  test("fix-edited lines per kLOC added, by band, over each label's population", () => {
+    // Low: 100 PRs of 10 lines, 10 fixed. High: 100 of 1,000, 20 fixed, the last 10 reverted (2 of them fixed).
+    // Medium: 50 of 200, none fixed.
+    const groups: Group[] = [
+      { band: "low", lines: 10, count: 100, fixed: 10 },
+      { band: "high", lines: 1000, count: 100, fixed: 20, reverted: 10 },
+      { band: "medium", lines: 200, count: 50 },
+    ]
+    const ledger = measured(groups)
+    const density = quality(ledger).density
+    expect(density.low.unfiltered).toEqual({ pulls: 100, added: 1000, lines: 10, perKloc: 10 })
+    expect(density.high.unfiltered).toEqual({ pulls: 90, added: 90_000, lines: 18, perKloc: 0.2 })
+    expect(density.medium.unfiltered).toEqual({ pulls: 50, added: 10_000, lines: 0, perKloc: 0 })
+    expect(density.all.unfiltered).toEqual({ pulls: 240, added: 101_000, lines: 28, perKloc: 28_000 / 101_000 })
+    for (const band of ["low", "medium", "high", "all"] as const)
+      expect(density[band].filtered).toEqual(density[band].unfiltered)
+    const text = section(renderOutcomes(outcomeReport(ledger)), "## Fix-edited lines per kLOC")
+    expect(text).toContain("| low | 100 | 1.00 | 10 | 10.00 | 100 | 1.00 | 10 | 10.00 | 48.0 / 48.0 |")
+    expect(text).toContain("| medium | 50 | 10.00 | 0 | 0.00 | 50 | 10.00 | 0 | 0.00 | 48.0 / 48.0 |")
+    expect(text).toContain("| high | 90 | 90.00 | 18 | 0.20 | 90 | 90.00 | 18 | 0.20 | 48.0 / 48.0 |")
+    expect(text).toContain("| all | 240 | 101.00 | 28 | 0.28 | 240 | 101.00 | 28 | 0.28 | 48.0 / 48.0 |")
+    expect(text).toContain(
+      "while a fix's blamed lines count every file it edited, skipped files such as lockfiles and generated files included",
+    )
+    expect(text).toContain("The filtered columns are unaudited; the unfiltered columns are unaudited.")
+    // A fixed low PR marked filteredIncomplete leaves the filtered columns only.
+    const first = ledger.pulls.find((pull) => pull.band === "low" && (pull.fixesFiltered ?? []).length > 0)!
+    const marked = quality({
+      ...ledger,
+      pulls: ledger.pulls.map((pull) => (pull === first ? { ...pull, filteredIncomplete: true as const } : pull)),
+    }).density
+    expect(marked.low.filtered).toEqual({ pulls: 99, added: 990, lines: 9, perKloc: 9000 / 990 })
+    expect(marked.low.unfiltered).toEqual(density.low.unfiltered)
+    // An empty band has no rate.
+    expect(
+      section(renderOutcomes(outcomeReport(measured(groups.slice(0, 2)))), "## Fix-edited lines per kLOC"),
+    ).toContain("| medium | 0 | 0.00 | 0 | n/a | 0 | 0.00 | 0 | n/a | n/a |")
+  })
+
+  test("a /1 ledger shows every label section as unavailable, and open refuses to audit it", async () => {
+    const current = measured(BEATS)
+    const legacy = outcomeReport(v1Of(current))
+    expect(legacy.labelQuality).toBeUndefined()
+    const gradient = outcomeReport(v1Of({ ...current, findings: [] }))
+    expect(gradient.volume.decision).toBe("gradient-only")
+    for (const text of [renderOutcomes(legacy), renderOutcomes(gradient)])
+      for (const heading of LABEL_HEADINGS) expect(section(text, heading)).toBe(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
+    const sealedFile = sealTo("audit-v1.sealed.json", v1Of(current))
+    const labelsFile = join(root, "audit-v1-labels.json")
+    writeFileSync(labelsFile, JSON.stringify(labelsFrom(auditSample(current, auditKey(OWNER.privateKey)), () => true)))
+    for (const [name, extra] of [
+      ["audit-v1-audit", ["--audit"]],
+      ["audit-v1-labels", ["--labels", labelsFile]],
+    ] as const) {
+      const result = await main(["open", sealedFile, keyFile, join(root, name), ...extra], { now: NOW + DAY, env: {} })
+      expect(result).toMatchObject({ code: 1, stdout: "" })
+      expect(result.stderr).toContain(
+        "--audit and --labels need a vectorscope-outcomes/2 ledger: a vectorscope-outcomes/1 ledger has no filtered label to audit. Nothing was written.",
+      )
+      expect(existsSync(join(root, name))).toBe(false)
+    }
+  })
+
+  test("open writes the sample only when asked and never over answers, and reads labels without changing them", async () => {
+    const ledger = measured(BEATS)
+    const sealedFile = sealTo("writes.sealed.json", ledger)
+    const gradientFile = sealTo("writes-gradient.sealed.json", { ...ledger, findings: [] })
+    const owned = auditSample(ledger, auditKey(OWNER.privateKey))
+    // 55 of each label answered: four in five positives and one in ten negatives fix-inducing.
+    const answered = labelsFrom(owned, (label, index) =>
+      index >= 55 ? null : label === "positive" ? index % 5 !== 0 : index % 10 === 0,
+    )
+    const answers = join(root, "writes-answers.json")
+    writeFileSync(answers, JSON.stringify(answered, null, 2))
+    const sooner = new Date(NOW + 30 * DAY).toISOString()
+    const early = join(root, "writes-early.json")
+    writeFileSync(early, JSON.stringify({ ...answered, expires: sooner }))
+    const tree = join(root, "writes-tree")
+    mkdirSync(join(tree, ".git"), { recursive: true })
+    writeFileSync(join(tree, "labels.json"), JSON.stringify(answered))
+    const bad = (name: string, payload: string) => {
+      writeFileSync(join(root, `${name}.json`), payload)
+      return join(root, `${name}.json`)
+    }
+    const malformed = `not a ${AUDIT_SCHEMA} file`
+    const wrongRepository = bad("labels-repository", JSON.stringify({ ...answered, repository: "acme/gadgets" }))
+    // Answers to PRs the new sample does not hold: two given, one skipped.
+    const foreign = ["a", "b", "c"].map((digit, index) => ({
+      id: digit.repeat(16),
+      fixInducing: index === 2 ? null : index === 0,
+    }))
+    const extra = bad(
+      "writes-extra-answers",
+      JSON.stringify({ ...answered, entries: [...answered.entries, ...foreign] }),
+    )
+    // A dangling link named like the sample: the write would follow it out of the directory.
+    const linked = join(root, "writes-link")
+    const destination = join(root, "writes-link-destination.json")
+    mkdirSync(linked)
+    symlinkSync(destination, join(linked, AUDIT_FILE))
+    const refusals = [
+      ["refused-json", bad("labels-json", "{ not json"), "the labels file is not valid JSON"],
+      [
+        "refused-id",
+        bad("labels-id", JSON.stringify({ ...answered, entries: [{ id: "XYZ", fixInducing: true }] })),
+        malformed,
+      ],
+      [
+        "refused-answer",
+        bad(
+          "labels-answer",
+          JSON.stringify({ ...answered, entries: [{ ...answered.entries[0], fixInducing: "yes" }] }),
+        ),
+        malformed,
+      ],
+      [
+        "refused-schema",
+        bad("labels-schema", JSON.stringify({ ...answered, schema: "vectorscope-outcomes-audit/9" })),
+        malformed,
+      ],
+      ["refused-repository", wrongRepository, 'the labels file is for "acme/gadgets", not acme/widgets'],
+      [
+        "refused-duplicate",
+        bad("labels-duplicate", JSON.stringify({ ...answered, entries: [answered.entries[0], answered.entries[0]] })),
+        "the labels file names one PR twice",
+      ],
+      [
+        "refused-expired",
+        bad("labels-expired", JSON.stringify({ ...answered, expires: new Date(NOW + DAY).toISOString() })),
+        `the labels file expired on ${new Date(NOW + DAY).toISOString().slice(0, 10)}: delete it`,
+      ],
+      ["refused-missing", join(root, "no-such-labels.json"), "Cannot read the labels file"],
+      // Valid answers padded past the ceiling: the size alone refuses it, before it is read.
+      [
+        "refused-large",
+        bad("labels-large", JSON.stringify(answered) + " ".repeat(MAX_LABELS_BYTES)),
+        `The labels file is too large: more than ${MAX_LABELS_BYTES} bytes. Nothing was written.`,
+      ],
+    ] as const
+    const sealedBytes = readFileSync(sealedFile)
+    const answerBytes = readFileSync(answers)
+    const listing = readdirSync(root).toSorted()
+    const open = (target: string, ...extra: string[]) =>
+      main(["open", sealedFile, keyFile, join(root, target), ...extra], { now: NOW + DAY, env: {} })
+
+    // --audit writes the sample beside the report, both for the owner alone.
+    const audited = await open("writes-audit", "--audit")
+    expect(audited).toMatchObject({ code: 0, stderr: "" })
+    expect(audited.stdout).toContain(`Wrote ${REPORT_FILE} and ${AUDIT_FILE} to `)
+    expect(audited.stdout).toContain(
+      `Answer each fixInducing in ${AUDIT_FILE} (at least ${AUDIT_PER_LABEL} of each label) and pass the file back with --labels. It and your answers name PRs: keep them on this machine, and delete them by ${ledger.expires.slice(0, 10)}.`,
+    )
+    expect(readdirSync(join(root, "writes-audit")).toSorted()).toEqual([AUDIT_FILE, REPORT_FILE])
+    for (const name of [AUDIT_FILE, REPORT_FILE])
+      expect(statSync(join(root, "writes-audit", name)).mode & 0o777).toBe(0o600)
+    // The owner answers in place; a second --audit into that directory is refused, and both files keep their bytes.
+    writeFileSync(join(root, "writes-audit", AUDIT_FILE), JSON.stringify(answered, null, 2))
+    const kept = [AUDIT_FILE, REPORT_FILE].map((name) => readFileSync(join(root, "writes-audit", name)))
+    const again = await open("writes-audit", "--audit")
+    expect(again).toMatchObject({ code: 1, stdout: "" })
+    expect(again.stderr).toContain("already exists and may hold your answers")
+    expect([AUDIT_FILE, REPORT_FILE].map((name) => readFileSync(join(root, "writes-audit", name)))).toEqual(kept)
+    // A dangling link by that name is refused too, and nothing is created where it points.
+    const link = await open("writes-link", "--audit")
+    expect(link).toMatchObject({ code: 1, stdout: "" })
+    expect(link.stderr).toContain("already exists and may hold your answers")
+    expect(readdirSync(linked)).toEqual([AUDIT_FILE])
+    expect(lstatSync(join(linked, AUDIT_FILE)).isSymbolicLink()).toBe(true)
+    expect(existsSync(destination)).toBe(false)
+    // Without --audit, only the report; with --ledger too, all three, named in the order written.
+    const all = await open("writes-all", "--ledger", "--audit")
+    expect(all.stdout).toContain(`Wrote ${REPORT_FILE}, ${OUTCOME_LEDGER_FILE} and ${AUDIT_FILE} to `)
+    expect(readdirSync(join(root, "writes-all")).toSorted()).toEqual(
+      [AUDIT_FILE, OUTCOME_LEDGER_FILE, REPORT_FILE].toSorted(),
+    )
+
+    // --labels reads the answers and writes only the report.
+    const labelled = await open("writes-labelled", "--labels", answers)
+    expect(labelled).toMatchObject({ code: 0, stderr: "" })
+    expect(labelled.stdout).not.toContain("gradient-only")
+    expect(readdirSync(join(root, "writes-labelled"))).toEqual([REPORT_FILE])
+    expect(section(readFileSync(join(root, "writes-labelled", REPORT_FILE), "utf8"), "## Label audit")).toContain(
+      "Audited: 55 answered positives and 55 answered negatives, at least 50 of each.",
+    )
+    // --audit with --labels carries the answers into the new sample, which expires no later than their file.
+    const carriedAll = await open("writes-carried", "--audit", "--labels", answers)
+    expect(carriedAll.code).toBe(0)
+    expect(carriedAll.stdout).not.toContain("were not carried")
+    expect(JSON.parse(readFileSync(join(root, "writes-carried", AUDIT_FILE), "utf8"))).toEqual(answered)
+    // Answers to PRs outside the new sample are left behind, and open says how many; the skipped one is not counted.
+    const extraOpened = await open("writes-extra", "--audit", "--labels", extra)
+    expect(extraOpened).toMatchObject({ code: 0, stderr: "" })
+    expect(extraOpened.stdout).toContain(
+      " 2 of your answers name no PR in the new sample and were not carried into it; your labels file still holds them.",
+    )
+    expect(JSON.parse(readFileSync(join(root, "writes-extra", AUDIT_FILE), "utf8"))).toEqual(answered)
+    const carried = await open("writes-early", "--audit", "--labels", early)
+    expect(carried.stdout).toContain(`delete them by ${sooner.slice(0, 10)}.`)
+    expect(JSON.parse(readFileSync(join(root, "writes-early", AUDIT_FILE), "utf8"))).toEqual({
+      ...answered,
+      expires: sooner,
+    })
+    // On a gradient-only ledger the labels are checked, and not used.
+    const gradient = await main(["open", gradientFile, keyFile, join(root, "writes-gradient"), "--labels", answers], {
+      now: NOW + DAY,
+      env: {},
+    })
+    expect(gradient).toMatchObject({ code: 0, stderr: "" })
+    expect(gradient.stdout).toContain(
+      "The labels were checked but not used: this report is gradient-only (fewer than 200 settled human-stratum findings on PRs merged in the 90 days before collection), and the label sections follow the full report's volume rule.",
+    )
+    expect(readFileSync(join(root, "writes-gradient", REPORT_FILE), "utf8")).not.toContain("## Label audit")
+    const gradientAudit = await main(["open", gradientFile, keyFile, join(root, "writes-gradient-audit"), "--audit"], {
+      now: NOW + DAY,
+      env: {},
+    })
+    expect(gradientAudit.stdout).toContain(
+      "This report is gradient-only, so it has no label section yet: the label sections follow the full report's volume rule.",
+    )
+    expect(readdirSync(join(root, "writes-gradient-audit")).toSorted()).toEqual([AUDIT_FILE, REPORT_FILE])
+    const unchecked = await main(
+      ["open", gradientFile, keyFile, join(root, "writes-gradient-bad"), "--labels", wrongRepository],
+      { now: NOW + DAY, env: {} },
+    )
+    expect(unchecked).toMatchObject({ code: 1, stdout: "" })
+    expect(unchecked.stderr).toContain('the labels file is for "acme/gadgets"')
+
+    // Every refusal writes nothing.
+    const refused = async (name: string, extra: string[], code: number, text: string) => {
+      const result = await open(name, ...extra)
+      expect(result).toMatchObject({ code, stdout: "" })
+      expect(result.stderr).toContain(text)
+      expect(existsSync(join(root, name))).toBe(false)
+    }
+    await refused("refused-bare", ["--labels"], 2, "Give --labels as the path of your labels file.")
+    // Not strict, parseArgs takes a following --audit as the labels path: refused, not run as an audit without labels.
+    await refused("refused-option", ["--labels", "--audit"], 2, "Give --labels as the path of your labels file.")
+    const outside = "--labels must be outside the VectorScope checkout and every git work tree"
+    await refused("refused-tree", ["--labels", join(tree, "labels.json")], 2, outside)
+    await refused("refused-checkout", ["--labels", join(REPO_ROOT, "package.json")], 2, outside)
+    for (const [name, file, text] of refusals) await refused(name, ["--labels", file], 1, text)
+
+    // Read only: the answers and the sealed ledger keep their bytes, and only the opened directories are new.
+    expect(readFileSync(answers).equals(answerBytes)).toBe(true)
+    expect(readFileSync(sealedFile).equals(sealedBytes)).toBe(true)
+    expect(readdirSync(root).toSorted()).toEqual(
+      [
+        ...listing,
+        "writes-audit",
+        "writes-all",
+        "writes-labelled",
+        "writes-carried",
+        "writes-extra",
+        "writes-early",
+        "writes-gradient",
+        "writes-gradient-audit",
+      ].toSorted(),
+    )
+  })
+})
+
+// The 97.5% Wilson intervals of 40/50 and 5/50 composed into recall over 100 positives and 300 negatives, printed from
+// core wilson when SF-05a was built.
+const RECALL_INTERVAL = [0.47999287872607554, 0.885109284327646] as const
+
+// A collected history lifted into the full decision, which VS-46d's sections need as VS-46c's do: PR 1, merged 30 days
+// before collection, with MIN_VOLUME acknowledged findings.
+function fullOf(ledger: OutcomeLedger): OutcomeLedger {
+  return {
+    ...ledger,
+    pulls: [pullOf(1, 30), ...ledger.pulls],
+    findings: [...ledger.findings, ...repeat(MIN_VOLUME, () => finding(1, "acknowledged"))],
+  }
+}
+
+// A sample answered as `answer` says, by label and by place among that label's entries (in id order): the labels file
+// the owner would pass back.
+function labelsFrom(
+  sample: AuditSample,
+  answer: (label: AuditEntry["label"], index: number) => boolean | null,
+): AuditSample {
+  const positives = sample.entries.filter((entry) => entry.label === "positive").length
+  return {
+    ...sample,
+    entries: sample.entries.map((entry, index) => ({
+      ...entry,
+      fixInducing: answer(entry.label, entry.label === "positive" ? index : index - positives),
+    })),
+  }
+}
 
 const day = (days: number) => new Date(NOW - days * DAY).toISOString().slice(0, 10)
 
@@ -2657,11 +3387,22 @@ const MEASUREMENT_HEADINGS = [
   "## Depth and reach",
 ]
 
+// VS-46d items 1 to 4's sections (SF-05a), in their order after VS-46c's: a /2 report in the full decision prints them,
+// a /1 report prints each as V1_UNAVAILABLE.
+const LABEL_HEADINGS = [
+  "## Label audit",
+  "## Untraceable fixes",
+  "## Filter reattribution",
+  "## Fix-edited lines per kLOC",
+]
+
 // A report without its schema-2 sections.
 function v1Only(text: string) {
   return text
     .split(/(?=\n## )/)
-    .filter((part) => !MEASUREMENT_HEADINGS.some((heading) => part.startsWith(`\n${heading}\n`)))
+    .filter(
+      (part) => ![...MEASUREMENT_HEADINGS, ...LABEL_HEADINGS].some((heading) => part.startsWith(`\n${heading}\n`)),
+    )
     .join("")
 }
 
@@ -3159,6 +3900,53 @@ function moveRepo(name: string) {
         20: [prFile("src/app.ts", 5), prFile("src/other.ts", 5)],
         21: [prFile("src/app.ts", 5, 5), prFile("src/other.ts", 0, 5), prFile("src/target.ts", 5)],
         22: [prFile("src/app.ts", 1, 1), prFile("src/target.ts", 1, 1)],
+      },
+    ),
+  }
+}
+
+// The untraceable share: base (300 days ago) holds a clamp function; #40 (200) adds a limit function with a comment
+// line; #41 (180, labelled bug, "fix: add a null check") only adds a line; #42 (160, labelled bug) deletes only the
+// comment line; #43 (140, labelled bug) edits one of #40's code lines; a README edit (5) ends the history.
+function addOnlyRepo(name: string) {
+  const dir = join(root, name)
+  mkdirSync(dir, { recursive: true })
+  fixtureGit(dir, ["init", "-q"])
+  const at = (days: number) => NOW - days * DAY
+  const clamp = ["export function clamp(value) {", "  return value", "}"]
+  const limit = (lines: string[]) => textOf([...clamp, "export function limit(value) {", ...lines, "}"])
+  write(dir, { "src/limit.ts": textOf(clamp), "README.md": "limits\n" })
+  commitAll(dir, ["Initial"], at(300))
+  write(dir, { "src/limit.ts": limit(["  // keep the value under the cap", "  return Math.min(value, 100)"]) })
+  const c40 = commitAll(dir, ["Add the limit (#40)"], at(200))
+  write(dir, {
+    "src/limit.ts": limit([
+      "  if (value === null) return 0",
+      "  // keep the value under the cap",
+      "  return Math.min(value, 100)",
+    ]),
+  })
+  const c41 = commitAll(dir, ["fix: add a null check (#41)"], at(180))
+  write(dir, { "src/limit.ts": limit(["  if (value === null) return 0", "  return Math.min(value, 100)"]) })
+  const c42 = commitAll(dir, ["Drop a stale note (#42)"], at(160))
+  write(dir, { "src/limit.ts": limit(["  if (value === null) return 0", "  return Math.min(value, 99)"]) })
+  const c43 = commitAll(dir, ["Handle the cap (#43)"], at(140))
+  write(dir, { "README.md": "limits, and why\n" })
+  commitAll(dir, ["Update the README"], at(5))
+  return {
+    dir,
+    world: plainWorld(
+      [
+        listing(40, 200, "Add the limit", { login: "dev-one" }, c40),
+        listing(41, 180, "fix: add a null check", { login: "dev-two" }, c41, ["bug"]),
+        listing(42, 160, "Drop a stale note", { login: "dev-two" }, c42, ["bug"]),
+        listing(43, 140, "Handle the cap", { login: "dev-three" }, c43, ["bug"]),
+      ],
+      {
+        40: [prFile("src/limit.ts", 4)],
+        41: [prFile("src/limit.ts", 1)],
+        42: [prFile("src/limit.ts", 0, 1)],
+        43: [prFile("src/limit.ts", 1, 1)],
       },
     ),
   }

@@ -1400,7 +1400,8 @@ ledger data is committed (I-13).
 ```
 bun script/vectorscope-eval/outcomes.ts collect --repository <owner/name> --repo-dir <clone> --since <YYYY-MM-DD> \
   --out <dir> [--until <YYYY-MM-DD>] [--branch <name>] [--bot <login>]... [--agent-prs <file>]
-bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger]
+bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger] [--audit] \
+  [--labels <file>]
 ```
 
 - **What it reads.** GitHub through `gh api` only: GET requests under
@@ -1531,6 +1532,15 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   by then. `ci.ts unseal` refuses a ledger, because it does not check expiry.
   A `vectorscope-outcomes/1` ledger still opens, read-only and as v1, against
   VS-46a's own checks: `--ledger` writes it back as read, never upgraded.
+  With `--audit`, `open` also writes `outcomes-audit.json` (0600) beside the
+  report, and refuses, writing nothing, when anything by that name already
+  exists, a symbolic link included (even a dangling one), since it may hold
+  the owner's answers. The file is created exclusively, so one that appears
+  meanwhile is not overwritten or followed either. It, and any labels file
+  made from it, name PRs and carry the ledger's expiry: delete them by then,
+  as the report. `--labels <file>` is only read, must be outside this
+  checkout and every git work tree, may be at most 4 MiB, and is refused
+  once its own expiry has passed.
 - **The report.** Internal (D12): it claims no accuracy and compares
   nothing outside the repository's own PRs (the risk band against size and
   random order). Every rate is paired with cycle time over its own PRs. A rate
@@ -1558,7 +1568,9 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
     marked `filteredIncomplete` (how many were marked is printed), and each
     label's expected positives in the low and high bands. Reverts decide when
     both bands expect at least 10. Otherwise the filtered label decides,
-    flagged SZZ-based, size-biased and unaudited (until VS-46d's audit runs).
+    flagged SZZ-based, size-biased and unaudited. VS-46d's audit (below)
+    lifts that mark for the filtered label only; both fix lines carry their
+    own mark.
     The minimum detectable effect (two-sided 95%, 80% power) is in rate
     points: low against high, and the moved PRs against the label's rate.
   - "Capture against size", after the band table. For the top 10%, 20% and
@@ -1593,9 +1605,80 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
     "unavailable: a /1 ledger has no added or deleted counts", whatever the
     volume decision. The spec withholds them for /1; for the base rates the
     revert and fix fields exist, but the subjects and sizes do not.
+- **Label quality (VS-46d items 1 to 4).** A schema-2 ledger in the full
+  decision gets four more sections after "Depth and reach". Like the
+  measurement, they follow the 200-finding volume rule, so a gradient-only
+  report adds none and its header line ("only the severity gradient is
+  reported") stays true; `open` says so when `--audit` or `--labels` meets a
+  gradient-only ledger, whose labels are still checked. A schema-1 ledger
+  prints each heading with the unavailable line, and `open` refuses `--audit`
+  and `--labels` on it.
+  - "Label audit" (item 1). The population is the filtered label's own
+    (matured, banded, not reverted within 90 days, not `filteredIncomplete`):
+    positives have a filtered fix within 90 days, negatives none. With
+    `--audit`, `open` writes up to 60 PRs of each label to `outcomes-audit.json`,
+    ordered by an audit id and cut there (bottom-k), so each cut is a uniform
+    random sample to anyone without the key. The id is the first 16 hex
+    characters of an HMAC-SHA256 of the lowercased repository and the PR
+    number, under an audit key `open` derives in memory with HKDF-SHA256 from
+    the owner's private key (its PKCS#8 DER, so any PEM encoding of the key
+    gives the same key) and never stores or prints. So the sample is the same
+    on every open, a PR keeps its id in every ledger of the repository sealed
+    to that key, and nobody holding only the public key or these files can
+    tell which PRs a sample will draw. A new owner key draws a new sample,
+    whose answers are given anew. The id is a join key, not a de-identifier:
+    each entry keeps its PR number and its fixes' days and dates.
+  - The owner answers each entry's `fixInducing` with true or false, or
+    leaves it null to skip (at most 10 per label), as the file's `question`
+    says, and passes the file back with `open --labels <file>`. Only
+    `schema`, `repository`, `expires` and each entry's `id` and
+    `fixInducing` are read. The file is refused when it is not JSON, is
+    malformed, is another repository's, has expired, or names one PR twice.
+    Only answers to this ledger's own sample count; the rest are counted as
+    ignored. `--audit` with `--labels` carries the answers into the new
+    sample, which then expires no later than the labels file; `open` says how
+    many answers name no PR in the new sample and were left behind (the
+    labels file still holds them).
+  - Precision (fix-inducing among the answered positives) and the miss rate
+    (among the answered negatives) carry 95% Wilson intervals. Recall is
+    weighted by the population's positives and negatives, because the sample
+    is stratified, and its interval is composed from each label's 97.5%
+    Wilson interval, so both hold at once with at least 95% (Bonferroni). The
+    filtered label is audited once at least 50 of each label are answered:
+    its marks (the filtered base-rate line, the deciding line, the verdict
+    and its capture heading, the kLOC table's filtered columns) then read
+    audited. With labels but too few answers, the deciding line says so
+    rather than that the audit has not run. The unfiltered label is not
+    sampled, so its rates stay unaudited. Without labels, or with too few
+    answers, every follow-up-fix rate is unaudited, and the section names the
+    rates that carry no mark of their own (the band table's fix columns, the
+    escapes, the later-fixed shares, the filtered label's MDE row and capture
+    table).
+  - "Untraceable fixes" (item 2): of every fix commit the scan labelled, the
+    share that deleted no line, which the unfiltered label cannot trace, and
+    the share that deleted no code line (add-only, or only blank or comment
+    lines), which the filtered label cannot. These count fix commits, not
+    PRs, so they carry no cycle time.
+  - "Filter reattribution" (item 3): over the filtered population, the five
+    kinds of every line the unfiltered label blamed there, with shares; the
+    spec's split into whitespace (`whitespace`, put elsewhere by `-w`),
+    comment and move (`moved`), with blank lines on their own, because the
+    filter drops them and `-w` does not move them; the reattributed or
+    dropped total; and the lines the filtered label blames there, with those
+    it gained from other commits. No interval: lines cluster within fix
+    commits.
+  - "Fix-edited lines per kLOC" (item 4): each label's fix-edited lines per
+    1,000 lines added, by band and over all bands. Lines added count only
+    reviewed files, while a fix's blamed lines count every file it edited,
+    so fixes in lockfiles or generated files read higher.
+  - Internal (D12): no rate here is comparable with published SZZ figures or
+    with any other population. The owner's hand labels stay on the owner's
+    machine and are never committed; keeping them past their expiry is the
+    owner's decision (Q30, Q43), and nothing here is built for it.
 - **Deferred.** Proxy validation (VS-46b), history risk areas and the depth
   assignment (runner wiring and Q30), and the re-review share of spend (the
-  state keeps only a PR's total). VS-46d's report sections (SF-05a, SF-05b).
+  state keeps only a PR's total). VS-46d's remaining report sections, item 5
+  (verdict against outcome) included, are SF-05b's.
   Depth rows wait on VS-46 item 7. Schema 2 does not carry per-file fix data
   for Effort@20% or a per-finding dismissal reason, so those read unavailable
   on it; adding either is a /3. Run on a real repository only after Q30.

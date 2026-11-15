@@ -17927,3 +17927,565 @@ README and this log. VS-46d's report sections are SF-05a and SF-05b.
   - Refresh `vectorscope-continuation.md`.
   - Append the correcting entry for the stale `:16000` sentence.
   - SF-04 touches none of these.
+
+## 2026-11-15 · VS-46d Audited outcome labels report (SF-05a)
+
+Addendum B §1.9 (VS-46d) design items 1 to 4, the labels half of the report,
+built on `scope-finish` at `6e3c0e08` (SF-04) as lane package SF-05a. It
+implements the SF-05a plan as corrected by its critique; where a critique
+point was taken in another form, the reason is under "Critique points". It
+is script-only: `script/vectorscope-eval/outcomes.ts`, its test file, the eval
+README and this log.
+
+- **Status.** This entry is committed with SF-05a's source, tests and README,
+  the round-one review fixes below included, as a `feat(review)` commit on
+  `scope-finish`. A commit cannot name its own SHA, so the commit gate's
+  report to the lead names it. Five decisions are the lead's and stay open
+  at that commit, each built so either answer stays possible, with the
+  fallback under its decision: (c) the audit key, (i) the volume rule, (l)
+  the whitespace group (tied to SF-03 decision (c), still pending), (r) item
+  5's placement in SF-05b, and (s) the audit file's `date` under SF-03
+  decision (g), still pending.
+
+- **Scope.** Addendum B §1.9 :206-227: items 1 to 4 at :212-215, the
+  compatibility paragraph at :223 and the tests at :224. The task title says
+  "design items 1-5 (labels half)". Item 5 (:216, verdict against outcome
+  within band and size tercile) is not built here: the plan reads it as
+  SF-05b's, whose brief lists it, but no lane document shows that brief, so
+  decision (r) asks the lead to confirm. Citations at `6e3c0e08`:
+  `LEDGER_SCHEMA` `:81`, `V1_UNAVAILABLE` `:84`, `REPORT_FILE` `:86`,
+  `MAX_LEDGER_PULLS` `:184`, `hashName` `:668`, `LedgerFixCommit` `:286`,
+  `LedgerLineKinds` `:309`, `LedgerPull` `:353`, the `Hash` decoder `:2020`,
+  `OutcomeReport` `:2178-2230` (`unavailable` `:2227`), `outcomeReport`
+  `:2294-2455`, `measurementOf` `:2560-2638`, `renderOutcomes` `:2865-2947`,
+  `MEASUREMENT_SECTIONS` `:2950`, `separationLine` `:2959`,
+  `measurementLines` `:2976-3077`, `USAGE` `:3134`, `main` `:3167` and
+  `openCommand` `:3262-3297`. In the final file, after the review fixes: the
+  audit constants and `MAX_LABELS_BYTES` `:141-154`, `auditKey` `:702`,
+  `auditId` `:711`, the labels decoder and `auditLabels` `:2166-2205`, the
+  report types `:2371-2454`, `outcomeReport` `:2465` (the populations
+  `:2490`, the new spread `:2629`), `filteredFixed` `:2703`, `measurementOf`
+  `:2746`, `labelPopulations` `:2817`, `auditSample` `:3021`,
+  `labelQualityOf` `:3059`, `auditOf` `:3078`, `recallOf` `:3124`,
+  `untraceableOf` `:3147`, `reattributionOf` `:3160`, `densityOf` `:3188`,
+  `renderOutcomes` `:3264`, `LABEL_SECTIONS` `:3372`, `measurementLines`
+  `:3397`, `labelLines` `:3508`, `USAGE` `:3636`, `openCommand` `:3774` (the
+  labels size check `:3819`, the audit file check `:3827`, its exclusive
+  write `:3852`) and `writePrivate` `:3918`.
+
+- **Test first.** At `6e3c0e08`, with the source unedited, `outcomes.test.ts`
+  gave 66 pass, 0 fail (997 expect calls), as SF-04 recorded; `outcomes.ts`
+  was `7cbdde9902a0…`. The new source alone, against the unedited tests, gave
+  63 pass and 3 fail: T1, T8 and SF-04's /1 case, each only because the /1
+  report now lists four more unavailable headings that the unedited `v1Only`
+  did not filter.
+
+- **What landed.**
+  - New exports: `AUDIT_FILE` (`outcomes-audit.json`), `AUDIT_SCHEMA`
+    (`vectorscope-outcomes-audit/1`), `AUDIT_PER_LABEL` (50), `AUDIT_DRAW`
+    (60), `AUDIT_QUESTION`, `AUDIT_INFO`, `MAX_LABELS_BYTES` (4 MiB), the
+    functions `auditKey`, `auditSample` and `auditLabels`, and the types
+    `AuditFix`, `AuditEntry`, `AuditSample`, `AuditLabels`, `LabelAudit`,
+    `DensitySide`, `DensityRow` and `LabelQuality`.
+  - `OutcomeReport.labelQuality`, on a /2 ledger in the full decision only.
+    `outcomeReport(ledger, audit?)` takes the sample `open` drew and the
+    owner's answers; it stays pure.
+  - Four sections after "## Depth and reach": "## Label audit", "##
+    Untraceable fixes", "## Filter reattribution" and "## Fix-edited lines
+    per kLOC". A /1 report prints each with `V1_UNAVAILABLE` after VS-46c's
+    five, whatever the decision.
+  - Marks in SF-04's sections: both base-rate fix lines, the deciding line
+    and the flag on the verdict line and the filtered capture heading.
+  - `open --audit` and `open --labels <file>`, with `USAGE`, `OPTIONS` and
+    `main` updated and one sentence in the header comment.
+  - Refactor with no behaviour change: `measurementOf`'s population code is
+    `labelPopulations` (`ranked`, `kept`, `complete`), shared with the audit
+    and the label sections, and its `filtered` closure is the module-level
+    `filteredFixed`. `outcomeReport` computes the populations once and passes
+    them to `measurementOf` and `labelQualityOf`; `auditSample` computes them
+    once for both labels.
+  - Tests: eight new cases in a new describe, "the label audit and label
+    quality (VS-46d, SF-05a)", heading lists extended in five existing
+    cases, and the helpers `LABEL_HEADINGS`, `fullOf`, `labelsFrom`,
+    `addOnlyRepo` and `RECALL_INTERVAL`.
+  - README "Outcome ledger": the usage block, "Sealing and expiry", the
+    measurement bullet's mark sentence, a new "Label quality (VS-46d items 1
+    to 4)" bullet, and "Deferred".
+
+- **How it works.**
+  - _Population._ `labelPopulations` gives the matured PRs with a band that
+    no read cut short (`ranked`), those not reverted within 90 days
+    (`kept`), and those not marked `filteredIncomplete` either (`complete`).
+    The audit, the reattribution split and the filtered kLOC columns read
+    `complete`; the unfiltered kLOC columns read `kept`.
+  - _Sample._ `auditSample(ledger, key)` splits `complete` by the filtered
+    label within 90 days, orders each label by audit id then PR number, and
+    keeps the first 60 (or the whole label). The id is the first 16 hex of
+    HMAC-SHA256(key, `pr\0<repository lowercased>\0<number>`). Each entry
+    has `{id, pr, label, filtered, unfiltered, fixInducing: null}`, the fix
+    lists within 90 days as `{date, days, lines, kind}` with `date` from
+    `fixCommits[fix.commit]`. The file adds `schema`, `repository`,
+    `branch`, `collectedAt`, `expires`, `question` and `population`.
+  - _Key._ `auditKey(pem)` is HKDF-SHA256 over the private key's PKCS#8 DER,
+    salt empty, info `AUDIT_INFO`, 32 bytes. `open` derives it only when
+    `--audit` or `--labels` is given, after the key has unsealed the ledger.
+  - _Answers._ `auditLabels(text, repository, now)` decodes
+    `{schema, repository, expires, entries: [{id, fixInducing}]}` (other
+    fields ignored, at most 3,000 entries), and refuses a file that is not
+    JSON, is malformed, is another repository's, has expired or names an id
+    twice. Null answers are dropped.
+  - _Rates._ `auditOf` counts the answered sampled entries of each label;
+    answers whose id is not in this ledger's sample are counted as ignored.
+    Precision and the miss rate are `cell(…, 50)`: core Wilson intervals at
+    `DEFAULT_CONFIDENCE`, with a value only from 50 answers. `recallOf` gives
+    P·p / (P·p + N·q) over the population's P positives and N negatives, a
+    value only when audited, and an interval from core `wilson` at 0.975 for
+    each label: [P·pL / (P·pL + N·qH), P·pH / (P·pH + N·qL)], 0 and 1 for an
+    empty denominator.
+  - _Untraceable._ Over `ledger.fixCommits`: no deleted line of any kind
+    (unfiltered), no deleted code line (filtered), each `cell(…, 50)`.
+  - _Reattribution._ The five kinds summed over `complete`'s `fixes` within
+    90 days; `filtered` is the sum of their `fixesFiltered` lines, and
+    `gained` is that less `code`.
+  - _Density._ Per band and over all: lines within 90 days × 1,000 over the
+    PRs' `added`, null with nothing added; the cycle time is over `kept`'s
+    PRs in the row.
+  - _open._ The order of checks: target, the labels value (a bare
+    `--labels`, or a value starting with `-`, is a usage error), the labels
+    location (outside the checkout and every git work tree; usage), unseal
+    and decode as before, /1 with either option (refused), the labels
+    file's size (more than `MAX_LABELS_BYTES` refused before it is read),
+    reading and decoding the labels, and anything named
+    `outcomes-audit.json` in the target with `--audit`, a symbolic link
+    included (refused; `lstat`, so a dangling link counts). Only then is
+    anything written: the report, the ledger with `--ledger`, then the
+    sample with `--audit`, all 0600, the sample with flag `wx`. With both
+    options the new sample carries the answers by id, and its `expires` is
+    the earlier of the ledger's and the labels file's. stdout names the
+    files written ("A", "A and B", "A, B and C", so today's two strings are
+    unchanged), the sample's expiry, how many answers name no PR in the new
+    sample and were not carried, and a note when the ledger is
+    gradient-only.
+
+- **Decisions.**
+  - (a) _The filtered label is audited._ It is primary on /2 (item 3, SF-04
+    decision (a)). Its population is the measurement's filtered one, and a
+    positive has a filtered fix within 90 days. The unfiltered label is not
+    sampled, so `separationLine`, which reads only v1 fields, stays
+    unaudited. That departs from SF-04's hand-off wording, which lists
+    `separationLine` among the marks the audit lifts. Fallback: a second
+    stratified sample on the unfiltered label.
+  - (b) _Bottom-k by keyed id, with a skip margin (critique 2)._ 60 drawn
+    per label and 50 answers needed, so up to 10 per label can be skipped
+    without redrawing. Every answered sampled entry counts, up to 60, which
+    keeps the estimate a stratified random sample of the answerable PRs.
+  - (c) _The audit key (lead decision)._ HKDF from the owner's private key,
+    as above. It gives a sample that is the same on every open with no
+    stored state, ids stable across ledgers sealed to one key, and a draw
+    that nobody holding only the public key (which anyone may use to seal)
+    or the files can predict, so a PR author cannot steer a PR into or out
+    of the audit. A new owner key draws a new sample. Alternatives for the
+    lead: unkeyed SHA-256 of the same message with a seed constant (simpler,
+    but anyone can predict the draw, and the README would have to say so);
+    or the critique's random 32-byte seed written into `outcomes-audit.json`
+    and read back through `--labels` (survives key rotation, but a first
+    `--audit` is then not reproducible from the ledger alone). The plan's
+    claim that a labels file stripped of `pr` may outlive the ledger is
+    withdrawn (critique 3): the id is a join key, not a de-identifier.
+  - (d) _The sample file._ Positives first, then negatives, each in id
+    order. `--audit` never overwrites an existing `outcomes-audit.json` or
+    follows a link by that name, so answers are not lost: the check sees
+    any entry by that name, and the write is exclusive. `--audit --labels`
+    carries the answers into the new sample by id, and says how many it
+    left behind.
+  - (e) _The labels file._ Read only, outside the checkout and every git
+    work tree (I-13), as `--agent-prs` is kept out of the clone. A value
+    starting with `-` is refused, because parseArgs, not strict, takes
+    `--labels --audit` as the path "--audit" (critique 9).
+  - (f) _Recall's interval is composed, with Bonferroni (critique 1)._ Two
+    independent 95% intervals hold together only about 90% of the time, so
+    each label's interval is taken at 97.5%, and the composed interval,
+    which is monotone in both, holds with at least 95%. This departs from
+    the spec's "precision and recall with Wilson intervals": precision and
+    the miss rate have Wilson intervals, and recall, a ratio of two strata,
+    has no Wilson interval of its own. The text says so. No
+    finite-population correction is applied, which errs wide.
+  - (g) _Audited._ At least 50 answers of each label. A label with fewer
+    than 50 PRs can never be audited, and the section says so.
+  - (h) _Marks (critique 6)._ The two base-rate fix lines carry "unaudited"
+    (the filtered one "audited" once audited); the deciding line keeps
+    SF-04's exact text when no labels file is given, says "has too few
+    answers: see Label audit" when one is given but the label is not
+    audited, and has an audited variant; the flag on
+    the verdict line and the deciding capture heading follows the audit;
+    the kLOC section marks its columns; the untraceable and reattribution
+    sections read unaudited always, because the audit samples PRs, not fix
+    commits or lines. Some rates carry no mark of their own, and the label
+    audit section's sentence names them: the band table's Fixed 30 d and 90
+    d columns, the escapes and the later-fixed shares (v1 sections, held
+    byte-identical by T1), and the filtered label's MDE row and its capture
+    heading when reverts decide (SF-04's base-rates case asserts
+    "\nFiltered follow-up fix: 0 positives").
+  - (i) _Volume rule (lead decision)._ The label sections follow the
+    200-finding volume rule, as SF-04 decision (d) did for the measurement.
+    The critique argued for printing them on any /2 ledger, because the rule
+    gates on review findings, which the label's quality does not depend on.
+    That was not taken as the default: a gradient-only /2 report is VS-46a's
+    byte for byte (T1), and its pinned header line says "only the severity
+    gradient is reported", which would become false. The reason is given
+    where the owner meets it: `open`'s stdout, when `--audit` or `--labels`
+    meets a gradient-only ledger, and the README. `--audit` still writes the
+    sample on such a ledger, and `--labels` still checks the file.
+    Fallback: compute `labelQuality` in the base report, reword that header
+    line (re-pinning the "#" digest of every T1 history) and drop the
+    gradient-only assertion of case 2.
+  - (j) _/1 ledgers._ The four headings join VS-46c's list as
+    `LABEL_SECTIONS`, in a list of their own. `--audit` and `--labels` on a
+    /1 ledger are refused, writing nothing.
+  - (k) _Untraceable from `fixCommits`_, as SF-03's hand-off asks. If the
+    lead drops `fixCommits` (SF-03 decision (g)), the section reads
+    unavailable on /2, and case 4 asserts that instead.
+  - (l) _The whitespace group (lead decision, tied to SF-03 decision (c);
+    critique 5)._ With the `whitespace` field kept, as at HEAD, the spec's
+    "whitespace" is that field alone (lines `-w` puts elsewhere), and blank
+    lines, which the filter drops and `-w` does not move, stand on their
+    own. All five raw counts are printed in every case. If the lead deletes
+    `whitespace` and folds it into `moved`, the split's whitespace part
+    reads as folded into move, and case 5's filter expectations re-pin
+    (whitespace 2 becomes moved 2).
+  - (m) _Fix-edited lines per kLOC._ `added` counts only reviewed files, as
+    `riskFeatures` counts them for the band, while blamed lines count every
+    file a fix edited; the text says fixes in lockfiles or generated files
+    read higher.
+  - (n) _One population helper_, shared, with no behaviour change: SF-04's
+    cases pass unchanged.
+  - (o) _No stratum split._ The agent split is item 9, SF-05b's.
+  - (p) _The question._ `AUDIT_QUESTION` asks whether a commit merged within
+    90 days fixed a defect the PR introduced, allows a skip, and asks the
+    owner to check that a positive's fixes change behaviour, not only
+    formatting, comments or position.
+  - (q) _Retention (critique 3)._ The sample carries the ledger's `expires`;
+    stdout says to delete it and the answers by then; a labels file past its
+    `expires` is refused; and a sample with carried answers expires no later
+    than the file they came from. Keeping labels longer is the owner's
+    decision under Q30 and Q43, and nothing is built for it.
+  - (r) _Item 5 is SF-05b's (lead to confirm; critique 10)._ The "1-5" of
+    the title is read as items 1 to 4 here.
+  - (s) _The audit file's `date` follows SF-03 decision (g) (critique 10)._
+    If the lead drops `fixCommits`, `AuditFix` drops `date` and keeps
+    `days`, and case 1's `date` assertions go.
+
+- **Critique points.** Twelve, all taken; three in another form.
+  1. _Recall coverage (major)._ Taken (decision (f)), with a mutation that
+     composes from the 95% intervals (caught).
+  2. _No skip margin (major)._ Taken as the margin option (decision (b)).
+     Case 3 shows one skip per label still audits; the at-49 short case
+     stays unaudited.
+  3. _Retention (major)._ Taken (decision (q)); the keep-past-expiry claim
+     is gone from the code comments, the README and this entry.
+  4. _Public-key derivation (major)._ Taken: case 1 holds the key unequal to
+     HKDF over the public key's SPKI and PKCS#1 DER and over both PEM texts.
+     Both derivation mutations are caught, not recorded as gaps.
+  5. _Whitespace group (major)._ Taken (decision (l)), and the hand-off
+     response below is rewritten.
+  6. _Unmarked rates (minor)._ Taken (decision (h)).
+  7. _Volume rule (minor)._ Taken in another form (decision (i)): put to the
+     lead, with the reason in stdout and the README rather than in the
+     report, whose gradient-only form is pinned.
+  8. _Dry run (minor)._ Taken: the dry-run ledger is in the full decision,
+     and the labelled reopen is audited (below).
+  9. _fakeGitHub and `--labels --audit` (minor)._ Taken: the fakeGitHub
+     claim is dropped (`open` has no GitHub client), the filesystem listing
+     and byte checks are the 0-writes proof, and `--labels --audit` is a
+     usage refusal (decision (e)).
+  10. _Item 5 and `date` (minor)._ Taken (decisions (r) and (s)).
+  11. _A random seed (minor)._ Taken in another form: offered to the lead
+      as an alternative under decision (c), not built.
+  12. _Mutation cost (minor)._ Taken: each mutation ran against the new
+      describe (and T1 or the /1 cases where it touched them) with `-t`,
+      not the whole file.
+
+- **Plan corrections.**
+  - 60 drawn per label, not 50 (critique 2). The plan's "it has 50 and 48"
+    case became 50 and 49, so the at-49 mutation fails it.
+  - The plan pinned recall's interval at about [0.511, 0.872], the 95%
+    composition. With Bonferroni it is [0.4800, 0.8851], printed from core
+    `wilson` and pinned as `RECALL_INTERVAL`.
+  - The plan's filter split read whitespace 3 (30.0%); it is whitespace 2
+    (20.0%), with blank 1 (10.0%) on its own.
+  - The plan's per-side cycle time in the kLOC table became one per row,
+    over the unfiltered side's PRs, which hold the filtered side's.
+  - `auditLabels` and `AUDIT_INFO` are exported: the tests read answers
+    through the decoder `open` uses, and derive the public-key candidates.
+  - The plan's 30-PR whole-label case is a 23-positive label in case 1's
+    mixed history (30 fixed of 40, 4 of them reverted, 3 marked).
+  - SF-04's /1 case changes only through `v1Only`; the new /1 case asserts
+    the label headings in both decisions, and T8 loops over both lists.
+
+- **Review findings (round one).** Ten, all non-blocking (two were the same
+  point about the status and CI bullets). All are taken; one in part, with
+  the reason.
+  1. _Status and CI bullets (:17940 and :18337, raised twice)._ Taken: the
+     status bullet now names the commit and the five open lead decisions,
+     and the CI bullet gives the exact list owed. No run ID exists before
+     the push, so none is quoted.
+  2. _The deciding line with too few answers._ Taken: `measurementLines`
+     takes the report's `LabelAudit`, and with labels that do not audit the
+     line reads "unaudited (VS-46d's audit has too few answers: see Label
+     audit)". SF-04's "has not run" text stays for the no-labels case only.
+     The at-49 short case asserts the new line, and that "audit has not
+     run" appears nowhere in that report.
+  3. _`labelPopulations` recomputed._ Taken: `auditSample` computes
+     `complete` once for both labels, and `outcomeReport` computes the
+     populations once (`:2490`) and passes them to `measurementOf` and
+     `labelQualityOf`.
+  4. _`measurementOf`'s local copies._ Taken: it reads `populations.ranked`,
+     `.kept` and `.complete` where it uses them.
+  5. _Answers left behind by `--audit --labels`._ Taken: stdout adds "N of
+     your answers name no PR in the new sample and were not carried into
+     it; your labels file still holds them." N counts true or false
+     answers only, since the decoder drops nulls. The writes case gives
+     two answered and one null foreign entry and asserts N = 2, and asserts
+     the sentence absent when every answer is carried.
+  6. _`refusals[4][1]`._ Taken: the fixture is `wrongRepository`, used in
+     the refusal list and the gradient-only check, which now also asserts
+     stderr names "acme/gadgets".
+  7. _`recallOf`'s edge cases._ Taken in part. Both cases are added to the
+     Wilson case: every one of the 60 answered false on each label is
+     audited with recall `{ value: null, interval: [0, 1] }`, printed "n/a
+     [0.0%, 100.0%]"; answers on one label only give a null value and a
+     null interval, and no bracket. Their mutations are caught (below).
+     The finding's premise that these cases reach the `?? 0` and `?? 1`
+     fallbacks does not hold: in the all-false case the ends are 0 and 1 by
+     the composition itself, 0 / (0 + N·qH) and P·pH / P·pH. A fallback runs
+     only when an end's denominator is 0. A Wilson upper end is above 0 for
+     any stratum with an answer, so that needs answers on a label whose
+     population is empty, which a sample drawn from the same ledger cannot
+     have. The fallbacks stay: they type the tuple and state the convention.
+     Their two mutations survive and are recorded as equivalent for any
+     sample `open` draws, not as test gaps.
+  8. _The audit file's never-overwrite rule._ Taken, with an `lstat`
+     pre-check in place of `existsSync`. The check sees any entry by that
+     name, a dangling link included, and refuses before anything is
+     written, so "Nothing was written" stays true. The write uses flag `wx`
+     (O_EXCL), so a file or link that appears between the check and the
+     write fails the write rather than being overwritten or followed. That
+     race throws EEXIST after the report is written. It is not mapped to
+     the refusal, whose "Nothing was written" would then be false. A new
+     check in the writes case: a dangling link named `outcomes-audit.json`
+     is refused, the directory still holds only the link, and nothing is
+     created where it points. The `lstat` mutation is caught, and under it
+     the `wx` write meets the dangling link and fails with EEXIST instead
+     of following it. The `wx` mutation alone survives, because only the
+     race reaches it.
+  9. _No bound on the labels file._ Taken: `MAX_LABELS_BYTES` (4 MiB) is
+     checked with `statSync` before the file is read, refused with "The
+     labels file is too large: more than 4194304 bytes. Nothing was
+     written." The refusal list in the writes case gains valid answers
+     padded past the ceiling.
+
+- **Responses to hand-offs.**
+  - SF-04: the audit lifts the flag (verdict line and deciding capture
+    heading) and the deciding line for the filtered label. `separationLine`
+    is not lifted, because it reads the unfiltered label, which this sample
+    does not cover (decision (a)). The headings go after "## Depth and
+    reach", and in `LABEL_SECTIONS` after `MEASUREMENT_SECTIONS` for /1. T1
+    re-pins nothing: only its heading lists and `v1Only`'s list change. The
+    population is read as `measurementOf` reads it, through
+    `labelPopulations`.
+  - SF-03: the untraceable share is read from `fixCommits` as asked: all
+    three deleted counts at 0 for the unfiltered label, `code` at 0 for the
+    filtered one. The hand-off says the reattributed share is
+    "`blank + whitespace` against `comment` against `moved`, or `whitespace`
+    alone if the lead keeps the whitespace field". The field is kept at HEAD,
+    with the lead's answer pending, so the split uses `whitespace` alone, and
+    blank stands on its own (decision (l)). PRs marked `filteredIncomplete`
+    are left out of the split, the audit and the filtered kLOC columns, and
+    counted.
+
+- **Default and parity proof.**
+  - T1: the three collected histories' `v1Of` ledger digests, their call
+    counts (32, 36, 32), every section digest and `BAND_TABLE` are
+    unchanged, and `v1Only(text) === text` still holds: a gradient-only /2
+    report adds nothing (case 2 asserts it again on `measured(BEATS)`).
+  - `fullSynthetic`'s v1 section digests are unchanged; its heading order
+    gains only the four headings after "## Depth and reach". Its /1 and /2
+    v1 sections are equal.
+  - Without labels, SF-04's sections change only by "; unaudited" on the
+    two base-rate fix lines; the deciding line, the flags and the
+    separation line keep their text, and SF-04's cases pass unedited but
+    for heading lists.
+  - `open` without the new flags writes the same files with the same
+    stdout.
+  - The import graph is unchanged: `createPrivateKey` and `hkdfSync` come
+    from `node:crypto`, `lstatSync` from `node:fs` and `wilson` from core
+    eval, all three modules already imported.
+  - `git diff --stat`: only the three script files and this log.
+  - No runner, core, engine, app, digest, provider or session file changed,
+    and collection is untouched.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` stays `aef0d5c84ed90782` and
+  `REVIEW_PIPELINE_REVISION` stays 4: no pinned file changed, and
+  `REVIEW_PIPELINE_FILES` lists no `script/` file.
+- **Replay variant.** None. `VARIANTS` is untouched: 18 entries, 33 pending
+  halves, 3 wired, counted by importing `replay.ts`.
+- **Desktop half.** Not applicable: the ledger and its audit are an
+  owner-machine script, and the desktop keeps no outcome ledger.
+
+- **Tests actually run.** Each file alone from `packages/script`, through
+  `vector-serial`, with `--timeout 30000` and
+  `TMPDIR=/tmp/vector-v2/scope/sf05a/tmp`.
+  - At `6e3c0e08`: `outcomes.test.ts` 66 pass, 0 fail (997 expect calls).
+  - Before the review fixes: `outcomes.test.ts` 74 pass, 0 fail (1,595
+    expect calls), run once with `GITHUB_ACTIONS=false` and once with
+    `GITHUB_ACTIONS=true`.
+  - Final tree, after the review fixes: `outcomes.test.ts` 74 pass, 0 fail
+    (1,616 expect calls), run once with `GITHUB_ACTIONS=false` and once
+    with `GITHUB_ACTIONS=true`. That is 66 existing cases (T1, T8, SF-04's
+    base-rates, old-sentence and dry-run cases gained heading assertions)
+    and eight new ones:
+    1. the audit sample is seeded and deterministic, with stable hashed ids
+       (population, order, keys, rerun, reversed pulls, a grown ledger,
+       other key, other repository, case, reverted and marked PRs, a whole
+       small label, the key's encodings and public-key derivations, two
+       `open --audit` runs);
+    2. without a labels file every follow-up-fix rate is unaudited;
+    3. a fixture labels file gives precision, the miss rate and weighted
+       recall with Wilson intervals (and the short case with its deciding
+       line, the skip case, the all-false and one-label recall cases, and
+       the same answers through `open --labels`);
+    4. the untraceable share, on the new add-only history;
+    5. the reattribution split on SF-03's moved-lines and filter histories,
+       and a marked PR;
+    6. fix-edited lines per kLOC, by band;
+    7. a /1 ledger shows every label section as unavailable, and `open`
+       refuses to audit it;
+    8. `open` writes the sample only when asked and never over answers, and
+       reads labels without changing them (0600 modes, three-file stdout,
+       carried answers and expiry, the count of answers not carried, the
+       gradient-only notes and refusal text, a second `--audit` and a
+       dangling link, thirteen `--labels` refusals, and the root listing and
+       byte checks).
+  - `ci.test.ts` 39 pass, 0 fail (507 expect calls), as a regression check,
+    before and after the review fixes.
+  - `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, and `bun typecheck` in `packages/script`: clean. No
+    package source changed, so no other package typecheck is owed. The full
+    TURBO typecheck is for the commit gate, before the push.
+  - `prettier --check` is clean on the three script files; this entry was
+    checked through `--stdin-filepath`.
+  - `oxlint` on `outcomes.ts` and its test: 25 warnings, 0 errors, the count
+    SF-04 left, and none on a line this package or its review fixes added.
+  - Mutations of `outcomes.ts`, each run against the new describe with
+    `-t` (and against T1 or the /1 cases where they touched them), restored,
+    and the file's SHA-256 checked after every restore. Before the review
+    fixes, on `56974db2f46f…`: 34 of 34 caught. On the final file,
+    `ab577c4d2a5f…`, the sweep ran again: the same 34, three of them
+    re-aimed at code the review fixes moved (the sampled population at
+    `auditSample`'s one `complete`, the existing-file check at its `lstat`,
+    and the gradient-only mutation at `labelQualityOf`'s new signature), all
+    34 caught with the same failing-case counts, and ten more for the
+    review fixes, below. The number is the failing cases:
+    - the sample ordered by PR number: 1; an unkeyed id: 1; no repository
+      in the id: 1; reverted and marked PRs sampled: 1;
+    - `AUDIT_PER_LABEL` 49: 2; `AUDIT_DRAW` 50, no skip margin: 3;
+    - recall unweighted: 1; its interval from 95% intervals: 1; its ends
+      paired wrongly: 1;
+    - audited on one label: 1; audited at 49: 1; a null counted as false:
+      2; the miss rate from positives: 1; foreign answers not counted: 1;
+    - `separationLine` lifted by the audit: 1; the flag fixed at
+      unaudited: 1; no mark on the unfiltered base-rate line: 2;
+    - the filtered untraceable count on all three kinds: 1;
+    - the whitespace group with blank (the plan's grouping): 1; gained as
+      filtered less all lines: 1;
+    - kLOC over reverted PRs: 1; filtered kLOC over marked PRs: 1;
+    - /1 accepted for `--audit` or `--labels`: 1; an existing audit file
+      overwritten: 1; labels inside a work tree accepted: 1; an option
+      taken as the labels path: 1;
+    - label sections in the gradient-only decision: 3 (T1 among them);
+      `LABEL_SECTIONS` dropped from the /1 list: 3;
+    - no carried answers: 1; no expiry cap on a carried sample: 1; expired
+      labels accepted: 1; duplicate ids accepted: 1;
+    - the audit key from the public key: 1; from the PEM text: 1;
+    - review fixes, caught: the deciding line ignoring a short audit: 1;
+      recall 0, not null, with no fix-inducing answer: 1; recall's interval
+      without the `p && q` guard: 1; `[0, 1]` for an unanswered stratum: 1;
+      the audit file check by `existsSync`, so a dangling link passes it: 1
+      (the `wx` write then meets the link and fails with EEXIST, so nothing
+      is created where it points); no labels size ceiling: 1; answers left
+      behind not reported: 1;
+    - review fixes, surviving, as expected: the lower fallback `?? 0` and
+      the upper `?? 1` set to 0.5 (equivalent for any sample drawn from the
+      ledger, review finding 7), and the audit file written without `wx`
+      (only a race between the check and the write reaches it, finding 8).
+  - The manual dry run: `/tmp/vector-v2/scope/sf05a/dry-run.ts` (scratch,
+    not committed) sealed a synthetic full-decision /2 ledger (400 banded
+    PRs, 100 filtered positives, 200 acknowledged findings on a PR merged
+    30 days earlier, two fix commits) to a throwaway 3072-bit key it
+    generated. `bun script/vectorscope-eval/outcomes.ts open … --audit`
+    exited 0 and wrote `outcomes-report.md` and `outcomes-audit.json`, both
+    0600 (population 100 and 300, 120 entries). The script then answered 55
+    entries of each label, and `open … --labels <that file>` into a second
+    directory wrote only the report, leaving the answers' SHA-256 unchanged.
+    Its headings, in order: Outcome base rates, Minimum detectable effect,
+    Severity gradient, Split out, Resolution, Risk band against post-merge
+    outcomes, Capture against size, Measurement verdict, Depth and reach,
+    Label audit, Untraceable fixes, Filter reattribution, Fix-edited lines
+    per kLOC. The audit read "Audited: 55 answered positives and 55 answered
+    negatives" (precision 44/55, missed 6/55, recall 71.0% [47.9%, 86.7%]),
+    and the verdict line named "(SZZ-based, size-biased, audited)". The
+    throwaway key and every output were deleted afterwards. That run was on
+    the file before the review fixes, and was repeated on the final file
+    with the same results: the same two files at 0600, population 100 and
+    300, 120 entries, the same headings in the same order, the same audit
+    and verdict lines, and the answers' SHA-256 unchanged. Two more opens
+    of the final file: a copy with 49 answered negatives read "Deciding
+    label: filtered follow-up fix, SZZ-based, size-biased and unaudited
+    (VS-46d's audit has too few answers: see Label audit)" and "it has 55
+    and 49", and `--audit --labels` with three foreign entries (two
+    answered, one null) wrote the report and a new sample carrying the 110
+    answers, and said "2 of your answers name no PR in the new sample and
+    were not carried into it". The throwaway key and every output were
+    deleted again.
+  - CI owed for this commit, dispatched on `scope-finish` after the push:
+    `typecheck.yml`, and `test.yml`, the only workflow that runs
+    `outcomes.test.ts` (on its Linux leg; see the correction below). It is
+    owed since SF-03 and is not batched again: that would leave SF-03,
+    SF-04 and SF-05a without a CI run of their tests. When this entry was
+    written nothing had been dispatched, because dispatch follows the push,
+    so it quotes no run ID; the runs and their results go in the commit
+    gate's report and the lane's next entry. No core or engine review file,
+    app file, `run.ts`, `model.ts`, `session/llm.ts` or HttpApi changed, so
+    `scope-directory-identity.yml`, `review-memory-fence.yml`,
+    `review-http-regression.yml`, `scope-app-validation.yml` and
+    `vector-at-mention.yml` are not owed.
+
+- **Correction (append-only).** `test.yml`'s "Run VectorScope eval script
+  tests" step runs only when `runner.os == 'Linux'`. No Windows or macOS leg
+  runs `outcomes.test.ts`, so SF-03's "Windows backslash case owed with
+  `test.yml`" (T4's `build\Makefile`), which SF-04 repeated, cannot be
+  satisfied by `test.yml`. It stays unproven on Windows unless the lead adds
+  an eval step to a Windows leg.
+
+- **Not claimed.** No run on a real repository (Q30, Q43). No owner labels:
+  every labels file here is a fixture, and the owner's hand labels stay
+  external (VS-46d's owner sample). No paid run, no model or GitHub call, no
+  `cat-file`. No precision, recall, quality or comparative claim (D12): the
+  synthetic rates show only that each path is reachable. No default, key,
+  variant or pin change. `vectorscope-remaining.md:4-6` authorizes
+  reversible software only.
+
+- **Hand-offs to SF-05b.**
+  - Append SF-05b's headings after `LABEL_SECTIONS`, in a list of their own,
+    for /1, and after "## Fix-edited lines per kLOC" for /2; T1 then re-pins
+    nothing but its heading lists.
+  - Read the populations through `labelPopulations`. Item 5's proxy and the
+    agent split read the same `kept` or `complete` population, and say how
+    many marked PRs they leave out.
+  - The audit covers the filtered label only; a stratum rate on it can say
+    "audited" only when `labelQuality.audit.audited` is true.
+
+- **Left to the lane's final package.** Refresh `vectorscope-remaining.md:91`
+  (VS-46d items 1 to 4's report half is built in source; items 5 to 11 are
+  SF-05b's) and `vectorscope-continuation.md`, and append the correcting
+  entry for the stale `:16000` sentence. SF-05a touches neither file.
