@@ -805,6 +805,48 @@ describe("workflow v3", () => {
     expect(buildAgentsWorkflow(SCHEDULED).split("\n")[0]).not.toContain("${{")
   })
 
+  // The App's owner-started desktop dispatch sends brain_upload; GitHub refuses an undeclared input with 422.
+  test("only the Codium agent step receives the desktop Brain upload input", () => {
+    const occurrences = (text: string, name: string) => text.split(name).length - 1
+    for (const options of [CODIUM, { ...CODIUM, handle: "vector-dev", schedules: SCHEDULED.schedules }]) {
+      const workflow = agents(options)
+      const inputs = (workflow.on.workflow_dispatch as { inputs: Record<string, unknown> }).inputs
+      expect(Object.keys(inputs)).toEqual(["mode", "prompt", "pr", "code", "ticket", "brain_upload"])
+      expect(inputs.brain_upload).toEqual({ type: "string", required: false })
+      // The input key and the agent step's one expression: never the header, the route script or a run line. The split
+      // count is case-sensitive, so lowercase brain_upload never matches inside VECTOR_BRAIN_UPLOAD; the carriers check
+      // below is the structural guarantee.
+      const yaml = buildAgentsWorkflow(options)
+      expect(occurrences(yaml, "brain_upload")).toBe(2)
+      expect(occurrences(yaml, "VECTOR_BRAIN_UPLOAD")).toBe(1)
+      const carriers = Object.entries(workflow.jobs).flatMap(([job, value]) => [
+        ...Object.entries(value.env).flatMap(([name, text]) =>
+          text.includes("brain_upload") ? [`${job}:${name}`] : [],
+        ),
+        ...value.steps.flatMap((step) => [
+          ...Object.entries(step.env ?? {}).flatMap(([name, text]) =>
+            text.includes("inputs.brain_upload") ? [`${job}/${step.id ?? step.uses ?? step.run}:${name}`] : [],
+          ),
+          ...(step.run?.includes("brain_upload") ? [`${job}/${step.run}:run`] : []),
+          ...(JSON.stringify(step.with ?? {}).includes("brain_upload") ? [`${job}/${step.uses}:with`] : []),
+        ]),
+      ])
+      expect(carriers).toEqual(["agent/agent:VECTOR_BRAIN_UPLOAD"])
+      expect(workflow.jobs.agent.steps.find((step) => step.id === "agent")!.env!.VECTOR_BRAIN_UPLOAD).toBe(
+        "${{ inputs.brain_upload }}",
+      )
+    }
+    for (const options of [OWN_KEY, SCHEDULED]) {
+      const inputs = (agents(options).on.workflow_dispatch as { inputs: Record<string, unknown> }).inputs
+      expect(Object.keys(inputs)).toEqual(["mode", "prompt", "pr", "code", "ticket"])
+      const yaml = buildAgentsWorkflow(options)
+      expect(yaml).not.toContain("brain_upload")
+      expect(yaml).not.toContain("VECTOR_BRAIN_UPLOAD")
+    }
+    // The sandbox launcher keeps it; the run token that gives it meaning stays in the secret channel.
+    expect(GithubAgents.SANDBOX_ENV_ALLOW).toContain("VECTOR_BRAIN_UPLOAD")
+  })
+
   test("every emitted Actions expression is explicitly allowlisted", () => {
     const allowed = new Set([
       "runner.os",
@@ -816,6 +858,7 @@ describe("workflow v3", () => {
       "inputs.ticket",
       "inputs.prompt",
       "inputs.code",
+      "inputs.brain_upload",
       "github.event.comment.id",
       "secrets.GITHUB_TOKEN",
       "secrets.VECTOR_CLI_TOKEN",

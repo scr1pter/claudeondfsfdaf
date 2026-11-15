@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { GithubAgents } from "@vectordevai/core/github-agents"
-import { buildAgentsWorkflow, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
+import { buildAgentsWorkflow, readWorkflowOptions, type AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
 import { createGithubAgents } from "./github-agents"
 
-function fixture(mode: "codium" | "own-key" = "codium") {
+function fixture(mode: "codium" | "own-key" = "codium", brain = false) {
   const options: AgentsWorkflowOptions = {
     mode,
     provider: mode === "codium" ? "vector" : "anthropic",
@@ -141,7 +141,9 @@ function fixture(mode: "codium" | "own-key" = "codium") {
       if (url.pathname === "/api/model-plans/config")
         return Response.json({
           enabled: true,
-          listed: state.listed ? ["github-agents", "scheduled", "github-no-secret"] : [],
+          listed: state.listed
+            ? ["github-agents", "scheduled", "github-no-secret", ...(brain ? ["brain-cloud"] : [])]
+            : [],
         })
       if (url.pathname === "/api/github/installation") return Response.json({ available: false })
       if (new Headers(init?.headers).get("authorization") !== "Bearer " + state.vectorToken)
@@ -167,6 +169,15 @@ function fixture(mode: "codium" | "own-key" = "codium") {
       if (url.pathname === GithubAgents.ENDPOINT.runs) return Response.json({ runs: [] })
       throw new Error("Unexpected Vector endpoint")
     },
+    // Only a Brain fixture has an engine, so listed.brain stays false everywhere else. Its engine never starts, so a
+    // Brain call that passes every desktop gate stops here with this message.
+    ...(brain
+      ? {
+          engine: async () => {
+            throw new Error("The Brain fixture engine never starts.")
+          },
+        }
+      : {}),
   })
   return {
     state,
@@ -197,6 +208,61 @@ test("workflow status separates missing, old, current and an old actual CLI pin"
     "@vectordevai/cli@1.99.112",
   )
   expect((await f.controller.status("/fixture")).workflow).toBe("cli-too-old")
+})
+
+// BT01 declared the Codium brain_upload input. A v3 file written before it would make GitHub refuse an owner-started
+// Brain dispatch with 422, so the desktop offers the workflow update and starts nothing until it merges.
+test("a v3 Codium workflow from before the Brain input reads as an update and refuses Brain and plain starts", async () => {
+  using f = fixture("codium", true)
+  const current = buildAgentsWorkflow(f.options)
+  const stale = current
+    .replace("      brain_upload:\n        type: string\n        required: false\n", "")
+    .replace("          VECTOR_BRAIN_UPLOAD: ${{ inputs.brain_upload }}\n", "")
+  expect(stale.length).toBeLessThan(current.length)
+  expect(stale).not.toContain("brain_upload")
+  expect(stale).not.toContain("VECTOR_BRAIN_UPLOAD")
+  expect(readWorkflowOptions(stale)).toEqual(readWorkflowOptions(current))
+  // Every other Brain gate passes and stays the same, so the stale file is the only reason for the refusals below.
+  const gates = (value: Awaited<ReturnType<typeof f.controller.status>>) => ({
+    brain: value.listed.brain,
+    bound: value.bound,
+    codium: value.binding?.codium,
+    suspended: value.binding?.suspended,
+    canDispatch: value.canDispatch,
+  })
+  const ready = await f.controller.status("/fixture")
+  expect(ready.workflow).toBe("current")
+  expect(gates(ready)).toEqual({
+    brain: true,
+    bound: "yours",
+    codium: "ready",
+    suspended: undefined,
+    canDispatch: true,
+  })
+  await expect(f.controller.previewBrain("/fixture")).rejects.toThrow("The Brain fixture engine never starts.")
+  f.state.content = stale
+  const old = await f.controller.status("/fixture")
+  expect(old.workflow).toBe("old")
+  expect(gates(old)).toEqual(gates(ready))
+  expect(old.timeoutMinutes).toBeUndefined()
+  await expect(
+    f.controller.run({
+      cwd: "/fixture",
+      ...(await f.scope()),
+      prompt: "task",
+      brain: { previewId: "preview", approvedSha256: "0".repeat(64) },
+    }),
+  ).rejects.toThrow("Merge the current Vector workflow")
+  await expect(f.controller.run({ cwd: "/fixture", prompt: "task", ...(await f.scope()) })).rejects.toThrow(
+    "Merge the current Vector workflow",
+  )
+  await expect(f.controller.previewBrain("/fixture")).rejects.toThrow("listed Codium desktop run")
+  expect(f.calls.some((call) => call.path.endsWith("/dispatches"))).toBe(false)
+  expect(
+    f.calls.some(
+      (call) => call.path.startsWith("/api/cloud-agents/brain-") || call.path === "/api/cloud-agents/desktop-run",
+    ),
+  ).toBe(false)
 })
 
 test("own-key run stays available when Codium is unlisted and never sends an account request", async () => {

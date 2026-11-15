@@ -85,6 +85,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
             "MENTIONS": "/vector,/vs,/vectorscope,/vx",
             "MODEL": "\${{ vars.VECTOR_MODEL || 'vector-plan' }}",
             "SHARE": "false",
+            "VECTOR_BRAIN_UPLOAD": "\${{ inputs.brain_upload }}",
             "VECTOR_DISABLE_PROJECT_CONFIG": "1",
             "VECTOR_DISABLE_USAGE": "1",
             "VECTOR_MODE": "codium",
@@ -363,6 +364,10 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
     },
     "workflow_dispatch": {
       "inputs": {
+        "brain_upload": {
+          "required": false,
+          "type": "string",
+        },
         "code": {
           "required": false,
           "type": "string",

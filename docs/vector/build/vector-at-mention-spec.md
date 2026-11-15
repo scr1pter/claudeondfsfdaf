@@ -337,7 +337,7 @@ Test: `packages/engine/test/tool/registry-actions.test.ts` › "bridged and comp
 
 Test: `packages/engine/test/cli/github.policy.test.ts` (V03: the policy is in the system layer) and `packages/engine/test/cli/github.bundle.test.ts` › "a `</issue>` payload stays inside its JSON string; a non-writer comment is labelled and collapsed" (V18)
 
-**INV-S15. Untrusted text never reaches a shell line or an expression.** Comment bodies, issue titles, inputs (prompt, code, ticket) and schedule prompts reach steps only through `env:`. No `run:` line contains `${{` with event or input data, and the route script contains no `${{`. Every user string the generator writes (schedule prompts, the options header) has each `$` encoded as `$` inside its JSON. Key names match `^[A-Z_][A-Z0-9_]{0,99}$`, and provider and model names a fixed safe charset. Every `${{` in a generated file comes from a fixed allowlist of expressions.
+**INV-S15. Untrusted text never reaches a shell line or an expression.** Comment bodies, issue titles, inputs (prompt, code, ticket and Codium's brain_upload, deviations 2026-11-14 BT01) and schedule prompts reach steps only through `env:`. No `run:` line contains `${{` with event or input data, and the route script contains no `${{`. Every user string the generator writes (schedule prompts, the options header) has each `$` encoded as `$` inside its JSON. Key names match `^[A-Z_][A-Z0-9_]{0,99}$`, and provider and model names a fixed safe charset. Every `${{` in a generated file comes from a fixed allowlist of expressions.
 Test: `github.workflow.test.ts` › "no event or input expression in any run line"; "every expression is allowlisted" (V14)
 
 **INV-S16. Limited and fail-closed.** Bind codes, bind, mint, heartbeat, settle, artifact-key and the account endpoints are rate-limited per IP and per repository, run or account (2.7). Any persistent-store failure answers 503 `PERSISTENT_STORE_UNAVAILABLE` and issues no token, code, binding, key or reservation.
@@ -534,7 +534,7 @@ The file must have **no imports**, so `api/` can import it as `../../packages/co
 | `MIN_AGENTS_CLI` | (added by V14) the first CLI version that carries V15–V22; set in V14 to the next CLI release's version and recorded in the progress file (section 4 step 7) |
 | `JOB` | `{ agent: "Vector agent", publish: "Vector publish", review: "Vector review", bind: "Vector bind", legacyTask: "Vector task" }` |
 | `AUDIENCE` | `{ mint: "https://vectordev.ai/api/cloud-agents/mint", bind: "https://vectordev.ai/api/cloud-agents/bind" }` |
-| `ENDPOINT` | `{ bindCode, bind, bindings, unbind, mint, heartbeat, settle, runs, artifactKey }` as `/api/cloud-agents/<kebab-name>` |
+| `ENDPOINT` | `{ bindCode, bind, bindings, unbind, mint, heartbeat, settle, runs, artifactKey, brainDownload }` as `/api/cloud-agents/<kebab-name>` (`brainDownload`: deviations 2026-11-14 BT01) |
 | `COMMAND_MENTIONS` | `["/vector", "/vs"]` |
 | `LEGACY_MENTIONS` | `["/vectorscope", "/vx"]` (installed workflows still use them) |
 | `mentions(slug?: string)` | with slug: `["@" + slug, ...COMMAND_MENTIONS, ...LEGACY_MENTIONS]`; without: `[...COMMAND_MENTIONS, ...LEGACY_MENTIONS]`; slug must match `^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$` or is ignored |
@@ -551,7 +551,7 @@ The file must have **no imports**, so `api/` can import it as `../../packages/co
 | `bundleArtifact(runId, attempt)` | `` `vector-run-${runId}-${attempt}` `` |
 | `sessionArtifact(thread)` | `` `vector-session-${thread}` `` |
 | `SANDBOX_USER` | `"vector-agent"` |
-| `SANDBOX_ENV_ALLOW` | the only names the engine starts with in the sandbox: `PATH`, `LANG`, `LC_ALL`, `TZ`, `CI`, `GITHUB_ACTIONS`, `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, `GITHUB_REPOSITORY_OWNER`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH` (a copy the agent user can read), `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_SHA`, `GITHUB_REF`, `GITHUB_SERVER_URL`, `GITHUB_API_URL`, `GITHUB_WORKSPACE`, `RUNNER_OS`, `MENTIONS`, `MODEL`, `SHARE`, `VECTOR_SHARE_CONSENT`, and `VECTOR_MODE`, `VECTOR_THREAD`, `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_WORKFLOW_VERSION`, `VECTOR_DISABLE_USAGE`, `VECTOR_PURE`, `VECTOR_DISABLE_PROJECT_CONFIG`, `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID`, `VECTOR_BUNDLE_DIR`, `VECTOR_SECRET_CHANNEL`; plus `HOME` and `RUNNER_TEMP` set to the agent user's own directories |
+| `SANDBOX_ENV_ALLOW` | the only names the engine starts with in the sandbox: `PATH`, `LANG`, `LC_ALL`, `TZ`, `CI`, `GITHUB_ACTIONS`, `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, `GITHUB_REPOSITORY_OWNER`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH` (a copy the agent user can read), `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_SHA`, `GITHUB_REF`, `GITHUB_SERVER_URL`, `GITHUB_API_URL`, `GITHUB_WORKSPACE`, `RUNNER_OS`, `MENTIONS`, `MODEL`, `SHARE`, `VECTOR_SHARE_CONSENT`, and `VECTOR_MODE`, `VECTOR_THREAD`, `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_BRAIN_UPLOAD` (Codium's desktop Brain upload id, empty on every other event; deviations 2026-11-14 BT01), `VECTOR_WORKFLOW_VERSION`, `VECTOR_DISABLE_USAGE`, `VECTOR_PURE`, `VECTOR_DISABLE_PROJECT_CONFIG`, `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID`, `VECTOR_BUNDLE_DIR`, `VECTOR_SECRET_CHANNEL`; plus `HOME` and `RUNNER_TEMP` set to the agent user's own directories |
 | `SECRET_NAME_PATTERN` | `/(?:_TOKEN\|_KEY\|_SECRET\|_PASSWORD)$/` |
 | `HEARTBEAT_SECONDS` | `60` |
 | `IDLE_SECONDS` | `600` |
@@ -1115,6 +1115,7 @@ on:
       pr:     { type: string, required: false }
       code:   { type: string, required: false }
       ticket: { type: string, required: false }
+      brain_upload: { type: string, required: false }   # Codium only (deviations 2026-11-14 BT01)
 ```
 
 ### 2.11.3 Jobs
@@ -1174,7 +1175,7 @@ The agent job's outputs are `status: ${{ steps.mint.outputs.status }}` and `rid:
 - Always: `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE`, `GITHUB_TOKEN` (read-only here), `VECTOR_DISABLE_USAGE: "1"`, `VECTOR_PURE: "1"`, `MENTIONS`, `VECTOR_THREAD`.
 - `VECTOR_PROMPT: ${{ inputs.prompt }}`, as env only.
 - `VECTOR_SCHEDULE_PROMPTS: '<JSON cron → {id, prompt}, $ encoded>'`, single-quoted YAML, round-trip tested.
-- Codium: `MODEL: ${{ vars.VECTOR_MODEL || 'vector-plan' }}`, `VECTOR_DISABLE_PROJECT_CONFIG: "1"`.
+- Codium: `MODEL: ${{ vars.VECTOR_MODEL || 'vector-plan' }}`, `VECTOR_DISABLE_PROJECT_CONFIG: "1"`, `VECTOR_BRAIN_UPLOAD: ${{ inputs.brain_upload }}` (env only, this step only; deviations 2026-11-14 BT01).
 - Own key: `MODEL: <provider>/<model>`, `VECTOR_CLI_TOKEN: ${{ secrets.VECTOR_CLI_TOKEN }}`, each `KEY: ${{ secrets.KEY }}`, `VECTOR_SECRET_ENV_NAMES: "<KEY,KEY>"`, and `SHARE`/`VECTOR_SHARE_CONSENT` as today.
 
 **The publish job's steps:**
@@ -1296,7 +1297,7 @@ Successful cloud responses reject unknown fields and malformed values; failure b
 **New environment names:**
 - `VECTOR_MODE`
 - `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID` (the run token itself is never an environment variable)
-- `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_THREAD`
+- `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_THREAD`, `VECTOR_BRAIN_UPLOAD` (Codium agent step only; deviations 2026-11-14 BT01)
 - `VECTOR_BIND_CODE`, `VECTOR_TICKET`, `VECTOR_COMMENT_ID`, `VECTOR_PR`
 - `VECTOR_AGENT_STATUS`, `VECTOR_ROUTE_KIND`, `VECTOR_ROUTE_PR`, `VECTOR_ROUTE_REF`, `VECTOR_REPO_DIR`, `VECTOR_BUNDLE_DIR`
 - `VECTOR_SECRET_ENV_NAMES`, `VECTOR_SECRET_CHANNEL`, `VECTOR_AGENT_SUDO`

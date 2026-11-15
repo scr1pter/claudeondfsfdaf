@@ -182,6 +182,7 @@ Remaining:
    - The App dispatch sends the input `brain_upload` (`api/_lib/github-app.ts:725`).
    - The v3 workflow declares only `mode, prompt, pr, code, ticket` (`workflow.ts:768-773`). GitHub rejects undeclared `workflow_dispatch` inputs with a 422, so every Brain-start dispatch would fail.
    - Fix: add the input (golden test), pass it to the agent step, and add a `brain-download` endpoint constant and engine client.
+   - BT01 (`brain-transport`) added the Codium input, the agent-step env `VECTOR_BRAIN_UPLOAD` and `ENDPOINT.brainDownload`. The engine client is still missing; the tests it must add are in deviations, "2026-11-14 BT01" item 7.
    - Use the immutable `brain/bundle.json` as context, and collect model drafts into `brain/proposals.json` inside the encrypted manifest under the separately labeled Brain key.
 4. **Preview and import.** The desktop and UI exist, but no real run produces `session.vsa` or proposals yet. After items 1–3, add a CI case: a returned artifact, then the owner preview, then a one-shot import.
 5. Tests:

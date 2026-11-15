@@ -218,7 +218,7 @@ Tiers: **A** = must land before the PR is ready (security or privacy, off-by-def
 | Bounded probe diagnostics | **Fixed by `202b18947`** (`namespaceProbeFailure`). |
 | V24 version flip (`core/src/review/workflow.ts:18` is still `"2"`) | **Remains.** **B**, together with the `brain_upload` input below. Golden updates are listed in plan §3 V24. |
 | V24/V25 progress entries; V25 copy outside `i18n/en.ts` | Remains. **B**: docs or a deviation. |
-| V27 runtime: engine save and restore, `attestSessionArtifact` has no caller (`github.session-proof.ts:35`), no `brain_upload` workflow input (dispatch at `api/_lib/github-app.ts:725`; inputs at `workflow.ts:768-773`) | **Remains.** Behind `VECTOR_GITHUB_BRAIN_ENABLED` (off). Declare the `brain_upload` input (**B**, small). Save, restore and attestation are **C**: a follow-up PR into v2 with a deviation entry. |
+| V27 runtime: engine save and restore, `attestSessionArtifact` has no caller (`github.session-proof.ts:35`), no `brain_upload` workflow input (dispatch at `api/_lib/github-app.ts:725`; inputs at `workflow.ts:768-773`) | **Remains.** Behind `VECTOR_GITHUB_BRAIN_ENABLED` (off). Declare the `brain_upload` input (**B**, small; done in BT01 on `brain-transport`). Save, restore and attestation are **C**: a follow-up PR into v2 with a deviation entry. |
 | `github-compat.yml` is temporary | Remains. **A**: delete it before the PR is ready. |
 | A1 `vectorRequiredCliVersion` `1.99.99` (`desktop/package.json:6`) | Owner (needs a published CLI). |
 

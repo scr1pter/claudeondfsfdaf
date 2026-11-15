@@ -260,6 +260,7 @@ describe("credentials", () => {
         "VECTOR_THREAD",
         "VECTOR_PROMPT",
         "VECTOR_SCHEDULE_PROMPTS",
+        "VECTOR_BRAIN_UPLOAD",
         "VECTOR_WORKFLOW_VERSION",
         "VECTOR_DISABLE_USAGE",
         "VECTOR_PURE",
@@ -333,7 +334,18 @@ describe("shared names", () => {
   test("every endpoint is /api/cloud-agents/<kebab-case name>, and each audience is its endpoint's address", () => {
     const kebab = (name: string) => name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
     expect(Object.keys(GithubAgents.ENDPOINT).sort()).toEqual(
-      ["bindCode", "bind", "bindings", "unbind", "mint", "heartbeat", "settle", "runs", "artifactKey"].sort(),
+      [
+        "bindCode",
+        "bind",
+        "bindings",
+        "unbind",
+        "mint",
+        "heartbeat",
+        "settle",
+        "runs",
+        "artifactKey",
+        "brainDownload",
+      ].sort(),
     )
     expect(
       Object.entries(GithubAgents.ENDPOINT).filter(([name, route]) => route !== `/api/cloud-agents/${kebab(name)}`),

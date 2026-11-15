@@ -36,6 +36,8 @@ export const ENDPOINT = {
   settle: "/api/cloud-agents/settle",
   runs: "/api/cloud-agents/runs",
   artifactKey: "/api/cloud-agents/artifact-key",
+  // The run token reads its owner-approved desktop Brain upload (api/cloud-agents/brain-download.ts).
+  brainDownload: "/api/cloud-agents/brain-download",
 } as const
 
 export const COMMAND_MENTIONS = ["/vector", "/vs"] as const
@@ -151,6 +153,10 @@ export const SANDBOX_ENV_ALLOW = [
   "VECTOR_THREAD",
   "VECTOR_PROMPT",
   "VECTOR_SCHEDULE_PROMPTS",
+  // Codium only: the opaque desktop Brain upload id from the dispatch input, empty on every other event. Any
+  // dispatcher can set it, and it is not a credential: reading the upload needs the run token, which stays in the
+  // secret channel, and brain-download also checks the live desktop ticket.
+  "VECTOR_BRAIN_UPLOAD",
   "VECTOR_WORKFLOW_VERSION",
   "VECTOR_DISABLE_USAGE",
   "VECTOR_PURE",

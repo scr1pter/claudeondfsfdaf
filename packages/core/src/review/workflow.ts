@@ -641,6 +641,9 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
       ? {
           MODEL: "${{ vars.VECTOR_MODEL || 'vector-plan' }}",
           VECTOR_DISABLE_PROJECT_CONFIG: "1",
+          // Env only (INV-S15). Any dispatcher can set it; only an owner-started desktop run's token can read the
+          // upload (brain-download checks the live desktop ticket).
+          VECTOR_BRAIN_UPLOAD: "${{ inputs.brain_upload }}",
         }
       : {
           MODEL: `${opts.provider}/${opts.model}`,
@@ -768,8 +771,14 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
           workflow_dispatch: {
             inputs: {
               mode: { type: "choice", options: ["task", "review", "bind"], default: "task" },
+              // The App's owner-started desktop dispatch sends brain_upload (api/_lib/github-app.ts), and GitHub
+              // refuses a dispatch carrying an undeclared input with 422. Only Codium, the mode the App dispatches,
+              // declares it.
               ...Object.fromEntries(
-                ["prompt", "pr", "code", "ticket"].map((key) => [key, { type: "string", required: false }]),
+                ["prompt", "pr", "code", "ticket", ...(codium ? ["brain_upload"] : [])].map((key) => [
+                  key,
+                  { type: "string", required: false },
+                ]),
               ),
             },
           },
