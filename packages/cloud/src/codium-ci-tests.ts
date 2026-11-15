@@ -6,10 +6,12 @@ import path from "node:path"
 // to keep. It runs:
 // - the hosted API suite in test/, where most of Codium is built;
 // - every test whose path names Codium (Codium, model plans, model top-ups);
-// - every test file the branch added or changed since it left main.
+// - every test file the branch added or changed since it left main, or since it left the remote branch a dispatch
+//   names instead (the workflow's `base` input, here CODIUM_CI_BASE).
 // Each file runs in its own Bun process from the package that owns it: a crash names its file, and one file's module
-// mocks cannot reach the next. Browser specs (Playwright, packages/app/e2e) are picked by the same rule. The Stripe
-// test-mode checks in packages/web/e2e/codium run only in vector-codium-e2e.yml.
+// mocks cannot reach the next. Browser specs (Playwright, packages/app/e2e) are picked by the same rule, and a dispatch
+// can name up to ten more (the `browser_specs` input, here CODIUM_CI_BROWSER_SPECS). The Stripe test-mode checks in
+// packages/web/e2e/codium run only in vector-codium-e2e.yml.
 
 export const CODIUM_PATH = /codium|model[-_]?plans?|model[-_]?topups?/i
 
@@ -19,6 +21,9 @@ const NOT_UNIT = new Set(["node_modules", "e2e", "fixture", "fixtures", "dist"])
 const BROWSER_SPEC = /^packages\/app\/e2e\/.+\.spec\.tsx?$/
 // The same files packages/app/playwright.config.ts ignores: they need their own configs.
 const BROWSER_IGNORED = [/^packages\/app\/e2e\/performance\//, /\/public-share-viewer\.spec\.tsx?$/]
+// A dispatch's base must be a remote branch's name: never an option, a range, a commit or a revision expression.
+const BASE_REF = /^origin\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/
+const MAX_REQUESTED_SPECS = 10
 
 const BROWSER_DIRECTORY = "packages/app"
 
@@ -48,12 +53,46 @@ export function selectHostedTests(tracked: readonly string[]) {
     .sort()
 }
 
-export function selectBrowserSpecs(tracked: readonly string[], changed: readonly string[]) {
-  const touched = new Set(changed)
+export function selectBrowserSpecs(
+  tracked: readonly string[],
+  changed: readonly string[],
+  requested: readonly string[] = [],
+) {
+  const touched = new Set([...changed, ...requested])
   return tracked
-    .filter((file) => BROWSER_SPEC.test(file) && !BROWSER_IGNORED.some((pattern) => pattern.test(file)))
+    .filter(runnableSpec)
     .filter((file) => CODIUM_PATH.test(file) || touched.has(file))
     .sort()
+}
+
+/** The ref the branch is compared with: origin/main, or the remote branch a dispatch names. */
+export function diffBase(value: string | undefined) {
+  if (!value) return "origin/main"
+  // The name's characters allow dots, so a range (origin/main..HEAD) is refused separately.
+  if (BASE_REF.test(value) && !value.includes("..")) return value
+  throw new Error(
+    `CODIUM_CI_BASE must name a remote branch such as origin/main or origin/release-finish, not ${JSON.stringify(value)}`,
+  )
+}
+
+/** The browser specs a dispatch adds: whitespace-separated, at most ten, each tracked and run by the app's config. */
+export function requestedBrowserSpecs(tracked: readonly string[], value: string | undefined) {
+  const specs = (value ?? "").split(/\s+/).filter(Boolean)
+  if (specs.length > MAX_REQUESTED_SPECS)
+    throw new Error(
+      `CODIUM_CI_BROWSER_SPECS names ${specs.length} specs; a dispatch may add at most ${MAX_REQUESTED_SPECS}.`,
+    )
+  const known = new Set(tracked)
+  const refused = specs.filter((spec) => !known.has(spec) || !runnableSpec(spec))
+  if (!refused.length) return specs
+  throw new Error(
+    "CODIUM_CI_BROWSER_SPECS may name only tracked specs under packages/app/e2e that the app's Playwright config runs " +
+      `(not performance or public-share-viewer specs): ${refused.join(", ")}`,
+  )
+}
+
+function runnableSpec(file: string) {
+  return BROWSER_SPEC.test(file) && !BROWSER_IGNORED.some((pattern) => pattern.test(file))
 }
 
 /** The nearest directory with a package.json or bunfig.toml: its test preloads and settings apply to the file. */
@@ -101,8 +140,9 @@ function git(root: string, ...args: string[]) {
 }
 
 function changedSinceMain(root: string) {
-  // CI checks the branch out with its whole history, so the fork point with main is known.
-  const base = process.env.CODIUM_CI_BASE || "origin/main"
+  // CI checks the branch out with its whole history, so the fork point with main, or with the dispatch's base, is
+  // known. The base is checked before git sees it.
+  const base = diffBase(process.env.CODIUM_CI_BASE)
   const fork = git(root, "merge-base", base, "HEAD")[0]
   if (!fork) throw new Error(`No merge base between ${base} and HEAD; fetch ${base} first.`)
   return git(root, "diff", "--name-only", "-z", fork, "HEAD")
@@ -123,10 +163,11 @@ async function main(argv: readonly string[]) {
   const tracked = git(root, "ls-files", "-z")
   // The hosted lane's set does not depend on what the branch changed, so it needs no history.
   const hosted = argv.includes("--hosted")
-  const changed = hosted ? [] : changedSinceMain(root)
 
   if (argv.includes("--browser")) {
-    const specs = selectBrowserSpecs(tracked, changed)
+    // A dispatch's inputs are checked before any history is read, so a refused one fails the step at once.
+    const requested = requestedBrowserSpecs(tracked, process.env.CODIUM_CI_BROWSER_SPECS)
+    const specs = selectBrowserSpecs(tracked, hosted ? [] : changedSinceMain(root), requested)
     if (argv.includes("--list")) {
       for (const spec of specs) console.log(spec)
       return 0
@@ -138,7 +179,7 @@ async function main(argv: readonly string[]) {
     return run([process.execPath, ...browserCommand(specs)], path.join(root, BROWSER_DIRECTORY), "Playwright")
   }
 
-  const files = hosted ? selectHostedTests(tracked) : selectUnitTests(tracked, changed)
+  const files = hosted ? selectHostedTests(tracked) : selectUnitTests(tracked, changedSinceMain(root))
   if (argv.includes("--list")) {
     for (const file of files) console.log(file)
     return 0

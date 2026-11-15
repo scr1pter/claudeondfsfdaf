@@ -110,3 +110,10 @@ refuses otherwise.
 `vercelCli`, which since P8's review (`codium-p8-repairs.md`) installs the pinned CLI with npm, install scripts off and
 no secret in npm's environment, instead of `npx --yes`. Images built from now on carry hostd's signed heartbeats, which
 the server requires; a computer from an older image is refused.
+
+**Status, 15 Nov 2026 (Codium finish CI0).** `vector-codium.yml`'s `workflow_dispatch` now takes two optional string
+inputs, `base` (the remote branch the test picker compares with instead of `origin/main`) and `browser_specs` (up to ten
+more app browser specs). They reach `codium-ci-tests.ts` only as step environment (`CODIUM_CI_BASE`,
+`CODIUM_CI_BROWSER_SPECS`), where `diffBase` and `requestedBrowserSpecs` check them before git or Playwright sees them.
+Pushes, `--hosted` and `vector-hosted-ci.yml` are unchanged. The reasons and counts are in `codium-deviations.md`
+("Codium finish: CI0 lane dispatch inputs"); the first dispatch's run is recorded in a later dated line.

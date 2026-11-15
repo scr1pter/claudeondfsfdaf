@@ -2796,3 +2796,137 @@ sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
   environment, checks the installed version, and runs that install's `vercel` with the token and only PATH, HOME,
   TMPDIR, DOCKER_CONFIG, VERCEL_ORG_ID and VERCEL_PROJECT_ID. The CLI's dependencies are still resolved at run time
   without a lockfile; pinning them in a lockfile is left to whoever can update bun.lock with network access.
+
+## Codium finish: CI0 lane dispatch inputs (15 Nov 2026)
+
+- **Why.** Vector Codium run 43636507058 (a dispatch on `release-finish` at 0ee486e3), Codium tests job 132574374820:
+  the merge base of 0ee486e3 with `origin/main` is 58f85edc, from before PR #33, so `codium-ci-tests.ts` picked 667
+  unit files (and 24 browser specs). "Run the Codium test files" was stopped at its 40-minute limit (20:19:34 to
+  20:59:46) before `test/*.test.ts`, the hosted API suite, which sorts last, had run. The browser picker also never
+  picks a spec that is on main and unchanged, so the receipt specs this lane needs (`race`, `playbooks-settings`,
+  `hosted-result-note`, `remote-phone` under `packages/app/e2e/regression/`) never ran in the lane.
+- **A00 and §6.2 name the lane's push and dispatch triggers but no inputs.** `workflow_dispatch` now takes two optional
+  string inputs, both defaulting to "": `base`, the remote branch the picker compares with, and `browser_specs`, up to
+  ten more app specs, space-separated. The `on` keys, push branches, concurrency, permissions, SHA pins, runners, the
+  hosted job and every `run:` script are unchanged; the lane still holds no secret. On a push the `inputs` context is
+  empty, so both variables are empty strings and the picker compares with `origin/main` and adds nothing, exactly as
+  before.
+- **Environment only.** The inputs reach the picker only as step `env:`: "Run the Codium test files" gets
+  `CODIUM_CI_BASE`; "Select the Codium browser specs" and "Run the Codium browser specs" get `CODIUM_CI_BASE` and
+  `CODIUM_CI_BROWSER_SPECS`. The unit step does not read the spec list, so it does not get it. A test collects every
+  env entry that mentions `inputs.` and requires exactly those five, requires that `inputs.` appears nowhere else in
+  the jobs (no script, condition or called workflow's arguments), and that no step's `run:` holds a `${{ }}` other than
+  the typecheck matrix's fixed command.
+- **The base check.** `diffBase` answers `origin/main` for an empty or missing value and otherwise accepts only
+  `/^origin\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/` with no `..` in it. The character class allows dots, so the
+  regex alone would take `origin/main..HEAD`; the `..` refusal is the reading of "no ranges". Starting with `origin/`
+  rules out a leading `-`, and `~`, `^`, `@{`, spaces and newlines are outside the class. Anything else fails with
+  "CODIUM_CI_BASE must name a remote branch such as origin/main or origin/release-finish, not <value>". A well-formed
+  name that is not fetched (a typo, a deleted branch) still fails at `git merge-base`; nothing falls back to main.
+  The old `process.env.CODIUM_CI_BASE || "origin/main"` took any value, so a developer running the picker locally
+  with a SHA, `main` or `upstream/main` as the base now gets this error on purpose; no workflow or script in the
+  repository sets such a value (only the new env wiring sets the variable at all), so CI is unaffected.
+- **Extra browser specs.** `requestedBrowserSpecs` splits on whitespace, refuses more than ten entries as given
+  (duplicates count), and refuses any entry that is not a tracked path matching the browser spec pattern and outside
+  the app config's ignores (performance specs and `public-share-viewer` stay excluded), naming the refused entries.
+  `selectBrowserSpecs` takes them as an optional third argument and unions them with the selection, de-duplicated and
+  sorted; its two-argument results are unchanged, and both stay pure. A refused input throws, so the Select step's
+  `set -euo pipefail` and `specs=$(...)` fail the step before a count is written or Playwright starts. The Run step
+  re-reads the same variables, so both steps pick the same specs.
+- **Inputs are checked before history is read.** The browser branch checks the spec list before it compares with the
+  base, and `changedSinceMain` checks the base before `git merge-base` sees it, so a bad input fails even in a shallow
+  checkout. `--hosted` reads neither variable and needs no history, as before, and `vector-hosted-ci.yml` is
+  unchanged. `--hosted --browser` keeps the hosted gate on the changed list (no history read); no workflow uses that
+  combination.
+- **Counts, measured 15 Nov 2026 after `git fetch origin release-finish main`.** HEAD 0ee486e3; `origin/main`
+  58f85edc; `origin/release-finish` had moved on to cf2373c46, and its merge base with HEAD is 0ee486e3, which is what
+  the picker diffs from. Against `origin/main`: 667 unit files and 24 browser specs. Against `origin/release-finish`:
+  119 unit files (70 `test/*.test.ts` plus 49 Codium-named files) and 2 specs (`codium-image-routing`,
+  `codium-usage-labels`); with the four receipts named, 6 specs. Once this package is committed,
+  `packages/cloud/src/workflow-compliance.test.ts` is a changed file too, so its dispatch should pick 120 unit files
+  and 2 specs. The task's "about 137" estimate measured 119/120. Whoever dispatches re-measures after a fresh fetch,
+  because the counts follow `release-finish`'s merge base.
+- **Coverage that moves to PR #33's own CI.** The 548 files the drop from 667 to 119 leaves out are files PR #33
+  changed. With `base=origin/release-finish` this lane deliberately stops re-running them, because PR #33's test.yml,
+  typecheck.yml and lane workflows run them on every push to `release-finish`. This lane keeps the hosted API suite,
+  every Codium-named test and its own changes. An empty base restores the comparison with `origin/main` once #33 is in
+  main.
+- **Timing is an expectation, not evidence.** Earlier green push runs on `codium` (for example 43190646575, about 11
+  minutes for the whole run) predate PR #33's content, and the 70 `test/*.test.ts` files have not run in this lane
+  since PR #33 (runs 43631064967 and 43636507058 stopped before them). The dispatch's record gives the step's actual
+  start and end times; a `test/*.test.ts` file failing for the first time gets a root cause, and one in another
+  lane's file goes under For the lead.
+- **Tests (`packages/cloud/src/workflow-compliance.test.ts`, describe "Codium CI lane").** Three cases: the base check
+  (accepts `origin/main`, `origin/release-finish`, `origin/codium/a36`, `origin/codium-113`; refuses `--output=x`,
+  `main..x`, `origin/main..x`, `origin/main...HEAD`, a full and a short SHA, `main`, `upstream/main`,
+  `refs/heads/main`, `origin/`, `origin/main/`, `~1`, `^`, `@{1}`, a leading space, a trailing newline and a newline
+  followed by an option); the extra specs (whitespace and tabs, union, de-duplication, an unchanged default; refuses an
+  untracked spec, a tracked performance spec, the public-share-viewer spec, a fixture, an app unit test, a
+  package-relative path, `--grep=x`, a list with one bad entry, and an 11th entry); and the workflow's inputs and
+  env-only wiring, plus the Select step's own script run with `--output=x` and with an untracked spec, each failing
+  with the picker's message and no `count=`. That last check runs bash with an explicit environment (PATH with the
+  running Bun's folder first, joined with the platform's delimiter, `GITHUB_OUTPUT`, the variable under test), because
+  the Codium tests step now exports its own `CODIUM_CI_BASE` to every test process. `packages/cloud`'s `test` script
+  also runs in test.yml's Windows unit job, so on Windows only (`process.platform === "win32"`) the case also passes
+  `SYSTEMROOT`, `WINDIR`, `TEMP` and `USERPROFILE` through from its own environment, matched by name without regard
+  to case because Windows spells them `SystemRoot` and `windir`, and never a `CODIUM_CI_*` variable. On Linux and
+  macOS the environment is exactly as before. That this is enough for Git Bash to start Bun and git on Windows is a
+  reading only, shown by no run yet (see For the lead). The describe block's existing `shell` helper gained an
+  optional `cwd` (undefined keeps today's working directory) and now also returns stderr: it pipes stderr instead of
+  ignoring it and reads it to the end, which leaves its other callers' status and output unchanged. The spec case's
+  one real-checkout check requires every tracked `packages/app/e2e/performance/**` spec to be refused; it names no
+  lane-specific spec.
+- **Red on the old source.** (a) With only the tests written, the file failed to load: "SyntaxError: Export named
+  'requestedBrowserSpecs' not found in module '.../packages/cloud/src/codium-ci-tests.ts'" (0 pass, 1 fail, 1 error).
+  (b) With the picker changed and the workflow not yet, only the workflow case failed, its `toEqual` receiving `[]`
+  for the input names (53 pass, 1 fail). (c) With the workflow edited: 54 pass, 0 fail,
+  1027 expect() calls. Mutations, each restored afterwards: dropping the `..` refusal fails the base case; checking only
+  that a spec is tracked fails the spec case; raising the limit above ten fails the spec case.
+- **Critique points taken.** The record cites the merge base separately from `release-finish`'s moving tip; the
+  shallow-checkout reading below is by reasoning only; the `--hosted` gate stays on the browser branch; the existing
+  `shell` helper was extended instead of a second spawn routine, with PATH built from `process.env.PATH` and no HOME
+  override; the a58 status line carries no run id (a later dated line will); the timing and coverage readings above.
+  No point was rejected.
+- **Review points (15 Nov 2026), all non-blocking.**
+  - The receipt guard (two findings that disagree). One asked to remove the assertion that the four receipt specs
+    (`race`, `playbooks-settings`, `hosted-result-note`, `remote-phone`) stay tracked, the other to keep it with a
+    message pointing at `codium-track-b-checkpoint.md`. Taken: removed. The test runs in test.yml's Linux and Windows
+    unit jobs, so after this lane's PR merges another lane renaming one of those specs would fail a general compliance
+    test for this lane's bookkeeping, and the brief asked only for synthetic cases. The lane loses nothing: a
+    dispatch naming a renamed or deleted spec already fails its Select step with the picker's message naming that
+    path, which is the lane's own check. The performance half stays, as the first finding allowed.
+  - Windows environment for the Select-step check (two findings). Both said no change was needed until test.yml's
+    Windows unit job showed a failure, then to pass a few Windows system variables through. Taken now, because it is
+    cheap, changes nothing off Windows, and saves a failing round trip at the end of the lane: the union of both
+    lists (`SYSTEMROOT`, `WINDIR`, `TEMP`, `USERPROFILE`), on Windows only. The case is not skipped or loosened.
+  - `requestedBrowserSpecs` now builds a `Set` of the tracked files instead of scanning the list once per spec, as
+    `selectUnitTests` and `selectBrowserSpecs` do. Results are unchanged.
+  - Local non-origin bases are refused on purpose: the sentence is in "The base check" above.
+- **Shallow checkouts, by reasoning only.** `vector-hosted-ci.yml`'s Hosted tests job runs this test file with a
+  default checkout. The new cases read only `git ls-files`, and the Select-step check fails on its input before any
+  merge base is needed, so they should pass there too. CI0 does not dispatch `vector-hosted-ci.yml`, so no CI run has
+  shown this yet; the PR into main runs it, because the picker is in its `pull_request` paths.
+- **Ran locally (15 Nov 2026, each through vector-serial, one file at a time).** `packages/cloud`:
+  `bun test --timeout 30000 src/workflow-compliance.test.ts` at stages (a), (b) and (c) and for the three mutations;
+  `test/`: `bun test --timeout 30000 ./no-topups.test.ts` (4 pass); `packages/cloud`: `bun typecheck` (exit 0);
+  `bunx prettier --check` on the three changed files (clean after `--write` on the test file); the picker's `--list`
+  smoke checks above, `CODIUM_CI_BASE=--output=x` (exit 1 with the message) and `--hosted --list` with both variables
+  set to bad values (143 files, unaffected). After the review points: `src/workflow-compliance.test.ts` (54 pass,
+  0 fail, 1026 expect() calls, one fewer for the removed receipt assertion), `./no-topups.test.ts` (4 pass),
+  `packages/cloud` `bun typecheck` (exit 0) and `bunx prettier --check` on the picker and the test file (clean). Not
+  run locally: the full turbo typecheck and the api tree (they come before the push), and everything CI-only.
+- **Only in CI, still to run.** The Vector Codium dispatch on `codium-finish` with `base=origin/release-finish` and no
+  `browser_specs`, and typecheck.yml on the same ref. A dated CI line with the run and job ids, the step's start and
+  end, the "Codium: N/N test files passed" line and the exerciser's MISS lines follows in a later docs(codium) commit.
+- **For the lead.**
+  - Read PR #33's state and fetch `origin/main` right before each dispatch: while #33 is unmerged dispatch with
+    `base=origin/release-finish`; once main contains it, dispatch with an empty base. Switch to an empty base before
+    `release-finish` is deleted, because a dispatch naming a deleted `origin/release-finish` fails at `git merge-base`.
+  - The four `/experimental/review-memory` MISS lines in the HttpApi exerciser (pass=359 missing=4 in Codium tests
+    job 132574374820) belong to VectorScope and the PR #33 CI lanes; no scenario is added here.
+  - The task's "about 137" unit files measured 119 against `origin/release-finish` (120 with this package).
+  - Before the lane's PR merges, confirm that the Windows unit job of the single end-of-lane test.yml run passes
+    "a dispatch's inputs reach the picker only as step environment, and pushes leave them empty" in
+    `packages/cloud/src/workflow-compliance.test.ts`. If Bun or git fails to start there, the fix is another named
+    Windows system variable in that case's pass-through list, never a skip and never a `CODIUM_CI_*` variable.
+  - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change: these are CI inputs, not product settings.
