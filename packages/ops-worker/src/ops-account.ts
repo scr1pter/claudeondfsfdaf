@@ -138,6 +138,12 @@ export class OpsAccount {
   private readonly ctx: DurableObjectState
   private readonly env: Env
   private readonly runtime: Runtime
+  /**
+   * Erasures since this instance started, counted before erase's first await. A wake or a release compares it across
+   * its own awaits and writes nothing once an erasure came in between (P5): the erased object keeps nothing of the
+   * account. In memory only, since the runtime keeps one instance of an object while it runs.
+   */
+  private erasures = 0
 
   /** The runtime calls this with `ctx` and `env`; tests pass a fake runtime (clock and outbound fetch). */
   constructor(ctx: DurableObjectState, env: Env, runtime: Runtime = workersRuntime()) {
@@ -155,20 +161,30 @@ export class OpsAccount {
     return this.internal(action as InternalAction, request, now)
   }
 
-  /** The one alarm: the kill flag, then every check and watch round due, then the reports. */
+  /**
+   * The one alarm: the kill flag, then every check and watch round due, then the reports. An erasure that comes while
+   * the wake waits on the flag or on its probes ends the wake with nothing written and nothing scheduled: erase deleted
+   * the alarm, and a call that set the account up again since then scheduled its own. While the flag is set, reports
+   * past their day are still dropped, so an account with nothing else to do stops waking.
+   */
   async alarm(): Promise<void> {
     const now = this.runtime.now()
+    const erasures = this.erasures
     try {
-      if (await this.killed()) {
+      const killed = await this.killed()
+      if (this.erasures !== erasures) return
+      if (killed) {
         const run = this.run()
         this.countWake(run, now)
         this.save(run)
+        this.expireReports(now)
         if (this.hasWork(now)) await this.ctx.storage.setAlarm(now + OPS_LIMITS.killRecheckMs)
         else await this.ctx.storage.deleteAlarm()
         return
       }
       const wake = this.planWake(now)
       const { results, dns } = await this.probeAll(wake, now)
+      if (this.erasures !== erasures) return
       this.applyWake(wake, results, dns, now)
       await this.deliver(this.runtime.now())
     } catch {
@@ -202,7 +218,7 @@ export class OpsAccount {
     }
     const fields = BODY_FIELDS[action]
     if (fields && !onlyFields(body, fields)) return failure(400, "INTERNAL_BAD_REQUEST")
-    if (action === "flags") return this.flags(body)
+    if (action === "flags") return this.flags(body, signedAt)
     if (typeof body.account !== "string" || !ACCOUNT.test(body.account)) return failure(400, "INTERNAL_BAD_REQUEST")
     const known = this.meta<string>("account")
     if (known !== undefined && known !== body.account) return failure(409, "OPS_MISROUTED")
@@ -284,13 +300,16 @@ export class OpsAccount {
   /**
    * A production release to watch. In order: the plan, the kill flag and the age; a newer deployment ends the running
    * watch of the same repository and environment; then the dedupe by (repository, environment, sha), then the daily cap,
-   * so a repeated report never counts twice.
+   * so a repeated report never counts twice. The environment arrives in lower case (parseRelease).
    */
   private async release(body: Record<string, unknown>, now: number): Promise<Response> {
     const input = parseRelease(body)
     if (!input) return failure(400, "INTERNAL_BAD_REQUEST")
-    // The one await comes first: from here on everything is read and written with nothing else running in between.
+    // The one await comes first: from here on everything is read and written with nothing else running in between. An
+    // erasure during it refuses the release, so internal() stores neither the release nor the account id.
+    const erasures = this.erasures
     const killed = await this.killed()
+    if (this.erasures !== erasures) return failure(409, "OPS_ERASED")
     const plan = this.meta<OpsPlan>("plan")
     if (!plan?.releaseGuard || !this.active(plan, now)) return answer({ accepted: false, reason: "not-in-plan" })
     if (killed) return answer({ accepted: false, reason: "off" } satisfies ReleaseAnswer)
@@ -468,6 +487,7 @@ export class OpsAccount {
    * the erasure and delivered late is refused instead of filling the object again.
    */
   private async erase(now: number) {
+    this.erasures++
     const used = this.sql<{ id: string; expires_at: number }>(
       "SELECT id, expires_at FROM seen WHERE expires_at >= ?",
       now,
@@ -480,9 +500,20 @@ export class OpsAccount {
     return answer({ erased: true })
   }
 
-  /** The Worker's kill flag, written by the API when the owner's `ops` switch changes (through the control object). */
-  private async flags(body: Record<string, unknown>) {
+  /**
+   * The Worker's kill flag, written by the API when the owner's `ops` switch changes (through the control object).
+   * Ordered by when the API signed each call, either way: a call signed before the newest one applied (a delayed retry,
+   * or a call the API gave up on and reported as failed) is ignored and answers the newest call's flag, with
+   * `applied: false`. Calls signed in the same second apply in the order they arrive. The order is claimed before the
+   * KV write, so a delayed call that arrives while a newer one writes is ignored too. A KV write that throws leaves the
+   * order claimed, and overlapping writes are not ordered at KV; the owner's step after `failed` covers both
+   * (owner-actions/hosted-ops.md).
+   */
+  private async flags(body: Record<string, unknown>, signedAt: number) {
     if (typeof body.kill !== "boolean") return failure(400, "INTERNAL_BAD_REQUEST")
+    const newest = this.meta<{ kill: boolean; signedAt: number }>("flags")
+    if (newest && signedAt < newest.signedAt) return answer({ kill: newest.kill, applied: false })
+    this.setMeta("flags", { kill: body.kill, signedAt })
     if (body.kill) await this.env.OPS_FLAGS.put(KILL_KEY, "1")
     else await this.env.OPS_FLAGS.delete(KILL_KEY)
     return answer({ kill: body.kill })
@@ -749,7 +780,7 @@ export class OpsAccount {
    * for a later wake, 30 s later and doubling to an hour. Reports older than a day are dropped.
    */
   private async deliver(now: number) {
-    this.sql("DELETE FROM outbox WHERE created_at < ?", now - OPS_LIMITS.outboxKeepMs)
+    this.expireReports(now)
     const target = this.reportTarget()
     if (!target) return
     const rows = this.sql<{ id: string; body: string; attempts: number }>(
@@ -774,6 +805,11 @@ export class OpsAccount {
           row.id,
         )
     }
+  }
+
+  /** Drops reports older than a day (OPS_LIMITS.outboxKeepMs), delivered or not. */
+  private expireReports(now: number) {
+    this.sql("DELETE FROM outbox WHERE created_at < ?", now - OPS_LIMITS.outboxKeepMs)
   }
 
   private reportTarget() {
@@ -1017,6 +1053,13 @@ function parseConfig(body: Record<string, unknown>) {
   return { domains: domains as string[], monitors: parsed }
 }
 
+/**
+ * A release to watch. The environment is folded to lower case, as GitHub and the API compare environment names
+ * (api/_lib/release-guard.ts environmentKey), so "Production" and "production" are one target and one dedupe key. Its
+ * length is checked on the name as sent, as the API checks it (ops-settings.ts environmentName): folding can lengthen a
+ * name ("İ" becomes two UTF-16 units), so a name the API accepts is never refused here, and the stored name stays
+ * bounded at twice the limit.
+ */
 function parseRelease(body: Record<string, unknown>) {
   const { repositoryId, environment, sha, deployment, at, urls } = body
   if (!integer(repositoryId, 1, Number.MAX_SAFE_INTEGER)) return undefined
@@ -1031,7 +1074,7 @@ function parseRelease(body: Record<string, unknown>) {
     if (!target.ok) return undefined
     normalised.push(target.url)
   }
-  return { repositoryId, environment, sha, deployment, at, urls: normalised }
+  return { repositoryId, environment: environment.toLowerCase(), sha, deployment, at, urls: normalised }
 }
 
 export function answer(body: unknown, status = 200) {

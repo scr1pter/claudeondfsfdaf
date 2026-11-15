@@ -11,7 +11,7 @@
 //   conclusive answer. It passes the URLs whose last conclusive answer was ok, and keeps the earlier release's passes for
 //   URLs it never got a conclusive answer for.
 // - A newer deployment of the same repository and environment ends the watch (superseded); the object dedupes releases
-//   by (repository, environment, sha).
+//   by (repository, environment, sha), with the environment in lower case.
 
 import type { ProbeResult } from "./check"
 import { OPS_LIMITS } from "./limits"

@@ -14,13 +14,16 @@
 //                                            a plan older than the stored one (by version) is ignored
 //   config {account, domains, monitors}      the verified domains (in verification order) and the On Call URLs (in the
 //                                            order they were added), replacing what was there
-//   release {account, repositoryId, ...}     a production deployment reported success: watch it (Release Guard)
+//   release {account, repositoryId, ...}     a production deployment reported success: watch it (Release Guard);
+//                                            the environment is compared without case, as GitHub and the API compare it
 //   state {account}                          what the Worker knows: each monitor's state, recent changes, hourly totals,
 //                                            recent releases and running watches
 //   suspend {account, suspended, reason, at} the ops guard or the owner holds the account: nothing runs while held;
 //                                            ordered by `at`, so a late update never undoes a newer one
 //   erase {account}                          everything the account's object holds (P5, A57)
-//   flags {kill}                             the Worker's kill flag (the owner's `ops` switch)
+//   flags {kill}                             the Worker's kill flag (the owner's `ops` switch); ordered by when each
+//                                            call was signed: one signed before the newest applied is ignored and
+//                                            answers {kill: <the newest applied>, applied: false}
 //
 // The Worker reports to the API: POST <API_ORIGIN>/api/ops/worker with an OpsReport body, signed the same way (the API
 // checks it with requireInternalRequest("ops", …)). A 2xx answer means every event in it was taken; anything else and
@@ -59,7 +62,10 @@ export type ReleaseBody = {
   account: string
   repositoryId: number
   environment: string
-  /** The deployed commit, 40 hex digits. Releases are deduped by (repository, environment, sha). */
+  /**
+   * The deployed commit, 40 hex digits. Releases are deduped by (repository, environment without case, sha), and the
+   * Worker's reports and state name the environment in lower case.
+   */
   sha: string
   /** GitHub's deployment id, as text. */
   deployment: string

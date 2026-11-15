@@ -52,6 +52,17 @@ Without its two secrets the Worker answers the API's calls with 503 and checks n
 ## Turning it off
 
 - **Normally:** the `ops` switch on `/owner/codium`. It stops new settings, release watches, reverts, cards and fix runs in the API (a regression the Worker still reports while its flag spreads is recorded, with Undo left to the person) and copies itself to the Worker's kill flag (`flags`). If the answer says `worker: "failed"`, apply the switch again or set the flag directly as below.
+- **A switch that answered `failed`.** The Worker applies the switch's calls in the order the API signed them, either way: a call that arrives after a newer one (the API gives up after 10 s and answers `failed`, but the call may still arrive later) is ignored. So a late "off" cannot turn the Worker off after a newer "on", and a late "on" cannot undo a newer "off". After any `failed`, apply the switch again (the new call is signed later, so it normally applies; if it answers `failed` again, set the key directly as below), or read the key to see where the flag stands:
+
+  ```sh
+  bunx wrangler kv key get --binding OPS_FLAGS --remote kill
+  ```
+
+  The order covers only calls made through the switch: a key set or deleted directly (below) is not part of it, and the next switch change applies normally. Three limits of that order, each covered by applying again or setting the key directly:
+  - A call that answers `failed` because the Worker could not write the key still counts as the newest: a call signed before it and delivered late is ignored, and its answer names the failed call's value, which the key may not hold (so a switch asking for that same value reports `updated`).
+  - Two calls whose writes overlap are not ordered at the key itself: the older call's write can land after the newer one's.
+  - The order is by the API's clock, to the second, and the Worker accepts up to 300 s of clock difference. A call from an API instance whose clock runs ahead can make a later call from a correct clock look older, so that call is ignored until real time passes the earlier stamp; the switch answers `failed` when it asked for the other value.
+
 - **Directly:**
 
   ```sh
@@ -63,6 +74,10 @@ Without its two secrets the Worker answers the API's calls with 503 and checks n
   ```sh
   bunx wrangler kv key delete --binding OPS_FLAGS --remote kill
   ```
+
+## Workers Logs and traces
+
+`packages/ops-worker/wrangler.jsonc` turns them off (`"observability": { "enabled": false }`). The Worker writes no log of its own, but the platform's logs and traces would record each request and possibly the URLs it checks. Turning them on is the owner's choice, and it is made by changing `wrangler.jsonc` (and deploying), not in the dashboard: each deploy applies the file, so a toggle changed in the dashboard does not survive the next deploy.
 
 ## The GitHub webhook and verified domains (A47)
 

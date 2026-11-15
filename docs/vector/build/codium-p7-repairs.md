@@ -916,3 +916,381 @@ vector-hosted-ci.yml's Hosted tests job, which runs every `packages/ops-worker` 
 change uncommitted, and the run and job ids go in a dated line here in the lane commit that follows the runs.
 
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+**CI receipts (15 Nov 2026, recorded by R46b).** R46a's commit `d866364f` on `codium-finish`. Vector Codium run
+43720600992: every job passed except Codium tests job 132831553538, whose "Run the Codium test files" and "Check
+generated client" steps passed and whose "Run HttpApi exerciser gates" step reported `pass=359 fail=0 skip=0 missing=4`
+with exactly the four baseline lines `MISS DELETE /experimental/review-memory/previews/{previewId}`,
+`MISS GET /experimental/review-memory`, `MISS POST /experimental/review-memory/confirm` and
+`MISS POST /experimental/review-memory/prepare`, and no FAIL line: green under the lane's rule. Its Hosted services job
+"Ops Worker (dry run and miniflare smoke)" 132831553772 passed (the run's own Hosted tests job is skipped by
+`services_only`). typecheck.yml run 43720604063 passed. vector-hosted-ci.yml run 43721009223 passed, with Hosted tests
+job 132832781366 (every `packages/ops-worker` test, among the hosted files) and Ops Worker job 132832781290.
+
+**Correction (15 Nov 2026, R46b).** The sentence above "the other three ops files (`ops-domain-health`, `ops-screens`,
+`ship-desk`) import none" is wrong: all three import `./ops-fixture` (`ops-domain-health.test.ts:24`,
+`ops-screens.test.ts:33`, `ship-desk.test.ts:47`). The nine root files that import `test/ops-fixture.ts` are
+`account-delete`, `github-webhook`, `on-call`, `ops-domain-health`, `ops-guard`, `ops-payment-pipeline`, `ops-screens`,
+`release-guard` and `ship-desk`; `ops-worker-contract` imports the Worker's sources directly. The fixture drives the
+real Worker code (`test/ops-fixture.ts:17-21`), so all ten exercise it. The runs above are unaffected.
+
+## A46 ops Worker: accounts, schedules and internal API
+
+Codium finish R46b, 15 Nov 2026. Part 2 of the A46 review, the second half of the P7 addendum for A46. Read on
+`codium-finish` `d866364f` (R46a); line numbers are at `d866364f` unless a line says "now". Scratch is under
+`/tmp/vector-v2/codium/r46b/` (HEAD copies in `head/`, the repaired copies in `new/`, the mutation runner in `mut/`, the
+read-only planning probe in `plan/`). Nothing here boots the engine, and nothing was deployed.
+
+### Scope
+
+- `packages/ops-worker/src/ops-account.ts` (1,046 lines at `d866364f`; R46a reviewed only its body validators),
+  `index.ts`, `internal.ts`, `limits.ts` and `runtime.ts`; `wrangler.jsonc`; `e2e/ops-smoke.mjs`;
+  `test/ops-worker-contract.test.ts`.
+- `git log 334aab8d..HEAD` on those files lists `025d75da` (it removed the `KILL_KEY` export from `index.ts` after the
+  Workers runtime refused it) and R46a's `d866364f` (validators only).
+- API callers, read only as far as the contract: `api/_lib/ops-worker.ts` (`opsCall` `:90-125`, `syncOpsKillFlag`
+  `:152-164`, `opsPlanFor` `:184-213`), `api/_lib/ops-cleanup.ts` (`eraseAccountOps` `:93-101`) and
+  `api/_lib/codium-owner-api.ts:154` (the only caller of `syncOpsKillFlag`).
+- Unchanged: `limits.ts`, `runtime.ts`, `e2e/ops-smoke.mjs`, `test/ops-worker-contract.test.ts` and every API file.
+
+### Findings repaired here
+
+**R46-16. Confirmed: an inbound body was read whole before its size check.**
+- Cause: `index.ts:41-43`. `Number(content-length ?? "0")` let a body with no length through, then
+  `await request.arrayBuffer()` read all of it before the 32 KiB check. Any caller of the `workers.dev` address can do
+  this before the signature is checked. Red run: a 1 MiB stream with no length was pulled 1,025 times, never cancelled,
+  then refused with 413.
+- Repair: `index.ts` (now `:42-48`) keeps the declared-length check, then reads with
+  `readPrefix(request.body, OPS_LIMITS.internalBodyBytes + 1)` (R46a's reader): a failed read is 400
+  `INTERNAL_BAD_REQUEST`, a body that did not end within 32 KiB and one byte is 413, and `read.bytes` goes to the
+  signature check and the JSON parse. A body of exactly 32,768 bytes is still taken, as before. No export or signature
+  changed.
+- Regression test: internal.test.ts "a body sent with no length is read only to 32 KiB and one more byte, and the rest
+  is cancelled" (`{status: 413, pulled: 33, cancelled: 1}`; then a signed body of exactly 32,768 bytes, streamed with no
+  length, answers 200 with no cancel).
+
+**R46-20. Confirmed (P5): an erasure that came while a wake or a release waited left account data in the erased
+object.**
+- Cause: the alarm (`ops-account.ts:159-182`) awaits the kill flag (`:162`) and the probes (`:171`), then `applyWake`
+  (`:553-616`) writes the run row with the account's host names in its DNS cache (`:556`) and `pruned_at` (`:615`).
+  The kill branch (`:162-168`) writes the run row too. The critique found the same race in `release()`: `internal()`
+  reads `known` (`:207`) and the late-call guard (`:212-213`) before `release()` awaits the flag (`:293`); an erasure in
+  that await let a fresh object answer `not-in-plan` with 200, and `internal()` then stored the raw account id
+  (`:231`); a re-subscription in the same await let a release signed before the erasure insert a releases row. Red
+  run: erase during a held probe left meta `["erased_at","pruned_at","run"]` with the monitored host name, and nothing
+  ever removed it; erase during a release's flag read left meta `["account","erased_at"]`.
+- Repair (the critique's counter, not the plan's comparison of `erased_at` values, which would miss a second erasure
+  with the same time and relies on erase's own awaits finishing first): a private in-memory counter `erasures` (now
+  `:146`), incremented as the first statement of `erase()` (now `:490`), before its first await. The alarm captures
+  it before its first await (now `:172`) and returns with nothing written and nothing scheduled if it changed after
+  the flag (now `:175`) or after the probes (now `:187`); erase already deleted the alarm, and a call that set the
+  account up again scheduled its own. `release()` captures it before its one await (now `:310`) and answers 409
+  `OPS_ERASED` if it changed (now `:312`), so `internal()` stores neither the release nor the account id. `deliver()`
+  needs no check on the Worker's side: after its `sendReport` await it only deletes or updates outbox rows by id, which
+  the erasure removed. A report already in flight still reaches the API after the erasure; the API's side of that is a
+  lane follow-up under For the lead (`api/_lib/ops-incidents.ts:328-357`).
+  The counter is in memory, which holds because the runtime keeps one instance of an object while it runs.
+- Regression tests (internal.test.ts): "an erasure while a wake waits on its probes leaves nothing of that wake"; "an
+  erasure while a wake waits on the kill flag leaves nothing of that wake, with the flag set or not"; "an erasure while
+  a release waits on the kill flag stores neither the release nor the account" (a fresh object, then a re-subscription
+  during the wait). Each asserts meta exactly `["erased_at"]`, neither the host name nor the account id in it, the
+  monitors, changes, hourly, releases, baselines and outbox tables empty, and no alarm.
+- What this does not claim: an erasure that lands while `internal()` awaits `schedule()`'s alarm calls. In the fake
+  those are separate awaits, so a schedule could set an alarm after erase deleted it; the next wake would then find no
+  plan and write an empty run row and `pruned_at` (nothing of the account) before removing the alarm. Under workerd's
+  input gates other events wait while a storage operation runs; that interleaving was not exercised and is deferred
+  verification.
+
+**R46-21. Confirmed (M9 cost; the documented report retention): while the kill flag was set, reports older than a day
+were never dropped.**
+- Cause: only `deliver()` dropped expired reports (`:752`), and the kill branch (`:162-168`) skips `deliver()`; any
+  outbox row counts as work (`dueTimes`, `:817-820`). An account with one undelivered report woke every 10 minutes for
+  as long as the flag was set, against `limits.ts:56-58` ("kept at most … this long"). Red run: 288 wakes in two days,
+  with the row and the alarm still there.
+- Repair: a private `expireReports(now)` (now `:811`) runs `DELETE FROM outbox WHERE created_at < now − outboxKeepMs`;
+  `deliver()` calls it in place of its statement (now `:783`) and the kill branch calls it before `hasWork` (now
+  `:180`).
+- Regression test: schedule.test.ts "while set, a report past its day is dropped, so an account with nothing else to
+  do stops waking" (at most 145 wakes in two days, then an empty outbox and no alarm).
+
+**R46-22. Confirmed (M9): a delayed call to the kill flag could undo a newer one.**
+- Cause: `flags()` (`:484-489`) applied every call in arrival order. The API gives up after 10 s
+  (`api/_lib/hosted-internal.ts:33`, `:129`) and reports `failed` (`ops-worker.ts:158-163`), while the Worker still
+  accepts a call signed up to 300 s earlier (`internal.ts:25`, `:120`). Red run: `{kill:true}` signed now, then
+  `{kill:false}` signed 60 s earlier, cleared the flag.
+- Repair, both directions (the critique's preferred rule; the plan ordered only clears): the control object keeps meta
+  `flags` = `{kill, signedAt}` of the newest call applied. A call signed strictly earlier is ignored and answers `{kill:
+  <the newest applied>, applied: false}`; a call signed in the same second applies in arrival order, so the existing
+  "set and cleared" test still passes. The order is claimed (`setMeta`) before the KV write, so a delayed call that
+  arrives while a newer one writes is ignored too (now `:512-520`; `internal()` passes `signedAt`, now `:221`). What the
+  claim does not give: a KV write that throws answers 500 (the API reports `failed`) and leaves the order claimed, so a
+  call signed earlier and delivered later is ignored and answers the claimed value, which KV may not hold
+  (`syncOpsKillFlag` then reports `updated` when that value matches the one it asked for); and two calls whose KV writes
+  overlap are not ordered at KV, so the older call's write can land last. The owner's step after any `failed` (apply
+  again, or read and set the key directly; `owner-actions/hosted-ops.md`) covers both. Not taken (review round below):
+  undoing the claim when the write throws, since putting back the value read before the write would also drop a newer
+  claim made while the write ran, and it would not order overlapping writes either. Why both ways: `syncOpsKillFlag`
+  runs only when the owner changes the switch (`codium-owner-api.ts:154`), with no periodic resync, so a stale raise
+  applied after a newer clear would leave every account off while the switch shows on and answered `updated`, and
+  nothing would show or fix it.
+- The API reads only `answer.kill` (`ops-worker.ts:160`): a refused call answers `updated` when the newest flag already
+  matches it and `failed` otherwise, which is right, so no API change is needed.
+- Regression test: internal.test.ts "a delayed call to the kill flag cannot undo a newer one, either way" (a clear 60 s
+  earlier, a raise 120 s earlier and a clear 30 s earlier are ignored after a raise; a clear 1 s later applies; then a
+  raise signed before that clear is ignored; a later raise applies).
+
+**R46-23. Confirmed (contract mismatch): the Worker compared release environments with case; GitHub and the API
+compare without case.**
+- API side: the handler matches the configured environment without case (`github-webhook-handlers/ops.ts:247`) and
+  forwards GitHub's spelling (`:276`); records, incidents and snoozes are keyed by `environmentKey`, which lower-cases
+  (`release-guard.ts:83-85`, `ops-incidents.ts:115-119`). Worker side: the dedupe and supersede checks
+  (`ops-account.ts:298-313`, `release-watch.ts:47-52`) and the baselines were exact. Red run: "Production" then
+  "production" with the same sha were two watches.
+- Repair: `parseRelease` (now `:1066`, `:1077`) checks the pattern (no control character, 1 to 255 UTF-16 units) on the
+  environment as sent, as the API's `environmentName` (`ops-settings.ts:280-288`) and the webhook handler
+  (`github-webhook-handlers/ops.ts:239`) check it, and returns it folded to lower case. Folding can lengthen a name ("İ"
+  becomes two units), so checking after folding, as the first draft did, refused a 255-unit name the API accepts with
+  400 and that release went unwatched (review round below); the stored name is at most 510 units. Stored rows, state and
+  reports name the environment in lower case. `protocol.ts`, `release-watch.ts` and `release()`'s comments say so.
+- Display effect, recorded: text built from the Worker's events shows the lower-case spelling, namely the incident
+  record and its text (`ops-incidents.ts:541`, `:856`) and the revert pull request's body (`release-guard.ts:884`,
+  whose input is the event's environment, `ops-incidents.ts:655`). The release list from the API's own record
+  (`api/ops/releases.ts:20`) keeps GitHub's spelling. In-app and pull-request text, not public copy.
+- Regression test: release-watch.test.ts "environments are compared without case, as GitHub and the API compare them"
+  ("Production" sha1 accepted, "production" sha1 a duplicate, "PRODUCTION" sha2 supersedes it; rows and the state's
+  watches in lower case), and "the length is checked on the name as sent: a 255-unit name with İ, longer once folded,
+  is watched" (accepted and stored folded, 256 units; 256 units as sent are refused with 400).
+
+**R46-18. Test only: the redirect check counted only `fetcher(` and `deps.fetch(` and ran on raw text.**
+- Repair: source.test.ts strips comments first (a shared `code()` helper, also used by the logging test), finds every
+  `fetch(` or `fetcher(` call, bare or as a member, splits its arguments up to the call's own closing parenthesis
+  (`callArguments`: nested parentheses, brackets and braces counted, quoted strings skipped), and requires a second
+  (options) argument that says `redirect: "manual"`; a call with no options, or one that never closes, fails. The first
+  draft cut each call at the next `})` anywhere later in the file, so a bare `deps.fetch(url)` before a call with
+  options passed (review round below; mutation M16). Left out, with the reason in the test: method and interface
+  definitions (their first parameter has a type), `stub.fetch(` (the Durable Object), and runtime.ts's forwarder, which
+  hands each caller's options to the platform unchanged and is pinned to exactly `fetch: (input, init) => fetch(input,
+  init),`. The outbound calls must be exactly those in `check.ts`, `internal.ts` and `ssrf.ts`.
+
+**R46-19. `wrangler.jsonc` had no `observability` setting.**
+- Repair: `"observability": { "enabled": false }` (now `wrangler.jsonc:24-27`) with a comment: the Worker writes no
+  log, but the platform's logs and traces would record each request and possibly the checked URLs, so turning them on
+  is the owner's choice, made in this file because each deploy resets a dashboard toggle. wrangler 4.50.0's schema
+  defines `Observability.enabled` as a boolean (`node_modules/wrangler/config-schema.json`). The CI dry run only parses
+  the file (wrangler warns on unknown fields rather than failing), so the evidence is the schema and the source test.
+- Regression test: source.test.ts's wrangler test asserts `observability` is exactly `{ enabled: false }`.
+
+Comments only: `internal.ts`'s `callbackOrigin` comment said plain http was for "the CI smoke test's stand-in API"; the
+smoke uses `https://vectordev.ai` answered in-process (`e2e/ops-smoke.mjs:34`, `:87`), so it now says "a local stand-in
+API". `protocol.ts` (still importing nothing) names the case-folded release dedupe and the ordered `flags`.
+
+### Checks that hold
+
+- **R46-24. The secret is checked first.** `index.ts:35-50`, in order and before any storage: method, action,
+  `internalSecret` (at least 32 characters, else 503), size, then `verifyInternalSignature`: header shapes, 300 s skew,
+  HMAC over method, path, timestamp, nonce and the body's SHA-256, compared by `equalBytes` over 32 bytes in time that
+  depends only on the lengths (`internal.ts:110-137`, `bytes.ts:77-83`). `accountHandle` runs after the signature. The
+  first storage read is the nonce in the Durable Object (`once()`, `ops-account.ts:192`, `:933-938`), which is reached
+  only through `stub.fetch`.
+- **R46-25. No raw account id in a storage key or a log.** Object names are HMAC(ACCOUNT_KEY,
+  `"vector-ops-account-v1\n"` + account) in hex (`internal.ts:143-148`); the control object is `control`, which no
+  64-hex-digit name can equal. The value `meta.account` (`:231`) holds the id by design, to name the account in reports
+  (`:765`), as A46's own reading says. No logs: source.test.ts's logging test.
+- **R46-26. The kill flag.** Read at every wake and before a watch starts (`:162`, `:293`); fails closed when unreadable
+  (`:879-885`); while set nothing is probed or delivered (`:162-169`). The only writers are in `flags()` (pinned now by
+  source.test.ts "the kill flag is written in one place: one put and one delete, both inside flags()"); `sendReport`
+  discards the API's answer (`internal.ts:191`), so no report can lower it. "At once" means the next wake after the KV
+  write is visible; `hosted-ops.md` already says "while its flag spreads". KV propagation time is deferred
+  verification.
+- **R46-27. Caps come from the plan the Worker was sent (S1, P1).** Monitors probed (`:841-852`), release perDay and
+  paths (`:319-339`), the interval (`:245-247`, `:563`, `:625-626`), validUntil and suspension (`:836-838`). `state`
+  reaches only the guard (`api/_lib/ops-guard.ts:443`) and carries `plan {version, validUntil}`, counts and times,
+  never caps or amounts; the config answer is counts; error answers are codes.
+- **R46-28. Alarms cannot multiply or loop.** One alarm (`schedule`, `:792-802`), never less than 25 s ahead (`:798`);
+  at most 125 wakes an hour (`:800`, counted at `:828-832`); a 10-minute recheck while killed (`:166`); no work deletes
+  the alarm (`:794-796`); a missed due time catches up by one interval, not a burst (`:625-626`); the control object
+  never schedules. Worst case if a save keeps failing: one wake per 25 s.
+- **R46-29. Storage per account is bounded.** At most 10 monitors; changes and hourly totals pruned after 30 days
+  (`:868-876`); releases bounded by the API's daily cap × 30 days; outbox at most 200 (`:741-744`) and now at most a day
+  old even while killed; nonces 600 s. The run row: R46-17 below.
+- **R46-30. Erase (P5).** Everything goes but the unexpired nonces and `erased_at` (`:470-481`), now also against a wake
+  or a release in flight (R46-20). A repeated erase answers `{erased:true}` again and moves `erased_at` forward:
+  idempotent, pinned by internal.test.ts "a repeated erase answers the same and keeps only the erasure time".
+- **R46-31. Reports are bounded.** Batches of 20 (`limits.ts:53`). Worst case, 20 `release.regressed` events with 5
+  failing URLs of 2,048 characters and a 255-character environment: about 233 KB, under the API's 256 KiB
+  (`api/ops/worker.ts:32`) and its 100-event cap (`ops-incidents.ts:237`). Retries at 30 s doubling to an hour; dropped
+  after a day (`expireReports`, now also while killed); without `API_ORIGIN` they wait (documented).
+- **R46-32. The entry module's exports.** `default` (`{fetch}`), `OpsAccount` (a class) and `handleRequest` (an async
+  function, `index.ts:28`). `025d75da`'s message says "only OpsAccount and the default handler", but `handleRequest`
+  stayed; workerd accepted it (the smoke passed in 42136600777/127626223269, 42138157347/127631455750 and
+  43720600992/132831553772), and the relay exports two functions the same way. Kept, since moving it would change
+  `test/ops-fixture.ts:17` for no runtime gain. Pinned by source.test.ts "the entry module exports only the default
+  handler and functions the runtime takes" (keys exactly `OpsAccount`, `default`, `handleRequest`; `default` exactly
+  `{fetch}`; every named export a function), so a string export like `KILL_KEY` now fails locally, not only in the CI
+  smoke.
+- **R46-33. Nothing deploys from tests.** `workflow-compliance.test.ts:1279-1280` pin the CI steps to
+  `bun run dry-run` and `bun run smoke` (and `:1312-1316` keep any copy of them out of the lane's other jobs), and
+  `:1285` pins `"dry-run": "wrangler deploy --dry-run --outdir dist"`. The
+  smoke only calls `mf.dispatchFetch` on `dist/` with throwaway keys; the unit tests use fakes.
+- `limits.ts` and `runtime.ts`: the root contract test still holds (`test/ops-worker-contract.test.ts:83-117`), and
+  `runtime.ts` declares only what the Worker calls.
+
+### Readings, not repaired
+
+- **R46-17 (plausible: bounded by the API, not by the Worker).** The run state is one JSON meta row. A watch holds about
+  51.6 KB at worst (5 URLs × 2,048 characters in `urls`, `streaks`, `last`, `failures` and `baseline.ok`). With the
+  API's bounds (20 repositories, `ops-settings.ts:33`; one production environment each, case-folded now; URLs of at
+  most 2,048 characters, `ops-settings.ts:38`) and one running watch per repository and environment, the row stays near
+  1.06 MB. Cloudflare's published 2 MB limit per row of SQLite-backed Durable Objects would be reached near 40
+  concurrent watches; that limit is unverified here (developers.cloudflare.com is outside this session's network). The
+  Worker's own bounds (100 releases a day, 120 minutes) do not keep the row under it. If it were exceeded, `release()`
+  would answer 500 and the API 503, and a failing save in a wake skips the wake count, so the account wakes once per
+  25 s. Lane follow-up: move watches to their own table if the repository cap grows.
+- A `release` to a fresh object that is accepted or refused with 200 stores `meta.account` and nothing else (`:231`);
+  an erasure in between now refuses it (R46-20).
+- Running watches continue after `releaseGuard` becomes null (paused) until they end, matching "no new watches".
+- The erase tombstone, an HMAC-named object holding `erased_at`, holds nothing about the account.
+- A refused `flags` call answers the newest call applied through the switch; a key set or deleted directly with
+  wrangler is not part of that order and is not seen by the answer (`hosted-ops.md` says so).
+- Clock skew between API instances: two switch changes signed in different seconds by instances whose clocks differ
+  by more than that gap could apply in the wrong order. After an earlier call from an instance whose clock runs ahead,
+  a re-applied switch from a correct clock is ignored as older until real time passes the skewed stamp (at most the
+  300 s the Worker accepts), so applying again does not always apply; the API then answers `failed` again
+  (`ops-worker.ts:160`) when it asked for the other value, so the owner is not misled. `owner-actions/hosted-ops.md`
+  says "normally applies" and points to setting the key directly when it answers `failed` again.
+
+### For the lead
+
+- No defect was found in another lane's file.
+- Lane follow-ups outside R46b's scope (Codium lane files; file:line and why), not fixed here:
+  - R46-2's product reading, carried forward from R46a: a monitor that stays inconclusive with `resolver` is never
+    probed or reported, and no screen says so. Proposed: an ops-screen line, or a counter in the Worker's `state`.
+  - Relay (A39), the same three patterns: `packages/relay/src/index.ts:81-84` reads the whole body before its check
+    (R46-16); `packages/relay/src/account-relay.ts:810-815` applies flags in arrival order (R46-22);
+    `packages/relay/wrangler.jsonc` has no observability setting (R46-19). Its index also exports the functions
+    `handleRequest` and `offeredTicket` (`:32`, `:41`), which workerd accepts.
+  - `api/_lib/ops-cleanup.ts:94` skips the Worker's erase silently when `!opsErasable()`: if the Worker's address or
+    secret was removed after an account used ops, deletion finishes while the Worker may still hold its data.
+    Proposed: keep the erase pending for accounts in `ops:accounts`.
+  - `github-webhook-handlers/ops.ts:276` could forward `repo.environment`; after R46-23 that only changes display, and
+    the incident record stores the lower-case environment either way.
+  - P5 on the API side of R46-20: `api/_lib/ops-incidents.ts:328-357`. A report already in flight in the Worker's
+    `sendReport` when `eraseAccountOps` calls the Worker's erase (`api/_lib/ops-cleanup.ts:94`) can reach
+    `POST /api/ops/worker` after `eraseAccountOpsRecords` has run. `handleOpsReport` does not check the deletion
+    tombstone, so `handleEvent` (`monitorDown`, `releaseRegressed`) and `markTaken` (`:314`, `:353`) can write an
+    incident and the events set for an account being deleted. The `check` pass of `finishAccountDeletion`
+    (`api/_lib/codium-erase.ts:566`) probably removes them, but only if it runs after the late report lands. Proposed:
+    before any write, drop the events of a report whose account has a tombstone (`accountDeleting(report.account)`,
+    `api/_lib/codium-tombstone.ts:106`) and answer 2xx so the Worker stops resending, with a root test in
+    `test/account-delete.test.ts`. A48/A57 code, outside R46b's files; not fixed here.
+- R46-17's row bound (above) if the repository cap grows.
+
+### Review round (15 Nov 2026)
+
+Six non-blocking findings from the package review (two of them the same `parseRelease` case); all taken, none disagreed
+with. One offered a choice; the reason for the option chosen is below.
+- The redirect source test cut each call at the next `})` anywhere later in the file, so a bare `deps.fetch(url)`
+  before a call with options passed (the review's probe showed both calls as `true`), and a call followed by no `})`
+  ran to the end of the file. `callArguments` now ends each call at its own closing parenthesis and the test requires
+  a second (options) argument with `redirect: "manual"` (R46-18 above; M16 added, and M10 re-run against it).
+- `parseRelease` checked the length after folding, and folding can lengthen a name, so a 255-unit environment the API
+  accepts could fold to 256 and be refused with 400. The pattern now runs on the name as sent and the folded name is
+  returned with no second check (R46-23 above; a new release-watch case; M17 and M18).
+- `flags()`'s claimed order: the review offered undoing the claim when the KV write throws, or recording the limits.
+  Recorded, not undone: putting back the value read before the write would also drop a newer call's claim made while
+  the write ran (a later delayed call could then apply over it), and it would not order overlapping writes either.
+  R46-22 above, the `flags()` comment and `owner-actions/hosted-ops.md` now name both limits, and the owner's step
+  after `failed` covers them.
+- `owner-actions/hosted-ops.md` stated "the new call is signed later, so it applies" as a guarantee; with API clocks up
+  to 300 s apart a re-applied switch can be ignored as older. It now says "normally applies" and points to setting the
+  key directly when the switch answers `failed` again, and names the clock limit. Code unchanged (Readings above).
+- P5 on the API side of R46-20 (`api/_lib/ops-incidents.ts:328-357`): added under For the lead as a lane follow-up
+  with its proposed fix and root test; not fixed here (A48/A57 code outside R46b's files).
+
+### Mutations
+
+Each was applied as an exact one-occurrence substitution by `/tmp/vector-v2/codium/r46b/mut/run.py` (M16–M18, and M9
+and M10 again against the repaired tests, by `/tmp/vector-v2/codium/r46b-fix/run.py`), run against the named file with
+`-t`, and restored; a byte comparison with the saved copy confirmed every restore.
+
+| Mutation | Turns red |
+| --- | --- |
+| M1: read the body with `arrayBuffer()` again (index.ts) | internal "a body sent with no length…" |
+| M2: `readPrefix` limit without `+ 1` | internal "a body sent with no length…" (the exact-32-KiB step) |
+| M3: drop the erasure check after the probes | internal "an erasure while a wake waits on its probes…" |
+| M4: drop the erasure check after the flag | internal "…waits on the kill flag…" (the flag-set round; with the flag clear, the check after the probes still catches it, so the test runs both) |
+| M5: drop `expireReports` in the kill branch | schedule "while set, a report past its day is dropped…" |
+| M6: drop the flags ordering check | internal "a delayed call to the kill flag cannot undo a newer one, either way" |
+| M7: `<=` in place of `<` (ties refused) | internal "the kill flag is set and cleared through the control object…" (existing) |
+| M8: record the order only on raises (the plan's one-sided rule) | internal "a delayed call…" (the raise signed before the newer clear) |
+| M9: no `toLowerCase()` | release-watch "environments are compared without case…" |
+| M10: add `?? (await fetch(url, { method: "GET" }))` to check.ts's probe call | source "every outbound fetch refuses to follow redirects" (HEAD's version of that test stays green under it) |
+| M11: restore `export { OpsAccount, KILL_KEY }` (the pre-`025d75da` defect) | source "the entry module exports only…" |
+| M12: remove the `observability` line | source wrangler "one Worker, the OpsAccount object on SQLite storage…" |
+| M13: add `OPS_FLAGS.delete(KILL_KEY)` in `deliver()` | source "the kill flag is written in one place…" |
+| M14: drop the erasure check in `release()` | internal "an erasure while a release waits on the kill flag…" |
+| M15: drop `this.erasures++` | all three erasure-race tests |
+| M16: add a bare `await deps.fetch(url)` before check.ts's probe call | source "every outbound fetch refuses to follow redirects" (the first draft of that test stayed green under it: the review's probe, `/tmp/vector-v2/codium/r46b-review/probe.ts`) |
+| M17: check the environment's pattern after folding (the first draft) | release-watch "the length is checked on the name as sent…" |
+| M18: drop the environment's pattern check | release-watch "the length is checked on the name as sent…" (the 256-unit refusal) |
+
+Red runs against the HEAD sources (`index.ts`, `ops-account.ts`, `internal.ts`, `protocol.ts`, `release-watch.ts` and
+`wrangler.jsonc` copied back, then restored and checked with `diff -q`): internal.test.ts 18 pass, 5 fail (the body,
+flag-order and three erasure-race cases; the body case saw `pulled: 1025, cancelled: 0`); schedule.test.ts 12 pass,
+1 fail (288 wakes); release-watch.test.ts 14 pass, 2 fail (the case and the length-as-sent cases; the second run
+after the review round, with `ops-account.ts` alone copied back); source.test.ts 8 pass, 1 fail (the observability
+assertion; the tightened redirect, exports and kill-writer tests pass on HEAD and pin it).
+
+### Tests run here (one file at a time)
+
+Through `vector-serial` with `--timeout 30000`: `packages/ops-worker` with `bun test`; the root `test/` with
+`bun test ./<file>`.
+
+| Package | File | Before (HEAD `d866364f`) | After |
+| --- | --- | --- | --- |
+| ops-worker | `test/internal.test.ts` | 17 pass (97) | 23 pass (168) |
+| ops-worker | `test/schedule.test.ts` | 12 pass (137) | 13 pass (141) |
+| ops-worker | `test/release-watch.test.ts` | 14 pass (85) | 16 pass (94) |
+| ops-worker | `test/source.test.ts` | 7 pass (58) | 9 pass (62) |
+| ops-worker | `test/on-call.test.ts` | 16 pass (60) | 16 pass (60) |
+| ops-worker | `test/protocol.test.ts` | 4 pass (63) | 4 pass (63) |
+| ops-worker | `test/ssrf.test.ts` | 12 pass (271) | 12 pass (271) |
+| ops-worker | `test/check.test.ts` | 16 pass (70) | 16 pass (70) |
+| ops-worker | `test/bytes.test.ts` | 6 pass (12) | 6 pass (12) |
+
+Root files, after the change (what each imports):
+
+| File | Imports | After |
+| --- | --- | --- |
+| `test/ops-worker-contract.test.ts` | the Worker's sources directly | 8 pass (59) |
+| `test/on-call.test.ts` | `./ops-fixture` | 30 pass, 1 skip (299) |
+| `test/ship-desk.test.ts` | `./ops-fixture` | 26 pass, 1 skip (270) |
+| `test/release-guard.test.ts` | `./ops-fixture` | 36 pass, 1 skip (345) |
+| `test/ops-guard.test.ts` | `./ops-fixture` | 13 pass (87) |
+| `test/ops-payment-pipeline.test.ts` | `./ops-fixture` | 10 pass (78) |
+| `test/account-delete.test.ts` | `./ops-fixture` | 37 pass, 1 skip (454) |
+| `test/github-webhook.test.ts` | `./ops-fixture` | 30 pass (223) |
+| `test/ops-screens.test.ts` | `./ops-fixture` | 6 pass (41) |
+| `test/ops-domain-health.test.ts` | `./ops-fixture` | 9 pass (57) |
+
+After the review round, re-run with the same counts as above: `packages/ops-worker` `internal`, `on-call`, `schedule`,
+`source` and `release-watch` (16 pass, 94), and root `ops-worker-contract`, `release-guard`, `on-call` and `ship-desk`;
+`bun typecheck` in `packages/ops-worker` and the api tree, and `prettier --check` on the three changed files, clean
+again. The root skips are the Valkey cases (`VECTOR_TEST_REDIS_URL`), CI only. `bun typecheck` clean in
+`packages/ops-worker`, and the api tree (`packages/engine`, `bun typecheck --project ../../tsconfig.json`) clean.
+`prettier --check` clean on the five changed sources and four changed tests; `git diff --check` clean. The full turbo
+typecheck is a pre-push step and was not run in this step.
+
+**CI only:** Vector Codium's Codium tests job (the changed ops-worker test files since the base and the root files it
+always runs, with Valkey and Postgres), its HttpApi exerciser (no route changed) and check:generated, its Hosted
+services "Ops Worker (dry run and miniflare smoke)" job (every signed call in the smoke now goes through `readPrefix`
+on workerd's own request body; the dry run parses the new `observability` key), typecheck.yml, and
+vector-hosted-ci.yml's Hosted tests job (every `packages/ops-worker` test) and its Ops Worker job. CI: pending; this
+step left the change uncommitted. After the package commit is pushed and the three dispatches (Vector Codium with
+base `origin/release-finish`, typecheck.yml, then vector-hosted-ci.yml once the Vector Codium run has finished) are
+green, a `docs(codium)` receipt commit adds dated lines with the run and job ids here and in the a46 notes. A failure
+gets a root-caused fix commit, not a re-run, except for the RULES-v2 flakes.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+With R45a, R45b, R46a and R46b, P7 now covers A44–A50: A44 and A47–A50 in "P7 review decisions", A45 and A46 here.

@@ -123,3 +123,24 @@ These are in `owner-actions/hosted-ops.md`:
   first, in its own merge) is in `owner-actions/hosted-ops.md` step 6. `ssrf.ts`'s header no longer states that
   Cloudflare's production fetch refuses private addresses: unverified, left to the outside security review. R46b
   (part 2: `index.ts`, `internal.ts`, `limits.ts`, `runtime.ts` and the rest of `ops-account.ts`) follows. CI: pending.
+- **Status on 15 Nov 2026 (Codium finish R46b).** The P7 review addendum's part 2 (accounts, schedules and the
+  internal API; `codium-p7-repairs.md`, "A46 ops Worker: accounts, schedules and internal API") repaired five findings
+  and tightened two tests. R46-16: an inbound body with no length is read only to 32 KiB and one byte, then cancelled,
+  before the signature check (`src/index.ts`, R46a's `readPrefix`). R46-20: an erasure that comes while a wake waits on
+  the kill flag or its probes, or while a release reads the flag, now leaves the object holding only `erased_at` (an
+  in-memory erasure counter in `src/ops-account.ts`; the release answers 409 `OPS_ERASED`). R46-21: reports older than
+  a day are dropped while the kill flag is set too, so such an account stops waking. R46-22: `flags` calls apply in the
+  order the API signed them, both ways; a delayed one answers `{kill, applied: false}` (a KV write that fails leaves
+  the order claimed, and overlapping writes are not ordered at KV; `owner-actions/hosted-ops.md` covers both).
+  R46-23: release environments are compared without case, as GitHub and the API compare them, with the length checked
+  on the name as sent, and the Worker names them in lower case. R46-19:
+  `wrangler.jsonc` turns Workers Logs and traces off (`"observability": { "enabled": false }`), an owner choice made in
+  that file (`owner-actions/hosted-ops.md`). R46-18 and R46-32: `test/source.test.ts` now requires every outbound
+  `fetch(` call to pass an options argument with `redirect: "manual"` (each call read to its own closing parenthesis)
+  and pins the entry module's exports to `default`, `OpsAccount` and `handleRequest`. A lane follow-up for the lead:
+  the API takes a report that was in flight during an erasure without checking the tombstone
+  (`api/_lib/ops-incidents.ts:328-357`).
+  R46a's CI receipts: Vector Codium run 43720600992 (Codium tests job 132831553538 green but for the four baseline
+  `/experimental/review-memory` MISS lines; Ops Worker job 132831553772), typecheck.yml run 43720604063 and
+  vector-hosted-ci.yml run 43721009223 (Hosted tests job 132832781366), all at `d866364f`. R46b's own CI is pending
+  until its commit is pushed. P7 now covers A44–A50.

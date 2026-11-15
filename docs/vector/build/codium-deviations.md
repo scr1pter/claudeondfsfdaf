@@ -2259,6 +2259,9 @@ unchanged.
   (`071dfe37`) lie between P2's `d04a2808` and P3's range, so no recorded phase-review range includes them; each record
   names its own independent review (line 3 of `codium-a15-catalog-notes.md` and `codium-a16-callers-notes.md`). The
   order under "Next phase order and external gates" (A10–A14) is the order of its own day.
+  - Status on 15 Nov 2026 (Codium finish R46b): A36 is covered by "P6 review addendum (15 Nov 2026)" (R36), and A45
+    and A46 by "P7 review addendum (15 Nov 2026)" (R45a, R45b, R46a and R46b; `codium-p7-repairs.md`). P7 now covers
+    A44–A50.
 - **Records refreshed on 8 Nov 2026.** Eight records got one dated status line each: `codium-a17-admission-notes.md`,
   `codium-a17-context-decision.md`, `codium-a18-models-status-notes.md`, `codium-a36-playbooks-server-notes.md`,
   `codium-a40-remote-api-notes.md`, `codium-a44-vault-api-notes.md`, `codium-a45-desktop-vault-notes.md` and
@@ -3969,6 +3972,114 @@ checks"). Read on `codium-finish` `8a43f2b2`; scratch under `/tmp/vector-v2/codi
   flag, route, listing, price, public page, SDK or generated file changed, and nothing was deployed.
   `owner-actions/hosted-ops.md` gained one instruction for the owner and performs nothing.
 - Edits to `api/_lib/model-plan-*.ts`: none.
+
+Part 4 (Codium finish R46b, 15 Nov 2026): the A46 ops Worker review, part 2, its accounts, schedules and internal API
+(`index.ts`, `internal.ts`, `limits.ts`, `runtime.ts`, the rest of `ops-account.ts`, `wrangler.jsonc`,
+`e2e/ops-smoke.mjs` and `test/ops-worker-contract.test.ts`, with `025d75da`). Findings R46-16 to R46-33, repairs,
+mutations and tests are in `codium-p7-repairs.md` ("A46 ops Worker: accounts, schedules and internal API"). Read on
+`codium-finish` `d866364f`; scratch under `/tmp/vector-v2/codium/r46b/`.
+
+- **Inbound bodies (R46-16).** A body with no length is read only to 32 KiB and one byte, then cancelled, before the
+  signature is checked; a body of exactly 32 KiB is still taken. Before, any caller of the `workers.dev` address could
+  make the Worker read a body of any size first.
+- **The kill flag's order (R46-22).** `flags` calls apply in the order the API signed them, in both directions: a call
+  signed before the newest one applied is ignored and answers `{kill: <the newest applied>, applied: false}`; calls in
+  the same second apply in arrival order. The order is claimed before the KV write. Reason for both directions (the
+  critique's preferred rule, taken over the plan's clears-only rule): the API gives up after 10 s and reports `failed`
+  while the call can still arrive up to 300 s later, and `syncOpsKillFlag` runs only when the owner changes the switch
+  (`api/_lib/codium-owner-api.ts:154`), so a stale raise after a newer clear would leave every account off while the
+  switch shows on, with nothing to show or fix it. The cost of ordering raises too: two changes signed in different
+  seconds by API instances whose clocks differ by more than that gap could apply in the wrong order, and a re-applied
+  switch after a call from a clock that runs ahead is ignored until real time passes that stamp (at most 300 s; the API
+  answers `failed` again when it asked for the other value). Two more limits of the claimed order: a KV write that
+  throws answers 500 and leaves the order claimed, so a call signed earlier and delivered later is ignored and answers
+  the claimed value, which KV may not hold; and overlapping KV writes are not ordered at KV. The owner's instruction
+  after any `failed` (apply the switch again, which normally applies, or read and set the key directly;
+  `owner-actions/hosted-ops.md`) covers all three. Undoing the claim when the write throws was not taken: putting back
+  the value read before the write would also drop a newer claim made while the write ran, and would not order
+  overlapping writes. The API reads only `answer.kill`, so it needs no change. A key set or deleted directly with
+  wrangler is outside the order.
+- **Environments without case (R46-23).** The Worker folds a release's environment to lower case, as GitHub and the API
+  (`environmentKey`) compare it, so one environment has one watch, one dedupe key and one baseline. Its length and
+  control-character check runs on the name as sent, as the API's `environmentName` checks it, because folding can
+  lengthen a name ("İ" becomes two UTF-16 units): checked after folding, a 255-unit name the API accepts was refused
+  with 400 and its release went unwatched. The stored name is at most 510 units. The Worker's rows,
+  state and reports name it in lower case. Two spellings now show in the app: text built from the Worker's events (the
+  incident record and its text, `ops-incidents.ts:541`, `:856`, and the revert pull request's body,
+  `release-guard.ts:884` from `ops-incidents.ts:655`) is lower case, while the release list from the API's own record
+  (`api/ops/releases.ts:20`) keeps GitHub's spelling. In-app and pull-request text, not public copy. The Worker is not
+  deployed, so no stored rows have mixed case.
+- **An erasure overtakes a wake or a release (R46-20, P5).** An in-memory counter, raised as the first statement of
+  `erase()`, is compared by the alarm after the flag and after the probes and by `release()` after its flag read; a
+  change ends the wake with nothing written or scheduled, and refuses the release with 409 `OPS_ERASED`, so the erased
+  object keeps only `erased_at`. The release half and the counter (instead of comparing `erased_at` values) came from
+  the critique. Not claimed: an erasure that lands while `internal()` awaits its alarm calls, which in the fake could
+  leave an alarm that writes an empty run row (nothing of the account) before removing itself; under workerd's input
+  gates other events wait while a storage operation runs. Deferred verification.
+- **Reports are dropped after a day while the flag is set (R46-21).** Before, an account with one undelivered report
+  woke every 10 minutes for as long as the flag was set (288 wakes in two days in the red run).
+- **"At once" for the kill flag** means at the next wake after the KV write is visible; KV propagation time and the
+  order of two KV writes from one object are deferred verification. The flag's only writers are in `flags()`, pinned by
+  a source test.
+- **Observability off (R46-19).** `wrangler.jsonc` sets `"observability": { "enabled": false }`. Turning Workers Logs
+  or traces on is the owner's choice, made in that file, because each deploy applies it over a dashboard toggle
+  (`owner-actions/hosted-ops.md`). wrangler 4.50.0's schema defines the key; the CI dry run only parses the file, so
+  the evidence is the schema and the source test.
+- **Entry exports (R46-32).** `handleRequest` stays exported next to `default` and `OpsAccount`, although `025d75da`'s
+  message says only the two remain: workerd accepted the function export in every smoke since, and the root fixture
+  imports it. A source test now pins the exports, so a non-function export fails locally.
+- **The run row (R46-17).** Bounded near 1.06 MB by the API's 20 repositories and one production environment each, not
+  by the Worker's own caps; Cloudflare's 2 MB row limit is unverified here. A lane follow-up if the repository cap grows.
+- **Plan and critique.** Taken from the critique: the erasure check in `release()` with its own regression test and
+  mutation; both-way ordering of `flags` (above), with the test step "a raise signed before the newest clear is
+  refused" and M8 changed to the one-sided rule; the in-memory counter; the observability evidence worded as the schema
+  and the source test, with the dashboard-reset note for the owner; comments stripped before the redirect scan, and
+  runtime.ts's forwarder pinned instead of skipped silently; the kill-writer test renamed and checking the `flags()`
+  body; the R46a record's ops-fixture sentence corrected by a dated line; both display spellings recorded; the CI
+  follow-through named (a `docs(codium)` receipt commit after green runs); the relay and ops-cleanup items labelled as
+  lane follow-ups outside R46b's scope. Also corrected from the plan: the URL bound is `ops-settings.ts:38`
+  (`release-guard.ts:279` is the rollback link's bound), and `workflow-compliance.test.ts:1315` keeps the smoke out of
+  the lane's other jobs rather than pinning the steps. The flag-race test runs with the flag set and clear, because with
+  it clear the check after the probes masks M4. Not taken: none rejected.
+- **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`: `packages/ops-worker`
+  `test/internal.test.ts` (23), `schedule.test.ts` (13), `release-watch.test.ts` (16), `source.test.ts` (9),
+  `on-call.test.ts` (16), `protocol.test.ts` (4), `ssrf.test.ts` (12), `check.test.ts` (16) and `bytes.test.ts` (6);
+  root `test/ops-worker-contract.test.ts` (8), `on-call.test.ts` (30, 1 Valkey skip), `ship-desk.test.ts` (26, 1 skip),
+  `release-guard.test.ts` (36, 1 skip), `ops-guard.test.ts` (13), `ops-payment-pipeline.test.ts` (10),
+  `account-delete.test.ts` (37, 1 skip), `github-webhook.test.ts` (30), `ops-screens.test.ts` (6) and
+  `ops-domain-health.test.ts` (9). Red runs on the HEAD sources and eighteen mutations are in the P7 record. `bun
+  typecheck` in `packages/ops-worker` and the api tree; `prettier --check` on the changed code; `git diff --check`.
+- **Only in CI:** Vector Codium (Codium tests with Valkey and Postgres, the HttpApi exerciser, check:generated, the
+  Hosted services ops Worker dry run and miniflare smoke on workerd's own request bodies), typecheck.yml and
+  vector-hosted-ci.yml's Hosted tests and Ops Worker jobs. Pending: this step left the change uncommitted. R46a's
+  receipts (Vector Codium 43720600992 with Codium tests job 132831553538 green under the four-MISS rule and Ops Worker
+  job 132831553772; typecheck.yml 43720604063; vector-hosted-ci.yml 43721009223 with Hosted tests job 132832781366)
+  are recorded in the P7 record.
+- **For the lead.** No defect in another lane's file. Lane follow-ups outside this package's scope: R46-2's
+  `resolver` screen line (carried from R46a); the relay's whole-body read (`packages/relay/src/index.ts:81-84`),
+  unordered flags (`account-relay.ts:809-815`) and missing observability setting; `api/_lib/ops-cleanup.ts:94` skipping
+  the Worker's erase silently when the address or secret was removed; `github-webhook-handlers/ops.ts:276` forwarding
+  GitHub's spelling (display only after R46-23); and P5 on the API side of R46-20, `api/_lib/ops-incidents.ts:328-357`:
+  a report already in flight when `eraseAccountOps` erases the Worker (`ops-cleanup.ts:94`) can reach
+  `POST /api/ops/worker` after `eraseAccountOpsRecords` ran, and `handleOpsReport` does not check the tombstone, so
+  `handleEvent` and `markTaken` (`:314`) can write an incident and the events set for an account being deleted (the
+  `check` pass of `finishAccountDeletion`, `codium-erase.ts:566`, probably removes them only if it runs after the late
+  report). Proposed: drop the events of a report whose account has a tombstone (`accountDeleting(report.account)`)
+  before any write and answer 2xx, with a root test in `test/account-delete.test.ts`. Not fixed here (A48/A57 code).
+- **Review round (15 Nov 2026).** All six non-blocking findings were taken (two were the same `parseRelease` case);
+  none was disagreed with. The redirect source test now ends each call at its own closing parenthesis and requires an
+  options argument with `redirect: "manual"`, since cutting at the next `})` let a bare `deps.fetch(url)` pass (M16).
+  `parseRelease` checks the environment as sent and returns it folded (above; M17, M18). For `flags()` the review
+  offered undoing the claim on a failed KV write or recording the limits; the limits were recorded (above, the
+  `flags()` comment and `hosted-ops.md`), for the reason given above. `hosted-ops.md`'s "so it applies" now says
+  "normally applies" and names the clock limit. The API-side P5 item is a lane follow-up (above).
+- No setting, flag, route, listing, price, public page, SDK or generated file changed, and nothing was deployed.
+  `MODEL-PLANS.md`'s ops Worker bullet names the case-folded dedupe, the ordered flag, the erasure rule and the
+  observability setting; `owner-actions/hosted-ops.md` gained two instructions for the owner and performs nothing.
+- Edits to `api/_lib/model-plan-*.ts`: none.
+
+With R45a, R45b, R46a and R46b, P7 now covers A44–A50: A44 and A47–A50 in "P7 review decisions" (5 Nov 2026), A45 and
+A46 in this addendum and in `codium-p7-repairs.md`.
 
 ## Codium finish: B10 acceptance (15 Nov 2026)
 
