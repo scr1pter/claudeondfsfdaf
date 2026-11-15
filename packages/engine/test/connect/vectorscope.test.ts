@@ -2091,4 +2091,150 @@ describe("in process", () => {
     { git: true },
     60_000,
   )
+
+  // I11: Hands' screenshots and the requester's uploads stay in the requester's conversation. VectorScope's helper
+  // sessions are new hidden children, prompted with text only, so no image or file reaches the review's provider.
+  live.instance(
+    "a review's helper prompts carry no screenshot or file the requester holds (I11)",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const directory = test.directory
+        const llm = yield* TestLLMServer
+        const provider = testProviderConfig(llm.url)
+        const config = yield* Config.Service
+        const globalFile = path.join(Global.Path.config, "vector.json")
+        const original = yield* Effect.promise(() => fs.readFile(globalFile, "utf8").catch(() => undefined))
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(async () => {
+            if (original === undefined) await fs.rm(globalFile, { force: true })
+            else await fs.writeFile(globalFile, original)
+          }).pipe(Effect.andThen(config.invalidate())),
+        )
+        yield* write(Global.Path.config, {
+          "vector.json": JSON.stringify({ agent: { vectorscope: { model: "lmstudio/test-model" } } }),
+        })
+        yield* config.invalidate()
+        yield* write(directory, {
+          "vector.json": JSON.stringify({
+            $schema: "https://vectordev.ai/config.json",
+            ...provider,
+            model: "lmstudio/test-model",
+          }),
+          "src/list.ts": LIST,
+        })
+        yield* git(directory, "add", "-A")
+        yield* git(directory, "commit", "-q", "-m", "base")
+        yield* write(directory, { "src/list.ts": LIST_CHANGED })
+        yield* Effect.promise(() => trustWorkspace(directory))
+
+        const sessions = yield* Session.Service
+        const prompts = yield* SessionPrompt.Service
+        const hub = yield* ConnectHub.Service
+        const requester = yield* sessions.create({ title: "Requester" })
+        const message = yield* say(requester.id, "review my changes")
+        const SHOT = Buffer.from("HANDS_SCREENSHOT_OF_THE_USERS_SCREEN").toString("base64")
+        const UPLOAD = Buffer.from("THE_USERS_OWN_UPLOADED_IMAGE").toString("base64")
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: message.id,
+          sessionID: requester.id,
+          type: "file",
+          mime: "image/png",
+          filename: "upload.png",
+          url: `data:image/png;base64,${UPLOAD}`,
+        })
+        const assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          sessionID: requester.id,
+          mode: "build",
+          agent: "build",
+          path: { cwd: directory, root: directory },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.modelID,
+          providerID: model.providerID,
+          parentID: message.id,
+          time: { created: Date.now(), completed: Date.now() },
+        })
+        const computer = yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: requester.id,
+          type: "tool",
+          tool: "computer",
+          callID: "call_screenshot",
+          state: {
+            status: "completed",
+            input: { action: "screenshot" },
+            output: "Observed the app",
+            title: "Read the app",
+            time: { start: 1, end: 2 },
+            metadata: { providerResult: { content: [{ type: "image-data", mediaType: "image/png", data: SHOT }] } },
+            attachments: [
+              {
+                id: PartID.ascending(),
+                messageID: assistant.id,
+                sessionID: requester.id,
+                type: "file",
+                mime: "image/png",
+                url: `data:image/png;base64,${SHOT}`,
+              },
+            ],
+          },
+        })
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", { summary: "Nothing to flag.", risk: "low", files: [], findings: [] }),
+        )
+        const sent: SessionPrompt.PromptInput["parts"][] = []
+        const ops: TaskPromptOps = {
+          cancel: (sessionID) => prompts.cancel(sessionID),
+          resolvePromptParts: (template) => prompts.resolvePromptParts(template),
+          prompt: (input) =>
+            Effect.suspend(() => {
+              sent.push(input.parts)
+              return prompts.prompt(input).pipe(Effect.orDie)
+            }),
+        }
+        const { ask } = asker()
+        const run = yield* hub.run({ request: review(requester.id, directory), call: { ask, promptOps: ops } })
+        // The Linux branch needs an unprivileged user: ReadOnlyGit refuses root (CN-02), so run as root this case fails
+        // at its first assertion below.
+        if (process.platform !== "linux") {
+          // Off Linux connect cannot inspect Git reads safely, so it refuses before any helper or provider call.
+          expect(run.result?.refusal).toBe("unavailable")
+          expect(sent).toEqual([])
+          expect(yield* llm.inputs).toHaveLength(0)
+          expect(yield* sessions.children(requester.id)).toEqual([])
+          return
+        }
+        // What reached the helper sessions and the provider is checked before how the review ended.
+        expect(sent.length).toBeGreaterThan(0)
+        expect(sent.flat().map((part) => part.type)).toEqual(sent.flat().map(() => "text"))
+        const payloads = JSON.stringify(yield* llm.inputs)
+        for (const marker of [SHOT, UPLOAD, "image_url", "data:image"]) expect(payloads).not.toContain(marker)
+        expect(payloads).toContain("items[index]")
+        expect(run.result?.state).toBe("completed")
+        expect(run.result!.sessions.length).toBeGreaterThan(0)
+        for (const id of run.result!.sessions) {
+          const parts = (yield* sessions.messages({ sessionID: id })).flatMap((item) => item.parts)
+          expect(parts.some((part) => part.type === "file")).toBe(false)
+          expect(
+            parts.some(
+              (part) =>
+                part.type === "tool" && part.state.status === "completed" && (part.state.attachments?.length ?? 0) > 0,
+            ),
+          ).toBe(false)
+        }
+        // The requester's own screenshot is still where Hands put it.
+        const kept = (yield* sessions.messages({ sessionID: requester.id }))
+          .flatMap((item) => item.parts)
+          .find((part) => part.id === computer.id)
+        expect(kept?.type === "tool" && kept.state.status === "completed" ? kept.state.attachments : []).toHaveLength(1)
+      }),
+    { git: true },
+    60_000,
+  )
 })

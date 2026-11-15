@@ -1660,11 +1660,11 @@ describe("runs saved in a session after a restart", () => {
 })
 
 describe("members", () => {
-  it.instance("the list has the adapters, the agents, the helpers, and Hands as not in this build", () =>
+  it.instance("the list has the adapters, the agents and the helpers; Hands comes only from its adapter", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup()
       yield* hub.run({ request: review(requester.id, directory), call: asker() })
-      const list = yield* hub.members({ tools: ["read", "task", "research"] })
+      const list = yield* hub.members({ tools: ["read", "task", "research", "computer"] })
       const byID = new Map(list.map((item) => [item.id, item]))
       expect(byID.get("vectorscope")?.reach).toBe("connect")
       expect(byID.get("vectorscope")?.activity).toMatchObject({ running: 0 })
@@ -1672,35 +1672,56 @@ describe("members", () => {
       expect(byID.get("agent:build")?.reach).toBe("ui")
       expect(byID.get("research")?.reach).toBe("research")
       expect(byID.get("tasks")?.state).toBe("ready")
-      expect(byID.get("computer")).toMatchObject({ state: "not-installed", reason: "Not in this build." })
+      // The hub under test is built over fakes (nodeWith), so Hands' adapter is not listed here
+      // (test/connect/hands.test.ts lists it), and its tool never becomes a plain tool row.
+      expect(byID.has("computer")).toBe(false)
+      expect(byID.has("tool:computer")).toBe(false)
       expect(byID.get("browser")?.state).toBe("unavailable")
       expect(byID.get("github-agent")?.state).toBe("not-installed")
       expect(byID.get("tool:read")?.reach).toBe("read")
       // Without the tool ids (outside the HTTP view), members reached through a tool are left out.
-      expect((yield* hub.members()).some((item) => item.id === "computer")).toBe(false)
+      const untooled = yield* hub.members()
+      expect(untooled.some((item) => item.id === "tasks")).toBe(false)
+      expect(untooled.some((item) => item.id === "computer")).toBe(false)
       for (const item of list) expect(item.state === "ready" || item.reason !== undefined).toBe(true)
     }),
   )
 
   it.instance("Vector Local marks cloud members and code sent past the listed model servers as off", () =>
     Effect.sync(() => {
-      const list = ConnectMembers.compose({
-        adapters: [member("vectorscope", ["read"], { sendsTo: "provider:openai" }), member("other")],
+      const hands: Connect.Member = {
+        id: "computer",
+        kind: "tool",
+        title: "Vector Hands",
+        summary: "",
+        owner: "hands",
+        place: "local",
+        state: "ready",
+        reach: "computer",
+      }
+      const sources = {
+        adapters: [member("vectorscope", ["read"], { sendsTo: "provider:openai" }), member("other"), hands],
         agents: [],
         skills: [],
         workflows: [{ name: "ship", title: "Ship", issues: [{ message: "bad stage" }] }],
         mcp: { remote: { status: "failed", error: "Off in Vector Local: not listed" }, docs: { status: "connected" } },
-        tools: ["vector_cloud", "computer"],
         githubAgent: true,
         local: true,
-      })
+      } satisfies ConnectMembers.Sources
+      const list = ConnectMembers.compose({ ...sources, tools: ["vector_cloud", "computer"] })
       const byID = new Map(list.map((item) => [item.id, item]))
       expect(byID.get("vectorscope")).toMatchObject({ state: "off" })
       expect(byID.get("vectorscope")?.reason).toContain("provider openai")
       expect(byID.get("other")?.state).toBe("ready")
       expect(byID.get("vector-cloud")?.state).toBe("off")
       expect(byID.get("github-agent")?.state).toBe("off")
+      // Vector Local leaves a local member ready; an adapter's member reached through a tool follows the registry.
       expect(byID.get("computer")).toMatchObject({ state: "ready", owner: "hands", reach: "computer" })
+      expect(byID.has("tool:computer")).toBe(false)
+      expect(
+        ConnectMembers.compose({ ...sources, tools: ["vector_cloud"] }).find((item) => item.id === "computer"),
+      ).toMatchObject({ state: "not-installed", reason: "Not in this build.", reach: "none" })
+      expect(ConnectMembers.compose(sources).some((item) => item.id === "computer")).toBe(false)
       expect(byID.get("mcp:remote")?.state).toBe("off")
       expect(byID.get("mcp:docs")?.state).toBe("ready")
       expect(byID.get("workflow:ship")?.state).toBe("unavailable")
@@ -1849,7 +1870,13 @@ describe("the layer graph", () => {
         node.dependencies.forEach(walk)
       }
       walk(ConnectHub.node)
-      for (const name of ["@vector/Permission", "@vector/Session", "@vector/SpendGuard", "@vector/RuntimeFlags"])
+      for (const name of [
+        "@vector/Permission",
+        "@vector/Session",
+        "@vector/SpendGuard",
+        "@vector/RuntimeFlags",
+        "@vector/ComputerAvailability",
+      ])
         expect(names.has(name)).toBe(true)
       for (const name of ["@vector/ToolRegistry", "@vector/SessionPrompt", "@vector/SessionProcessor"])
         expect(names.has(name)).toBe(false)

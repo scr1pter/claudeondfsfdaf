@@ -8,7 +8,8 @@ import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 // The hub gathers the sources (its adapters, the agents, the skills, the saved workflows, MCP status, the tool ids
 // in the HTTP view, and a few facts about this directory) and this file turns them into one list. Nothing here keeps
 // a copy, calls a model or reaches the network. Members that already have a tool are listed with that tool as their
-// way in; only members with no tool take hand-offs through connect (VectorScope, through its adapter).
+// way in; only members with no tool take hand-offs through connect (VectorScope, through its adapter). Hands is listed
+// by its own list-only adapter, with its tool as its way in.
 
 type MemberInput = Connect.Member
 
@@ -39,7 +40,10 @@ export type McpSource =
   | { readonly status: "needs_client_registration"; readonly error: string }
 
 export interface Sources {
-  /** What each adapter's `describe()` returned. They come first, so an adapter's member wins over any other source. */
+  /**
+   * What each adapter's `describe()` returned. They come first, so an adapter's member wins over any other source. One
+   * reached through a tool follows `tools` (`registered`).
+   */
   readonly adapters: readonly Connect.Member[]
   readonly agents: readonly AgentSource[]
   readonly skills: readonly { readonly name: string; readonly description?: string }[]
@@ -102,7 +106,7 @@ export const HELPERS = {
 
 /**
  * Tools listed under their own member, so the plain tool list does not repeat them, and connect's own tool, which is
- * how members are reached rather than a member.
+ * how members are reached rather than a member. `computer` is listed by the Hands adapter (connect/adapters/hands.ts).
  */
 const NAMED_TOOLS = new Set(["research", "browser", "computer", "vector_cloud", "task", "workflow", "skill", "connect"])
 
@@ -117,7 +121,7 @@ const decode = Schema.decodeUnknownOption(Connect.Member)
  */
 export function compose(sources: Sources): Connect.Member[] {
   const candidates: MemberInput[] = [
-    ...sources.adapters,
+    ...sources.adapters.flatMap((member) => registered(member, sources.tools)),
     ...sources.agents.filter((agent) => !agent.hidden).map(agentMember),
     ...helperMembers(sources),
     ...desktopMembers(sources),
@@ -143,6 +147,18 @@ export function gate(member: MemberInput, local: boolean): MemberInput {
   if (member.state !== "ready") return member
   const gated = ConnectPolicy.localGate({ local, place: member.place, sendsTo: member.sendsTo })
   return gated.state === "ready" ? member : { ...member, state: "off", reason: gated.reason }
+}
+
+/**
+ * An adapter's member reached through a tool (Hands, through `computer`) follows the registry as toolMembers' members
+ * do: left out without the tool ids, and not installed, with nothing to reach, when the registry does not offer its
+ * tool. Any later adapter whose `reach` is a tool id falls under this rule too.
+ */
+function registered(member: MemberInput, tools: readonly string[] | undefined): MemberInput[] {
+  if (member.reach === "connect" || member.reach === "ui" || member.reach === "none") return [member]
+  if (!tools) return []
+  if (tools.includes(member.reach)) return [member]
+  return [{ ...member, state: "not-installed", reason: "Not in this build.", reach: "none" }]
 }
 
 function agentMember(agent: AgentSource): MemberInput {
@@ -218,28 +234,6 @@ function toolMembers(sources: Sources): MemberInput[] {
       reach: "browser",
       ...offered("browser", "The browser works in the Vector desktop app."),
     },
-    has.has("computer")
-      ? {
-          id: "computer",
-          kind: "tool",
-          title: "Vector Hands",
-          summary: "The agent uses apps on this computer, with your approval.",
-          owner: "hands",
-          place: "local",
-          reach: "computer",
-          state: "ready",
-        }
-      : {
-          id: "computer",
-          kind: "tool",
-          title: "Vector Hands",
-          summary: "The agent uses apps on this computer, with your approval.",
-          owner: "hands",
-          place: "local",
-          reach: "none",
-          state: "not-installed",
-          reason: "Not in this build.",
-        },
     {
       id: "vector-cloud",
       kind: "service",
