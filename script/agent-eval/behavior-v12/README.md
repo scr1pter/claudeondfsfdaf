@@ -16,7 +16,7 @@ From the clean final checkout:
 
 ```sh
 export VECTOR_BENCH_SOURCE="$PWD"
-export E12_ARCHIVE="/Users/Krishna/.codex/benchmarks/vector-codex-20261007-7deUGe/round4/diagnosis/prompt-consolidation-proposal/behavior-evaluation-v12"
+export E12_ARCHIVE="$HOME/.codex/benchmarks/vector-codex-20261007-7deUGe/round4/diagnosis/prompt-consolidation-proposal/behavior-evaluation-v12"
 export E12_STUDY="$(mktemp -d -t vector-e12)/study"
 python3 script/agent-eval/behavior-v12/offline-proof.py
 python3 script/agent-eval/behavior-v12/prepare.py \
