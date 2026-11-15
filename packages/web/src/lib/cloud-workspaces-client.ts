@@ -186,6 +186,8 @@ export function readCloudWorkspace(value: unknown): CloudWorkspace {
     !number(value.createdAt) ||
     !number(value.updatedAt) ||
     !number(value.revision) ||
+    // Repeats parsePublicWorkspace's `usage` rule (packages/cloud-workspaces/src/protocol.ts), which client code
+    // cannot import; change both together, or a usage the gateway passes makes this throw for every workspace.
     (value.usage !== undefined &&
       (!record(value.usage) ||
         Object.keys(value.usage).some((key) => key !== "model" && key !== "time") ||

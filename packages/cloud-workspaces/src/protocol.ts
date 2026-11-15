@@ -73,6 +73,8 @@ export function parsePublicWorkspace(value: unknown): CloudWorkspace {
     value.revision < 1
   )
     return invalid()
+  // The browser repeats this `usage` rule in readCloudWorkspace (packages/web/src/lib/cloud-workspaces-client.ts),
+  // which cannot import this package; change both together, or the console hides every workspace.
   const usage = value.usage
   if (usage !== undefined) {
     if (!record(usage)) return invalid()
