@@ -1444,9 +1444,9 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   report sections need, as one schema change (addendum B §1.8 and §1.9).
   - Per PR: `added` and `deleted` (the reviewed files' lines, as
     `riskFeatures` counts them for the band, so present exactly when `band`
-    is); for a reviewed PR, `unreviewedFiles` (the state's last run) and
-    `humanComments` (issue comments, review-thread comments and reviews with a
-    body by someone other than the author and the bots).
+    is, and so is `score`); for a reviewed PR, `unreviewedFiles` (the state's
+    last run) and `humanComments` (issue comments, review-thread comments and
+    reviews with a body by someone other than the author and the bots).
   - Per unfiltered fix (`fixes`): `commit`, the fix commit's index in
     `fixCommits` (a link inside this ledger, not a new name), and `deleted`,
     which splits that fix's blamed lines on the PR into `code` (still the PR's
@@ -1476,7 +1476,14 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
     (every fix commit the scan labelled: its day, kind, deleted lines by kind,
     and at most 32 distinct hashed locations, `capped` beyond), which the
     fix entries of both labels name by `commit`. A fix commit with no deleted
-    line blames no PR, so only `fixCommits` shows it (VS-46d item 2).
+    line blames no PR, so only `fixCommits` shows it (VS-46d item 2). And
+    `rule`, VS-46c's measurement rule as the report config
+    (`MEASUREMENT_RULE`) had it at collection: the margin, the overhead the
+    verdict reads, the bootstrap seed and its replicates (100 to 10,000). The
+    report applies the sealed rule, not the config's, and says when they
+    differ. SF-03's collection sealed schema-2 ledgers without a rule: those
+    still open, under the config's rule, and the verdict section says that no
+    rule was sealed.
   - Paths and funcnames are hashed like logins, under the same per-run key
     and separated by kind. They are pseudonyms, not secrets: a PR number, its
     merge time and a fix's days name the fix commit to anyone who can read the
@@ -1496,6 +1503,10 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
     lookups the cap stopped gets no kinds or filtered entry, every PR in its
     label window is marked `filteredIncomplete`, and one more line in
     `problems` (and so in the report's Problems section) says so.
+  - A schema-2 ledger holds at most 3,000 PRs, the most the merged-PR
+    listing reads (30 pages of 100). With the replicate bound, that bounds
+    the bootstrap `open` runs on a payload anyone with the public key could
+    seal.
   - Before sealing, `collect` checks the ledger against the same schema-2
     rules `open` checks, and refuses, writing nothing, when it fails them.
 - **Outcomes.** A fix is confirmed only when its thread was resolved by
@@ -1521,25 +1532,73 @@ bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <di
   A `vectorscope-outcomes/1` ledger still opens, read-only and as v1, against
   VS-46a's own checks: `--ledger` writes it back as read, never upgraded.
 - **The report.** Internal (D12): it claims no accuracy and compares
-  nothing. Every rate is paired with cycle time over its own PRs. A rate
+  nothing outside the repository's own PRs (the risk band against size and
+  random order). Every rate is paired with cycle time over its own PRs. A rate
   needs 50 settled findings (or 50 PRs or reviews); smaller cells show counts
   and intervals. With fewer than 200 settled
   human-stratum findings on PRs merged in the 90 days before collection, only
   the severity gradient (VS-45's `severityGradient` over the confirmed-fix
   share, with a sensitivity row counting every fix) is reported. The band
-  check needs 200 matured PRs with a band; overlapping low and high intervals
-  mean `riskOf` is documented as a size, reach and sensitivity heuristic for
-  that repository, and history risk areas are never enabled there. Every v1
-  section is the same on a schema-1 and a schema-2 ledger. The schema-2
-  sections come with SF-04, SF-05a and SF-05b; until then a schema-2 report
-  adds none, and a schema-1 report adds one, "Schema 2 sections", that reads
-  "unavailable: a /1 ledger has no added or deleted counts".
+  check needs 200 matured PRs with a band. It compares the low and high
+  bands' Wilson intervals on one label: reverts within 90 days when both
+  bands expect at least 10 (a band's PRs times the rate pooled over every
+  banded matured PR), else the unfiltered follow-up fix over the PRs not
+  reverted, flagged SZZ-based, size-biased and unaudited. Under 10 expected
+  positives in either band it reads `underpowered`, with no verdict. Overlap
+  alone is not a verdict. Every v1 section is the same on a schema-1 and a
+  schema-2 ledger: the band check reads v1 fields only.
+- **The measurement (VS-46c).** A schema-2 ledger in the full decision gets
+  five more sections. The 200-finding volume rule applies, so a schema-2
+  report in the gradient-only decision adds none.
+  - "Outcome base rates" and "Minimum detectable effect" come before the
+    severity gradient. They cover the matured PRs with a band: the
+    base-branch subjects (fix-prefixed and revert-prefixed shares of
+    first-parent commits), reverts over every PR, the unfiltered fix over
+    those not reverted, the filtered fix over those not reverted and not
+    marked `filteredIncomplete` (how many were marked is printed), and each
+    label's expected positives in the low and high bands. Reverts decide when
+    both bands expect at least 10. Otherwise the filtered label decides,
+    flagged SZZ-based, size-biased and unaudited (until VS-46d's audit runs).
+    The minimum detectable effect (two-sided 95%, 80% power) is in rate
+    points: low against high, and the moved PRs against the label's rate.
+  - "Capture against size", after the band table. For the top 10%, 20% and
+    50% of PRs it ranks by final band (ties by score, then PR number)
+    against added plus deleted lines (then PR number) and against a random
+    order's expectation. It gives the positives captured, their share and
+    the share of changed lines, and a seeded paired bootstrap of band minus
+    size in capture-share points (2.5th to 97.5th percentile; replicates with
+    no positive are skipped and counted, and a label with no PR runs none).
+    It states what this tests: only the
+    floors (sensitive, deletion-heavy; the wide-reach floor cannot fire
+    without dependents), the test-only rule and the tie-breakers. It also
+    counts the PRs a floor or the test-only rule moved: their band is not the
+    one their score gives at the default cutpoints, so tie-breaker reordering
+    is compared but not counted. The low-band miss rate follows, and
+    Effort@20% reads unavailable.
+  - "Measurement verdict", on the deciding label at the rule's overhead. A
+    deciding filtered label is flagged SZZ-based, size-biased and unaudited
+    in the verdict line itself and in its capture table's heading.
+    `underpowered` comes first: under 200 PRs, under 10 expected positives in
+    the low or high band or among the moved PRs, or no interval. Then
+    `beats-size` when the interval lies above 0, `no-better-than-size` when it
+    lies wholly below the rule's margin, and `undecided` otherwise.
+    Underpowered and undecided mean not yet. No verdict decides history risk
+    areas: VS-46 item 6's gate stands.
+  - "Depth and reach": outcomes are a monitor, not a gate, for depth and lens
+    decisions. No depth row is shown until VS-46 item 7's assignment exists,
+    and then only with at least 10 expected positives per depth, each row
+    with its MDE. Reach is untested, because the band is computed without
+    dependents.
+  - A schema-1 ledger prints each of the five headings with
+    "unavailable: a /1 ledger has no added or deleted counts", whatever the
+    volume decision. The spec withholds them for /1; for the base rates the
+    revert and fix fields exist, but the subjects and sizes do not.
 - **Deferred.** Proxy validation (VS-46b), history risk areas and the depth
   assignment (runner wiring and Q30), and the re-review share of spend (the
-  state keeps only a PR's total). The VS-46c and VS-46d report sections
-  (SF-04, SF-05a, SF-05b). Schema 2 does not carry per-file fix data for
-  Effort@20% or a per-finding dismissal reason, so those sections read
-  unavailable on it. Run on a real repository only after Q30.
+  state keeps only a PR's total). VS-46d's report sections (SF-05a, SF-05b).
+  Depth rows wait on VS-46 item 7. Schema 2 does not carry per-file fix data
+  for Effort@20% or a per-finding dismissal reason, so those read unavailable
+  on it; adding either is a /3. Run on a real repository only after Q30.
 
 The tests use a fake GitHub client and git repositories they build, and
 spawn no `gh`:

@@ -6,6 +6,7 @@ import { parseArgs } from "node:util"
 import { Option, Schema } from "effect"
 import { fromGitHubFiles, parseUnifiedDiff, type GitHubPrFile } from "../../packages/core/src/review/diff"
 import {
+  DEFAULT_CONFIDENCE,
   DEFAULT_SLACK,
   proportion,
   severityGradient,
@@ -18,6 +19,7 @@ import {
   FIX_SUBJECT,
   REVERT_SUBJECT,
   RISK_BANDS,
+  RISK_CUTPOINTS,
   riskFeatures,
   riskOf,
   type RiskBand,
@@ -58,7 +60,8 @@ import { OUTCOME_LEDGER_FILE, publicKey, PUBLIC_KEY_ENV, seal, unseal, type Seal
 // The owner runs it only after Q30 is answered, on a repository the owner nominates, with `gh` signed in and a full
 // local clone. It makes no model call and has no key of its own. It reads GitHub with GET requests and two fixed
 // GraphQL queries only, and git with read-only subcommands only. Nothing it collects is ever sent to a model, a tool,
-// retrieval or Brain (I-13), and its results are internal (D12): the report claims no accuracy and compares nothing.
+// retrieval or Brain (I-13), and its results are internal (D12): the report claims no accuracy and compares nothing
+// outside the repository's own PRs (the risk band against size and random order, VS-46c).
 //
 //   collect  Reads one repository's PRs merged in a window and writes only <out>/vectorscope-outcomes.sealed.json,
 //            sealed to PUBLIC_KEY_ENV. It refuses to start in GitHub Actions, whose logs are public, and checks the
@@ -71,7 +74,9 @@ import { OUTCOME_LEDGER_FILE, publicKey, PUBLIC_KEY_ENV, seal, unseal, type Seal
 // -M and -C over code lines only) beside the unfiltered one, the kinds of each fix's blamed lines, hashed fix
 // locations, the same-agent flag from the trusted record, and the base branch's subject counts and fix commits.
 // Collection writes only schema 2. `open` still reads a schema-1 ledger, read-only and as v1: it is never upgraded, and
-// every schema-2 section reads "unavailable".
+// every schema-2 section reads "unavailable". Collection also seals VS-46c's measurement rule into the ledger, so the
+// report applies the rule that was fixed before any outcome was seen; a schema-2 ledger SF-03's collection sealed has
+// none, and its report applies the report config's rule and says so.
 
 export const LEDGER_SCHEMA = "vectorscope-outcomes/2"
 export const LEDGER_SCHEMA_V1 = "vectorscope-outcomes/1"
@@ -93,8 +98,35 @@ export const MIN_PULLS = 50
 // Fewer settled human-stratum findings than this, on PRs merged in the 90 days before collection, gives the severity
 // gradient only.
 export const MIN_VOLUME = 200
-// The band-separation check needs this many matured PRs with a band.
+// The band-separation check needs this many matured PRs with a band, and so does the measurement verdict.
 export const MIN_MATURED = 200
+// VS-46c (addendum B §1.8 item 1): a comparison with fewer expected positives than this in either compared group (the
+// group's PRs times the label's rate, pooled over every band) is underpowered and gives no verdict.
+export const MIN_EXPECTED = 10
+// The top shares of matured PRs at which capture is compared (item 4).
+export const CAPTURE_OVERHEADS = [0.1, 0.2, 0.5] as const
+// The normal quantiles behind the minimum detectable effect: two-sided at DEFAULT_CONFIDENCE (0.95), the level the
+// bootstrap interval uses too (a test holds the two equal), and 80% power. Core's normalQuantile is not exported.
+export const Z_ALPHA = 1.959963984540054
+export const Z_POWER = 0.8416212335729143
+
+// VS-46c's measurement rule (item 6): pre-registered here, in the report config, before any schema-2 ledger is
+// collected, and sealed into each ledger at collection. The report applies the ledger's own rule, not this one, and says
+// when the two differ. A schema-2 ledger SF-03's collection sealed carries no rule: the report applies this one to it,
+// and says so.
+export interface MeasurementRule {
+  margin: number // no-better-than-size: the band-minus-size interval lies wholly below this, in capture-share points
+  overhead: (typeof CAPTURE_OVERHEADS)[number] // the top share the verdict reads
+  seed: number // the bootstrap's seed, so a rerun gives the same intervals
+  replicates: number
+}
+export const MEASUREMENT_RULE: Readonly<MeasurementRule> = Object.freeze({
+  margin: 0.05,
+  overhead: 0.2,
+  seed: 46_003,
+  replicates: 2000,
+})
+export type MeasurementVerdict = "underpowered" | "beats-size" | "no-better-than-size" | "undecided"
 // How far after `now` a ledger's collection time may be and still open: the clock at collection against this one.
 export const CLOCK_SKEW_MS = 300_000
 // At most this many GitHub requests per collection. A PR that cannot be read within it is marked truncated.
@@ -148,6 +180,8 @@ export type Resolver = (typeof RESOLVERS)[number]
 const DAY = 86_400_000
 const PER_PAGE = 100
 const MAX_PULL_PAGES = 30
+// The most PRs the merged-PR listing reads, and so the most a schema-2 ledger may hold: its decoder checks it.
+export const MAX_LEDGER_PULLS = MAX_PULL_PAGES * PER_PAGE
 const MAX_LIST_PAGES = 30
 const MAX_FILE_PAGES = 30 // GitHub lists at most 3,000 files of a PR
 const MAX_COMMITS = 250 // and at most 250 commits
@@ -236,6 +270,7 @@ export interface OutcomeLedger extends Omit<OutcomeLedgerV1, "schema" | "pulls">
   pulls: LedgerPull[]
   subjects: LedgerSubjects
   fixCommits: LedgerFixCommit[]
+  rule?: MeasurementRule // MEASUREMENT_RULE as it was at collection; absent from a ledger SF-03's collection sealed
 }
 
 // The base branch's first-parent commits in the merge window, and how many of their subjects are fix-prefixed or
@@ -920,6 +955,7 @@ export async function collect(input: CollectInput, deps: CollectDeps): Promise<O
     findings: reads.flatMap((read) => ledgerFindings(read, ctx)),
     subjects: subjectCounts(history, { since: input.since, until: input.until }),
     fixCommits: scanned.fixes.map((fix) => ledgerFixCommit(fix, deps.key)),
+    rule: { ...MEASUREMENT_RULE },
     problems,
   }
 }
@@ -2024,7 +2060,8 @@ const LedgerPullEntry = Schema.Struct({
   Schema.makeFilter((pull) => {
     const flags = [...(pull.fixes ?? []), ...(pull.fixesFiltered ?? [])].map((fix) => fix.sameAgent)
     return (
-      // Line counts come with the band, and the two labels and the incompleteness mark come together.
+      // Line counts and the score come with the band, and the two labels and the incompleteness mark come together.
+      (pull.band !== undefined) === (pull.score !== undefined) &&
       (pull.band !== undefined) === (pull.added !== undefined) &&
       (pull.band !== undefined) === (pull.deleted !== undefined) &&
       (pull.fixes !== undefined) === (pull.fixesFiltered !== undefined) &&
@@ -2043,7 +2080,9 @@ const LedgerPullEntry = Schema.Struct({
 )
 const LedgerEntries = Schema.Struct({
   ...LedgerEntriesV1.fields,
-  pulls: Schema.Array(LedgerPullEntry),
+  // With the replicate bound below, this bounds the bootstrap `open` runs (replicates × PRs per label) for a payload
+  // anyone with the public key could seal.
+  pulls: Schema.Array(LedgerPullEntry).check(Schema.makeFilter((pulls) => pulls.length <= MAX_LEDGER_PULLS)),
   subjects: Schema.Struct({ commits: Count, fix: Count, revert: Count }).check(
     Schema.makeFilter((subjects) => subjects.fix + subjects.revert <= subjects.commits),
   ),
@@ -2057,6 +2096,16 @@ const LedgerEntries = Schema.Struct({
       deleted: Schema.Struct({ code: Count, blank: Count, comment: Count }),
       locations: Schema.Array(Location).check(Schema.makeFilter((locations) => locations.length <= MAX_FIX_LOCATIONS)),
       capped: Schema.optionalKey(Schema.Literal(true)),
+    }),
+  ),
+  // The sealed measurement rule, checked whenever it is present. SF-03's collection sealed /2 ledgers without one, and
+  // those still open: the report applies MEASUREMENT_RULE to them and says so.
+  rule: Schema.optionalKey(
+    Schema.Struct({
+      margin: Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThan(1)),
+      overhead: Schema.Literals(CAPTURE_OVERHEADS),
+      seed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(0xffffffff)),
+      replicates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(100), Schema.isLessThanOrEqualTo(10_000)),
     }),
   ),
 }).check(
@@ -2159,20 +2208,88 @@ export interface OutcomeReport {
     spendShare: "not recorded"
     cycle: Cycle
   }
-  bands?: { rows: Record<RiskBand, BandRow>; separation: "too-few" | "overlap" | "separated" }
+  bands?: {
+    rows: Record<RiskBand, BandRow>
+    // Read from v1 fields only, so a /1 and a /2 ledger give the same section. Item 2's label: reverts within 90 days
+    // when both the low and the high band expect at least MIN_EXPECTED, else VS-46a's unfiltered fix label.
+    separation: "too-few" | "underpowered" | "overlap" | "separated"
+    label: "revert" | "unfiltered"
+    // A band's PRs times the label's rate pooled over every banded matured PR (for the fix label, over those not
+    // reverted within 90 days).
+    expected: Record<"revert" | "unfiltered", { low: number; high: number }>
+  }
+  // VS-46c's measurement: a schema-2 ledger in the full decision only.
+  measurement?: Measurement
   split: Record<"agent" | "agent-signal" | "bulk", Record<Outcome, number>>
   cycle: { n: number; p50: number; p90: number } | null
-  // A schema-1 ledger only: it has none of the fields the schema-2 sections read, so each says so. SF-04 and SF-05 add
-  // those sections.
+  // A schema-1 ledger only: it has none of the fields the schema-2 sections read, so each says so, whatever the volume
+  // decision. SF-05a and SF-05b add their own sections to that list.
   unavailable?: typeof V1_UNAVAILABLE
   problems: string[]
+}
+
+// One side of a capture comparison: the top PRs in one order, the positives among them, and their shares.
+export interface CaptureSide {
+  captured: number
+  positives: number | null // the share of all positives, or null with none
+  lines: number | null // the share of all changed lines (added plus deleted), or null with none
+  cycle: Cycle
+}
+
+export interface CaptureRow {
+  overhead: (typeof CAPTURE_OVERHEADS)[number]
+  pulls: number // round(overhead × PRs), at least 1, and 0 with no PR
+  band: CaptureSide // ranked by final band, ties by score, then PR number
+  size: CaptureSide // ranked by added plus deleted lines, then PR number
+  random: number | null // a random order's expected share of positives: pulls over PRs
+  difference: number | null // band less size, in shares of all positives (capture-share points)
+  interval: [number, number] | null // the paired bootstrap's percentile interval, at DEFAULT_CONFIDENCE
+}
+
+// One label over its population: matured PRs with a band, less (for the filtered label) those reverted within 90 days
+// and those marked filteredIncomplete. Rates and minimum detectable effects are in rate points.
+export interface LabelMeasure {
+  pulls: number
+  positives: number
+  rate: number | null
+  low: { pulls: number; expected: number }
+  high: { pulls: number; expected: number }
+  mde: number | null // low against high
+  // The PRs a floor or the test-only rule put in another band than their score's own (likelyBand), the positives among
+  // them, their expected positives at the label's rate, and the MDE of their rate against that rate.
+  floorMoved: { pulls: number; positives: number; expected: number; mde: number | null }
+  capture: CaptureRow[] // one per CAPTURE_OVERHEADS
+  ran: number // the bootstrap replicates run: the rule's count, or 0 with no PR
+  replicates: number // those that held a positive; the rest were skipped
+  lowMiss: { positives: Proportion; pulls: number | null; lines: number | null } // the low band's shares
+}
+
+export interface Measurement {
+  rule: MeasurementRule // the ledger's sealed rule, or MEASUREMENT_RULE when it has none: the one applied
+  sealed: boolean // the ledger carries a rule (SF-03's collection sealed none)
+  differs: boolean // the sealed rule is not this source's MEASUREMENT_RULE
+  base: {
+    pulls: number // matured PRs with a band that no read cut short
+    cycle: Cycle
+    subjects: { commits: number; fix: Proportion; revert: Proportion } // over the base branch's first-parent commits
+    reverted: Record<(typeof LABEL_WINDOWS)[number], Proportion> // over every one of those PRs
+    fixed: Record<(typeof LABEL_WINDOWS)[number], Proportion> // the unfiltered label, over those not reverted in 90 days
+    filtered: Record<(typeof LABEL_WINDOWS)[number], Proportion> // and over those not marked filteredIncomplete either
+    filteredIncomplete: number // not-reverted PRs the mark left out of the filtered rates
+  }
+  labels: Record<"revert" | "filtered", LabelMeasure>
+  deciding: "revert" | "filtered"
+  verdict: MeasurementVerdict
+  reasons: string[] // why it is underpowered, in fixed wording
 }
 
 /**
  * The internal report (D12). Truncated PRs are left out of every count but the totals. Rates come from settled
  * human-stratum findings; a cell over fewer than MIN_SETTLED settled findings, or MIN_PULLS PRs or reviews, keeps its
  * count and interval and shows no rate. Below MIN_VOLUME settled human-stratum findings on PRs merged in the 90 days
- * before collection, only the gradient, its sensitivity row, the split and the counts are reported.
+ * before collection, only the gradient, its sensitivity row, the split and the counts are reported. In the full
+ * decision a schema-2 ledger also gets VS-46c's measurement, under the rule sealed in it (MEASUREMENT_RULE when it has
+ * none); it never changes the ledger.
  */
 export function outcomeReport(ledger: OutcomeLedger | OutcomeLedgerV1): OutcomeReport {
   // Every v1 section reads only v1 fields, whichever schema the ledger has.
@@ -2333,6 +2450,7 @@ export function outcomeReport(ledger: OutcomeLedger | OutcomeLedgerV1): OutcomeR
       cycle: cycleOf(reviewed.map((pull) => pull.number)),
     },
     bands: bandsOf(matured, cycleOf),
+    ...(ledger.schema === LEDGER_SCHEMA ? { measurement: measurementOf(ledger, cycleOf) } : {}),
   }
 }
 
@@ -2340,48 +2458,359 @@ function bandsOf(
   matured: readonly LedgerPullV1[],
   cycleOf: (numbers: Iterable<number>) => Cycle,
 ): NonNullable<OutcomeReport["bands"]> {
-  const reverted = (pull: LedgerPullV1, days: number) => pull.revertedDays !== undefined && pull.revertedDays <= days
-  const fixed = (pull: LedgerPullV1, days: number) => (pull.fixes ?? []).some((fix) => fix.days <= days)
   const rows = Object.fromEntries(
     RISK_BANDS.map((band) => {
       const inBand = matured.filter((pull) => pull.band === band)
       const clean = inBand.filter((pull) => !reverted(pull, MATURITY_DAYS))
-      const windows = (test: (pull: LedgerPullV1, days: number) => boolean, group: readonly LedgerPullV1[]) =>
-        Object.fromEntries(
-          LABEL_WINDOWS.map((days) => [
-            days,
-            cell(group.filter((pull) => test(pull, days)).length, group.length, MIN_PULLS),
-          ]),
-        ) as Record<(typeof LABEL_WINDOWS)[number], Proportion>
       return [
         band,
         {
           pulls: inBand.length,
-          reverted: windows(reverted, inBand),
-          fixed: windows(fixed, clean),
+          reverted: windows(inBand, reverted),
+          fixed: windows(clean, fixed),
           cycle: cycleOf(inBand.map((pull) => pull.number)),
         },
       ]
     }),
   ) as Record<RiskBand, BandRow>
   const banded = matured.filter((pull) => pull.band !== undefined)
-  // Reverted or fixed within 90 days, over every matured PR of the band, with Wilson intervals.
+  // Item 2's two v1 labels: a revert within 90 days over every banded PR, and a v1 fix within 90 days over those not
+  // reverted, as the table's fix rates count it.
+  const labels = {
+    revert: { pulls: banded, positive: (pull: LedgerPullV1) => reverted(pull, MATURITY_DAYS) },
+    unfiltered: {
+      pulls: banded.filter((pull) => !reverted(pull, MATURITY_DAYS)),
+      positive: (pull: LedgerPullV1) => fixed(pull, MATURITY_DAYS),
+    },
+  }
+  const expected = {
+    revert: expectedIn(labels.revert.pulls, labels.revert.positive),
+    unfiltered: expectedIn(labels.unfiltered.pulls, labels.unfiltered.positive),
+  }
+  const label = expected.revert.low >= MIN_EXPECTED && expected.revert.high >= MIN_EXPECTED ? "revert" : "unfiltered"
+  const chosen = labels[label]
+  // The label's positives over the band's PRs in its population, with Wilson intervals.
   const interval = (band: RiskBand) => {
-    const group = banded.filter((pull) => pull.band === band)
-    return proportion(
-      group.filter((pull) => reverted(pull, MATURITY_DAYS) || fixed(pull, MATURITY_DAYS)).length,
-      group.length,
-    ).interval
+    const group = chosen.pulls.filter((pull) => pull.band === band)
+    return proportion(group.filter(chosen.positive).length, group.length).interval
   }
   const low = interval("low")
   const high = interval("high")
   const separation =
-    banded.length < MIN_MATURED || !low || !high
+    banded.length < MIN_MATURED ||
+    !banded.some((pull) => pull.band === "low") ||
+    !banded.some((pull) => pull.band === "high")
       ? "too-few"
-      : low[1] >= high[0] && high[1] >= low[0]
-        ? "overlap"
-        : "separated"
-  return { rows, separation }
+      : expected[label].low < MIN_EXPECTED || expected[label].high < MIN_EXPECTED || !low || !high
+        ? "underpowered"
+        : low[1] >= high[0] && high[1] >= low[0]
+          ? "overlap"
+          : "separated"
+  return { rows, separation, label, expected }
+}
+
+// VS-46a's two v1 labels within `days` of the merge: reverted on the base branch, and fixed on the unfiltered label.
+function reverted(pull: LedgerPullV1, days: number) {
+  return pull.revertedDays !== undefined && pull.revertedDays <= days
+}
+
+function fixed(pull: LedgerPullV1, days: number) {
+  return (pull.fixes ?? []).some((fix) => fix.days <= days)
+}
+
+// A label's share of `group` in each window, with no rate shown under MIN_PULLS PRs.
+function windows<T extends LedgerPullV1>(group: readonly T[], test: (pull: T, days: number) => boolean) {
+  return Object.fromEntries(
+    LABEL_WINDOWS.map((days) => [days, cell(group.filter((pull) => test(pull, days)).length, group.length, MIN_PULLS)]),
+  ) as Record<(typeof LABEL_WINDOWS)[number], Proportion>
+}
+
+// A band's expected positives (item 1): its PRs times the label's rate pooled over every band's PRs.
+function expectedIn<T extends { band?: RiskBand }>(pulls: readonly T[], positive: (pull: T) => boolean) {
+  const positives = pulls.filter(positive).length
+  const of = (band: RiskBand) => expectedOf(pulls.filter((pull) => pull.band === band).length, positives, pulls.length)
+  return { low: of("low"), high: of("high") }
+}
+
+// n PRs' expected positives at the rate `positives` over `total`, as n × positives / total so whole counts stay exact.
+function expectedOf(n: number, positives: number, total: number) {
+  return total ? (n * positives) / total : 0
+}
+
+// A matured PR with a band, as VS-46c ranks it.
+interface Ranked {
+  pull: LedgerPull
+  band: RiskBand
+  score: number
+  lines: number // added plus deleted, as riskFeatures counted them for riskOf
+  moved: boolean // its band is not likelyBand(score): a floor or the test-only rule moved it
+}
+
+/**
+ * VS-46c's measurement (addendum B §1.8 items 1 to 7) under the rule sealed in the ledger, or under MEASUREMENT_RULE
+ * for a ledger SF-03's collection sealed without one. Its PRs are the matured ones
+ * with a band that no read cut short: in a collected ledger, every matured PR that is not truncated. Each label is
+ * measured on its own population:
+ * - revert: every such PR, positive when reverted within 90 days;
+ * - filtered: those not reverted within 90 days and not marked filteredIncomplete, positive with a fixesFiltered entry
+ *   within 90 days (VS-46d's label, primary on schema 2).
+ * Reverts decide when both the low and the high band expect at least MIN_EXPECTED reverts; the filtered label decides
+ * otherwise. The verdict reads the deciding label's capture at the rule's overhead.
+ */
+function measurementOf(ledger: OutcomeLedger, cycleOf: (numbers: Iterable<number>) => Cycle): Measurement {
+  const rule = ledger.rule ?? MEASUREMENT_RULE
+  const ranked = ledger.pulls.flatMap((pull): Ranked[] =>
+    !pull.truncated && pull.matured && pull.band !== undefined && pull.score !== undefined
+      ? [
+          {
+            pull,
+            band: pull.band,
+            score: pull.score,
+            lines: (pull.added ?? 0) + (pull.deleted ?? 0),
+            moved: pull.band !== likelyBand(pull.score),
+          },
+        ]
+      : [],
+  )
+  const filtered = (pull: LedgerPull, days: number) => (pull.fixesFiltered ?? []).some((fix) => fix.days <= days)
+  const kept = ranked.filter((entry) => !reverted(entry.pull, MATURITY_DAYS))
+  const complete = kept.filter((entry) => entry.pull.filteredIncomplete !== true)
+  const labels = {
+    revert: labelMeasure(ranked, (entry) => reverted(entry.pull, MATURITY_DAYS), rule, cycleOf),
+    filtered: labelMeasure(complete, (entry) => filtered(entry.pull, MATURITY_DAYS), rule, cycleOf),
+  }
+  const deciding =
+    labels.revert.low.expected >= MIN_EXPECTED && labels.revert.high.expected >= MIN_EXPECTED ? "revert" : "filtered"
+  const decided = labels[deciding]
+  const interval = decided.capture.find((row) => row.overhead === rule.overhead)?.interval ?? null
+  const reasons = [
+    ranked.length < MIN_MATURED ? `fewer than ${MIN_MATURED} matured PRs with a band (${ranked.length})` : undefined,
+    decided.low.expected < MIN_EXPECTED || decided.high.expected < MIN_EXPECTED
+      ? `fewer than ${MIN_EXPECTED} expected positives in the low or the high band`
+      : undefined,
+    decided.floorMoved.expected < MIN_EXPECTED
+      ? `fewer than ${MIN_EXPECTED} expected positives among the PRs a floor or the test-only rule moved`
+      : undefined,
+    interval ? undefined : "no bootstrap interval: no replicate held a positive",
+  ].filter((reason) => reason !== undefined)
+  return {
+    rule: { ...rule },
+    sealed: ledger.rule !== undefined,
+    differs: (["margin", "overhead", "seed", "replicates"] as const).some(
+      (name) => rule[name] !== MEASUREMENT_RULE[name],
+    ),
+    base: {
+      pulls: ranked.length,
+      cycle: cycleOf(ranked.map((entry) => entry.pull.number)),
+      subjects: {
+        commits: ledger.subjects.commits,
+        fix: cell(ledger.subjects.fix, ledger.subjects.commits, MIN_PULLS),
+        revert: cell(ledger.subjects.revert, ledger.subjects.commits, MIN_PULLS),
+      },
+      reverted: windows(
+        ranked.map((entry) => entry.pull),
+        reverted,
+      ),
+      fixed: windows(
+        kept.map((entry) => entry.pull),
+        fixed,
+      ),
+      filtered: windows(
+        complete.map((entry) => entry.pull),
+        filtered,
+      ),
+      filteredIncomplete: kept.length - complete.length,
+    },
+    labels,
+    deciding,
+    verdict:
+      reasons.length || !interval
+        ? "underpowered"
+        : interval[0] > 0
+          ? "beats-size"
+          : interval[1] < rule.margin
+            ? "no-better-than-size"
+            : "undecided",
+    reasons,
+  }
+}
+
+// The band the likelihood score alone gives, as riskOf reads it at the default cutpoints readPull uses: a score exactly
+// at a cutpoint takes the lower band. A PR whose final band differs was moved by a floor or by the test-only rule.
+export function likelyBand(score: number): RiskBand {
+  return score > RISK_CUTPOINTS.high ? "high" : score > RISK_CUTPOINTS.medium ? "medium" : "low"
+}
+
+function labelMeasure(
+  entries: readonly Ranked[],
+  positive: (entry: Ranked) => boolean,
+  rule: MeasurementRule,
+  cycleOf: (numbers: Iterable<number>) => Cycle,
+): LabelMeasure {
+  const flags = entries.map(positive)
+  const positives = flags.filter(Boolean).length
+  const rate = entries.length ? positives / entries.length : null
+  const inBand = (band: RiskBand) => entries.filter((entry) => entry.band === band)
+  const low = inBand("low")
+  const high = inBand("high")
+  const moved = entries.filter((entry) => entry.moved)
+  const lines = (group: readonly Ranked[]) => group.reduce((sum, entry) => sum + entry.lines, 0)
+  const total = lines(entries)
+  // Item 4's two orders, as indices into `entries`: the final band, ties broken by score, then PR number; and added
+  // plus deleted lines (the order of log(added + deleted)), then PR number.
+  const indices = entries.map((_, index) => index)
+  const byBand = indices.toSorted(
+    (a, b) =>
+      RISK_BANDS.indexOf(entries[b].band) - RISK_BANDS.indexOf(entries[a].band) ||
+      entries[b].score - entries[a].score ||
+      entries[a].pull.number - entries[b].pull.number,
+  )
+  const bySize = indices.toSorted(
+    (a, b) => entries[b].lines - entries[a].lines || entries[a].pull.number - entries[b].pull.number,
+  )
+  const tops = CAPTURE_OVERHEADS.map((overhead) => topOf(overhead, entries.length))
+  const boot = bootstrap([byBand, bySize], flags, tops, rule)
+  const side = (order: readonly number[], n: number): CaptureSide => {
+    const top = order.slice(0, n).map((index) => entries[index])
+    const captured = top.filter(positive).length
+    return {
+      captured,
+      positives: positives ? captured / positives : null,
+      lines: total ? lines(top) / total : null,
+      cycle: cycleOf(top.map((entry) => entry.pull.number)),
+    }
+  }
+  return {
+    pulls: entries.length,
+    positives,
+    rate,
+    low: { pulls: low.length, expected: expectedOf(low.length, positives, entries.length) },
+    high: { pulls: high.length, expected: expectedOf(high.length, positives, entries.length) },
+    mde: minimumDetectable(rate, [low.length, high.length]),
+    floorMoved: {
+      pulls: moved.length,
+      positives: moved.filter(positive).length,
+      expected: expectedOf(moved.length, positives, entries.length),
+      mde: minimumDetectable(rate, [moved.length]),
+    },
+    capture: CAPTURE_OVERHEADS.map((overhead, index) => {
+      const n = tops[index]
+      const band = side(byBand, n)
+      const size = side(bySize, n)
+      return {
+        overhead,
+        pulls: n,
+        band,
+        size,
+        random: entries.length ? n / entries.length : null,
+        difference: positives ? (band.captured - size.captured) / positives : null,
+        interval: boot.intervals[index],
+      }
+    }),
+    ran: boot.ran,
+    replicates: boot.held,
+    lowMiss: {
+      positives: cell(low.filter(positive).length, positives, MIN_PULLS),
+      pulls: entries.length ? low.length / entries.length : null,
+      lines: total ? lines(low) / total : null,
+    },
+  }
+}
+
+// The top round(overhead × n) PRs, at least one, of n.
+function topOf(overhead: number, n: number) {
+  return n ? Math.max(1, Math.round(overhead * n)) : 0
+}
+
+// Item 3: the smallest difference in rate that a two-sided test at DEFAULT_CONFIDENCE detects with 80% power, between
+// groups of these sizes at this rate (one size: a group against the rate itself), in rate points. Null with nothing to
+// detect it with.
+function minimumDetectable(rate: number | null, sizes: readonly number[]) {
+  if (rate === null || rate <= 0 || rate >= 1 || sizes.some((n) => n <= 0)) return null
+  return (Z_ALPHA + Z_POWER) * Math.sqrt(rate * (1 - rate) * sizes.reduce((sum, n) => sum + 1 / n, 0))
+}
+
+/**
+ * Item 4's seeded paired bootstrap of the band-minus-size difference. Each replicate draws the PRs (indices into
+ * `flags`, which says which are positive) with replacement once, and both orders take their top `tops[k]` draws from
+ * that same resample, so the pair shares every draw. A replicate's difference is the positives the band order
+ * captures less the size order's, over the resample's positives; a replicate with no positive is skipped and counted.
+ * With no PR it runs no replicate.
+ * Each interval is the percentile interval (type 7) at DEFAULT_CONFIDENCE. The generator starts from the rule's seed on
+ * every call, so a rerun gives the same intervals.
+ */
+function bootstrap(
+  orders: readonly [readonly number[], readonly number[]],
+  flags: readonly boolean[],
+  tops: readonly number[],
+  rule: MeasurementRule,
+) {
+  const n = flags.length
+  if (!n) return { intervals: tops.map(() => null), ran: 0, held: 0 }
+  const random = seeded(rule.seed)
+  const differences = tops.map(() => new Float64Array(rule.replicates))
+  const counts = new Uint32Array(n)
+  // Loops, not array methods: this body runs replicates × PRs times.
+  let held = 0
+  for (let replicate = 0; replicate < rule.replicates; replicate++) {
+    counts.fill(0)
+    for (let draw = 0; draw < n; draw++) {
+      const index = Math.floor(random() * n)
+      counts[index] = counts[index] + 1
+    }
+    let positives = 0
+    for (let index = 0; index < n; index++) if (flags[index]) positives += counts[index]
+    if (!positives) continue
+    const band = capturedAt(orders[0], flags, counts, tops)
+    const size = capturedAt(orders[1], flags, counts, tops)
+    for (let k = 0; k < tops.length; k++) differences[k][held] = (band[k] - size[k]) / positives
+    held++
+  }
+  return {
+    intervals: differences.map((values) => percentileInterval(values.subarray(0, held))),
+    ran: rule.replicates,
+    held,
+  }
+}
+
+// The positives among an order's first `tops[k]` draws of a resample, where `counts` holds each PR's draws: a PR drawn
+// c times fills c places, so a threshold can take only part of them.
+function capturedAt(order: readonly number[], flags: readonly boolean[], counts: Uint32Array, tops: readonly number[]) {
+  const found = tops.map(() => 0)
+  const last = Math.max(0, ...tops)
+  let taken = 0
+  for (const index of order) {
+    if (taken >= last) break
+    const count = counts[index]
+    if (!count) continue
+    if (flags[index]) for (let k = 0; k < tops.length; k++) found[k] += Math.max(0, Math.min(count, tops[k] - taken))
+    taken += count
+  }
+  return found
+}
+
+function percentileInterval(values: Float64Array): [number, number] | null {
+  if (!values.length) return null
+  const sorted = values.toSorted()
+  const tail = (1 - DEFAULT_CONFIDENCE) / 2
+  const at = (q: number) => {
+    const h = (sorted.length - 1) * q
+    const below = Math.floor(h)
+    const lower = sorted[below]
+    return lower + (h - below) * (sorted[Math.min(below + 1, sorted.length - 1)] - lower)
+  }
+  return [at(tail), at(1 - tail)]
+}
+
+// mulberry32: a small seeded generator, so the bootstrap is reproducible with no dependency and no global state.
+function seeded(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    const t = Math.imul(state ^ (state >>> 15), state | 1)
+    const u = t ^ (t + Math.imul(t ^ (t >>> 7), t | 61))
+    return ((u ^ (u >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 // The share of `fixes` among `among`, by severity, through VS-45's severityGradient. A share over fewer than
@@ -2441,7 +2870,7 @@ export function renderOutcomes(report: OutcomeReport): string {
       .join(", ") || "none"
   const cycle = (value: Cycle) => (value ? `${hours(value.p50)} / ${hours(value.p90)}` : "n/a")
   const paired = (value: Cycle) => `cycle p50 / p90 ${cycle(value)} h`
-  const lines = [
+  const header = [
     "# Outcome ledger report",
     "",
     `Internal measurement: no accuracy or comparative claim (D12). Sealed; expires ${report.expires.slice(0, 10)}.`,
@@ -2451,6 +2880,8 @@ export function renderOutcomes(report: OutcomeReport): string {
     `- Findings: ${report.findings.total}. By stratum: ${counts(report.findings.byStratum)}. By outcome: ${counts(report.findings.byOutcome)}.`,
     `- Volume: ${report.volume.settled90} settled human-stratum findings on PRs merged in the ${MATURITY_DAYS} days before collection; ${report.volume.decision === "full" ? "the full report follows" : `fewer than ${MIN_VOLUME}, so only the severity gradient is reported`}.`,
     `- Cycle time (hours, p50 / p90): ${report.cycle ? `${cycle(report.cycle)} over ${report.cycle.n} PRs` : "n/a"}. Every rate below carries its own.`,
+  ]
+  const lines = [
     "",
     "## Severity gradient",
     "",
@@ -2499,20 +2930,173 @@ export function renderOutcomes(report: OutcomeReport): string {
           return `| ${band} | ${row.pulls} | ${formatCell(row.reverted[30])} | ${formatCell(row.reverted[90])} | ${formatCell(row.fixed[30])} | ${formatCell(row.fixed[90])} | ${cycle(row.cycle)} |`
         }),
         "",
-        `A fix rate counts only matured PRs not reverted within ${MATURITY_DAYS} days: a backed-out PR is neither positive nor clean. Separation: ${report.bands!.separation}.${
-          report.bands!.separation === "overlap"
-            ? " The low and high bands' intervals overlap: document riskOf as a size, reach and sensitivity heuristic for this repository, and never enable history risk areas for it."
-            : report.bands!.separation === "too-few"
-              ? ` Fewer than ${MIN_MATURED} matured PRs with a band, or an empty low or high band.`
-              : ""
-        }`,
+        `A fix rate counts only matured PRs not reverted within ${MATURITY_DAYS} days: a backed-out PR is neither positive nor clean. Separation: ${separationLine(report.bands!)}`,
       ]
     : []
-  const unavailable = report.unavailable ? ["", "## Schema 2 sections", "", report.unavailable] : []
+  const measured =
+    report.measurement && report.bands
+      ? measurementLines(report.measurement, report.bands, cycle)
+      : { before: [], after: [] }
+  // A schema-1 ledger: each VS-46c section says it is unavailable, whatever the volume decision.
+  const unavailable = report.unavailable
+  const legacy = unavailable ? MEASUREMENT_SECTIONS.flatMap((heading) => ["", heading, "", unavailable]) : []
   const problems = report.problems.length
     ? ["", "## Problems", "", ...report.problems.map((problem) => `- ${problem}`)]
     : []
-  return [...lines, ...full, ...unavailable, ...problems, ""].join("\n")
+  return [...header, ...measured.before, ...lines, ...full, ...measured.after, ...legacy, ...problems, ""].join("\n")
+}
+
+// VS-46c's report sections, in their order. A schema-1 ledger prints each with V1_UNAVAILABLE.
+const MEASUREMENT_SECTIONS = [
+  "## Outcome base rates",
+  "## Minimum detectable effect",
+  "## Capture against size",
+  "## Measurement verdict",
+  "## Depth and reach",
+] as const
+
+// The band table's separation, read on one v1 label (item 2). The too-few sentence is VS-46a's.
+function separationLine(bands: NonNullable<OutcomeReport["bands"]>) {
+  if (bands.separation === "too-few")
+    return `too-few. Fewer than ${MIN_MATURED} matured PRs with a band, or an empty low or high band.`
+  const label = bands.label === "revert" ? "revert" : "unfiltered follow-up-fix (SZZ-based, size-biased, unaudited)"
+  const rest = {
+    underpowered: ` Fewer than ${MIN_EXPECTED} expected positives in the low or the high band: no verdict, not yet.`,
+    overlap: " The low and high bands' intervals overlap. That alone is not a verdict, only not yet.",
+    separated: " The low and high bands' intervals do not overlap.",
+  }[bands.separation]
+  return `${bands.separation}, on the ${label} label.${rest}`
+}
+
+/**
+ * VS-46c's sections (addendum B §1.8): the base rates and the minimum detectable effect before everything else, and,
+ * after the band table, capture against size, the verdict, and depth and reach. Item 7: no sentence here says that
+ * anything is ruled out for good; underpowered and undecided read as not yet.
+ */
+function measurementLines(
+  measurement: Measurement,
+  bands: NonNullable<OutcomeReport["bands"]>,
+  cycle: (value: Cycle) => string,
+) {
+  const base = measurement.base
+  const labels = measurement.labels
+  const rule = measurement.rule
+  const name = { revert: "revert", filtered: "filtered follow-up fix" } as const
+  // The deciding follow-up-fix label carries its caveat wherever the verdict is read from it.
+  const flag = measurement.deciding === "filtered" ? " (SZZ-based, size-biased, unaudited)" : ""
+  const keys = ["revert", "filtered"] as const
+  const byWindow = (record: Record<(typeof LABEL_WINDOWS)[number], Proportion>) =>
+    LABEL_WINDOWS.map((days) => `${days} d ${formatCell(record[days])}`).join(", ")
+  const expected = (value: { low: number; high: number }) => `${value.low.toFixed(1)} / ${value.high.toFixed(1)}`
+  const side = (value: CaptureSide) => `${value.captured} (${share(value.positives)}), ${share(value.lines)}`
+  const skipped = (label: LabelMeasure) => (label.ran ? `${label.ran - label.replicates}` : "none run (no PR)")
+  const verdictRow = labels[measurement.deciding].capture.find((row) => row.overhead === rule.overhead)
+  const tail = (1 - DEFAULT_CONFIDENCE) / 2
+  const before = [
+    "",
+    "## Outcome base rates",
+    "",
+    `This repository's own rates, before anything is compared, over the ${base.pulls} matured PRs with a band that no read cut short (cycle p50 / p90 ${cycle(base.cycle)} h). A band's expected positives are its PRs times the label's rate, pooled over every band.`,
+    "",
+    `- Base-branch subjects: ${base.subjects.commits} first-parent commits in the merge window; fix-prefixed ${formatCell(base.subjects.fix)}, revert-prefixed ${formatCell(base.subjects.revert)}.`,
+    `- Reverted, over all ${base.pulls}: ${byWindow(base.reverted)}.`,
+    `- Unfiltered follow-up fix (VS-46a's label), over the ${base.fixed[90].total} not reverted within ${MATURITY_DAYS} days: ${byWindow(base.fixed)}.`,
+    `- Filtered follow-up fix (VS-46d's label: blame with -w, -M and -C, code lines only), over the ${base.filtered[90].total} not reverted within ${MATURITY_DAYS} days and not marked filteredIncomplete (${base.filteredIncomplete} marked, left out): ${byWindow(base.filtered)}.`,
+    `- Expected positives, low / high band: revert ${expected(bands.expected.revert)}, unfiltered follow-up fix ${expected(bands.expected.unfiltered)}, filtered follow-up fix ${expected({ low: labels.filtered.low.expected, high: labels.filtered.high.expected })}.`,
+    measurement.deciding === "revert"
+      ? `- Deciding label: revert, which carries no blame-size bias: both the low and the high band expect at least ${MIN_EXPECTED} reverts. Both labels are reported, and the band table's separation reads reverts too.`
+      : `- Deciding label: filtered follow-up fix, SZZ-based, size-biased and unaudited (VS-46d's audit has not run). Reverts decide only when both the low and the high band expect at least ${MIN_EXPECTED} reverts, and here they do not. Both labels are reported. The band table's separation reads only v1 fields, so it uses the unfiltered follow-up-fix label.`,
+    "",
+    "## Minimum detectable effect",
+    "",
+    `Printed before any verdict: the smallest difference in positive rate that a two-sided test at ${whole(DEFAULT_CONFIDENCE)} confidence detects with 80% power at these counts, in rate points. The verdict below is in capture-share points instead, and its own interval decides it. Moved PRs are those a floor or the test-only rule put in another band than their score's own. A comparison with fewer than ${MIN_EXPECTED} expected positives in either group is underpowered and gives no verdict.`,
+    "",
+    "| Label | PRs | Positives | Low / high PRs | MDE low against high (rate points) | Moved PRs | Their expected positives | MDE moved against the label's rate (rate points) |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...keys.map((key) => {
+      const label = labels[key]
+      return `| ${name[key]} | ${label.pulls} | ${label.positives} (${share(label.rate)}) | ${label.low.pulls} / ${label.high.pulls} | ${points(label.mde)} | ${label.floorMoved.pulls} | ${label.floorMoved.expected.toFixed(1)} | ${points(label.floorMoved.mde)} |`
+    }),
+  ]
+  const after = [
+    "",
+    "## Capture against size",
+    "",
+    `What this tests: only what the final band adds beyond size. riskOf's likelihood score is log2(1 + added + deleted) plus at most 0.5 from the directory and entropy tie-breakers, so a ranking by score would compare size with itself. PRs are ranked here by the final band, ties broken by score and then by PR number; size ranks them by added plus deleted lines (the order of log(added + deleted)), then by PR number; a random order is shown as its expectation. The band differs from size where a floor raised a PR (a security-sensitive path, or a deletion-heavy code change, to at least medium; the sensitive-with-wide-reach floor cannot fire here, because the band is computed without dependents), where the test-only rule lowered one, and where a tie-breaker reorders PRs of one size or carries one across a cutpoint (compared here, but not counted as moved). ${labels.revert.floorMoved.pulls} of the ${base.pulls} PRs were moved by a floor or the test-only rule: their band is not the one their score gives at the default cutpoints.`,
+    ...keys.flatMap((key) => [
+      "",
+      `${key === "revert" ? "Revert" : `Filtered follow-up fix${flag}`}: ${labels[key].positives} positives among ${labels[key].pulls} PRs. Each side gives the positives its top PRs capture (their share of all positives), then their share of all changed lines.`,
+      "",
+      "| Top | PRs | Band: positives, lines | Size: positives, lines | Random | Band − size, points [interval] | Cycle p50 / p90 (h), band; size |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      ...labels[key].capture.map(
+        (row) =>
+          `| ${whole(row.overhead)} | ${row.pulls} | ${side(row.band)} | ${side(row.size)} | ${share(row.random)} | ${difference(row)} | ${cycle(row.band.cycle)}; ${cycle(row.size.cycle)} |`,
+      ),
+    ]),
+    "",
+    `- Bootstrap: ${rule.replicates} replicates, seed ${rule.seed}, each drawing these PRs with replacement and ranking the same draw both ways (paired). Replicates with no positive are skipped: revert ${skipped(labels.revert)}, filtered follow-up fix ${skipped(labels.filtered)}. Each interval runs from the ${(tail * 100).toFixed(1)}th to the ${((1 - tail) * 100).toFixed(1)}th percentile.`,
+    `- Low-band miss rate: ${keys
+      .map(
+        (key) =>
+          `${name[key]} ${formatCell(labels[key].lowMiss.positives)} of positives in the low band, which holds ${share(labels[key].lowMiss.pulls)} of PRs and ${share(labels[key].lowMiss.lines)} of changed lines`,
+      )
+      .join("; ")}.`,
+    "- Effort@20% of order(files) inside matured multi-file PRs: unavailable: schema 2 records no per-file fix data.",
+    "",
+    "## Measurement verdict",
+    "",
+    `The rule, pre-registered in the report config before any collection${measurement.sealed ? " and sealed into this ledger when it was collected" : ""}: a margin of ${points(rule.margin)} capture-share points, read at the top ${whole(rule.overhead)}, with ${rule.replicates} bootstrap replicates and seed ${rule.seed}.${
+      !measurement.sealed
+        ? " No rule sealed in this ledger: the report config's rule applies."
+        : measurement.differs
+          ? ` The report config's rule differs now (margin ${points(MEASUREMENT_RULE.margin)} points, top ${whole(MEASUREMENT_RULE.overhead)}, ${MEASUREMENT_RULE.replicates} replicates, seed ${MEASUREMENT_RULE.seed}): the sealed rule is the one applied.`
+          : ""
+    }`,
+    "",
+    `Verdict: ${measurement.verdict}, on the ${name[measurement.deciding]}${flag} label at the top ${whole(rule.overhead)}: band − size ${verdictRow ? difference(verdictRow) : "n/a"} points. ${
+      {
+        underpowered: `Underpowered: ${measurement.reasons.join("; ")}. Not yet: no verdict at this volume.`,
+        "beats-size":
+          "The interval lies above 0: the floors and tie-breakers add capture beyond size. That says nothing about history features.",
+        "no-better-than-size":
+          "The interval lies wholly below the margin: the floors and tie-breakers add no capture detectable at this power, and riskOf is documented as a size, reach and sensitivity heuristic for this repository. Reach is untested here, because the band is computed without dependents. That says nothing about history features.",
+        undecided: "The interval neither lies above 0 nor wholly below the margin: not yet.",
+      }[measurement.verdict]
+    }`,
+    "",
+    "Underpowered and undecided mean not yet. No verdict decides history risk areas by itself: VS-46 item 6 gates them on a measured separation gain with an interval excluding 0, and that gate stands.",
+    "",
+    "## Depth and reach",
+    "",
+    `Post-merge outcomes are a monitor, not a gate, for lens and depth decisions (P3-7). Comparing outcomes across depths needs depth assigned independently of risk (VS-46 item 7), and this ledger records no such assignment, so no depth row is shown. Once one exists, a depth row is suppressed unless each depth compared has at least ${MIN_EXPECTED} expected positives, and a shown row prints its minimum detectable effect: a difference smaller than that is not detectable at this power, which does not mean there is none.`,
+    "",
+    "Reach is untested: the band here is computed without dependents, so no PR has a reach band, the sensitive-with-wide-reach floor cannot fire, and nothing in this report measures reach.",
+  ]
+  return { before, after }
+}
+
+// A capture row's band-minus-size difference and its interval, in capture-share points.
+function difference(row: CaptureRow) {
+  if (row.difference === null) return "n/a"
+  return `${signed(row.difference)}${row.interval ? ` [${signed(row.interval[0])}, ${signed(row.interval[1])}]` : ""}`
+}
+
+function signed(value: number) {
+  return `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)}`
+}
+
+function points(value: number | null) {
+  return value === null ? "n/a" : (value * 100).toFixed(1)
+}
+
+function share(value: number | null) {
+  return value === null ? "n/a" : percent(value)
+}
+
+// An overhead, as a whole percentage.
+function whole(value: number) {
+  return `${Math.round(value * 100)}%`
 }
 
 function gradientTable(gradient: GradientReport, cycle: (value: Cycle) => string) {

@@ -17357,3 +17357,573 @@ VS-46c and VS-46d report sections are SF-04, SF-05a and SF-05b.
     `vectorscope-continuation.md`.
   - Append the correcting entry for the stale `:16000` sentence.
   - SF-03 touches neither file.
+
+## 2026-11-15 · VS-46c Outcome measurement rule report (SF-04)
+
+Addendum B §1.8 (VS-46c) design items 1 to 9, report half, built on
+`scope-finish` at `a723ac92` (SF-03) as lane package SF-04. It implements the
+SF-04 plan as corrected by its critique; where a critique point was rejected
+or taken in another form, the reason is under "Critique points". It is
+script-only: `script/vectorscope-eval/outcomes.ts`, its test file, the eval
+README and this log. VS-46d's report sections are SF-05a and SF-05b.
+
+- **Status: committed by the lane's commit gate; the lead's answer on
+  decision (b) is still pending, and both answers stay open.** No answer on
+  (b) had reached the commit gate, so it committed the package as review
+  round one left it. Decision (b) seals the measurement rule into the /2 ledger at collection.
+  That goes past "all changes are in the report", and it stacks a further /2
+  change on SF-03's, whose entry is itself still waiting on the lead for its
+  decisions (c), (g) and (j). After review round one, `rule` is optional on
+  read: a /2 ledger SF-03's `a723ac92` collection sealed, which has none,
+  opens under `MEASUREMENT_RULE`, and its verdict section says that no rule
+  was sealed. So `vectorscope-outcomes/2` keeps one readable shape with an
+  optional field, and no ledger of either collection is refused for the
+  rule. No /2 ledger exists yet anyway: collection needs the owner's sealing
+  key, refuses to run in Actions, a real repository waits on Q30, and SF-03
+  never ran on an owner repository. What a yes or a no changes is under
+  decision (b); the answer, when it comes, goes in a later dated entry, and
+  a no is a follow-up commit that makes exactly those deletions. The
+  workflows the commit gate dispatched are under "Tests actually run".
+
+- **Scope.** Addendum B §1.8 :185-204, design items 1 to 9 :190-198, and the
+  compatibility paragraph :200. The spec's citations have moved, and at
+  `a723ac92` they are:
+  - the "never" sentence (spec `outcomes.ts:1878`) is `renderOutcomes`
+    `:2504`;
+  - the `riskFeatures` call without dependents (spec `:895`) is `readPull`
+    `:1089`, with the `band` field comment at `:309`;
+  - `bandsOf` (spec `:1713-1758`) is `:2339-2387`;
+  - `LedgerPull` is at `:296-334`, `LEDGER_SCHEMA` at `:76`, `ledgerProblem`
+    at `:2079`, and the /2 decoders at `:2002-2071`;
+  - `OutcomeReport` is at `:2129-2175` (`unavailable` `:2167`) and
+    `outcomeReport` at `:2177-2337` (`bands: bandsOf(...)` `:2335`);
+  - `renderOutcomes` is at `:2436-2516`: the band section `:2490-2509` and
+    the /1 "## Schema 2 sections" block `:2511`;
+  - `collect`'s return is at `:910-925`.
+
+  In the final file (after review round one): `MIN_EXPECTED` and the rule
+  `:103-128`, `MAX_LEDGER_PULLS` `:184`, the decoder's score rule `:2064`,
+  its `pulls` bound `:2085` and `rule` `:2103`, the report types
+  `:2211-2284`, `bandsOf` `:2457`, the label helpers `reverted`, `fixed` and
+  `windows` `:2513-2526`, `expectedIn` `:2529`, `measurementOf` `:2560`,
+  `likelyBand` `:2640`, `labelMeasure` `:2644`, `minimumDetectable` `:2728`,
+  `bootstrap` `:2742`, `seeded` `:2806`, `renderOutcomes` `:2865`,
+  `MEASUREMENT_SECTIONS` `:2950`, `separationLine` `:2959` and
+  `measurementLines` `:2976`. `collect` writes `rule` at `:958`.
+
+- **Test first.** At `a723ac92`, with the source unedited, `outcomes.test.ts`
+  gave 54 pass, 0 fail (727 expect calls), as SF-03 recorded. `pullOf` was
+  then changed (a band brings its own sizes and score, below), and a
+  `BAND_TABLE` pin was added to T1: the SHA-256 of `fullSynthetic`'s band
+  section up to "Separation: ", which covers its table and its fix-rate
+  sentence. Against the unedited source it gave `9d719ac7cfa2…`, and the file
+  gave 54 pass, 0 fail (728 expect calls). VS-46a's full band-section digest
+  was `e2e6a8f127c1…`.
+
+- **What landed.**
+  - New exports:
+    - constants `MIN_EXPECTED` (10), `CAPTURE_OVERHEADS` (0.1, 0.2 and 0.5),
+      `Z_ALPHA` and `Z_POWER`, `MEASUREMENT_RULE` (margin 0.05, overhead
+      0.2, seed 46003, 2,000 replicates; frozen), and `MAX_LEDGER_PULLS`
+      (`MAX_PULL_PAGES` × `PER_PAGE`, 3,000);
+    - types `MeasurementRule`, `MeasurementVerdict`, `CaptureSide`,
+      `CaptureRow`, `LabelMeasure` and `Measurement`;
+    - the function `likelyBand`.
+  - The ledger: `OutcomeLedger` gains an optional `rule`, which `collect`
+    writes as a copy of `MEASUREMENT_RULE` after `fixCommits`. The /2
+    decoder checks it whenever it is present: margin finite in (0, 1),
+    overhead one of `CAPTURE_OVERHEADS`, seed an integer in [0, 2^32 − 1],
+    and replicates an integer in [100, 10,000]. A /2 ledger without it (as
+    SF-03's collection sealed them) opens under `MEASUREMENT_RULE`. The
+    decoder also holds `pulls` to at most `MAX_LEDGER_PULLS`, the most the
+    merged-PR listing reads; with the replicate bound, that bounds the
+    bootstrap `open` runs (replicates × PRs per label) on a forged payload.
+    It also requires `score` exactly with `band`, which collection already
+    writes together. The /1 decoder is untouched.
+  - `OutcomeReport.bands` gains `label` ("revert" or "unfiltered") and
+    `expected`, and `separation` gains `underpowered`. The table rows are
+    unchanged. `OutcomeReport` gains `measurement`, on a /2 ledger in the full
+    decision only. `Measurement.sealed` says whether the ledger carried a
+    rule, and `LabelMeasure.ran` gives the replicates the bootstrap ran
+    beside `replicates`, those that held a positive.
+  - `renderOutcomes`, /2 in the full decision:
+    - "## Outcome base rates" and "## Minimum detectable effect" go directly
+      after the header bullets, before "## Severity gradient";
+    - the band section's last paragraph changes after "Separation: " only;
+    - "## Capture against size", "## Measurement verdict" and "## Depth and
+      reach" go after the band section, before Problems.
+  - A /1 ledger prints the five headings, each followed by `V1_UNAVAILABLE`,
+    after its v1 sections and before Problems, whatever the decision. This
+    replaces SF-03's single "## Schema 2 sections" block.
+  - Comments: the header's "compares nothing" now reads "compares nothing
+    outside the repository's own PRs (the risk band against size and random
+    order, VS-46c)"; the header also says the rule is sealed at collection;
+    and the `outcomeReport` doc comment and the `unavailable` comment are
+    updated. `USAGE` is unchanged.
+  - Tests: twelve new cases in a new describe, "the measurement rule
+    (VS-46c)", and assertions added to T1, T2, T8, the band-separation case
+    and the decoder case.
+  - README "Outcome ledger": the `rule` field and the score-with-band rule in
+    the schema-2 bullet, a rewritten "The report." bullet, a new "The
+    measurement (VS-46c)." bullet, and the "Deferred." bullet.
+
+- **How it works.**
+  - _Band table (v1 fields only)._ `bandsOf` computes two v1 labels over the
+    banded matured PRs: a revert within 90 days over all of them, and a v1
+    fix within 90 days over those not reverted. A band's expected positives
+    are its PRs times the label's rate pooled over every banded PR, computed
+    as n × positives / total so whole counts stay exact. Reverts decide when
+    both low and high expect at least 10; otherwise the unfiltered label
+    decides. The separation is:
+    - `too-few` as before;
+    - else `underpowered` when that label expects fewer than 10 in low or in
+      high;
+    - else Wilson overlap on that label: `overlap` or `separated`.
+  - _Population._ `measurementOf` reads the matured PRs with a band that are
+    not truncated; in a collected ledger, that is every matured untruncated
+    PR. Each PR is ranked on band, score and lines (added plus deleted), and
+    is "moved" when its band is not `likelyBand(score)`. `likelyBand` is
+    riskOf's likelihood rule at the default `RISK_CUTPOINTS` readPull uses: a
+    score exactly at a cutpoint takes the lower band. A per-repository refit
+    (VS-39 item 2) would change that, and the moved count would then need the
+    refit cutpoints.
+  - _Labels._
+    - revert: every PR, positive when `revertedDays <= 90`;
+    - filtered: the PRs not reverted within 90 days and not marked
+      `filteredIncomplete`, positive with a `fixesFiltered` entry within 90
+      days.
+
+    Reverts decide when both their low and high expected counts reach 10,
+    else the filtered label does.
+
+  - _Base rates._
+    - Subjects: fix and revert over the base branch's first-parent commits.
+    - Reverts over every PR.
+    - The unfiltered fix over those not reverted.
+    - The filtered fix over those not reverted and not marked, and the count
+      of not-reverted PRs the mark left out.
+
+    The denominators are printed in each line, and so is the population's
+    cycle time.
+
+  - _MDE._ (Z_ALPHA + Z_POWER) · √(p(1 − p) · Σ 1/n), in rate points, at
+    two-sided 95% and 80% power; null when p is 0, 1 or null, or when a size
+    is 0. Low against high uses [n_low, n_high]; the moved PRs against the
+    label's rate use [m].
+  - _Capture._
+    - The band order is band descending, then score descending, then PR
+      number ascending. The size order is lines descending, then PR number
+      ascending: the order of log(added + deleted).
+    - At each overhead the top n = round(k·N), at least 1, is taken. Each
+      side records the positives captured, their share of all positives, the
+      share of all changed lines, and the cycle time of the top PRs.
+    - Random is its expectation, n/N.
+    - The low-band miss rate is the low band's share of positives
+      (`cell`, minimum 50), of PRs and of lines.
+  - _Bootstrap._
+    - mulberry32 restarts from `rule.seed` for each label.
+    - Each replicate draws N indices into a `Uint32Array` of counts. Both
+      pre-sorted orders are walked once, crediting a PR drawn c times with
+      the part of its c places that falls under each threshold.
+    - A replicate's difference is (band captured − size captured) over the
+      resample's positives. A replicate with no positive is skipped and
+      counted, as run less held. A label with no PR runs none, and the report
+      prints "none run (no PR)" instead of a count.
+    - The interval is percentile type 7 at core `DEFAULT_CONFIDENCE`.
+  - _Verdict._ It is read on the deciding label at `rule.overhead`.
+    `underpowered` comes first, with one fixed reason per cause:
+    - fewer than 200 PRs;
+    - fewer than 10 expected positives in low or high;
+    - fewer than 10 among the moved PRs;
+    - no interval.
+
+    Then `beats-size` when the lower bound is above 0, `no-better-than-size`
+    when the upper bound is below `rule.margin`, and `undecided` otherwise.
+    The ledger's sealed rule is the one applied, and `differs` says when it
+    is not the source's. A ledger with no rule gets `MEASUREMENT_RULE`, with
+    `sealed` false, and the verdict section reads "No rule sealed in this
+    ledger: the report config's rule applies." When the filtered label
+    decides, the verdict line and its capture table's heading name it
+    "filtered follow-up fix (SZZ-based, size-biased, unaudited)", as the
+    deciding-label line and `separationLine` do.
+
+- **Decisions.**
+  - (a) _The filtered label decides the measurement_ (VS-46d item 3: primary
+    on /2), while the band table's separation stays on v1 fields, so /1 and
+    /2 give the same v1 sections. The base-rates section says so. Fallback:
+    decide the measurement on the unfiltered label; only the new sections'
+    tests move.
+  - (b) _`rule` is sealed in the /2 ledger, and optional on read (lead's
+    answer pending)._ The spec asks for a margin "pre-registered in the
+    report config before the first run and recorded in the sealed output",
+    and the task says the margin is "pre-registered in the report config and
+    sealed". `MEASUREMENT_RULE` is the report config. Sealing a copy at
+    collection fixes the rule before any outcome is seen, so a later edit to
+    the config cannot move a verdict. Since review round one the decoder
+    takes `rule` as `Schema.optionalKey`. A ledger without it (SF-03's
+    collection) opens under `MEASUREMENT_RULE` and says so, so one schema
+    name no longer has a shape that only "malformed" answers. Both answers
+    stay open:
+    - Yes: nothing changes. The answer goes in a later dated entry.
+    - No: delete `OutcomeLedger.rule`, `collect`'s write (`:958`), the
+      decoder's `rule` entry, `Measurement.sealed`, `differs` and both of
+      their notes, and have `measurementOf` read `MEASUREMENT_RULE` alone.
+      The verdict section then always reads as the rule-less case does now.
+      What it re-pins: T2's two `ledger.rule` assertions, the decoder case's
+      fourteen `rule` entries (eleven bad; three good: two other rules and
+      the rule-less ledger) and its `rule` check, `v1Of`'s `rule` strip, and
+      the `synthetic` and `measured` helpers. (Before review the entry said
+      "eleven `rule` entries (nine bad, two good)"; there were thirteen,
+      eleven bad.) Also the cases that seal a
+      non-default rule: the bootstrap case's seed, margin, overhead and
+      rule-less checks, the (0, margin) precedence case, and the dry run's
+      rule-less open. They would pass a rule argument to `outcomeReport`
+      instead, or be dropped.
+    - What it leaves: T1's pins, `BAND_TABLE`, every v1 digest, and the
+      `pulls` bound.
+  - (c) _The rule's values_ (margin 5 capture-share points, the top 20%,
+    seed 46003, 2,000 replicates) are this package's choice. They are the
+    lead's to change before the first collection. Changing them re-pins only
+    the measurement cases' expected numbers.
+  - (d) _Volume and the /1 asymmetry._ The measurement sections follow the
+    200-finding volume rule on /2, so a gradient-only /2 report adds none, and
+    the v1 line "only the severity gradient is reported" stays true (addendum
+    A VS-46). A /1 report prints the five unavailable headings whatever the
+    decision, as SF-03's single block did. `V1_UNAVAILABLE`'s wording is the
+    spec's. For the base rates the spec withholds the section on /1, though
+    the v1 revert and fix fields exist; the subjects and sizes do not. The
+    README says both.
+  - (e) _Random is its expectation_, n/N, not a seeded permutation, so it has
+    no noise of its own and needs no interval.
+  - (f) _Ties and the top n._ Band ties go to score, then PR number; size
+    ties to PR number. The top n is round(k·N), at least 1, and 0 with no PR.
+  - (g) _Verdict precedence._ Underpowered comes first, then beats-size, then
+    no-better-than-size, so an interval wholly inside (0, margin) beats size
+    (tested). `MIN_MATURED` counts as an underpowered reason.
+  - (h) _No `depthEffects` (critique, minor; the plan's fallback)._ No depth
+    assignment exists (VS-46 item 7), so a helper would have no caller and no
+    data. The section states the rule instead: once an assignment exists, a
+    depth row is suppressed unless each depth has at least 10 expected
+    positives, and a shown row prints its MDE. The spec's "suppressed below
+    their minimum detectable effect" is read as a power rule. Hiding a row
+    whenever its observed difference is under the MDE would be a
+    significance filter, and the surviving rows would overstate their
+    effects.
+  - (i) _Separation._ It gains `underpowered`, and its label is chosen by
+    item 2.
+  - (j) _The decoder requires `score` with `band`._ The measurement ranks on
+    it.
+  - (k) _Effort@20% reads unavailable on /2_: schema 2 records no per-file
+    fix data (SF-03, "Not carried by schema 2").
+  - (l) _The z values are hard-coded_, because core's `normalQuantile` is not
+    exported and there is no core change. A test derives z from a core
+    `wilson` bound (a Wilson bound L solves (p − L)² = z²·L(1 − L)/n) and
+    holds it equal to `Z_ALPHA`, so a change to `DEFAULT_CONFIDENCE` fails
+    there.
+  - (m) _Zero-positive replicates are skipped and counted._ The count is
+    printed per label.
+  - (n) _The moved-PR MDE is in rate form_ (their rate against the label's
+    rate), labelled "rate points" in the table and README. The text says the
+    verdict is in capture-share points, decided by its own interval.
+  - (o) _`MeasurementVerdict`, not `Verdict`._ Core eval already exports a
+    `Verdict` (the judge's), so the plan's name was changed to avoid two
+    meanings.
+  - (p) _Cycle time on new rates._ The header says "Every rate below carries
+    its own". So the base rates carry the population's cycle time, and each
+    capture row carries the cycle time of both top sets.
+
+- **Critique points.** Twelve. Eleven were taken, three of them in another
+  form, and one was moot.
+  1. _Unmoved twin (major)._ Taken. The twin has every difference 0, every
+     interval [0, 0], and verdict `underpowered` with the moved-PR reason
+     only. `no-better-than-size` comes from `NO_BETTER`, whose 60 moved PRs
+     are all negative.
+  2. _Sealing `rule` (major)._ Taken as option 1. The status line is at the
+     top, and the exact re-pins of a no are under decision (b). The fallback
+     was not built first, because the task text itself says the margin is
+     sealed. The first draft refused a rule-less /2 as malformed; review
+     round one made it open under the config's rule instead (below).
+  3. _Base rates first (minor)._ Taken: both sections sit directly after the
+     header bullets. Every v1 digest, "#" included, is unchanged.
+  4. _`BAND_TABLE` slice (minor)._ Taken: it is sliced before "Separation: ",
+     so the table and the fix-rate sentence are both pinned.
+  5. _`likelyBand` against riskOf (minor)._ Taken. A test runs core `riskOf`
+     on nine feature sets: both sides of both cutpoints, a small sensitive
+     PR, a 1,000-line sensitive PR (high either way), deletion-heavy,
+     test-only, and a tie-breaker that crosses the medium cutpoint. It asserts `likelyBand(likelihood.score)` equals
+     `likelihood.band` for each, and that the report's moved count equals the
+     count of `band !== likelihood.band`. The default-cutpoint assumption is
+     in the comment and under "How it works".
+  6. _Capture wording (minor)._ Taken. The capture text names the floors that
+     can fire (sensitive and deletion-heavy), says the wide-reach floor cannot
+     fire without dependents, and says tie-breaker reordering is compared but
+     not counted. The no-better-than-size sentence carries its reach caveat
+     (tested). The spec's sentence calling riskOf "a size, reach and
+     sensitivity heuristic" is kept, because the spec mandates it.
+  7. _MDE units and populations (minor)._ Taken (decision (n)). The pooled
+     rate is over every banded matured PR, the same as `bandsOf`, and the
+     fix-rate denominators are printed and in the type comments.
+  8. _`depthEffects` (minor)._ Taken: the fallback (decision (h)).
+  9. _`Z_ALPHA` coupling (minor)._ Taken (decision (l)).
+  10. _Precedence edge (minor)._ Taken: under a sealed margin of 0.5,
+      `BEATS`' interval lies inside (0, 0.5) and the verdict is `beats-size`.
+      The precedence-swap mutant fails exactly that case (below).
+  11. _CI batching (minor)._ Taken in another form. This package is not
+      committed here, so nothing is dispatched. The commit gate should
+      dispatch `test.yml` with `typecheck.yml` for SF-04, not batch it: it is
+      the only workflow that runs `outcomes.test.ts`, and SF-03 already
+      deferred it, so it also covers SF-03's Windows backslash case.
+  12. _Push procedure (minor)._ Moot here: nothing is committed or pushed. For
+      the commit gate, RULES-v2 applies: fetch, merge any new commits on
+      `origin/scope-finish` with a merge commit, re-run this file and the full
+      TURBO typecheck, then push fast-forward.
+
+- **Plan corrections.**
+  - The plan's band-separation case "9 reverts in the high band" assumed
+    observed counts. Expected counts are a band's PRs times the pooled rate,
+    so the test uses 20 reverts over 200 PRs (10 per band: revert decides)
+    against 19 (9.5: the fix label decides).
+  - The tie-breaker-only history first used 100-line PRs. +0.4 carried them
+    across the medium cutpoint, so they counted as moved. The final history
+    uses 50-line PRs, which stay low.
+  - The plan's floating-point expected counts (0.035 × 100) were not exact;
+    `expectedOf` computes n × positives / total.
+  - `bootstrap` was first drafted with per-order positive flags, which lose
+    PR identity across the two orders. It was rewritten before any test ran,
+    to sort index orders over one PR list.
+  - `measurementOf` returns a copy of the sealed rule, not the ledger's own
+    object, so nothing that holds the report can change the ledger through
+    it.
+
+- **Review findings (round one).** Ten findings, all non-blocking. Every
+  one was taken; two are the same point twice, and one was taken in another
+  form. Nothing is committed (the task said not to).
+  1. _`rule` required, so an SF-03 /2 ledger reads "malformed"
+     (`outcomes.ts:2097`), and its scope twin (the second `:2097` finding:
+     do not commit until the lead answers (b))._ Taken as the reviewer's
+     keep-both-answers-open option. `rule` is `Schema.optionalKey`, with its
+     bounds checked when present. A rule-less /2 opens under
+     `MEASUREMENT_RULE`, with `Measurement.sealed` false and "No rule sealed
+     in this ledger: the report config's rule applies." in the verdict
+     section. `collect` still writes `rule`. Decision (b) now gives what a
+     yes and a no change; the lead's answer is still pending, and nothing is
+     committed.
+  2. _The deciding filtered label's caveat is missing from the verdict line
+     (`:3017`, and its twin at `:3021`)._ Taken. When the filtered label
+     decides, `measurementLines` appends " (SZZ-based, size-biased,
+     unaudited)" to its name in the "Verdict:" line and in its capture
+     table's heading. The each-verdict case asserts the three verdict
+     sentences and BEATS' capture heading, and the base-rates case asserts
+     that neither carries the flag when reverts decide. The MDE table, the
+     bootstrap line and the low-band miss line name both labels side by side
+     and state no verdict, so they are unchanged.
+  3. _`measurementOf` repeats `bandsOf`'s closures (`:2556`)._ Taken.
+     `reverted`, `fixed` and a generic `windows<T extends LedgerPullV1>` are
+     at module level and used by both; `filtered` stays local. oxlint went
+     from 26 warnings to 25.
+  4. _The overlap sentence points to a verdict a /1 ledger lacks
+     (`:2941`)._ Taken: it now ends "That alone is not a verdict, only not
+     yet." No digest needed re-pinning, because no pinned history overlaps:
+     `fullSynthetic`'s separation is `underpowered`, and the T1 histories
+     are gradient-only. The band-separation case now asserts the whole
+     sentence instead.
+  5. _"Skipped" counts replicates that never ran (`:3007`)._ Taken.
+     `bootstrap` returns `ran` (0 on its no-PR return), `LabelMeasure.ran`
+     holds it, and the line prints run less held, or "none run (no PR)". It
+     is asserted on the no-PR history and on BEATS' revert label (2,000 run,
+     none held).
+  6. _The depth-suppression test checks form only
+     (`outcomes.test.ts:2421`)._ Taken: the case is kept, and its comment
+     and the tests list below say that it asserts the stated rule and the
+     absence of rows, not a suppression computed on data.
+  7. _The status lines will be wrong once committed
+     (`vectorscope-deviations.md:17370`)._ Taken in the form available
+     without a commit. The status bullet now gives the state after review,
+     and it and the "Not dispatched" bullet say that the commit gate
+     replaces them with the lead's answer and the dispatched runs. No
+     dispatch exists yet to record.
+  8. _`open`'s cost is unbounded, because `pulls` is (`:2095`)._ Taken. The
+     /2 decoder holds `pulls` to `MAX_LEDGER_PULLS` (3,000, the most the
+     merged-PR listing reads), and its comment now claims only what that
+     bound and the replicate bound give together. The decoder case refuses
+     3,001 PRs and opens 3,000. The /1 decoder is VS-46a's and untouched: a
+     /1 ledger gets no measurement, so it runs no bootstrap.
+
+- **Default and parity proof.**
+  - T1: the three collected histories' `v1Of` ledger digests, their call
+    counts (32, 36, 32) and every report section digest are unchanged, and
+    `v1Only(text) === text` still holds (gradient-only /2 adds nothing).
+  - `fullSynthetic`: every v1 section digest is unchanged except
+    "## Risk band against post-merge outcomes", re-pinned
+    `e2e6a8f127c1…` → `4aedb769cecb…`. `BAND_TABLE` (`9d719ac7cfa2…`) is
+    equal before and after, so only the text after "Separation: " moved. Its
+    separation is now `underpowered` on the unfiltered label: 21 fixes over
+    199 not-reverted PRs expect 10.4 in low and 8.4 in high.
+  - The /1 rendering's v1 sections equal the /2 rendering's (`v1Only` of
+    both), and the T1 heading order is pinned.
+  - The import-graph case passes unchanged. The new imports are
+    `DEFAULT_CONFIDENCE` from core eval and `RISK_CUTPOINTS` from core risk,
+    both already in the graph.
+  - `git diff --stat` touches only the three script files and this log.
+  - No runner, core, digest, provider, session or app file changed.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` stays `aef0d5c84ed90782` and
+  `REVIEW_PIPELINE_REVISION` stays 4: no pinned file changed, and
+  `REVIEW_PIPELINE_FILES` lists no `script/` file.
+- **Replay variant.** None. `VARIANTS` is untouched: 18 entries, 33 pending halves, 3 wired, counted by importing `replay.ts`
+  (as SF-03 counted them).
+- **Desktop half.** Not applicable: the ledger is an owner-machine script,
+  and the desktop keeps no outcome ledger.
+
+- **Tests actually run.** Each file was run alone from `packages/script`,
+  through `vector-serial`, with `--timeout 30000` and
+  `TMPDIR=/tmp/vector-v2/scope/sf04/tmp`.
+  - At `a723ac92`: 54 pass, 0 fail (727 expect calls). With `pullOf`'s
+    sizes and `BAND_TABLE` added, against the unedited source: 54 pass, 0
+    fail (728).
+  - Before review: `outcomes.test.ts` 66 pass, 0 fail (977 expect calls),
+    run once with `GITHUB_ACTIONS=false` and once with `GITHUB_ACTIONS=true`.
+  - Final tree, after review round one: `outcomes.test.ts` 66 pass, 0 fail
+    (997 expect calls), run once with `GITHUB_ACTIONS=false` and once with
+    `GITHUB_ACTIONS=true` as CI sets it. That is 54 existing cases (T1, T2,
+    T8, the band-separation case and the decoder case gained assertions) and
+    twelve new ones:
+    - base rates and expected positives first;
+    - the MDE before any verdict, with `Z_ALPHA` held to
+      `DEFAULT_CONFIDENCE`;
+    - each verdict on a synthetic history;
+    - an interval wholly inside (0, margin);
+    - only moved PRs differ from size (core `riskOf`, the cutpoints, the
+      unmoved twin and tie-breakers alone);
+    - a resample's top takes exactly its share of draws, and at least one
+      PR;
+    - the low-band miss rate and Effort@20%;
+    - bootstrap determinism and the sealed rule;
+    - the old sentence absent;
+    - depth and reach. It asserts the stated suppression rule and the
+      absence of rows only, not a suppression computed on data: no depth
+      assignment exists (decision (h)), so there is no row to suppress.
+      SF-05 or VS-46 item 7 adds that case;
+    - a /1 ledger's unavailable sections;
+    - a dry run through `main open` that writes only the report.
+  - `ci.test.ts` 39 pass, 0 fail (507), as a regression check before
+    review. It was not re-run after review: only the test file imports
+    `outcomes.ts`.
+  - `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine` and `bun typecheck` in `packages/script`: clean, before
+    and after review. No package source changed, so no other package
+    typecheck is owed. The full TURBO typecheck is for the commit gate,
+    before the push.
+  - `prettier --check` is clean on `outcomes.ts`, its test and the README.
+    This entry was checked through `--stdin-filepath`.
+  - `oxlint` on `outcomes.ts` and its test: 25 warnings, 0 errors, the
+    count SF-03 left. Before review there were 26: `measurementOf` repeated
+    `bandsOf`'s `windows` record cast (`no-unsafe-type-assertion`). Review
+    round one hoisted `windows` to module level, so one cast serves both.
+    The non-null assertions the first draft carried (unneeded with
+    `noUncheckedIndexedAccess` off) and a loop-condition warning were
+    removed.
+  - Mutations of `outcomes.ts`. Each was run against the whole test file and
+    restored, with the file's SHA-256 checked after every restore
+    (`e84adeaa17dd…` for the batch; `5b65167d2afb…` for the rerun, after
+    `measurementOf` began returning a copy of the rule). 25 of 25 are caught;
+    the number is the failing cases:
+    - rank by score instead of band: 5;
+    - drop score as the tie-break: 1;
+    - `Math.random` in place of the seed: 1;
+    - the margin from the source: 1;
+    - verdict precedence swapped: 1 (the (0, margin) case);
+    - `MIN_EXPECTED` 9: 5;
+    - no `filteredIncomplete` exclusion: 1;
+    - `>=` at the cutpoint: 1;
+    - the /1 depth heading dropped: 3;
+    - "never" restored in the overlap sentence: 1;
+    - the depth rule sentence dropped: 1;
+    - zero-positive replicates counted as held: 1;
+    - no moved-PR reason: 2;
+    - the decoder without score-with-band: 1;
+    - the decoder without the replicate bound: 1;
+    - `differs` always false: 1;
+    - `Z_ALPHA` at 90%: 1;
+    - `collect` seals no rule: 10;
+    - expected positives pooled over the low band only: 2;
+    - the verdict read at the first overhead: 3;
+    - the fix rates without the not-reverted rule: 1;
+    - four survived the first batch, and each gained a test. They were then
+      re-run and are caught: reverts deciding on one band in the measurement
+      (1) and in the band table (1), whose new cases put 8 expected reverts
+      in low against 12 in high; no partial credit at a threshold (1), whose
+      new case is an all-positive history with intervals [0, 0]; and a top
+      of no PR at a small N (1), whose new case is four PRs taking
+      [1, 1, 2].
+    - After review round one, nine more mutations, each restored and checked
+      against the file's SHA-256 (`f29bf2e06ee4…`), are caught: no `pulls`
+      bound (1, the decoder case); `rule` required again in the decoder (3);
+      `sealed` always true (2); a label with no PR reporting the rule's count
+      as run (1); skipped counted from the rule's count (1); no flag in the
+      verdict line (1); no flag in the capture heading (1); the flag even
+      when reverts decide (1); and the overlap sentence pointing to the
+      measurement verdict again (1, the band-separation case). Then the
+      local formatter in `measurementLines` was renamed from `windows` to
+      `byWindow`, because it shadowed the hoisted helper. That changes no
+      behaviour or line number. The final file is `7cbdde9902a0…`, and the
+      test file, the eval typecheck, oxlint and prettier were re-run on it
+      with the results above.
+  - The manual dry run: `/tmp/vector-v2/scope/sf04/dry-run.ts` sealed a
+    synthetic /2 ledger (400 banded PRs, five reverts) to a throwaway key it
+    generated. `bun script/vectorscope-eval/outcomes.ts open` then exited 0
+    and wrote only `outcomes-report.md` (mode 0600) to
+    `/tmp/vector-v2/scope/sf04/out`. Its headings, in order: Outcome base
+    rates, Minimum detectable effect, Severity gradient, Split out,
+    Resolution, Risk band against post-merge outcomes, Capture against size,
+    Measurement verdict, Depth and reach. Its verdict was `underpowered`:
+    the high band, 38 PRs after two reverts, expects 9.4 filtered
+    positives. After review round one it was run again into
+    `/tmp/vector-v2/scope/sf04/out-r1`, with the same headings and verdict.
+    The verdict line now names "filtered follow-up fix (SZZ-based,
+    size-biased, unaudited)", and so does the filtered capture heading; 14
+    revert replicates held no revert.
+  - The commit gate, on the final file (`7cbdde9902a0…`), before the
+    commit: `outcomes.test.ts` 66 pass, 0 fail (997 expect calls), run once
+    with `GITHUB_ACTIONS=false` and once with `GITHUB_ACTIONS=true`;
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine` and `bun typecheck` in `packages/script`, both clean;
+    and the full TURBO typecheck (`--concurrency=2`), 27 of 27 tasks
+    successful.
+  - Not run locally: the CI-only legs. After the push, the commit gate
+    dispatched on ref `scope-finish` the five workflows its task named:
+    `typecheck.yml`, `scope-directory-identity.yml`,
+    `review-memory-fence.yml`, `scope-app-validation.yml` and
+    `vector-at-mention.yml`. Their run ids and results are in the gate's
+    report to the lead, not here, because this commit comes before the runs
+    it starts. `test.yml`, the only workflow that runs `outcomes.test.ts`,
+    was not on that list and was not dispatched. So neither this file nor
+    SF-03's Windows backslash case has a CI run yet. Both are owed with the
+    next `test.yml` dispatch: the lane notes allow an eval-only package to
+    be batched with the next runtime package. No core or engine review file,
+    app file, `run.ts`, `model.ts`, `session/llm.ts` or HttpApi changed, so
+    the other four workflows do not exercise this package's code.
+
+- **Not claimed.**
+  - No run on a real repository (Q30 and Q43 stay open) and no paid run.
+  - No quality, prediction or accuracy claim. The verdicts on synthetic
+    histories show only that each verdict is reachable.
+  - No default, key, variant or pin change.
+  - No owner gate is crossed: no `cat-file`, no model call, no GitHub call.
+  - `vectorscope-remaining.md:4-6` authorizes reversible software only.
+- **Hand-offs to SF-05a and SF-05b.**
+  - SF-05a lifts "unaudited" when VS-46d's audit labels exist. The
+    deciding-label line, `separationLine` and `measurementLines`' `flag`
+    (the verdict line and the filtered capture heading) carry it.
+  - SF-05a and SF-05b append their own headings to the /1 unavailable list
+    (`MEASUREMENT_SECTIONS`, or a list of their own after it). Their sections
+    go after "## Depth and reach", and they re-pin nothing in T1 but
+    `v1Only`'s heading list.
+  - Read the filtered population as `measurementOf` does: not reverted, and
+    not `filteredIncomplete`.
+- **Left to the lane's final package.**
+  - Refresh `vectorscope-remaining.md:91`: VS-46c's report sections are now
+    built in source, and VS-46d's are SF-05a and SF-05b.
+  - Refresh `vectorscope-continuation.md`.
+  - Append the correcting entry for the stale `:16000` sentence.
+  - SF-04 touches none of these.

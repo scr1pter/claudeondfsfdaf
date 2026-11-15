@@ -20,6 +20,8 @@ import {
   SUMMARY_MARKER,
   type FindingMarker,
 } from "../../packages/core/src/review/state"
+import { DEFAULT_CONFIDENCE, wilson } from "../../packages/core/src/review/eval"
+import { RISK_CUTPOINTS, riskOf, type RiskBand, type RiskFeatures } from "../../packages/core/src/review/risk"
 import type { PriorFinding, ReviewState } from "../../packages/core/src/review/types"
 import { UNTRUSTED_GIT, untrustedGitEnv } from "./dataset"
 import {
@@ -38,13 +40,17 @@ import {
   LEDGER_SCHEMA,
   LEDGER_SCHEMA_V1,
   ledgerProblem,
+  likelyBand,
   localGit,
   main,
   matured,
+  MEASUREMENT_RULE,
+  MIN_EXPECTED,
   MIN_MATURED,
   MIN_SETTLED,
   MAX_FILTERED_BLAME_LINES,
   MAX_FIX_LOCATIONS,
+  MAX_LEDGER_PULLS,
   MIN_VOLUME,
   NOT_FIX_LABEL,
   OUTCOMES,
@@ -61,11 +67,14 @@ import {
   v1LedgerProblem,
   V1_UNAVAILABLE,
   WRITER_PERMISSIONS,
+  Z_ALPHA,
+  Z_POWER,
   type GitHubRead,
   type LedgerFinding,
   type LedgerFix,
   type LedgerPull,
   type LedgerPullV1,
+  type MeasurementRule,
   type Outcome,
   type OutcomeLedger,
   type OutcomeLedgerV1,
@@ -815,7 +824,7 @@ describe("the report", () => {
   })
 
   test("band separation needs 200 matured PRs, then compares the low and high bands' intervals", () => {
-    const bands = (low: number, high: number, highPulls = MIN_MATURED / 2) =>
+    const report = (low: number, high: number, highPulls = MIN_MATURED / 2, reverts = [0, 0]) =>
       outcomeReport(
         synthetic(
           repeat(MIN_VOLUME, () => finding(1, "acknowledged")),
@@ -824,17 +833,21 @@ describe("the report", () => {
               pullOf(1000 + index, 200, {
                 band: "low",
                 fixes: index < low ? [{ days: 5, lines: 1, kind: "title", commit: 0 }] : [],
+                ...(index >= MIN_MATURED / 2 - reverts[0] ? { revertedDays: 30 } : {}),
               }),
             ),
             ...repeat(highPulls, (index) =>
               pullOf(2000 + index, 200, {
                 band: "high",
                 fixes: index < high ? [{ days: 5, lines: 1, kind: "title", commit: 0 }] : [],
+                ...(index >= highPulls - reverts[1] ? { revertedDays: 30 } : {}),
               }),
             ),
           ],
         ),
-      ).bands!.separation
+      )
+    const bands = (low: number, high: number, highPulls = MIN_MATURED / 2) =>
+      report(low, high, highPulls).bands!.separation
     expect(bands(10, 12)).toBe("overlap")
     expect(bands(0, 100)).toBe("separated")
     // 199 matured PRs with a band (the synthetic ledger's own matured PR has none).
@@ -842,6 +855,43 @@ describe("the report", () => {
     expect(renderOutcomes(outcomeReport(synthetic(repeat(MIN_VOLUME, () => finding(1, "acknowledged")))))).toContain(
       "Separation: too-few",
     )
+    // 7 fixes over 200 PRs expect 3.5 in each band: fewer than 10, so no verdict (VS-46c item 1).
+    const few = report(3, 4).bands!
+    expect(few).toMatchObject({ separation: "underpowered", label: "unfiltered" })
+    expect(few.expected.unfiltered).toEqual({ low: 3.5, high: 3.5 })
+    expect(renderOutcomes(report(3, 4))).toContain(
+      "Separation: underpowered, on the unfiltered follow-up-fix (SZZ-based, size-biased, unaudited) label. Fewer than 10 expected positives in the low or the high band: no verdict, not yet.",
+    )
+    // 10 and 12 fixes expect 11 in each band: enough to compare, and the bands overlap.
+    expect(report(10, 12).bands!.expected.unfiltered).toEqual({ low: 11, high: 11 })
+    // The sentence holds on a /1 ledger too, which has no measurement verdict to point to.
+    expect(renderOutcomes(report(10, 12))).toContain(
+      "Separation: overlap, on the unfiltered follow-up-fix (SZZ-based, size-biased, unaudited) label. The low and high bands' intervals overlap. That alone is not a verdict, only not yet.\n",
+    )
+    // Reverts decide when both bands expect at least 10 (item 2): 30 in each band of 100 overlap, 5 against 60 do not.
+    const reverted = report(0, 0, MIN_MATURED / 2, [30, 30]).bands!
+    expect(reverted).toMatchObject({
+      separation: "overlap",
+      label: "revert",
+      expected: { revert: { low: 30, high: 30 } },
+    })
+    expect(report(0, 0, MIN_MATURED / 2, [5, 60]).bands).toMatchObject({ separation: "separated", label: "revert" })
+    expect(renderOutcomes(report(0, 0, MIN_MATURED / 2, [5, 60]))).toContain(
+      "Separation: separated, on the revert label. The low and high bands' intervals do not overlap.",
+    )
+    // A band's expected reverts are its PRs times the pooled rate: 20 reverts expect 10 in each band, 19 expect 9.5, and
+    // then the fix label decides (underpowered, with no fix).
+    expect(report(0, 0, MIN_MATURED / 2, [10, 10]).bands).toMatchObject({ label: "revert", separation: "overlap" })
+    expect(report(0, 0, MIN_MATURED / 2, [9, 10]).bands).toMatchObject({
+      label: "unfiltered",
+      separation: "underpowered",
+      expected: { revert: { low: 9.5, high: 9.5 } },
+    })
+    // Both bands must reach 10: with 150 high PRs, 20 reverts over 250 expect 8 in low and 12 in high.
+    expect(report(0, 0, 150, [5, 15]).bands).toMatchObject({
+      label: "unfiltered",
+      expected: { revert: { low: 8, high: 12 } },
+    })
   })
 
   test("the rendering opens with the internal-measurement line and its expiry", () => {
@@ -982,8 +1032,27 @@ describe("expiry", () => {
       agent({ fixes: [{ ...fix, sameAgent: true }], fixesFiltered: [] }, { sameAgentIncomplete: true }),
       ledger({ pulls: [{ ...pullOf(1, 200), fixes: [fix], sameAgentIncomplete: true }] }),
       ledger({ pulls: [{ ...pullOf(1, 30), stratum: "agent", sameAgentIncomplete: true }] }),
+      // VS-46c's sealed rule, within its bounds when present, and a banded PR's score.
+      ledger({ rule: null }),
+      ledger({ rule: { ...MEASUREMENT_RULE, margin: 0 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, margin: 1 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, margin: Number.NaN } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, overhead: 0.3 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, seed: -1 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, seed: 2 ** 32 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, seed: 1.5 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, replicates: 99 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, replicates: 10_001 } }),
+      ledger({ rule: { margin: 0.05, overhead: 0.2, seed: 1 } }),
+      ledger({ pulls: [withoutScore(pullOf(1, 200, { band: "low" }))] }),
+      ledger({ pulls: [{ ...pullOf(1, 200), score: 3 }] }),
+      // More PRs than the merged-PR listing can read, which would also leave the bootstrap's cost unbounded.
+      ledger({ pulls: repeat(MAX_LEDGER_PULLS + 1, (index) => pullOf(index + 1, 30)) }),
     ])
       expect(ledgerProblem(bad, NOW)).toContain("malformed")
+    // SF-03's collection sealed /2 ledgers without a rule: they still open, and the report applies the config's.
+    const { rule, ...ruleless } = ledger()
+    expect(rule).toEqual(MEASUREMENT_RULE)
     // What collection writes passes: kinds that sum to the lines, both labels, and an agent PR's same-agent flags.
     for (const good of [
       ledger({ pulls: [{ ...pullOf(1, 200), fixes: [fix], fixesFiltered: [filtered] }] }),
@@ -1009,6 +1078,11 @@ describe("expiry", () => {
         fixCommits: [fixCommit, { ...fixCommit, kind: "title" }],
       }),
       agent({ fixes: [fix, { ...fix, sameAgent: false }], fixesFiltered: [filtered] }, { sameAgentIncomplete: true }),
+      // A rule other than this source's still opens: the report applies the sealed one.
+      ledger({ rule: { margin: 0.3, overhead: 0.5, seed: 0xffffffff, replicates: 100 } }),
+      ledger({ rule: { ...MEASUREMENT_RULE, overhead: 0.1, replicates: 10_000, seed: 0 } }),
+      ruleless,
+      ledger({ pulls: repeat(MAX_LEDGER_PULLS, (index) => pullOf(index + 1, 30)) }),
     ])
       expect(ledgerProblem(good, NOW)).toBeUndefined()
     expect(ledgerProblem(ledger({ observedUntil: new Date(NOW + DAY).toISOString() }), NOW)).toContain(
@@ -1337,7 +1411,8 @@ describe("what the ledger may load and what it reuses", () => {
 
 // The digests VS-46a's ledger and report gave on these synthetic histories, printed at f8543197 before schema 2: the v1
 // fields of a schema-2 ledger, and every v1 report section, must stay byte-identical (addendum B §1.8, §1.9). Report
-// sections are pinned one by one, so SF-04's rewording of the band-separation sentence re-pins only that section.
+// sections are pinned one by one, so SF-04's rewording of the band-separation sentence re-pins only that section, and
+// BAND_TABLE holds the rest of it to VS-46a's bytes.
 const GRADIENT_ONLY = {
   "## Severity gradient": "109c7965eb66acfcbd2ad2180533b3d65f6ec3e4cf617ddcbfe1683e51318a02",
   "## Split out": "836cdacae23c82582f4256cfa1b3b43d2a012c1105ac1b4aff9ceafab685d08e",
@@ -1363,9 +1438,19 @@ const V1_DIGESTS = {
     "## Severity gradient": "22eee9e73613e5b4b1b8bb2af94adca274c8bdcdf748f64a20e724b2b5c7d1ca",
     "## Split out": "84e13e3fba075e2d22018dbfe0cf46ec2151fd73351c334def93755a1fbc3f02",
     "## Resolution": "3cfab86799e6ad2397561ab0875c587637d91c293306a61986067199964af3f5",
-    "## Risk band against post-merge outcomes": "e2e6a8f127c168702edba82eebc2c0741f06eb7d7147554ff7f474031659f72f",
+    // Re-pinned by VS-46c (SF-04): only the separation sentence moved (BAND_TABLE). VS-46a's was e2e6a8f127c1…
+    "## Risk band against post-merge outcomes": "4aedb769cecbdf94112273533bcde100a007e4e49c4d6e96d33359a0fb5125b3",
     "## Problems": "8e8e3bcac7208276ebec51e8620f0058d2d87a558b70dfcff4fc14bc983e3a57",
   },
+}
+
+// The band section up to "Separation: ": VS-46a's table and its fix-rate sentence, which VS-46c leaves as they were.
+const BAND_TABLE = "9d719ac7cfa29e5c66650a5776de2900559db1dbbc42a0f4cb76254f69258b1d"
+const bandTable = (text: string) => {
+  const part = text
+    .split(/(?=\n## )/)
+    .find((entry) => entry.startsWith("\n## Risk band against post-merge outcomes\n"))!
+  return part.slice(0, part.indexOf("Separation: "))
 }
 
 describe("schema 2 collection (VS-46c, VS-46d)", () => {
@@ -1379,7 +1464,7 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
       const ledger = await collect(input(), { github: recorder.github, git: localGit(repo.dir), now, key: KEY })
       expect(ledger.schema).toBe(LEDGER_SCHEMA)
       expect(digest(JSON.stringify(v1Of(ledger)))).toBe(V1_DIGESTS[name].ledger)
-      // A schema-2 report adds no section yet, so all of it is VS-46a's.
+      // These histories are gradient-only, where a schema-2 report adds no section, so all of it is VS-46a's.
       const text = renderOutcomes(outcomeReport(ledger))
       expect(v1Only(text)).toBe(text)
       expect(sectionDigests(text)).toEqual(V1_DIGESTS[name].report)
@@ -1388,12 +1473,30 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
     }
     const full = fullSynthetic()
     const text = renderOutcomes(outcomeReport(full))
-    expect(text).toContain("Separation: overlap.")
-    expect(sectionDigests(text)).toEqual(V1_DIGESTS.full)
-    // The same ledger read as schema 1: every v1 section as before, and one more saying the rest is unavailable.
+    // VS-46c changes only the separation sentence: the table and the fix-rate sentence before it keep VS-46a's bytes.
+    expect(text).toContain(
+      "Separation: underpowered, on the unfiltered follow-up-fix (SZZ-based, size-biased, unaudited) label.",
+    )
+    expect(digest(bandTable(text))).toBe(BAND_TABLE)
+    expect(sectionDigests(v1Only(text))).toEqual(V1_DIGESTS.full)
+    expect(text.split(/(?=\n## )/).map((part, index) => (index ? part.slice(1, part.indexOf("\n", 1)) : "#"))).toEqual([
+      "#",
+      ...MEASUREMENT_HEADINGS.slice(0, 2),
+      "## Severity gradient",
+      "## Split out",
+      "## Resolution",
+      "## Risk band against post-merge outcomes",
+      ...MEASUREMENT_HEADINGS.slice(2),
+      "## Problems",
+    ])
+    // The same ledger read as schema 1: every v1 section as before, and each VS-46c section unavailable.
     const legacy = renderOutcomes(outcomeReport(v1Of(full)))
     expect(sectionDigests(v1Only(legacy))).toEqual(V1_DIGESTS.full)
-    expect(legacy).toContain(`\n## Schema 2 sections\n\n${V1_UNAVAILABLE}\n\n## Problems\n`)
+    expect(v1Only(legacy)).toBe(v1Only(text))
+    expect(legacy).toContain(
+      `${MEASUREMENT_HEADINGS.map((heading) => `\n${heading}\n\n${V1_UNAVAILABLE}\n`).join("")}\n## Problems\n`,
+    )
+    expect(legacy).not.toContain("## Schema 2 sections")
   })
 
   test("sizes, subjects, fix commits and the filtered label on the synthetic repository", async () => {
@@ -1405,6 +1508,9 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
       key: KEY,
     })
     expect(ledgerProblem(ledger, NOW)).toBeUndefined()
+    // VS-46c's rule, as the report config had it at collection, sealed with the ledger.
+    expect(ledger.rule).toEqual(MEASUREMENT_RULE)
+    expect(ledger.rule).not.toBe(MEASUREMENT_RULE)
     const pull = (number: number) => ledger.pulls.find((entry) => entry.number === number)!
     // The merged PR's reviewed files, as riskFeatures counts them: #3's lockfile is not reviewed.
     expect(ledger.pulls.map((entry) => [entry.number, entry.added, entry.deleted])).toEqual([
@@ -1916,7 +2022,8 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
     expect(current.stdout).not.toContain("read-only")
     const report = readFileSync(join(root, "legacy-opened", REPORT_FILE), "utf8")
     expect(v1Only(report)).toBe(readFileSync(join(root, "current-opened", REPORT_FILE), "utf8"))
-    expect(report).toContain(`\n## Schema 2 sections\n\n${V1_UNAVAILABLE}\n`)
+    for (const heading of MEASUREMENT_HEADINGS) expect(report).toContain(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
+    expect(report).not.toContain("## Schema 2 sections")
     // Written back as it was read: still schema 1, never upgraded.
     expect(readFileSync(join(root, "legacy-opened", OUTCOME_LEDGER_FILE), "utf8")).toBe(
       JSON.stringify(legacy, null, 2) + "\n",
@@ -1969,6 +2076,540 @@ describe("schema 2 collection (VS-46c, VS-46d)", () => {
   })
 })
 
+// VS-46c's measurement (addendum B §1.8) over synthetic schema-2 histories: 400 single-file PRs merged 200 days ago, no
+// tie-breaker unless a group says so, and the filtered and unfiltered labels on the same PRs.
+const BEATS: Group[] = [
+  { band: "high", lines: 1000, count: 40, fixed: 10 },
+  // Five lines score low, so a floor moved these to medium: here they are mostly positive.
+  { band: "medium", lines: 5, count: 60, fixed: 50 },
+  { band: "low", lines: 100, count: 150, fixed: 20 },
+  { band: "low", lines: 10, count: 150, fixed: 20 },
+]
+const NO_BETTER: Group[] = [
+  { band: "high", lines: 1000, count: 40, fixed: 10 },
+  { band: "medium", lines: 5, count: 60, fixed: 0 },
+  { band: "low", lines: 100, count: 150, fixed: 60 },
+  { band: "low", lines: 10, count: 150, fixed: 30 },
+]
+const UNDECIDED: Group[] = [
+  { band: "high", lines: 1000, count: 40, fixed: 10 },
+  { band: "medium", lines: 5, count: 60, fixed: 16 },
+  { band: "low", lines: 100, count: 150, fixed: 40 },
+  { band: "low", lines: 10, count: 150, fixed: 34 },
+]
+const FEW: Group[] = [
+  { band: "high", lines: 1000, count: 40, fixed: 1 },
+  { band: "medium", lines: 5, count: 60, fixed: 2 },
+  { band: "low", lines: 100, count: 150, fixed: 1 },
+  { band: "low", lines: 10, count: 150, fixed: 1 },
+]
+const MOVED_REASON = "fewer than 10 expected positives among the PRs a floor or the test-only rule moved"
+
+describe("the measurement rule (VS-46c)", () => {
+  const measure = (ledger: OutcomeLedger) => outcomeReport(ledger).measurement!
+  const at20 = (label: { capture: { overhead: number; interval: [number, number] | null }[] }) =>
+    label.capture.find((row) => row.overhead === MEASUREMENT_RULE.overhead)!
+
+  test("base rates and expected positives come before anything else", () => {
+    const ledger = measured(BEATS)
+    const report = outcomeReport(ledger)
+    const base = report.measurement!.base
+    expect(base.pulls).toBe(400)
+    expect(base.subjects).toMatchObject({
+      commits: 100,
+      fix: { count: 20, value: 0.2 },
+      revert: { count: 5, value: 0.05 },
+    })
+    expect(base.fixed[90]).toMatchObject({ count: 100, total: 400 })
+    expect(base.filtered[90]).toMatchObject({ count: 100, total: 400 })
+    expect(report.measurement!.labels.filtered.low.expected).toBe(75)
+    expect(report.measurement!.labels.filtered.high.expected).toBe(10)
+    const text = renderOutcomes(report)
+    const rates = section(text, "## Outcome base rates")
+    expect(rates).toContain("fix-prefixed 20/100 20.0% [")
+    expect(rates).toContain("revert-prefixed 5/100 5.0% [")
+    expect(rates).toContain("filtered follow-up fix 75.0 / 10.0.")
+    expect(rates).toContain(
+      "Deciding label: filtered follow-up fix, SZZ-based, size-biased and unaudited (VS-46d's audit has not run).",
+    )
+    // Every section in order: base rates and the MDE first, the rest after the band table.
+    const problem = renderOutcomes(outcomeReport({ ...ledger, problems: ["PR #9: its files stopped at 3000"] }))
+    const order = [
+      ...MEASUREMENT_HEADINGS.slice(0, 2),
+      "## Severity gradient",
+      "## Risk band against post-merge outcomes",
+    ]
+    expect(
+      [...order, ...MEASUREMENT_HEADINGS.slice(2), "## Problems"].map((heading) => problem.indexOf(`\n${heading}\n`)),
+    ).toEqual(
+      [...order, ...MEASUREMENT_HEADINGS.slice(2), "## Problems"]
+        .map((heading) => problem.indexOf(`\n${heading}\n`))
+        .toSorted((a, b) => a - b),
+    )
+    expect(problem.indexOf("\n## Outcome base rates\n")).toBeGreaterThan(0)
+
+    // A PR fixed on the unfiltered label only counts there, and a PR marked filteredIncomplete leaves the filtered
+    // population and is counted.
+    const [first, second, ...rest] = ledger.pulls.filter((pull) => (pull.fixesFiltered ?? []).length > 0)
+    const changed = {
+      ...ledger,
+      pulls: ledger.pulls.map((pull) =>
+        pull === first
+          ? { ...pull, fixesFiltered: [] }
+          : pull === second
+            ? {
+                ...pull,
+                filteredIncomplete: true as const,
+                fixes: [{ days: 5, lines: 1, kind: "label" as const, commit: 0 }],
+              }
+            : pull,
+      ),
+    }
+    expect(rest.length).toBe(98)
+    expect(ledgerProblem(changed, NOW)).toBeUndefined()
+    const split = measure(changed)
+    expect(split.base.fixed[90]).toMatchObject({ count: 100, total: 400 })
+    expect(split.base.filtered[90]).toMatchObject({ count: 98, total: 399 })
+    expect(split.base.filteredIncomplete).toBe(1)
+    expect(split.labels.filtered).toMatchObject({ pulls: 399, positives: 98 })
+    expect(split.labels.revert.pulls).toBe(400)
+    expect(renderOutcomes(outcomeReport(changed))).toContain("(1 marked, left out)")
+
+    // 60 reverts over 250 PRs expect 24 in each band of 100: reverts decide, with no SZZ flag.
+    const reverted = measured([
+      { band: "high", lines: 1000, count: 100, reverted: 30 },
+      { band: "low", lines: 10, count: 100, reverted: 30 },
+      { band: "medium", lines: 200, count: 50 },
+    ])
+    const decided = outcomeReport(reverted)
+    expect(decided.measurement!.deciding).toBe("revert")
+    expect(decided.measurement!.labels.revert.low.expected).toBe(24)
+    expect(decided.bands!.label).toBe("revert")
+    const revertRates = section(renderOutcomes(decided), "## Outcome base rates")
+    expect(revertRates).toContain("Deciding label: revert, which carries no blame-size bias")
+    expect(revertRates).not.toContain("SZZ-based")
+    // Nor does the verdict, or the filtered label's capture table, when reverts decide.
+    expect(section(renderOutcomes(decided), "## Measurement verdict")).toContain(
+      ", on the revert label at the top 20%: band − size",
+    )
+    expect(section(renderOutcomes(decided), "## Capture against size")).toContain(
+      "\nFiltered follow-up fix: 0 positives",
+    )
+    // Reverted PRs leave both fix labels' populations.
+    expect(decided.measurement!.base.filtered[90].total).toBe(190)
+    // Both bands must reach 10: 20 reverts over 250 PRs expect 8 in the 100 low and 12 in the 150 high.
+    const oneBand = measure(
+      measured([
+        { band: "high", lines: 1000, count: 150, reverted: 15 },
+        { band: "low", lines: 10, count: 100, reverted: 5 },
+      ]),
+    )
+    expect(oneBand.labels.revert.low.expected).toBe(8)
+    expect(oneBand.labels.revert.high.expected).toBe(12)
+    expect(oneBand.deciding).toBe("filtered")
+  })
+
+  test("the minimum detectable effect is printed for the observed counts before any verdict", () => {
+    // p = 0.2 over 400 PRs, 280 low and 60 high, and 60 moved.
+    const report = outcomeReport(
+      measured([
+        { band: "high", lines: 1000, count: 60, fixed: 12 },
+        { band: "medium", lines: 5, count: 60, fixed: 12 },
+        { band: "low", lines: 10, count: 280, fixed: 56 },
+      ]),
+    )
+    const filtered = report.measurement!.labels.filtered
+    expect(filtered.rate).toBe(0.2)
+    expect(filtered.mde).toBeCloseTo((Z_ALPHA + Z_POWER) * Math.sqrt(0.16 * (1 / 280 + 1 / 60)), 12)
+    expect(filtered.mde).toBeCloseTo(0.1594, 4)
+    expect(filtered.floorMoved).toMatchObject({ pulls: 60, positives: 12, expected: 12 })
+    expect(filtered.floorMoved.mde).toBeCloseTo(0.1447, 4)
+    // No revert: its rate is 0, so nothing is detectable.
+    expect(report.measurement!.labels.revert.mde).toBeNull()
+    const text = renderOutcomes(report)
+    const row = "| filtered follow-up fix | 400 | 80 (20.0%) | 280 / 60 | 15.9 | 60 | 12.0 | 14.5 |"
+    expect(text).toContain(row)
+    expect(text).toContain("| revert | 400 | 0 (0.0%) | 280 / 60 | n/a | 60 | 0.0 | n/a |")
+    expect(text.indexOf(row)).toBeLessThan(text.indexOf("Verdict:"))
+    expect(text.indexOf("\n## Minimum detectable effect\n")).toBeLessThan(text.indexOf("\n## Severity gradient\n"))
+    // Z_ALPHA is the two-sided quantile at DEFAULT_CONFIDENCE, the level Wilson and the bootstrap interval use: a Wilson
+    // bound L solves (p - L)^2 = z^2 L (1 - L) / n.
+    const lower = wilson(20, 100)![0]
+    expect((Math.sqrt(100) * (0.2 - lower)) / Math.sqrt(lower * (1 - lower))).toBeCloseTo(Z_ALPHA, 6)
+    expect(DEFAULT_CONFIDENCE).toBe(0.95)
+  })
+
+  test("synthetic histories reach each verdict", () => {
+    const beats = measure(measured(BEATS))
+    expect(beats).toMatchObject({ verdict: "beats-size", deciding: "filtered", reasons: [] })
+    expect(at20(beats.labels.filtered).interval![0]).toBeGreaterThan(0)
+    const noBetter = measure(measured(NO_BETTER))
+    expect(noBetter).toMatchObject({ verdict: "no-better-than-size", reasons: [] })
+    expect(at20(noBetter.labels.filtered).interval![1]).toBeLessThan(MEASUREMENT_RULE.margin)
+    const undecided = measure(measured(UNDECIDED))
+    expect(undecided).toMatchObject({ verdict: "undecided", reasons: [] })
+    const straddle = at20(undecided.labels.filtered).interval!
+    expect(straddle[0]).toBeLessThanOrEqual(0)
+    expect(straddle[1]).toBeGreaterThanOrEqual(MEASUREMENT_RULE.margin)
+    // Five positives: every comparison expects fewer than 10.
+    const few = measure(measured(FEW))
+    expect(few.verdict).toBe("underpowered")
+    expect(few.reasons).toEqual(["fewer than 10 expected positives in the low or the high band", MOVED_REASON])
+    // The fix label's expectation decides at exactly 10: BEATS' high band expects 10.0 and is not underpowered.
+    expect(beats.labels.filtered.high.expected).toBe(MIN_EXPECTED)
+    // Each verdict's sentence. The deciding follow-up-fix label is flagged in the verdict line itself, and in its
+    // capture table's heading.
+    const flagged = "filtered follow-up fix (SZZ-based, size-biased, unaudited)"
+    const beatsText = renderOutcomes(outcomeReport(measured(BEATS)))
+    expect(beatsText).toContain(`Verdict: beats-size, on the ${flagged} label at the top 20%: band − size +28.0 [`)
+    expect(section(beatsText, "## Capture against size")).toContain(
+      "\nFiltered follow-up fix (SZZ-based, size-biased, unaudited): 100 positives among 400 PRs.",
+    )
+    const noBetterText = section(renderOutcomes(outcomeReport(measured(NO_BETTER))), "## Measurement verdict")
+    expect(noBetterText).toContain(`Verdict: no-better-than-size, on the ${flagged} label`)
+    expect(noBetterText).toContain(
+      "riskOf is documented as a size, reach and sensitivity heuristic for this repository",
+    )
+    // The reach caveat stands beside that sentence, not only in the depth section.
+    expect(noBetterText).toContain("Reach is untested here, because the band is computed without dependents.")
+    expect(renderOutcomes(outcomeReport(measured(UNDECIDED)))).toContain(
+      "The interval neither lies above 0 nor wholly below the margin: not yet.",
+    )
+    expect(renderOutcomes(outcomeReport(measured(FEW)))).toContain(
+      `Verdict: underpowered, on the ${flagged} label at the top 20%: band − size`,
+    )
+    // No banded PR at all: underpowered, printed as n/a, and nothing throws.
+    const none = outcomeReport(measured([]))
+    expect(none.measurement).toMatchObject({ verdict: "underpowered", base: { pulls: 0 } })
+    expect(none.measurement!.reasons).toEqual([
+      "fewer than 200 matured PRs with a band (0)",
+      "fewer than 10 expected positives in the low or the high band",
+      MOVED_REASON,
+      "no bootstrap interval: no replicate held a positive",
+    ])
+    expect(none.measurement!.labels.filtered.capture.map((row) => row.pulls)).toEqual([0, 0, 0])
+    expect(renderOutcomes(none)).toContain("| 10% | 0 | 0 (n/a), n/a | 0 (n/a), n/a | n/a | n/a | n/a; n/a |")
+    // With no PR the bootstrap runs no replicate, so none is counted as skipped.
+    expect(none.measurement!.labels.revert).toMatchObject({ ran: 0, replicates: 0 })
+    expect(renderOutcomes(none)).toContain(
+      "Replicates with no positive are skipped: revert none run (no PR), filtered follow-up fix none run (no PR).",
+    )
+  })
+
+  test("an interval wholly inside (0, margin) beats size: the order of the rules decides it", () => {
+    // Under a sealed margin of 0.5, BEATS' interval lies above 0 and below the margin at once.
+    const wide = measure(measured(BEATS, { ...MEASUREMENT_RULE, margin: 0.5 }))
+    const interval = at20(wide.labels.filtered).interval!
+    expect(interval[0]).toBeGreaterThan(0)
+    expect(interval[1]).toBeLessThan(0.5)
+    expect(wide.verdict).toBe("beats-size")
+  })
+
+  test("only the PRs a floor or the test-only rule moved differ from size", () => {
+    // riskOf itself: likelyBand is its likelihood band, and a PR is moved exactly when its band is not that one.
+    const features = (lines: number, extra: Partial<RiskFeatures> = {}): RiskFeatures => ({
+      added: lines,
+      deleted: 0,
+      files: 1,
+      dirs: 1,
+      entropy: 0,
+      sensitive: false,
+      codeAdded: lines,
+      codeDeleted: 0,
+      testDelta: 0,
+      testOnly: false,
+      ...extra,
+    })
+    const cases = [
+      features(116), // log2(117) is below the medium cutpoint
+      features(117),
+      features(551), // log2(552) is below the high cutpoint
+      features(552),
+      features(10, { sensitive: true }), // raised to medium
+      features(0, { deleted: 30, codeAdded: 0, codeDeleted: 30 }), // deletion-heavy: raised to medium
+      features(1000, { testOnly: true, testDelta: 1000 }), // lowered to low
+      features(1000, { sensitive: true }), // high either way
+      features(110, { dirs: 8 }), // a tie-breaker carries it across the medium cutpoint: not moved
+    ].map((entry) => riskOf(entry))
+    expect(cases.map((assessed) => [assessed.likelihood.band, assessed.band])).toEqual([
+      ["low", "low"],
+      ["medium", "medium"],
+      ["medium", "medium"],
+      ["high", "high"],
+      ["low", "medium"],
+      ["low", "medium"],
+      ["high", "low"],
+      ["high", "high"],
+      ["medium", "medium"],
+    ])
+    for (const assessed of cases) expect(likelyBand(assessed.likelihood.score)).toBe(assessed.likelihood.band)
+    const assessedLedger = measured([])
+    const fromRisk = {
+      ...assessedLedger,
+      pulls: [
+        ...assessedLedger.pulls,
+        ...cases.map((assessed, index) =>
+          pullOf(500 + index, 200, { band: assessed.band, score: assessed.likelihood.score }),
+        ),
+      ],
+    }
+    expect(measure(fromRisk).labels.revert.floorMoved.pulls).toBe(
+      cases.filter((assessed) => assessed.band !== assessed.likelihood.band).length,
+    )
+    // At a cutpoint the score takes the lower band, as riskOf reads it at the default cutpoints readPull uses.
+    expect(likelyBand(RISK_CUTPOINTS.medium)).toBe("low")
+    expect(likelyBand(RISK_CUTPOINTS.high)).toBe("medium")
+    const cut = (band: "low" | "medium" | "high", score: number) =>
+      measure({ ...assessedLedger, pulls: [...assessedLedger.pulls, pullOf(600, 200, { band, score })] }).labels.revert
+        .floorMoved.pulls
+    expect([cut("low", RISK_CUTPOINTS.medium), cut("medium", RISK_CUTPOINTS.medium)]).toEqual([0, 1])
+    expect([cut("medium", RISK_CUTPOINTS.high), cut("high", RISK_CUTPOINTS.high)]).toEqual([0, 1])
+
+    // BEATS' 60 five-line medium PRs are the moved ones. Positives are spread evenly through each group, PR numbers
+    // ascending, so the first n PRs of a group of c with k positives hold floor(n k / c).
+    const moved = measure(measured(BEATS)).labels.filtered
+    expect(moved.floorMoved).toMatchObject({ pulls: 60, positives: 50, expected: 15 })
+    // Top 40: the 40 high PRs either way. Top 80: the high PRs, then 40 moved PRs (33 positive) against 40 of the
+    // 100-line PRs (5 positive). Top 200: all 60 moved and 100 of the 100-line PRs (13) against all 150 of those (20)
+    // and 10 ten-line PRs (1).
+    expect(moved.capture.map((row) => [row.pulls, row.band.captured, row.size.captured])).toEqual([
+      [40, 10, 10],
+      [80, 43, 15],
+      [200, 73, 31],
+    ])
+    expect(moved.capture.map((row) => row.difference)).toEqual([0, 0.28, 0.42])
+    expect(moved.capture.map((row) => row.random)).toEqual([0.1, 0.2, 0.5])
+    expect(moved.capture[1].band.lines).toBeCloseTo((40 * 1000 + 40 * 5) / 56_800, 12)
+    expect(moved.capture[1].size.lines).toBeCloseTo((40 * 1000 + 40 * 100) / 56_800, 12)
+
+    // The unmoved twin: every band reset to its score's own. Both orders are then the same, every replicate's difference
+    // is 0, and no moved PR expects a positive: underpowered by the floor rule, not no-better-than-size.
+    const beats = measured(BEATS)
+    const twin = measure({
+      ...beats,
+      pulls: beats.pulls.map((pull) => (pull.score === undefined ? pull : { ...pull, band: likelyBand(pull.score) })),
+    })
+    expect(twin.labels.filtered.floorMoved.pulls).toBe(0)
+    expect(twin.labels.filtered.capture.map((row) => [row.difference, row.interval])).toEqual([
+      [0, [0, 0]],
+      [0, [0, 0]],
+      [0, [0, 0]],
+    ])
+    expect(twin.verdict).toBe("underpowered")
+    expect(twin.reasons).toEqual([MOVED_REASON])
+
+    // Tie-breakers alone reorder PRs of one size (the band order takes the scored-up group first, size takes PR
+    // numbers), so capture differs, but none is moved: underpowered by the floor rule.
+    const ties = measure(
+      measured([
+        { band: "high", lines: 1000, count: 40, fixed: 10 },
+        { band: "low", lines: 50, count: 180, fixed: 0 },
+        { band: "low", lines: 50, count: 180, fixed: 90, score: Math.log2(51) + 0.4 },
+      ]),
+    )
+    expect(ties.labels.filtered.floorMoved.pulls).toBe(0)
+    expect(ties.labels.filtered.capture[1].difference).toBeGreaterThan(0)
+    expect(ties.verdict).toBe("underpowered")
+    expect(ties.reasons).toEqual([MOVED_REASON])
+  })
+
+  test("a resample's top takes exactly its share of draws, and at least one PR", () => {
+    // Every PR positive: whichever PRs either order puts first, its top n draws hold n positives, so every replicate's
+    // difference is 0. A PR drawn several times across a threshold counts only for its places under it.
+    const all = measure(
+      measured([
+        { band: "high", lines: 1000, count: 40, fixed: 40 },
+        { band: "medium", lines: 5, count: 60, fixed: 60 },
+        { band: "low", lines: 100, count: 150, fixed: 150 },
+        { band: "low", lines: 10, count: 150, fixed: 150 },
+      ]),
+    )
+    expect(all.labels.filtered.floorMoved.pulls).toBe(60)
+    expect(all.labels.filtered.capture.map((row) => row.interval)).toEqual([
+      [0, 0],
+      [0, 0],
+      [0, 0],
+    ])
+    // Four PRs: round(0.4) would take none at 10%, so the top is at least one PR.
+    const four = measure(measured([{ band: "low", lines: 10, count: 4, fixed: 2 }]))
+    expect(four.labels.filtered.capture.map((row) => row.pulls)).toEqual([1, 1, 2])
+  })
+
+  test("the low-band miss rate, and Effort@20% as unavailable", () => {
+    const report = outcomeReport(measured(BEATS))
+    const miss = report.measurement!.labels.filtered.lowMiss
+    expect(miss.positives).toMatchObject({ count: 40, total: 100, value: 0.4 })
+    expect(miss.pulls).toBe(0.75)
+    expect(miss.lines).toBeCloseTo((150 * 100 + 150 * 10) / 56_800, 12)
+    // No revert: the low band holds none of none.
+    expect(report.measurement!.labels.revert.lowMiss.positives).toMatchObject({ count: 0, total: 0, value: null })
+    const capture = section(renderOutcomes(report), "## Capture against size")
+    expect(capture).toContain(
+      "filtered follow-up fix 40/100 40.0% [30.9%, 49.8%] of positives in the low band, which holds 75.0% of PRs and 29.0% of changed lines",
+    )
+    expect(capture).toContain(
+      "- Effort@20% of order(files) inside matured multi-file PRs: unavailable: schema 2 records no per-file fix data.",
+    )
+    // The wide-reach floor and tie-breaker reordering are named for what they are here.
+    expect(capture).toContain("the sensitive-with-wide-reach floor cannot fire here")
+    expect(capture).toContain("(compared here, but not counted as moved)")
+    expect(capture).toContain("60 of the 400 PRs were moved by a floor or the test-only rule")
+  })
+
+  test("the bootstrap is seeded: reruns are identical, and the sealed rule is the one applied", () => {
+    const ledger = measured(BEATS)
+    const sealed = JSON.stringify(ledger)
+    const first = outcomeReport(ledger)
+    const second = outcomeReport(ledger)
+    expect(second).toEqual(first)
+    expect(renderOutcomes(second)).toBe(renderOutcomes(first))
+    // The report reads the ledger and changes none of it.
+    expect(JSON.stringify(ledger)).toBe(sealed)
+    const filtered = first.measurement!.labels.filtered
+    expect(filtered).toMatchObject({ ran: MEASUREMENT_RULE.replicates, replicates: MEASUREMENT_RULE.replicates })
+    // No revert: every replicate it ran held no positive.
+    expect(first.measurement!.labels.revert).toMatchObject({ ran: MEASUREMENT_RULE.replicates, replicates: 0 })
+    expect(renderOutcomes(first)).toContain(
+      "Replicates with no positive are skipped: revert 2000, filtered follow-up fix 0.",
+    )
+    expect(first.measurement).toMatchObject({ rule: MEASUREMENT_RULE, sealed: true, differs: false })
+    expect(section(renderOutcomes(first), "## Measurement verdict")).toContain(
+      "pre-registered in the report config before any collection and sealed into this ledger when it was collected: a margin of 5.0",
+    )
+    // A /2 ledger SF-03's collection sealed carries no rule: the report applies the config's, says so, and measures
+    // exactly as under the same rule sealed.
+    const { rule, ...ruleless } = ledger
+    expect(rule).toEqual(MEASUREMENT_RULE)
+    expect(ledgerProblem(ruleless, NOW)).toBeUndefined()
+    const unsealed = outcomeReport(ruleless)
+    expect(unsealed.measurement).toEqual({ ...first.measurement!, sealed: false })
+    const unsealedVerdict = section(renderOutcomes(unsealed), "## Measurement verdict")
+    expect(unsealedVerdict).toContain(
+      "pre-registered in the report config before any collection: a margin of 5.0 capture-share points",
+    )
+    expect(unsealedVerdict).toContain("No rule sealed in this ledger: the report config's rule applies.")
+    expect(unsealedVerdict).not.toContain("sealed into this ledger")
+    expect(section(renderOutcomes(first), "## Measurement verdict")).not.toContain("No rule sealed")
+    // Another seed draws other resamples.
+    const reseeded = measure(measured(BEATS, { ...MEASUREMENT_RULE, seed: MEASUREMENT_RULE.seed + 1 }))
+    expect(reseeded.labels.filtered.capture.map((row) => row.interval)).not.toEqual(
+      filtered.capture.map((row) => row.interval),
+    )
+    expect(reseeded.differs).toBe(true)
+    // A sealed margin of 0.30 puts UNDECIDED's interval wholly below it, and the report says the rule is not the
+    // config's.
+    const margin = outcomeReport(measured(UNDECIDED, { ...MEASUREMENT_RULE, margin: 0.3 }))
+    expect(margin.measurement).toMatchObject({ verdict: "no-better-than-size", differs: true })
+    const verdict = section(renderOutcomes(margin), "## Measurement verdict")
+    expect(verdict).toContain(
+      "a margin of 30.0 capture-share points, read at the top 20%, with 2000 bootstrap replicates",
+    )
+    expect(verdict).toContain(
+      "The report config's rule differs now (margin 5.0 points, top 20%, 2000 replicates, seed 46003): the sealed rule is the one applied.",
+    )
+    expect(section(renderOutcomes(first), "## Measurement verdict")).not.toContain("differs")
+    // The verdict's overhead is the sealed one too.
+    const top = measure(measured(BEATS, { ...MEASUREMENT_RULE, overhead: 0.1 }))
+    expect(top.verdict).toBe("undecided")
+  })
+
+  test("the old sentence is gone, and no new section says never", () => {
+    const texts = [
+      renderOutcomes(outcomeReport(fullSynthetic())),
+      renderOutcomes(outcomeReport(v1Of(fullSynthetic()))),
+      ...[BEATS, NO_BETTER, UNDECIDED, FEW, []].map((groups) => renderOutcomes(outcomeReport(measured(groups)))),
+      renderOutcomes(
+        outcomeReport(
+          measured([
+            { band: "high", lines: 1000, count: 100, reverted: 30 },
+            { band: "low", lines: 10, count: 100, reverted: 30 },
+          ]),
+        ),
+      ),
+    ]
+    for (const text of texts) {
+      expect(text).not.toContain("never enable")
+      expect(text).not.toContain("history risk areas for it")
+      for (const heading of ["## Risk band against post-merge outcomes", ...MEASUREMENT_HEADINGS])
+        expect(section(text, heading)).not.toMatch(/\bnever\b/i)
+    }
+    expect(texts[0]).toContain("\n## Risk band against post-merge outcomes\n")
+  })
+
+  test("depth rows are suppressed below their power, and reach is untested", () => {
+    // This asserts the stated rule and the absence of rows only: no depth assignment exists yet (VS-46 item 7), so
+    // there is no row for the rule to suppress. SF-05 or VS-46 item 7 adds the case computed on data.
+    const depth = section(renderOutcomes(outcomeReport(measured(BEATS))), "## Depth and reach")
+    expect(depth).toContain("Post-merge outcomes are a monitor, not a gate, for lens and depth decisions (P3-7).")
+    expect(depth).toContain("so no depth row is shown")
+    expect(depth).toContain("a depth row is suppressed unless each depth compared has at least 10 expected positives")
+    expect(depth).toContain("Reach is untested: the band here is computed without dependents")
+    // No row: the section holds no table.
+    expect(depth.split("\n").filter((line) => line.startsWith("|"))).toEqual([])
+  })
+
+  test("a /1 ledger shows every VS-46c section as unavailable", () => {
+    const current = measured(BEATS)
+    const legacy = outcomeReport(v1Of(current))
+    expect(legacy.measurement).toBeUndefined()
+    const text = renderOutcomes(legacy)
+    for (const heading of MEASUREMENT_HEADINGS)
+      expect(section(text, heading)).toBe(`\n${heading}\n\n${V1_UNAVAILABLE}\n`)
+    // Its v1 sections are the /2 report's.
+    expect(v1Only(text)).toBe(v1Only(renderOutcomes(outcomeReport(current))))
+    // In the gradient-only decision too: a /1 report still names each section, a /2 report prints none.
+    const gradient = { ...current, findings: [] }
+    expect(renderOutcomes(outcomeReport(v1Of(gradient)))).toContain(`\n## Outcome base rates\n\n${V1_UNAVAILABLE}\n`)
+    const plain = renderOutcomes(outcomeReport(gradient))
+    expect(v1Only(plain)).toBe(plain)
+    expect(outcomeReport(gradient).measurement).toBeUndefined()
+  })
+
+  test("a dry run on a sealed synthetic ledger prints every section and writes only the report", async () => {
+    const keyFile = join(root, "measure.pem")
+    writeFileSync(keyFile, OWNER.privateKey)
+    const sealedFile = join(root, "measure.sealed.json")
+    writeFileSync(
+      sealedFile,
+      JSON.stringify(seal({ [OUTCOME_LEDGER_FILE]: Buffer.from(JSON.stringify(measured(BEATS))) }, OWNER.publicKey)),
+    )
+    const sealedBytes = readFileSync(sealedFile)
+    const listing = readdirSync(root).toSorted()
+    const target = join(root, "measure-opened")
+    const result = await main(["open", sealedFile, keyFile, target], { now: NOW + DAY, env: {} })
+    expect(result).toMatchObject({ code: 0, stderr: "" })
+    expect(readdirSync(target)).toEqual([REPORT_FILE])
+    const report = readFileSync(join(target, REPORT_FILE), "utf8")
+    for (const heading of [
+      "## Severity gradient",
+      "## Split out",
+      "## Resolution",
+      "## Risk band against post-merge outcomes",
+      ...MEASUREMENT_HEADINGS,
+    ])
+      expect(report).toContain(`\n${heading}\n`)
+    expect(report).toContain("Verdict: beats-size")
+    expect(readFileSync(sealedFile).equals(sealedBytes)).toBe(true)
+    expect(readdirSync(root).toSorted()).toEqual([...listing, "measure-opened"].toSorted())
+    // A ledger SF-03's collection sealed, with no rule, opens the same way under the config's rule.
+    const { rule: _rule, ...ruleless } = measured(BEATS)
+    const unsealedFile = join(root, "measure-ruleless.sealed.json")
+    writeFileSync(
+      unsealedFile,
+      JSON.stringify(seal({ [OUTCOME_LEDGER_FILE]: Buffer.from(JSON.stringify(ruleless)) }, OWNER.publicKey)),
+    )
+    const ruleTarget = join(root, "measure-ruleless-opened")
+    expect(await main(["open", unsealedFile, keyFile, ruleTarget], { now: NOW + DAY, env: {} })).toMatchObject({
+      code: 0,
+      stderr: "",
+    })
+    expect(readdirSync(ruleTarget)).toEqual([REPORT_FILE])
+    expect(readFileSync(join(ruleTarget, REPORT_FILE), "utf8")).toContain(
+      "No rule sealed in this ledger: the report config's rule applies.",
+    )
+  })
+})
+
 const day = (days: number) => new Date(NOW - days * DAY).toISOString().slice(0, 10)
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex")
@@ -1985,7 +2626,7 @@ function sectionDigests(text: string) {
 
 // A schema-2 ledger's v1 part, keys in their order: the schema named /1, and every schema-2 field left out.
 function v1Of(ledger: OutcomeLedger): OutcomeLedgerV1 {
-  const { subjects: _subjects, fixCommits: _fixCommits, ...rest } = ledger
+  const { subjects: _subjects, fixCommits: _fixCommits, rule: _rule, ...rest } = ledger
   return { ...rest, schema: LEDGER_SCHEMA_V1, pulls: ledger.pulls.map(v1Pull) }
 }
 
@@ -2006,12 +2647,27 @@ function v1Pull(pull: LedgerPull): LedgerPullV1 {
   }
 }
 
+// VS-46c's sections, in their order: a /2 report in the full decision prints them, a /1 report prints each as
+// V1_UNAVAILABLE.
+const MEASUREMENT_HEADINGS = [
+  "## Outcome base rates",
+  "## Minimum detectable effect",
+  "## Capture against size",
+  "## Measurement verdict",
+  "## Depth and reach",
+]
+
 // A report without its schema-2 sections.
 function v1Only(text: string) {
   return text
     .split(/(?=\n## )/)
-    .filter((part) => !part.startsWith("\n## Schema 2"))
+    .filter((part) => !MEASUREMENT_HEADINGS.some((heading) => part.startsWith(`\n${heading}\n`)))
     .join("")
+}
+
+// The text of one report section, its heading line included.
+function section(text: string, heading: string) {
+  return text.split(/(?=\n## )/).find((part) => part.startsWith(`\n${heading}\n`)) ?? ""
 }
 
 // A full-decision ledger that reaches every v1 report section: 200 settled human-stratum findings, each severity and
@@ -2083,9 +2739,13 @@ function synthetic(findings: LedgerFinding[], pulls: LedgerPull[] = []): Outcome
     findings,
     subjects: { commits: 0, fix: 0, revert: 0 },
     fixCommits: [],
+    rule: { ...MEASUREMENT_RULE },
     problems: [],
   }
 }
+
+// A banded PR's default size: one file, no tie-breaker, so its score is log2(1 + lines) and its band is the score's own.
+const BAND_LINES = { low: 10, medium: 200, high: 1000 } as const
 
 function pullOf(number: number, daysAgo: number, extra: Partial<LedgerPull> = {}): LedgerPull {
   return {
@@ -2104,10 +2764,60 @@ function pullOf(number: number, daysAgo: number, extra: Partial<LedgerPull> = {}
     truncated: false,
     matured: daysAgo >= 90,
     ...(daysAgo >= 90 ? { fixes: [], fixesFiltered: [] } : {}),
-    ...(extra.band ? { added: 10, deleted: 0 } : {}),
+    ...(extra.band ? { score: Math.log2(1 + BAND_LINES[extra.band]), added: BAND_LINES[extra.band], deleted: 0 } : {}),
     ...(extra.reviewed === false ? {} : { unreviewedFiles: 0, humanComments: 1 }),
     ...extra,
   }
+}
+
+// A group of single-file PRs for measured(): `fixed` of them (spread evenly, PR numbers ascending) have a filtered and
+// an unfiltered fix, the last `reverted` were reverted, and `score` overrides log2(1 + lines).
+interface Group {
+  band: RiskBand
+  lines: number
+  count: number
+  fixed?: number
+  reverted?: number
+  score?: number
+}
+
+// A full-decision schema-2 ledger for VS-46c: MIN_VOLUME acknowledged findings on PR 1, subjects {100, 20, 5}, one label
+// fix commit, and each group's PRs merged 200 days ago, numbered from 10,000 + 1,000 times the group's index.
+function measured(groups: readonly Group[], rule: MeasurementRule = MEASUREMENT_RULE): OutcomeLedger {
+  const pulls = groups.flatMap((group, at) =>
+    repeat(group.count, (index) => {
+      const fixed = evenly(index, group.count, group.fixed ?? 0)
+      const fix = { days: 5, lines: 1, kind: "label" as const, commit: 0 }
+      return pullOf(10_000 + at * 1000 + index, 200, {
+        band: group.band,
+        score: group.score ?? Math.log2(1 + group.lines),
+        added: group.lines,
+        deleted: 0,
+        fixes: fixed ? [{ ...fix, deleted: { code: 1, blank: 0, comment: 0, whitespace: 0, moved: 0 } }] : [],
+        fixesFiltered: fixed ? [{ ...fix, location: { path: "0123456789abcdef" } }] : [],
+        ...(index >= group.count - (group.reverted ?? 0) ? { revertedDays: 30 } : {}),
+      })
+    }),
+  )
+  return {
+    ...synthetic(
+      repeat(MIN_VOLUME, () => finding(1, "acknowledged")),
+      pulls,
+    ),
+    subjects: { commits: 100, fix: 20, revert: 5 },
+    fixCommits: [{ date: "2026-07-10", kind: "label", deleted: { code: 1, blank: 0, comment: 0 }, locations: [] }],
+    rule: { ...rule },
+  }
+}
+
+// Whether the PR at `index` of `count` is one of `k` spread evenly through them: the first n hold floor(n k / count).
+function evenly(index: number, count: number, k: number) {
+  return Math.floor(((index + 1) * k) / count) > Math.floor((index * k) / count)
+}
+
+function withoutScore(pull: LedgerPull): LedgerPull {
+  const { score: _score, ...rest } = pull
+  return rest
 }
 
 function finding(pr: number, result: Outcome, extra: Partial<LedgerFinding> = {}): LedgerFinding {
