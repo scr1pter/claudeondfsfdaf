@@ -4,31 +4,40 @@
 // time, the deadline timer and the heartbeat interval come from a fake clock. Everything runs under the strict network
 // guard, and credentials come from holders of the test's own. It spawns only git and the tools' commands, so it runs
 // locally as well as in the lane. Some cases emit SIGTERM to this process, as the lifecycle tests do in a child, and
-// restore process.exitCode afterwards. The conversation save (V27) runs here because only this file's runtime has the
-// Codium catalog a Codium session needs.
+// restore process.exitCode afterwards. The conversation save and restore (V27) run here because only this file's
+// runtime has the Codium catalog a Codium session needs; the restore reads saved conversations from the fake GitHub's
+// artifact list and its in-memory signed storage.
 
 import { afterAll, describe, expect } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { APICallError } from "ai"
 import { Clock, Context, Duration, Effect, Exit, Fiber, Layer, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js"
 import { Database } from "@vectordevai/core/database/database"
 import { EventV2 } from "@vectordevai/core/event"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { Location } from "@vectordevai/core/location"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import { ProjectV2 } from "@vectordevai/core/project"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
+import { AbsolutePath } from "@vectordevai/core/schema"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionArchive } from "@vectordevai/core/share/archive"
 import { InvalidRequestReason, LLMError } from "@vectordevai/llm"
 import {
   BOT_REFUSED,
   CANCEL_REPEAT_MS,
   DEADLINE_MISSING,
+  RESTORE_CONTEXT_SHARE,
   SERVICE_TASK,
   SESSION_HEADROOM,
+  SESSION_NOT_RESTORED,
   SESSION_NOT_SAVED,
+  SESSION_RESTORED,
   SESSION_SAVED,
   SESSION_TOO_LARGE,
   gatewayRetry,
@@ -36,20 +45,26 @@ import {
   githubAgentPhase,
   runDeadline,
   stoppedLine,
+  type AgentCredentials,
   type AgentPhaseInput,
   type SessionExport,
+  type SessionImport,
+  type SessionRestore,
   type SessionSave,
 } from "../../src/cli/cmd/github.agent"
 import { GithubBundle } from "../../src/cli/cmd/github.bundle"
 import { verifyGithubRun } from "../../src/cli/cmd/github.cloud"
 import { untrustedJson } from "../../src/cli/cmd/github.policy"
+import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { allowConversationRestore, decryptConversation, encryptConversation } from "../../src/cli/cmd/github.session"
+import { InstanceRef } from "../../src/effect/instance-ref"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRetry } from "../../src/session/retry"
+import { PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session/session"
 import { testEffect } from "../lib/effect"
 import { runtime, setup } from "../lib/research"
@@ -58,21 +73,26 @@ import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import {
   ARTIFACT_KEY,
   CHANNEL,
+  CODIUM_MODEL,
   REPOSITORY_ID,
   RID,
   RUN_ID,
+  STORAGE,
   TICKET_FIXTURE,
   cleanup,
   cloudRecorder,
   codiumFakes,
+  comment,
   commitSetup,
   eventFile,
   fakeClock,
   folder,
   fakeGithub,
   holder,
+  issueData,
   resetTree,
   stepEnv,
+  type FakeArtifact,
   type GatewayAction,
 } from "./github.agent-fixture"
 
@@ -1621,5 +1641,1187 @@ describe("the conversation save (V27, BT05)", () => {
       }),
     { git: true },
     60_000,
+  )
+})
+
+// V27 "The next run" (BT06): before its first turn a Codium run with the runner's proof channel continues the newest
+// conversation its thread's runs saved; anything that cannot be continued starts a new session from the thread with one
+// fixed line, the outcome unchanged. Nothing restored is logged or posted again.
+describe("the conversation restore (V27, BT06)", () => {
+  const ISSUE = 5
+  const THREAD = String(ISSUE)
+  const FOLLOW_UP = "4243"
+  const MARKER = "RUN-ONE-MARKER"
+  const OLDER = "OLDER-MARKER"
+  const WORDS = "fixture gateway words: credits, plan, $9"
+  // P6: nothing public names a plan, a price, a billing state or a gateway's words.
+  const P6 =
+    /dispute|fraud|past_due|payment_failed|vector-(?:10|50|100|200)|\b(?:Plus|Pro|Max|Ultra) plan|fixture gateway|credits|[$€£]\s*\d/i
+  const QUESTIONS = [{ permission: "question", action: "deny" as const, pattern: "*" }]
+  const keyRequest = (thread = THREAD) => ({
+    path: GithubAgents.ENDPOINT.artifactKey,
+    body: { thread },
+    authorization: BEARER,
+  })
+  const keyAnswer = () => Response.json(ARTIFACT_KEY)
+  const RESTORE_LINES: string[] = [SESSION_RESTORED, SESSION_NOT_RESTORED]
+  const restoreLines = (lines: string[]) => lines.filter((line) => RESTORE_LINES.includes(line))
+  const sessionOf = (lines: string[]) =>
+    lines.find((line) => line.startsWith("vector session "))?.slice("vector session ".length)
+  const artifactRequests = <T extends { path: string }>(seen: T[]) =>
+    seen.filter((request) => request.path.includes("/artifacts"))
+  const proofHolder = () => Effect.promise(() => holder("codium", true, { sessionProof: true }))
+  const rid = (run: string, attempt = "1", repositoryId = REPOSITORY_ID) =>
+    GithubAgents.runId(repositoryId, run, attempt, "99")
+  const at = (hour: number) => `2026-11-14T${String(hour).padStart(2, "0")}:00:00Z`
+  const clearOut = (dir: string) =>
+    Promise.all([resetTree(dir), fs.rm(path.join(dir, "vector-out"), { recursive: true, force: true })])
+  const aborted = (signal: AbortSignal | null | undefined) =>
+    new Promise<void>((done) => {
+      if (!signal || signal.aborted) return done()
+      signal.addEventListener("abort", () => done(), { once: true })
+    })
+  const thread = issueData({
+    title: "Notes",
+    body: "Keep notes.",
+    author: "alice",
+    comments: [comment(501, "alice", "/vector write the notes"), comment(502, "alice", "/vector add a summary")],
+  })
+  const brainBytes = Buffer.from('{"private":"owner-approved repository context"}')
+  const approval = {
+    source: "desktop" as const,
+    audience: "owner-desktop" as const,
+    publicRepository: false,
+    repositoryId: REPOSITORY_ID,
+    sha256: createHash("sha256").update(brainBytes).digest("hex"),
+    approvedAt: 1_800_000_000_000,
+  }
+
+  /** The legacy archive the save writes, as plain JSON. */
+  type Archive = {
+    privacy?: "owner-only"
+    info: { id: string; [field: string]: unknown }
+    messages: {
+      info: { id: string; role: string; [field: string]: unknown }
+      parts: { id: string; type: string; text?: string; [field: string]: unknown }[]
+    }[]
+    [field: string]: unknown
+  }
+
+  /** The artifact's download as the runner uploads it: a zip that holds session.vsa. */
+  const artifactZip = async (bytes: Uint8Array) => {
+    const writer = new ZipWriter(new Uint8ArrayWriter())
+    await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
+      level: 0,
+      useWebWorkers: false,
+      useCompressionStream: false,
+    })
+    return writer.close()
+  }
+
+  /** A conversation as a run of `thread` (this run's own by default) saved it under the key, before it is zipped. */
+  const sealed = (
+    session: unknown,
+    options: {
+      thread?: string
+      repositoryId?: string
+      key?: typeof ARTIFACT_KEY
+      brain?: true
+      proposals?: true
+    } = {},
+  ) =>
+    encryptConversation({
+      identity: {
+        repositoryId: options.repositoryId ?? REPOSITORY_ID,
+        thread: options.thread ?? THREAD,
+        rid: rid(RUN_ID, "1", options.repositoryId),
+      },
+      key: options.key ?? ARTIFACT_KEY,
+      session,
+      ...(options.brain ? { brain: { path: "brain/bundle.json" as const, bytes: brainBytes, approval } } : {}),
+      ...(options.proposals ? { proposals: { path: "brain/proposals.json" as const, bytes: brainBytes } } : {}),
+    })
+  const saved = (session: unknown, options: Parameters<typeof sealed>[1] = {}) =>
+    sealed(session, options).then(artifactZip)
+  const artifact = (zip: Uint8Array, extra: Partial<FakeArtifact> = {}): FakeArtifact => ({
+    id: 30,
+    name: `vector-session-${THREAD}`,
+    created_at: at(12),
+    zip,
+    ...extra,
+  })
+
+  /**
+   * The real SessionArchive over this runtime's database behind a share service whose other methods die: the save and
+   * the restore may use only its export and import. Projects resolve to this instance's own.
+   */
+  const archiveShare = Effect.fn("AgentCodiumTest.archiveShare")(function* () {
+    const ctx = yield* InstanceRef
+    if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
+    const bridge = yield* EventV2Bridge.Service
+    const built = yield* Layer.build(
+      SessionArchive.node.implementation as Layer.Layer<
+        SessionArchive.Service,
+        never,
+        Database.Service | EventV2.Service | ProjectV2.Service
+      >,
+    ).pipe(
+      Effect.provideService(EventV2.Service, bridge),
+      Effect.provideService(
+        ProjectV2.Service,
+        ProjectV2.Service.of({
+          directories: () => Effect.die(new Error("The archive's import resolves only the project.")),
+          resolve: (directory) => Effect.succeed({ id: ctx.project.id, directory }),
+          commit: () => Effect.die(new Error("The archive's import resolves only the project.")),
+        }),
+      ),
+    )
+    const archive = Context.get(built, SessionArchive.Service)
+    const unused = () =>
+      Effect.die(new Error("The conversation save and restore use only the archive's export and import."))
+    return PublicSessionShare.Service.of({
+      ...archive,
+      publish: unused,
+      review: unused,
+      flush: unused,
+      unshare: unused,
+      removeTree: unused,
+      auto: unused,
+      read: unused,
+    })
+  })
+
+  /** A Codium issue comment's step env with the job's repository id and the run id mint wrote; `extra` replaces names. */
+  const commentEnv = Effect.fn("AgentCodiumTest.commentEnv")(function* (input: {
+    github: string
+    time: ReturnType<typeof fakeClock>
+    run?: string
+    attempt?: string
+    id?: number
+    body?: string
+    login?: string
+    mode?: "codium" | "own-key"
+    extra?: Record<string, string | undefined>
+  }) {
+    const run = input.run ?? RUN_ID
+    const attempt = input.attempt ?? "1"
+    const mode = input.mode ?? "codium"
+    const user = { ...alice, login: input.login ?? alice.login }
+    const event = yield* Effect.promise(() =>
+      eventFile({
+        action: "created",
+        issue: { number: ISSUE },
+        comment: { id: input.id ?? 501, body: input.body ?? "/vector write the notes", user },
+        sender: user,
+      }),
+    )
+    return {
+      ...stepEnv({
+        event,
+        eventName: "issue_comment",
+        thread: THREAD,
+        github: input.github,
+        mode,
+        ...(mode === "codium" ? { model: "vector-plan", deadline: String(input.time.state.now + HOUR) } : {}),
+      }),
+      GITHUB_RUN_ID: run,
+      GITHUB_RUN_ATTEMPT: attempt,
+      GITHUB_REPOSITORY_ID: REPOSITORY_ID,
+      VECTOR_RUN_ID: rid(run, attempt),
+      ...input.extra,
+    }
+  })
+
+  /**
+   * The issue's first run: it lists nothing (no run of the issue saved yet), runs the lint check, writes the notes and
+   * saves its conversation. Returns its lines, requests and bundle, and the saved archive with its session id replaced
+   * by `source`, an id this database has never seen, as a hosted runner's fresh database sees every saved id: the
+   * import then adopts no fork lineage, as in production.
+   */
+  const firstRun = Effect.fn("AgentCodiumTest.firstRun")(function* (
+    test: Effect.Success<ReturnType<typeof start>>,
+    share: PublicSessionShare.Interface,
+  ) {
+    yield* Effect.promise(() => clearOut(test.dir))
+    yield* test.llm.reset
+    codium.reset({})
+    const github = fakeGithub({
+      roles: { alice: "write" },
+      threads: [{ number: ISSUE, kind: "issue", data: thread }],
+      artifacts: [],
+    })
+    yield* test.llm.tool("bash", { command: "echo lint-run-one", description: "Run the lint check" })
+    yield* test.llm.tool("write", writeNotes(test.dir))
+    yield* test.llm.text(`${MARKER} wrote the notes.`)
+    const cloud = cloudRecorder({ artifactKey: keyAnswer })
+    const time = fakeClock()
+    const run = yield* phase({
+      env: yield* commentEnv({ github: github.url, time }),
+      credentials: yield* proofHolder(),
+      services: cloud.services,
+      clock: time.clock,
+      session: { attest: () => true },
+      restore: { request: github.request },
+    }).pipe(Effect.provideService(PublicSessionShare.Service, share))
+    github.stop()
+    const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+    const bytes = yield* Effect.promise(() => fs.readFile(path.join(test.dir, "vector-out", GithubAgents.SESSION_FILE)))
+    const opened = yield* Effect.promise(() =>
+      decryptConversation({
+        bytes,
+        key: ARTIFACT_KEY,
+        expected: { repositoryId: REPOSITORY_ID, thread: THREAD, rid: rid(RUN_ID) },
+      }),
+    )
+    if (!opened) throw new Error("The first run's saved conversation does not open.")
+    const archive = opened.session as Archive
+    const source = SessionID.descending()
+    yield* Effect.promise(() => clearOut(test.dir))
+    return { run, cloud, github, bundle, archive: { ...archive, info: { ...archive.info, id: source } }, source }
+  })
+
+  /**
+   * A follow-up comment on the issue (run 4243) against the fake GitHub's `artifacts`: the model writes the notes
+   * again and answers `text`. Returns the run, its fakes, the first task request the model got (as JSON) and the logged
+   * session id. `request` wraps the fake GitHub's restore transport.
+   */
+  const followUp = Effect.fn("AgentCodiumTest.followUp")(function* (
+    test: Effect.Success<ReturnType<typeof start>>,
+    input: {
+      artifacts: FakeArtifact[] | "unavailable"
+      share?: PublicSessionShare.Interface
+      key?: () => Response | Promise<Response>
+      importSession?: SessionImport
+      request?: (github: ReturnType<typeof fakeGithub>) => SessionRestore["request"]
+      session?: Partial<SessionSave>
+      credentials?: AgentCredentials
+      extra?: Record<string, string | undefined>
+      text?: string
+      time?: ReturnType<typeof fakeClock>
+      login?: string
+    },
+  ) {
+    yield* Effect.promise(() => clearOut(test.dir))
+    yield* test.llm.reset
+    codium.reset({})
+    const github = fakeGithub({
+      roles: { alice: "write" },
+      threads: [{ number: ISSUE, kind: "issue", data: thread }],
+      artifacts: input.artifacts,
+    })
+    yield* test.llm.tool("write", writeNotes(test.dir))
+    yield* test.llm.text(input.text ?? "RUN-TWO wrote the notes again.")
+    const cloud = cloudRecorder({ artifactKey: input.key ?? keyAnswer })
+    const time = input.time ?? fakeClock()
+    const effect = phase({
+      env: yield* commentEnv({
+        github: github.url,
+        time,
+        run: FOLLOW_UP,
+        id: 502,
+        body: "/vector add a summary",
+        login: input.login,
+        extra: input.extra,
+      }),
+      credentials: input.credentials ?? (yield* proofHolder()),
+      services: cloud.services,
+      clock: time.clock,
+      session: { attest: () => true, ...input.session },
+      restore: {
+        request: input.request ? input.request(github) : github.request,
+        ...(input.importSession ? { importSession: input.importSession } : {}),
+      },
+    })
+    const run = yield* input.share
+      ? effect.pipe(Effect.provideService(PublicSessionShare.Service, input.share))
+      : effect
+    github.stop()
+    const work = (yield* test.llm.inputs).filter(
+      (body) => !JSON.stringify(body).includes("Generate a title for this conversation"),
+    )
+    const requests = work.map((body) => JSON.stringify(body))
+    return { run, github, cloud, time, requests, first: requests[0] ?? "", sessionID: sessionOf(run.lines) }
+  })
+
+  /** An importer that records each call and answers `answer`, or dies, since a row that should not import never calls it. */
+  const importer = (answer?: SessionImport) => {
+    const calls: unknown[] = []
+    const importSession: SessionImport = (value) => {
+      calls.push(value)
+      return answer ? answer(value) : Effect.die(new Error("This row imports nothing."))
+    }
+    return { calls, importSession }
+  }
+
+  /** What every row that falls back shares: one fallback line, the outcome and patch unchanged, a new session. */
+  const fellBack = Effect.fn("AgentCodiumTest.fellBack")(function* (
+    test: Effect.Success<ReturnType<typeof start>>,
+    name: string,
+    row: Effect.Success<ReturnType<typeof followUp>>,
+  ) {
+    const sessions = yield* Session.Service
+    const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+    expect({ name, result: row.run.result }).toMatchObject({ name, result: { exitCode: 0, outcome: "changes" } })
+    expect({ name, lines: restoreLines(row.run.lines) }).toEqual({ name, lines: [SESSION_NOT_RESTORED] })
+    expect({ name, patch: bundle.patch.includes("NOTES.md"), stop: bundle.summary?.stop }).toEqual({
+      name,
+      patch: true,
+      stop: undefined,
+    })
+    expect({ name, restored: row.first.includes(MARKER) || row.first.includes(OLDER) }).toEqual({
+      name,
+      restored: false,
+    })
+    expect({ name, permission: (yield* sessions.get(row.sessionID as SessionID)).permission }).toEqual({
+      name,
+      permission: QUESTIONS,
+    })
+    expect({ name, methods: [...new Set(row.github.transport.map((entry) => entry.method))] }).toMatchObject({
+      name,
+      methods: row.github.transport.length ? ["GET"] : [],
+    })
+    const output = JSON.stringify({ lines: row.run.lines, summary: bundle.summary, notices: row.cloud.notices })
+    expect({ name, leaked: P6.test(output) || output.includes(ARTIFACT_KEY.key) }).toEqual({ name, leaked: false })
+  })
+
+  it.instance(
+    "a follow-up in the same issue continues the newest of its own saved conversations: its history reaches the first model request, the session keeps the question rule, and nothing restored is logged or posted again",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const sessions = yield* Session.Service
+        const audience = SessionAudience.make(yield* Database.Service)
+        const one = yield* firstRun(test, share)
+        // The issue's first run listed nothing, so it asked for no key before its save; its check ran and passed.
+        expect(one.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(restoreLines(one.run.lines)).toEqual([SESSION_NOT_RESTORED])
+        expect(one.run.lines).toContain(SESSION_SAVED)
+        expect(one.cloud.requests).toEqual([keyRequest(), settle("changes")])
+        expect(one.bundle.summary?.body).toContain("<code>echo lint-run-one</code> (exit 0)")
+        expect(JSON.stringify(one.archive)).toContain(MARKER)
+        // Production's precondition: the saved session's id is one this database does not know.
+        expect(yield* audience.knows(one.source)).toBe(false)
+        const older = JSON.parse(JSON.stringify(one.archive).replaceAll(MARKER, OLDER)) as Archive
+        const zip = yield* Effect.promise(() => saved(one.archive))
+        const stale = yield* Effect.promise(() => saved(older))
+        const artifacts: FakeArtifact[] = [
+          artifact(zip, { id: 30, created_at: at(12) }),
+          artifact(stale, { id: 10, created_at: at(9) }),
+          // Newer, but expired; another thread's; and a fork's pull_request run's, all opening under the same key.
+          artifact(stale, { id: 40, created_at: at(13), expired: true }),
+          artifact(stale, { id: 50, created_at: at(14), name: "vector-session-6" }),
+          artifact(stale, { id: 60, created_at: at(15), fork: true }),
+        ]
+        const two = yield* followUp(test, {
+          artifacts,
+          share,
+          text: "RUN-TWO reply. I work at Hooli on the payments team in Lisbon.",
+        })
+        expect(two.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(restoreLines(two.run.lines)).toEqual([SESSION_RESTORED])
+        // The first model request holds the restored history, its check among it, before the new comment.
+        expect(two.first).toContain(MARKER)
+        expect(two.first).toContain("echo lint-run-one")
+        expect(two.first).not.toContain(OLDER)
+        expect(two.first.indexOf(MARKER)).toBeLessThan(two.first.lastIndexOf("add a summary"))
+        // A new session, imported with no fork lineage and given the question rule.
+        expect(two.sessionID).toBeDefined()
+        expect(two.sessionID).not.toBe(one.source)
+        expect(yield* audience.knows(one.source)).toBe(false)
+        expect((yield* sessions.get(two.sessionID as SessionID)).permission).toEqual(QUESTIONS)
+        // GitHub: the list with the job's token, then only artifact 30's zip; storage got no authorization.
+        expect(artifactRequests(two.github.seen)).toEqual([
+          {
+            method: "GET",
+            path: `/repos/octo/widgets/actions/artifacts`,
+            search: `?name=vector-session-${THREAD}&per_page=100&page=1`,
+            authorization: `Bearer ${CHANNEL.githubToken}`,
+          },
+          {
+            method: "GET",
+            path: `/repos/octo/widgets/actions/artifacts/30/zip`,
+            authorization: `Bearer ${CHANNEL.githubToken}`,
+          },
+        ])
+        expect(two.github.storage).toEqual([
+          { url: `${STORAGE}/artifacts/30?sig=fixture`, method: "GET", authorization: null },
+        ])
+        expect(two.github.transport.every((entry) => entry.method === "GET")).toBe(true)
+        // The restore's key and the save's, each for the run's own thread, then the settle.
+        expect(two.cloud.requests).toEqual([keyRequest(), keyRequest(), settle("changes")])
+        // Nothing restored was logged, counted as this run's evidence or posted.
+        expect(two.run.lines.some((line) => line.includes(MARKER))).toBe(false)
+        const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+        expect(bundle.summary?.body).not.toContain("lint-run-one")
+        expect(bundle.summary?.body).toContain("_No test, typecheck, lint or build commands were run._")
+        expect(bundle.summary?.body).not.toContain(MARKER)
+        expect(bundle.summary?.comment).toContain("RUN-TWO reply.")
+        expect(bundle.summary?.comment).not.toContain("Hooli")
+        expect(bundle.summary?.body).not.toContain("Hooli")
+        // The follow-up saved the continued conversation: both runs' turns.
+        const next = yield* Effect.promise(() =>
+          fs.readFile(path.join(test.dir, "vector-out", GithubAgents.SESSION_FILE)),
+        )
+        const reopened = yield* Effect.promise(() =>
+          decryptConversation({
+            bytes: next,
+            key: ARTIFACT_KEY,
+            expected: { repositoryId: REPOSITORY_ID, thread: THREAD, rid: rid(FOLLOW_UP) },
+          }),
+        )
+        expect(JSON.stringify(reopened?.session)).toContain(MARKER)
+        expect(JSON.stringify(reopened?.session)).toContain("RUN-TWO")
+        const output = JSON.stringify({ lines: two.run.lines, summary: bundle.summary, notices: two.cloud.notices })
+        expect(output).not.toMatch(P6)
+        expect(output).not.toContain(ARTIFACT_KEY.key)
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "a writer's dispatch lists nothing on its first attempt and its re-run attempt continues the first attempt's conversation, while a ticket dispatch never lists",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const credentials = yield* proofHolder()
+        const dispatchThread = `dispatch-${RUN_ID}`
+        const attempt = Effect.fn(function* (input: {
+          number: string
+          artifacts: FakeArtifact[]
+          payload?: unknown
+          mentions?: string
+          extra?: Record<string, string | undefined>
+        }) {
+          yield* Effect.promise(() => clearOut(test.dir))
+          yield* test.llm.reset
+          codium.reset({})
+          yield* test.llm.tool("write", writeNotes(test.dir))
+          yield* test.llm.text(`${MARKER} wrote the notes.`)
+          const github = fakeGithub({ roles: { alice: "write" }, artifacts: input.artifacts })
+          const cloud = cloudRecorder({ artifactKey: keyAnswer })
+          const time = fakeClock()
+          const run = yield* phase({
+            env: {
+              ...(yield* dispatch({
+                github: github.url,
+                deadline: String(time.state.now + HOUR),
+                payload: input.payload,
+                mentions: input.mentions,
+              })),
+              GITHUB_RUN_ATTEMPT: input.number,
+              GITHUB_REPOSITORY_ID: REPOSITORY_ID,
+              VECTOR_RUN_ID: rid(RUN_ID, input.number),
+              ...input.extra,
+            },
+            credentials,
+            services: cloud.services,
+            clock: time.clock,
+            session: { attest: () => true },
+            restore: { request: github.request },
+          }).pipe(Effect.provideService(PublicSessionShare.Service, share))
+          github.stop()
+          const work = (yield* test.llm.inputs).filter(
+            (body) => !JSON.stringify(body).includes("Generate a title for this conversation"),
+          )
+          return { run, github, cloud, first: JSON.stringify(work[0] ?? {}) }
+        })
+        const placeholder = yield* Effect.promise(() =>
+          saved({ fixture: "not this run's" }, { thread: dispatchThread }),
+        )
+        const present = [artifact(placeholder, { name: `vector-session-${dispatchThread}` })]
+
+        // Attempt 1: its thread exists only for this run, so nothing is listed; it saves for a re-run attempt.
+        const first = yield* attempt({ number: "1", artifacts: present })
+        expect(first.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(artifactRequests(first.github.seen)).toEqual([])
+        expect(first.github.transport).toEqual([])
+        expect(restoreLines(first.run.lines)).toEqual([])
+        expect(first.run.lines).toContain(SESSION_SAVED)
+        expect(first.cloud.requests).toEqual([keyRequest(dispatchThread), settle("changes")])
+        const bytes = yield* Effect.promise(() =>
+          fs.readFile(path.join(test.dir, "vector-out", GithubAgents.SESSION_FILE)),
+        )
+        const opened = yield* Effect.promise(() =>
+          decryptConversation({
+            bytes,
+            key: ARTIFACT_KEY,
+            expected: { repositoryId: REPOSITORY_ID, thread: dispatchThread, rid: rid(RUN_ID, "1") },
+          }),
+        )
+        const archive = opened!.session as Archive
+        const rerun = yield* Effect.promise(() =>
+          saved({ ...archive, info: { ...archive.info, id: SessionID.descending() } }, { thread: dispatchThread }),
+        )
+
+        // Attempt 2 restores attempt 1's conversation under the same thread's key.
+        const second = yield* attempt({
+          number: "2",
+          artifacts: [artifact(rerun, { name: `vector-session-${dispatchThread}` })],
+        })
+        expect(second.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(restoreLines(second.run.lines)).toEqual([SESSION_RESTORED])
+        expect(second.first).toContain(MARKER)
+        expect(second.cloud.requests).toEqual([
+          keyRequest(dispatchThread),
+          keyRequest(dispatchThread),
+          settle("changes"),
+        ])
+
+        // A ticket dispatch is a desktop run, which never gets the ordinary key (2.8): no list on a re-run attempt,
+        // with or without a Brain upload.
+        const service = { login: "vector-test[bot]", id: 77, type: "Bot" }
+        const ticketed = { inputs: { mode: "task", ticket: TICKET_FIXTURE }, sender: service }
+        for (const [name, extra] of [
+          ["a ticket dispatch", {}],
+          ["a ticket dispatch with a Brain upload", { VECTOR_BRAIN_UPLOAD: `vbu_${"A".repeat(16)}${"b-".repeat(8)}` }],
+        ] as const) {
+          const ticket = yield* attempt({
+            number: "2",
+            artifacts: present,
+            payload: ticketed,
+            mentions: "@vector-test,/vector,/vs",
+            extra,
+          })
+          expect({ name, result: ticket.run.result }).toMatchObject({
+            name,
+            result: { exitCode: 0, outcome: "changes" },
+          })
+          expect({ name, listed: artifactRequests(ticket.github.seen), sent: ticket.github.transport }).toEqual({
+            name,
+            listed: [],
+            sent: [],
+          })
+          expect({ name, lines: restoreLines(ticket.run.lines) }).toEqual({ name, lines: [] })
+          expect({ name, restored: ticket.first.includes(MARKER) }).toEqual({ name, restored: false })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "a list, download or storage address that cannot be used falls back to a new session from the thread before any key request",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const zip = yield* Effect.promise(() => saved({ fixture: "any conversation" }))
+        const LIMIT = GithubAgents.PATCH_LIMITS.sessionBytes
+        // Each row: the artifacts listed, then how many GitHub artifact requests and storage requests it makes.
+        const rows: [string, FakeArtifact[] | "unavailable", number, number][] = [
+          ["no saved conversation", [], 1, 0],
+          ["an artifact list that is unavailable", "unavailable", 1, 0],
+          ["only an expired one", [artifact(zip, { expired: true })], 1, 0],
+          ["only another thread's", [artifact(zip, { name: "vector-session-6" })], 1, 0],
+          ["only one a fork's run uploaded", [artifact(zip, { fork: true })], 1, 0],
+          [
+            "a download that redirects off GitHub's storage",
+            [artifact(zip, { location: "https://unexpected.invalid/x" })],
+            2,
+            0,
+          ],
+          ["a download past its size limit", [artifact(new Uint8Array(LIMIT + 65_537))], 2, 1],
+        ]
+        for (const [name, artifacts, listed, stored] of rows) {
+          const spy = importer()
+          const row = yield* followUp(test, { artifacts, importSession: spy.importSession })
+          yield* fellBack(test, name, row)
+          expect({ name, imported: spy.calls.length }).toEqual({ name, imported: 0 })
+          // No key request for the restore: the save's own, then the settle.
+          expect({ name, cloud: row.cloud.requests }).toEqual({ name, cloud: [settle("changes")] })
+          expect({ name, listed: artifactRequests(row.github.seen).length }).toEqual({ name, listed })
+          expect({ name, storage: row.github.storage.length }).toEqual({ name, storage: stored })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    180_000,
+  )
+
+  it.instance(
+    "a key refusal or a file that does not open under this thread's key and identity falls back with the outcome unchanged, while the same file with the right key restores",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        const zip = yield* Effect.promise(() => saved(one.archive))
+        const tampered = yield* Effect.promise(async () => {
+          const bytes = Buffer.from(await sealed(one.archive))
+          bytes[bytes.length - 20] = bytes[bytes.length - 20]! ^ 1
+          return artifactZip(bytes)
+        })
+        const refusal = (status: number, code: string) => () =>
+          Response.json({ error: { code, message: WORDS } }, { status })
+        const otherKey = (fill: number, keyId: string) => () =>
+          Response.json({ key: Buffer.alloc(32, fill).toString("base64url"), keyId })
+
+        // The control: this file, this key, this thread and repository restore.
+        const control = yield* followUp(test, { artifacts: [artifact(zip)], share })
+        expect(restoreLines(control.run.lines)).toEqual([SESSION_RESTORED])
+        expect(control.first).toContain(MARKER)
+
+        const rows: [string, { zip?: Uint8Array; key?: () => Response | Promise<Response> }][] = [
+          ["another key", { key: otherKey(8, "fedcba9876543210") }],
+          ["a rebind's key of a new generation", { key: otherKey(9, ARTIFACT_KEY.keyId) }],
+          ["a tampered ciphertext byte", { zip: tampered }],
+          [
+            "a header for another thread under this thread's name",
+            { zip: yield* Effect.promise(() => saved(one.archive, { thread: "6" })) },
+          ],
+          [
+            "a header for another repository",
+            { zip: yield* Effect.promise(() => saved(one.archive, { repositoryId: "4712" })) },
+          ],
+          ["a 403 ARTIFACT_KEY_NOT_ALLOWED", { key: refusal(403, "ARTIFACT_KEY_NOT_ALLOWED") }],
+          ["a 401 MODEL_PLAN_RUN_EXPIRED", { key: refusal(401, "MODEL_PLAN_RUN_EXPIRED") }],
+          ["a 503", { key: refusal(503, "RUN_ARTIFACTS_UNAVAILABLE") }],
+          [
+            "a key transport that throws",
+            {
+              key: () => {
+                throw new Error(WORDS)
+              },
+            },
+          ],
+        ]
+        for (const [name, row] of rows) {
+          const spy = importer()
+          const result = yield* followUp(test, {
+            artifacts: [artifact(row.zip ?? zip)],
+            key: row.key,
+            importSession: spy.importSession,
+            session: { exportSession: () => Effect.succeed({ fixture: "the save's export" }) },
+          })
+          yield* fellBack(test, name, result)
+          expect({ name, imported: spy.calls.length }).toEqual({ name, imported: 0 })
+          // One key request for the restore, one for the save, then the settle; storage never got a token.
+          expect({ name, cloud: result.cloud.requests }).toEqual({
+            name,
+            cloud: [keyRequest(), keyRequest(), settle("changes")],
+          })
+          expect({ name, storage: result.github.storage.map((entry) => entry.authorization) }).toEqual({
+            name,
+            storage: [null],
+          })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    240_000,
+  )
+
+  it.instance(
+    "a conversation the agent phase cannot continue, one that holds a compaction or one over the context share falls back, and so does a failed import, while an image counts its visual tokens",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        const user = one.archive.messages.find((message) => message.info.role === "user")!
+        const compaction = {
+          ...one.archive,
+          messages: one.archive.messages.map((message) =>
+            message !== user
+              ? message
+              : {
+                  ...message,
+                  parts: [
+                    ...message.parts,
+                    {
+                      id: PartID.ascending(),
+                      sessionID: user.parts[0]!.sessionID,
+                      messageID: user.info.id,
+                      type: "compaction",
+                      auto: true,
+                    },
+                  ],
+                },
+          ),
+        }
+        // One token is about four characters (Token.estimate); this text alone is past the share of the window.
+        const over = "x".repeat(Math.ceil(CODIUM_MODEL.contextLength * RESTORE_CONTEXT_SHARE) * 4 + 8)
+        const large = {
+          ...one.archive,
+          messages: one.archive.messages.map((message) =>
+            message !== user
+              ? message
+              : {
+                  ...message,
+                  parts: message.parts.map((part) =>
+                    part.type === "text" ? { ...part, text: `${part.text}${over}` } : part,
+                  ),
+                },
+          ),
+        }
+        const rows: [string, unknown, SessionImport | undefined][] = [
+          ["a session.json that is no archive", { fixture: "not an archive", messages: [] }, undefined],
+          ["an owner-only archive", { ...one.archive, privacy: "owner-only" }, undefined],
+          ["a history that holds a compaction", compaction, undefined],
+          ["a history over the context share", large, undefined],
+          ["an import that fails", one.archive, () => Effect.fail(new Error(WORDS))],
+          [
+            "an import that reports a native session",
+            one.archive,
+            // The real import, reporting the other engine: the run must not continue the session it made.
+            (value) =>
+              share
+                .import({ archive: value, location: Location.Ref.make({ directory: AbsolutePath.make(test.dir) }) })
+                .pipe(Effect.map((imported) => ({ ...imported, engine: "v2" as const }))),
+          ],
+        ]
+        for (const [name, session, answer] of rows) {
+          const spy = importer(answer)
+          const zip = yield* Effect.promise(() => saved(session))
+          const result = yield* followUp(test, {
+            artifacts: [artifact(zip)],
+            importSession: spy.importSession,
+            session: { exportSession: () => Effect.succeed({ fixture: "the save's export" }) },
+          })
+          yield* fellBack(test, name, result)
+          expect({ name, imported: spy.calls.length }).toEqual({ name, imported: answer ? 1 : 0 })
+          expect({ name, cloud: result.cloud.requests }).toEqual({
+            name,
+            cloud: [keyRequest(), keyRequest(), settle("changes")],
+          })
+          // No compaction turn: no request carried the compaction agent's instructions.
+          expect({
+            name,
+            compacted: result.requests.some((body) => body.includes("Summarize only the conversation history")),
+          }).toEqual({ name, compacted: false })
+        }
+        // An image whose base64 alone is past the share, as text, restores: the gate counts the image's visual tokens,
+        // as the compaction's own estimate does, not its transport.
+        const pixels = Buffer.alloc(Math.ceil(CODIUM_MODEL.contextLength * RESTORE_CONTEXT_SHARE) * 4).toString(
+          "base64",
+        )
+        const screenshot = {
+          ...one.archive,
+          messages: one.archive.messages.map((message) =>
+            message !== user
+              ? message
+              : {
+                  ...message,
+                  parts: [
+                    ...message.parts,
+                    {
+                      id: PartID.ascending(),
+                      sessionID: user.parts[0]!.sessionID,
+                      messageID: user.info.id,
+                      type: "file",
+                      mime: "image/png",
+                      filename: "screen.png",
+                      url: `data:image/png;base64,${pixels}`,
+                    },
+                  ],
+                },
+          ),
+        }
+        const image = yield* followUp(test, {
+          artifacts: [artifact(yield* Effect.promise(() => saved(screenshot)))],
+          share,
+        })
+        expect(restoreLines(image.run.lines)).toEqual([SESSION_RESTORED])
+        expect(image.first).toContain(MARKER)
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    240_000,
+  )
+
+  it.instance(
+    "a conversation with Brain or proposal provenance never restores into a comment-triggered run",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        for (const [name, options] of [
+          ["an approved Brain attachment", { brain: true }],
+          ["Brain proposals alone", { proposals: true }],
+        ] as const) {
+          const spy = importer()
+          const zip = yield* Effect.promise(() => saved(one.archive, options))
+          const result = yield* followUp(test, {
+            artifacts: [artifact(zip)],
+            importSession: spy.importSession,
+            session: { exportSession: () => Effect.succeed({ fixture: "the save's export" }) },
+          })
+          yield* fellBack(test, name, result)
+          expect({ name, imported: spy.calls.length }).toEqual({ name, imported: 0 })
+          expect({ name, cloud: result.cloud.requests }).toEqual({
+            name,
+            cloud: [keyRequest(), keyRequest(), settle("changes")],
+          })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "a schedule continues its own thread's conversation through the default GET-only transport, and never one with Brain provenance",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        const cron = "17 3 * * 1"
+        const configuration = JSON.stringify({ [cron]: { id: "weekly", prompt: "Check the notes" } })
+        const scheduled = lookupSchedule({ VECTOR_SCHEDULE_PROMPTS: configuration }, { schedule: cron })
+        if (!scheduled) throw new Error("Missing configured schedule fixture")
+        for (const [name, brain] of [
+          ["the schedule's own conversation", false],
+          ["one with an approved Brain attachment", true],
+        ] as const) {
+          yield* Effect.promise(() => clearOut(test.dir))
+          yield* test.llm.reset
+          codium.reset({})
+          const zip = yield* Effect.promise(() =>
+            saved(one.archive, { thread: scheduled.thread, ...(brain ? { brain: true as const } : {}) }),
+          )
+          // The zip is answered by the API itself, so the restore's default transport, readOnlyFetch, sends every request.
+          const github = fakeGithub({
+            artifacts: [artifact(zip, { name: `vector-session-${scheduled.thread}` })],
+            direct: true,
+          })
+          yield* test.llm.tool("write", writeNotes(test.dir))
+          yield* test.llm.text("Checked the notes.")
+          const cloud = cloudRecorder({ artifactKey: keyAnswer })
+          const time = fakeClock()
+          const run = yield* phase({
+            env: {
+              ...stepEnv({
+                event: yield* Effect.promise(() => eventFile({ schedule: cron })),
+                eventName: "schedule",
+                thread: scheduled.thread,
+                github: github.url,
+                mode: "codium",
+                model: "vector-plan",
+                deadline: String(time.state.now + HOUR),
+              }),
+              VECTOR_SCHEDULE_PROMPTS: configuration,
+              GITHUB_RUN_ID: FOLLOW_UP,
+              GITHUB_REPOSITORY_ID: REPOSITORY_ID,
+              VECTOR_RUN_ID: rid(FOLLOW_UP),
+            },
+            credentials: yield* proofHolder(),
+            services: cloud.services,
+            clock: time.clock,
+            session: { attest: () => true },
+          }).pipe(Effect.provideService(PublicSessionShare.Service, share))
+          github.stop()
+          const first = JSON.stringify(
+            (yield* test.llm.inputs).find(
+              (body) => !JSON.stringify(body).includes("Generate a title for this conversation"),
+            ),
+          )
+          expect({ name, result: run.result }).toMatchObject({ name, result: { exitCode: 0, outcome: "changes" } })
+          expect({ name, lines: restoreLines(run.lines) }).toEqual({
+            name,
+            lines: [brain ? SESSION_NOT_RESTORED : SESSION_RESTORED],
+          })
+          expect({ name, restored: first.includes(MARKER) }).toEqual({ name, restored: !brain })
+          // Every request the default transport sent was a GET, the list and the zip, with the job's token.
+          expect({ name, requests: github.seen.map((request) => `${request.method} ${request.path}`) }).toEqual({
+            name,
+            requests: ["GET /repos/octo/widgets/actions/artifacts", "GET /repos/octo/widgets/actions/artifacts/30/zip"],
+          })
+          expect({ name, tokens: github.seen.map((request) => request.authorization) }).toEqual({
+            name,
+            tokens: [`Bearer ${CHANNEL.githubToken}`, `Bearer ${CHANNEL.githubToken}`],
+          })
+          expect({ name, cloud: cloud.requests }).toEqual({
+            name,
+            cloud: [keyRequest(scheduled.thread), keyRequest(scheduled.thread), settle("changes")],
+          })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "own key lists no artifact, asks for no key and imports nothing, even with a proof channel and saved conversations",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start("own-key")
+        const zip = yield* Effect.promise(() => saved({ fixture: "any conversation" }))
+        const github = fakeGithub({
+          roles: { alice: "write" },
+          threads: [{ number: ISSUE, kind: "issue", data: thread }],
+          artifacts: [artifact(zip)],
+        })
+        const owner = yield* Effect.promise(() => holder("own-key"))
+        const calls = { request: 0, key: 0 }
+        const spy = importer()
+        yield* test.llm.tool("write", writeNotes(test.dir))
+        yield* test.llm.text("Wrote the notes.")
+        const cloud = cloudRecorder({ artifactKey: keyAnswer })
+        const run = yield* phase({
+          env: yield* commentEnv({ github: github.url, time: fakeClock(), mode: "own-key" }),
+          credentials: { ...owner, sessionProof: () => true },
+          services: cloud.services,
+          clock: fakeClock().clock,
+          session: {
+            artifactKey: async () => {
+              calls.key++
+              return { status: "ok", key: ARTIFACT_KEY }
+            },
+          },
+          restore: {
+            request: (url, init) => {
+              calls.request++
+              return github.request(url, init)
+            },
+            importSession: spy.importSession,
+          },
+        })
+        github.stop()
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect({ ...calls, imported: spy.calls.length }).toEqual({ request: 0, key: 0, imported: 0 })
+        expect(artifactRequests(github.seen)).toEqual([])
+        expect(cloud.requests).toEqual([])
+        expect(restoreLines(run.lines)).toEqual([])
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "nothing is attempted without the runner's proof channel, on a desktop Brain run, for a refused event or once the stop time passed, and nothing is listed without a repository id or an archive",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const zip = yield* Effect.promise(() => saved({ fixture: "any conversation" }))
+        const plain = yield* Effect.promise(() => holder("codium"))
+        const rows: [
+          string,
+          {
+            credentials?: AgentCredentials
+            extra?: Record<string, string | undefined>
+            login?: string
+            share?: boolean
+            time?: ReturnType<typeof fakeClock>
+          },
+          { lines: string[]; outcome: GithubAgents.Outcome; cloud: ReturnType<typeof cloudRecorder>["requests"] },
+        ][] = [
+          ["no proof channel", { credentials: plain }, { lines: [], outcome: "changes", cloud: [settle("changes")] }],
+          [
+            "a desktop Brain run",
+            { extra: { VECTOR_BRAIN_UPLOAD: `vbu_${"A".repeat(16)}${"b-".repeat(8)}` } },
+            { lines: [], outcome: "changes", cloud: [settle("changes")] },
+          ],
+          ["a comment by a reader", { login: "bob" }, { lines: [], outcome: "refused", cloud: [settle("refused")] }],
+          [
+            "a stop time already passed",
+            { extra: { VECTOR_RUN_DEADLINE: String(1_800_000_000_000 + GithubAgents.STOP_MARGIN_SECONDS * 1000 - 1) } },
+            { lines: [], outcome: "failed", cloud: [settle("failed")] },
+          ],
+          [
+            "no repository id",
+            { extra: { GITHUB_REPOSITORY_ID: undefined } },
+            { lines: [SESSION_NOT_RESTORED], outcome: "changes", cloud: [settle("changes")] },
+          ],
+          [
+            "no session archive",
+            { share: false },
+            { lines: [SESSION_NOT_RESTORED], outcome: "changes", cloud: [settle("changes")] },
+          ],
+        ]
+        for (const [name, row, expected] of rows) {
+          const result = yield* followUp(test, {
+            artifacts: [artifact(zip)],
+            ...(row.share === false ? {} : { share }),
+            credentials: row.credentials,
+            extra: row.extra,
+            login: row.login,
+            session:
+              row.share === false ? {} : { exportSession: () => Effect.succeed({ fixture: "the save's export" }) },
+          })
+          expect({ name, result: result.run.result }).toMatchObject({
+            name,
+            result: { exitCode: 0, outcome: expected.outcome },
+          })
+          expect({ name, lines: restoreLines(result.run.lines) }).toEqual({ name, lines: expected.lines })
+          expect({ name, listed: artifactRequests(result.github.seen), sent: result.github.transport }).toEqual({
+            name,
+            listed: [],
+            sent: [],
+          })
+          // No artifact-key request at all: the restore made none, and none of these runs can save.
+          expect({ name, cloud: result.cloud.requests }).toEqual({ name, cloud: expected.cloud })
+          expect({ name, leaked: P6.test(JSON.stringify(result.run.lines)) }).toEqual({ name, leaked: false })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    180_000,
+  )
+
+  it.instance(
+    "SIGTERM as the saved conversation downloads or its key arrives imports nothing, sends no model request, writes no bundle and logs no line",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        const zip = yield* Effect.promise(() => saved(one.archive))
+        const exitCode = process.exitCode
+        const listeners = process.listenerCount("SIGTERM")
+        // Each stage's own SIGTERM; the stage waits for the run's abort and then answers as if nothing happened, so the
+        // check right after that stage is the one that stops the restore.
+        const variants: [
+          string,
+          Partial<SessionSave>,
+          ((github: ReturnType<typeof fakeGithub>) => SessionRestore["request"]) | undefined,
+        ][] = [
+          [
+            "storage",
+            {},
+            (github) => async (url, init) => {
+              if (!url.startsWith(`${STORAGE}/`)) return github.request(url, init)
+              process.emit("SIGTERM")
+              await aborted(init.signal)
+              return github.request(url, init)
+            },
+          ],
+          [
+            "key",
+            {
+              artifactKey: async (input) => {
+                process.emit("SIGTERM")
+                await aborted(input?.signal)
+                return { status: "ok", key: ARTIFACT_KEY }
+              },
+            },
+            undefined,
+          ],
+        ]
+        try {
+          for (const [name, stage, request] of variants) {
+            const calls = { key: 0 }
+            const spy = importer()
+            const time = fakeClock()
+            const result = yield* followUp(test, {
+              artifacts: [artifact(zip)],
+              share,
+              importSession: spy.importSession,
+              request,
+              time,
+              session: {
+                artifactKey: (input) => {
+                  calls.key++
+                  return (stage.artifactKey ?? (async () => ({ status: "ok", key: ARTIFACT_KEY }) as const))(input)
+                },
+              },
+            })
+            expect({ name, result: result.run.result }).toEqual({ name, result: undefined })
+            expect({ name, exitCode: process.exitCode }).toEqual({ name, exitCode: 143 })
+            // The phase's own work ends with its deadline timer cleared; only then is the absence of files meaningful.
+            yield* Effect.promise(async () => {
+              const until = Date.now() + 20_000
+              while (!time.state.timers[0]?.cleared && Date.now() < until)
+                await new Promise((done) => setTimeout(done, 20))
+            })
+            expect({ name, cleared: time.state.timers.map((timer) => timer.cleared) }).toEqual({
+              name,
+              cleared: [true],
+            })
+            expect({ name, none: yield* Effect.promise(() => noBundle(test.dir)) }).toEqual({ name, none: true })
+            expect({ name, key: calls.key, imported: spy.calls.length }).toEqual({
+              name,
+              key: name === "key" ? 1 : 0,
+              imported: 0,
+            })
+            expect({ name, gateway: codium.state.requests }).toEqual({ name, gateway: [] })
+            expect({
+              name,
+              lines: restoreLines(result.run.lines),
+              errors: result.run.lines.filter((line) => line.startsWith("error: ")),
+            }).toEqual({ name, lines: [], errors: [] })
+            expect({ name, cloud: result.cloud.requests }).toEqual({ name, cloud: [settle("cancelled")] })
+            expect({ name, listeners: process.listenerCount("SIGTERM") }).toEqual({ name, listeners })
+            process.exitCode = 0
+          }
+        } finally {
+          // Bun keeps an exit code that was set once, so a cleared one is set back to 0.
+          process.exitCode = exitCode ?? 0
+        }
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "a stop while the saved conversation downloads or its key arrives spends nothing more on the restore and stops the run as before",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        const zip = yield* Effect.promise(() => saved(one.archive))
+        // The heartbeat's stop and the deadline timer are the same halt (githubAgentPhase); the timer fires it here,
+        // from inside the stage, so the check right after that stage is the one that stops the restore.
+        for (const name of ["storage", "key"] as const) {
+          const spy = importer()
+          const time = fakeClock()
+          const fired = { key: false }
+          const result = yield* followUp(test, {
+            artifacts: [artifact(zip)],
+            share,
+            importSession: spy.importSession,
+            time,
+            request:
+              name === "storage"
+                ? (github) => async (url, init) => {
+                    if (url.startsWith(`${STORAGE}/`)) time.state.timers[0]!.fire()
+                    return github.request(url, init)
+                  }
+                : undefined,
+            key:
+              name === "key"
+                ? () => {
+                    if (!fired.key) time.state.timers[0]!.fire()
+                    fired.key = true
+                    return Response.json(ARTIFACT_KEY)
+                  }
+                : undefined,
+          })
+          expect({ name, result: result.run.result }).toMatchObject({
+            name,
+            result: { exitCode: 0, outcome: "failed" },
+          })
+          const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+          expect({ name, stop: bundle.summary?.stop, patch: bundle.patch }).toEqual({
+            name,
+            stop: "deadline",
+            patch: "",
+          })
+          expect({ name, imported: spy.calls.length }).toEqual({ name, imported: 0 })
+          expect({ name, lines: restoreLines(result.run.lines) }).toEqual({ name, lines: [] })
+          expect({ name, stopped: result.run.lines.includes(`error: ${stoppedLine(GithubBundle.DEADLINE)}`) }).toEqual({
+            name,
+            stopped: true,
+          })
+          // No model request; the restore's key request only when the stop came with it, then the save's, then the settle.
+          expect({ name, gateway: codium.state.requests }).toEqual({ name, gateway: [] })
+          expect({ name, cloud: result.cloud.requests }).toEqual({
+            name,
+            cloud: [...(name === "key" ? [keyRequest()] : []), keyRequest(), settle("failed")],
+          })
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    120_000,
   )
 })

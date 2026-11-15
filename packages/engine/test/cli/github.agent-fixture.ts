@@ -1,7 +1,8 @@
 // Fakes for the agent phase's tests (V18b, V18c): an event file outside the repository, a loopback fake GitHub that
-// records every request, a git origin that demands credentials and counts its hits, a vectordev.ai recorder behind the
-// cloud client's Services seam, channel holders made with createGithubSecrets, and a fake Codium gateway with its
-// catalog and run credential behind the services the provider layer reads. Nothing here assigns process.env, and no
+// records every request and can list and serve a thread's saved conversations (V27) with an in-memory signed storage
+// behind its restore transport, a git origin that demands credentials and counts its hits, a vectordev.ai recorder
+// behind the cloud client's Services seam, channel holders made with createGithubSecrets, and a fake Codium gateway with
+// its catalog and run credential behind the services the provider layer reads. Nothing here assigns process.env, and no
 // request leaves this computer.
 
 import { $ } from "bun"
@@ -51,7 +52,25 @@ export const CODIUM_MODEL = {
   maxOutputTokens: 8_000,
 }
 
-export type Recorded = { method: string; path: string; query?: string; authorization?: string }
+export type Recorded = { method: string; path: string; query?: string; search?: string; authorization?: string }
+
+/**
+ * A saved conversation as the artifact list names it (V27). `zip` is the artifact's download, the outer zip that holds
+ * `session.vsa`; without one its download is 404. By default a run of this repository's own head uploaded it; `fork`
+ * names a fork's pull_request run instead. `location` replaces the signed storage address the download redirects to.
+ */
+export type FakeArtifact = {
+  id: number
+  name: string
+  created_at: string
+  expired?: boolean
+  zip?: Uint8Array
+  fork?: true
+  location?: string
+}
+
+/** Where the fake GitHub's artifact downloads redirect: a signed storage address the restore transport answers. */
+export const STORAGE = "https://fixture.blob.core.windows.net"
 
 const scratch: string[] = []
 
@@ -124,14 +143,28 @@ type Thread = { number: number; kind: "issue" | "pr"; data: Record<string, unkno
 
 /**
  * A fake GitHub API: collaborator permissions from `roles` (anyone else is "read"), GraphQL answers for the threads
- * given, and review comments by id. Every request is recorded with its method, path and GraphQL query.
+ * given, and review comments by id. Every request is recorded with its method, path, query string and GraphQL query.
+ * With `artifacts` it lists them for any name, as `{artifacts}` with the run that uploaded each (the restore filters
+ * names itself), or answers the list 503 for "unavailable"; an artifact's download redirects to STORAGE, or with
+ * `direct` answers its zip itself. Without `artifacts` every artifact path is 404, as before. `request` is the restore's
+ * transport: it sends this server's own addresses on to it and answers STORAGE from memory, and records every request
+ * it sends with its method and authorization (`transport`, and the STORAGE ones in `storage`). It refuses any other host.
  */
 export function fakeGithub(input: {
   roles?: Record<string, string>
   threads?: Thread[]
   reviewComments?: Record<number, Record<string, unknown>>
+  artifacts?: FakeArtifact[] | "unavailable"
+  direct?: true
 }) {
   const seen: Recorded[] = []
+  const transport: { url: string; method: string; authorization: string | null }[] = []
+  const artifacts = input.artifacts === "unavailable" ? [] : (input.artifacts ?? [])
+  const run = (artifact: FakeArtifact) => ({
+    id: 900 + artifact.id,
+    repository_id: Number(REPOSITORY_ID),
+    head_repository_id: artifact.fork ? Number(REPOSITORY_ID) + 1 : Number(REPOSITORY_ID),
+  })
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -143,8 +176,35 @@ export function fakeGithub(input: {
         method: request.method,
         path: url.pathname,
         ...(query ? { query } : {}),
+        ...(url.search ? { search: url.search } : {}),
         ...(request.headers.get("authorization") ? { authorization: request.headers.get("authorization")! } : {}),
       })
+      if (
+        request.method === "GET" &&
+        input.artifacts &&
+        /^\/repos\/[^/]+\/[^/]+\/actions\/artifacts$/.test(url.pathname)
+      )
+        return input.artifacts === "unavailable"
+          ? Response.json({ message: "Service Unavailable" }, { status: 503 })
+          : Response.json({
+              total_count: artifacts.length,
+              artifacts: artifacts.map((artifact) => ({
+                id: artifact.id,
+                name: artifact.name,
+                expired: artifact.expired ?? false,
+                created_at: artifact.created_at,
+                workflow_run: run(artifact),
+              })),
+            })
+      const download = /^\/repos\/[^/]+\/[^/]+\/actions\/artifacts\/(\d+)\/zip$/.exec(url.pathname)
+      const artifact = download ? artifacts.find((item) => item.id === Number(download[1])) : undefined
+      if (request.method === "GET" && artifact?.zip)
+        return input.direct
+          ? new Response(Uint8Array.from(artifact.zip))
+          : new Response(null, {
+              status: 302,
+              headers: { location: artifact.location ?? `${STORAGE}/artifacts/${artifact.id}?sig=fixture` },
+            })
       const permission = /^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/.exec(url.pathname)
       if (request.method === "GET" && permission) {
         const role = input.roles?.[decodeURIComponent(permission[1]!)] ?? "read"
@@ -164,7 +224,29 @@ export function fakeGithub(input: {
       return Response.json({ message: "Not Found" }, { status: 404 })
     },
   })
-  return { url: `http://127.0.0.1:${server.port}`, seen, stop: () => server.stop(true) }
+  const origin = `http://127.0.0.1:${server.port}`
+  const request = async (url: string, init: RequestInit) => {
+    transport.push({
+      url,
+      method: (init.method ?? "GET").toUpperCase(),
+      authorization: new Headers(init.headers).get("authorization"),
+    })
+    if (url.startsWith(`${origin}/`)) return fetch(url, init)
+    const stored = /^\/artifacts\/(\d+)$/.exec(url.startsWith(`${STORAGE}/`) ? new URL(url).pathname : "")
+    const artifact = stored ? artifacts.find((item) => item.id === Number(stored[1])) : undefined
+    if (!stored) throw new Error(`The fake GitHub's transport refuses ${new URL(url).host}.`)
+    return artifact?.zip ? new Response(Uint8Array.from(artifact.zip)) : new Response("Not Found", { status: 404 })
+  }
+  return {
+    url: origin,
+    seen,
+    transport,
+    get storage() {
+      return transport.filter((entry) => entry.url.startsWith(`${STORAGE}/`))
+    },
+    request,
+    stop: () => server.stop(true),
+  }
 }
 
 export function comment(id: number, login: string | null, body: string) {

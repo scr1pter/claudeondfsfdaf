@@ -151,7 +151,11 @@ async function outer(bytes: Uint8Array) {
   return writer.close()
 }
 
-test("restore selects newest matching unexpired artifact and never forwards GitHub authorization to signed storage", async () => {
+// The run that uploaded an artifact, as the list names it: one on this repository's own head, and a fork's pull_request run.
+const own = { id: 901, repository_id: 123, head_repository_id: 123, head_branch: "main", head_sha: "0".repeat(40) }
+const fork = { ...own, id: 902, head_repository_id: 456, head_branch: "patch-1" }
+
+test("restore selects newest matching unexpired artifact of this repository's own runs and never forwards GitHub authorization to signed storage", async () => {
   const bytes = await encryptConversation({ identity, key, session })
   const zipped = await outer(bytes)
   const seen: { url: string; authorization: string | null; redirect?: RequestRedirect }[] = []
@@ -164,16 +168,33 @@ test("restore selects newest matching unexpired artifact and never forwards GitH
       if (url.includes("?name="))
         return Response.json({
           artifacts: [
-            { id: 4, name: "vector-session-17", expired: true, created_at: "2026-11-12T03:00:00Z" },
-            { id: 2, name: "vector-session-17", expired: false, created_at: "2026-11-11T03:00:00Z" },
+            { id: 4, name: "vector-session-17", expired: true, created_at: "2026-11-12T03:00:00Z", workflow_run: own },
+            { id: 2, name: "vector-session-17", expired: false, created_at: "2026-11-11T03:00:00Z", workflow_run: own },
             {
               id: 3,
               name: "vector-session-17",
               expired: false,
               created_at: "2026-11-12T02:00:00Z",
               archive_download_url: "https://unexpected.invalid",
+              workflow_run: own,
             },
-            { id: 5, name: "vector-session-18", expired: false, created_at: "2026-11-12T04:00:00Z" },
+            { id: 5, name: "vector-session-18", expired: false, created_at: "2026-11-12T04:00:00Z", workflow_run: own },
+            // Newer, but a fork's pull_request run uploaded it, or nothing says which run did (BT06).
+            {
+              id: 6,
+              name: "vector-session-17",
+              expired: false,
+              created_at: "2026-11-12T05:00:00Z",
+              workflow_run: fork,
+            },
+            {
+              id: 7,
+              name: "vector-session-17",
+              expired: false,
+              created_at: "2026-11-12T06:00:00Z",
+              workflow_run: null,
+            },
+            { id: 8, name: "vector-session-17", expired: false, created_at: "2026-11-12T07:00:00Z" },
           ],
         })
       if (url.endsWith("/3/zip"))
@@ -193,6 +214,81 @@ test("restore selects newest matching unexpired artifact and never forwards GitH
   expect(seen.every((entry) => entry.redirect === "manual")).toBe(true)
 })
 
+test("a thread whose only artifacts a fork's run uploaded, or whose run is not named, downloads nothing", async () => {
+  const seen: string[] = []
+  const result = await latestConversation({
+    repository: "owner/project",
+    thread: "17",
+    token: "fixture-read-only-github",
+    request: async (url) => {
+      seen.push(url)
+      return Response.json({
+        artifacts: [
+          { id: 6, name: "vector-session-17", expired: false, created_at: "2026-11-12T05:00:00Z", workflow_run: fork },
+          { id: 7, name: "vector-session-17", expired: false, created_at: "2026-11-12T06:00:00Z", workflow_run: null },
+          { id: 8, name: "vector-session-17", expired: false, created_at: "2026-11-12T07:00:00Z" },
+        ],
+      })
+    },
+  })
+  expect(result).toBeUndefined()
+  expect(seen).toEqual([
+    "https://api.github.com/repos/owner/project/actions/artifacts?name=vector-session-17&per_page=100&page=1",
+  ])
+})
+
+test("a listed entry in an unexpected shape is skipped and the thread's own artifact is still restored", async () => {
+  const bytes = await encryptConversation({ identity, key, session })
+  const zipped = await outer(bytes)
+  const seen: string[] = []
+  const result = await latestConversation({
+    repository: "owner/project",
+    thread: "17",
+    token: "fixture-read-only-github",
+    request: async (url) => {
+      seen.push(url)
+      if (url.includes("?name="))
+        return Response.json({
+          artifacts: [
+            { id: 3, name: "vector-session-17", expired: false, created_at: "2026-11-12T02:00:00Z", workflow_run: own },
+            // Each newer than the own artifact, and each one GitHub could list: a deleted fork's run names no head
+            // repository, and the others carry a value the reader does not accept.
+            {
+              id: 9,
+              name: "vector-session-17",
+              expired: false,
+              created_at: "2026-11-12T08:00:00Z",
+              workflow_run: { ...own, head_repository_id: null },
+            },
+            {
+              id: 10,
+              name: "vector-session-17",
+              expired: false,
+              created_at: "2026-11-12T09:00:00Z",
+              workflow_run: { ...own, repository_id: 0, head_repository_id: 0 },
+            },
+            { id: 0, name: "vector-session-17", expired: false, created_at: "2026-11-12T10:00:00Z", workflow_run: own },
+            { id: 11, name: "vector-session-17", expired: "no", created_at: "2026-11-12T11:00:00Z", workflow_run: own },
+            "not an artifact",
+          ],
+        })
+      if (url.endsWith("/3/zip"))
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://fixture.blob.core.windows.net/artifact?signed=fixture" },
+        })
+      if (url.startsWith("https://fixture.blob.core.windows.net/")) return new Response(Uint8Array.from(zipped))
+      throw new Error("Unexpected artifact request")
+    },
+  })
+  expect(result).toEqual(bytes)
+  expect(seen).toEqual([
+    "https://api.github.com/repos/owner/project/actions/artifacts?name=vector-session-17&per_page=100&page=1",
+    "https://api.github.com/repos/owner/project/actions/artifacts/3/zip",
+    "https://fixture.blob.core.windows.net/artifact?signed=fixture",
+  ])
+})
+
 test("storage redirects to metadata/internal/arbitrary hosts and unavailable artifact lists fall back", async () => {
   for (const location of [
     "http://169.254.169.254/latest/meta-data",
@@ -209,7 +305,15 @@ test("storage redirects to metadata/internal/arbitrary hosts and unavailable art
           calls++
           return calls === 1
             ? Response.json({
-                artifacts: [{ id: 1, name: "vector-session-17", expired: false, created_at: "2026-11-12T02:00:00Z" }],
+                artifacts: [
+                  {
+                    id: 1,
+                    name: "vector-session-17",
+                    expired: false,
+                    created_at: "2026-11-12T02:00:00Z",
+                    workflow_run: own,
+                  },
+                ],
               })
             : new Response(null, { status: 302, headers: { location } })
         },

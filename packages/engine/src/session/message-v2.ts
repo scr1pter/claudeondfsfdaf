@@ -19,7 +19,14 @@ import {
 } from "@vectordevai/core/v1/session"
 
 import { NamedError } from "@vectordevai/core/util/error"
-import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
+import {
+  APICallError,
+  convertToModelMessages,
+  LoadAPIKeyError,
+  type ModelMessage,
+  type ProviderMetadata,
+  type UIMessage,
+} from "ai"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { NotFoundError } from "@/storage/storage"
@@ -144,6 +151,16 @@ function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
   const { providerExecuted: _, ...rest } = metadata
   return Object.keys(rest).length > 0 ? rest : undefined
+}
+
+// A text part's metadata also holds Vector's own marks, such as BrainSchema.OUTSIDE on the text an imported session
+// carries (SessionArchive.import). They are no provider's: the AI SDK accepts only provider namespaces of JSON
+// objects and refuses the whole prompt otherwise, so only those are replayed.
+function providerOwned(metadata: Record<string, unknown> | undefined) {
+  const owned = Object.entries(metadata ?? {}).filter((entry): entry is [string, ProviderMetadata[string]] =>
+    isRecord(entry[1]),
+  )
+  return owned.length > 0 ? Object.fromEntries(owned) : undefined
 }
 
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
@@ -303,7 +320,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
           assistantMessage.parts.push({
             type: "text",
             text,
-            ...(differentModel ? {} : { providerMetadata: part.metadata }),
+            ...(differentModel ? {} : { providerMetadata: providerOwned(part.metadata) }),
           })
         }
         if (part.type === "step-start")

@@ -173,11 +173,11 @@ Remaining:
 
 **Missing: the Actions engine side does none of this yet.**
 1. **Save and restore.**
-   - Nothing called the codec before BT05: `encryptConversation`, `latestConversation` and `decryptConversation` were used only by the desktop. BT05 calls `encryptConversation` for the save; `latestConversation` and `decryptConversation` still wait for BT06.
+   - Nothing called the codec before BT05: `encryptConversation`, `latestConversation` and `decryptConversation` were used only by the desktop. BT05 calls `encryptConversation` for the save; BT06 calls `latestConversation`, `decryptConversation` and `allowConversationRestore` for the restore.
    - The engine never calls `GithubAgents.ENDPOINT.artifactKey` (`github-agents.ts:38`). `github.cloud.ts` calls only mint, bind, heartbeat and settle (`:244,332,363,382`).
    - Add a key client in `github.cloud.ts` that uses the run token.
      - BT04 (`brain-transport`) built it: `artifactKey` asks once with the authorized run token for the run's own thread, never on own key or a Brain run, and answers a closed status (deviations, "2026-11-15 BT04"). BT05 calls it for the save; restore is BT06.
-   - Restore before the session starts (`github.agent.ts:459-461`): pick the newest artifact with `GITHUB_TOKEN` `actions: read`, decrypt, check `allowConversationRestore`, then import using `cli/cmd/import.ts`. Any failure falls back to the thread.
+   - Restore before the session starts (`github.agent.ts:459-461`): pick the newest artifact with `GITHUB_TOKEN` `actions: read`, decrypt, check `allowConversationRestore`, then import using `cli/cmd/import.ts`. Any failure falls back to the thread. **Built in BT06** (`brain-transport`): `github.agent.ts` `restoreConversation` (`:783`) and `readConversation` (`:802`), Codium only and only with the runner's session proof; the import is `SessionArchive.import` through the archive service, as `cli/cmd/import.ts` uses it. It adds a compaction and context-share gate, a fork-artifact filter in `latestConversation`, and a `message-v2.ts` fix without which no imported session could continue (deviations, "2026-11-15 BT06").
    - Save after the share flush and before `writeBundle` (`:559`): export, encrypt, write `vector-out/session.vsa`. **Built in BT05** (`brain-transport`): `github.agent.ts` `saveConversation`, Codium only and only with the runner's session proof, for non-Brain runs; a desktop Brain run saves nothing until BT07b (progress and deviations, "2026-11-15 BT05").
 2. **Runner attestation.** `GithubSessionProof.attestSessionArtifact` (`github.session-proof.ts:35`) had no caller. Call it right after the encrypted bytes are written. **Built in BT05**: the save attests the exact written bytes and removes the file when attestation fails. The real FD3 write on this path runs only on a hosted runner; the `session-replaced` matrix scenario proves the runner side once the lane is green (§1), and the Bun caller stays unverified until the Undici baseline fix reaches this branch (deviations, "2026-11-15 BT05" item 13).
 3. **The desktop Brain transport is broken end to end.**
@@ -189,7 +189,7 @@ Remaining:
    - Use the immutable `brain/bundle.json` as context, and collect model drafts into `brain/proposals.json` inside the encrypted manifest under the separately labeled Brain key.
 4. **Preview and import.** The desktop and UI exist, but no real run produces `session.vsa` or proposals yet. After items 1–3, add a CI case: a returned artifact, then the owner preview, then a one-shot import.
 5. Tests:
-   - Agent-phase cases for restore (newest of several), fallback (wrong key, rebind, tamper), refusal of a Brain-provenance restore, and the proof write.
+   - Agent-phase cases for restore (newest of several), fallback (wrong key, rebind, tamper), refusal of a Brain-provenance restore, and the proof write. Restore, fallback and Brain-provenance cases are **done in BT06** (`github.agent-codium.test.ts`, "the conversation restore (V27, BT06)"); the proof write was BT05's.
    - Spec V27 test list: thread 5 asking for thread 6, and INV-P5.
 6. Switch the privacy copy to "encrypted per conversation" (V29) only after items 1–3 pass in CI.
 

@@ -7,8 +7,10 @@
 // its settle, stops its session at VECTOR_RUN_DEADLINE minus STOP_MARGIN_SECONDS or when the heartbeat says stop, follows
 // 2.9.2 in its retries and its bundle's stop, and logs gateway errors only as their reason lines (P6). With the
 // runner's session proof it also saves its conversation for the thread's next run as vector-out/session.vsa, attested
-// to the runner (V27). An own-key run never heartbeats, settles, waits or saves (INV-K1). Schedules run only the exact
-// default-branch configuration. Node APIs only: the desktop sidecar runs the engine under Node.
+// to the runner (V27), and before its first turn continues the conversation its thread's last run saved, when that
+// conversation opens under the thread's key and fits; otherwise it reads the thread as before. An own-key run never
+// heartbeats, settles, waits, saves or restores (INV-K1). Schedules run only the exact default-branch configuration.
+// Node APIs only: the desktop sidecar runs the engine under Node.
 
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -19,12 +21,14 @@ import { Effect, Option, Schema } from "effect"
 import { z } from "zod"
 import { EventV2 } from "@vectordevai/core/event"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { Location } from "@vectordevai/core/location"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import { parseReviewCommand } from "@vectordevai/core/review/command"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { SessionArchive } from "@vectordevai/core/share/archive"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { AbsolutePath } from "@vectordevai/core/schema"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { LLMError } from "@vectordevai/llm"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -33,6 +37,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
+import { SessionCompaction } from "@/session/compaction"
 import { LLMRequestPrep } from "@/session/llm/request"
 import { SessionPosting } from "@/session/posting"
 import { SessionPrompt } from "@/session/prompt"
@@ -81,6 +86,14 @@ export const SESSION_NOT_SAVED =
   "Vector could not save this conversation for follow-ups; a follow-up reads the thread instead."
 export const SESSION_TOO_LARGE =
   "This conversation is too large to save for follow-ups; a follow-up reads the thread instead."
+// A Codium run's conversation restore (V27 "The next run"): one of these when a restore was attempted, none otherwise.
+export const SESSION_RESTORED = "Vector continued this thread's saved conversation."
+export const SESSION_NOT_RESTORED = "Vector found no saved conversation it could continue; it reads the thread instead."
+// The most of the run model's context window a restored history may take, by the compaction's preflight estimate of
+// what its turns would send (images at their visual tokens, not their base64): the new trigger, the thread (which every
+// run sends again), the system prompt, the tools and the reply need the rest. A history over it, or one that holds a
+// compaction, starts a new session from the thread instead.
+export const RESTORE_CONTEXT_SHARE = 0.5
 // What the codec can add to a conversation of any content: the manifest (at most 4 KiB, its own read cap), the cipher
 // header (at most 1 KiB) and frame, the zip headers, and deflate's worst case of about 5 bytes per 16 KiB block (6,533
 // bytes in all for 20 MB of random bytes). A conversation within it always fits PATCH_LIMITS.sessionBytes, so no key is
@@ -103,6 +116,9 @@ const RUN_ID = /^[1-9]\d{0,19}$/
 const DEADLINE_AHEAD_MS = GithubAgents.TIMEOUT_MIN.codiumAgent * 60_000
 // How often a stopped run cancels its session again while the session's turns may still run.
 export const CANCEL_REPEAT_MS = 1000
+// Nobody can answer a question in an Action. A new session is created with this rule, and a restored one, which the
+// archive's import creates with no rule, gets it before its first turn.
+const NO_QUESTIONS = [{ permission: "question", action: "deny" as const, pattern: "*" }]
 
 export type AgentCredentials = Pick<
   ReturnType<typeof GithubSecrets.createGithubSecrets>,
@@ -126,6 +142,21 @@ export type SessionSave = {
   attest: (bytes: Uint8Array) => boolean
 }
 
+/** The archive's import of a restored session.json into this instance's directory (SessionArchive.import). */
+export type SessionImport = (
+  archive: unknown,
+) => Effect.Effect<{ readonly sessionID: SessionID; readonly engine: "v1" | "v2" }, unknown>
+
+/**
+ * What a Codium run's conversation restore uses (V27 "The next run"), each the real one by default: the GET-only
+ * transport (readOnlyFetch) for the artifact list, the artifact's zip and its signed storage address, and the archive's
+ * import (absent when this process has no archive). The key client is SessionSave's artifactKey.
+ */
+export type SessionRestore = {
+  request: (url: string, init: RequestInit) => Promise<Response>
+  importSession?: SessionImport
+}
+
 export type AgentPhaseInput = {
   /** The step's environment, read and never written; process.env by default. */
   env?: Readonly<Record<string, string | undefined>>
@@ -140,6 +171,8 @@ export type AgentPhaseInput = {
   clock?: Partial<AgentClock>
   /** What a Codium run's conversation save uses; the real ones by default. */
   session?: Partial<SessionSave>
+  /** What a Codium run's conversation restore uses; the real ones by default. */
+  restore?: Partial<SessionRestore>
 }
 
 export type AgentClock = {
@@ -205,10 +238,10 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
   // never shares (2.13).
   const consent = codium ? undefined : input.share
   const share = consent ? Option.getOrUndefined(yield* Effect.serviceOption(PublicSessionShare.Service)) : undefined
-  // A Codium run's conversation save uses only the archive's export, never publish or flush, so it reaches no sharing
-  // endpoint (2.13). The service is looked up only then; own key never looks it up for this.
+  // A Codium run's conversation save and restore use only the archive's export and import, never publish or flush, so
+  // they reach no sharing endpoint (2.13). The service is looked up only then; own key never looks it up for this.
   const archive =
-    codium && !input.session?.exportSession
+    codium && (!input.session?.exportSession || !input.restore?.importSession)
       ? Option.getOrUndefined(yield* Effect.serviceOption(PublicSessionShare.Service))
       : undefined
   const session: SessionSave = {
@@ -218,6 +251,20 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
       (archive ? (sessionID) => archive.export({ sessionID }).pipe(Effect.map(portableArchive)) : undefined),
     encrypt: input.session?.encrypt ?? encryptSession,
     attest: input.session?.attest ?? GithubSessionProof.attestSessionArtifact,
+  }
+  // The restored session lives in this instance's directory, where sessions.create puts a new one: in a hosted run,
+  // the checked-out worktree.
+  const restore: SessionRestore = {
+    request: input.restore?.request ?? readOnlyFetch,
+    importSession:
+      input.restore?.importSession ??
+      (archive
+        ? (value) =>
+            archive.import({
+              archive: value,
+              location: Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }),
+            })
+        : undefined),
   }
   const halt = haltSwitch()
   const settled = { outcome: "failed" as GithubAgents.Outcome }
@@ -244,6 +291,7 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         clock,
         halt,
         session,
+        restore,
       }),
     ),
   ).pipe(Effect.tap((result) => Effect.sync(() => (settled.outcome = result.outcome ?? "failed"))))
@@ -314,6 +362,7 @@ type Deps = {
   clock: AgentClock
   halt: ReturnType<typeof haltSwitch>
   session: SessionSave
+  restore: SessionRestore
 }
 
 // What a phase that SIGINT or SIGTERM cancelled hands back: nobody reads it, and it writes no bundle (2.13).
@@ -502,29 +551,31 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     deps.error(stoppedLine(early))
     return { end: early, title: fallback(), body: "", comment: "" }
   }
-  const model = agentModel({
-    mode: deps.codium ? "codium" : "own-key",
-    model: deps.env.MODEL,
-    providers: await deps.run(deps.provider.list()),
-  })
-  const session = await deps.run(
-    deps.sessions.create({ permission: [{ permission: "question", action: "deny", pattern: "*" }] }),
-  )
-  const shared = await publish(session.id, deps)
+  const providers = await deps.run(deps.provider.list())
+  const model = agentModel({ mode: deps.codium ? "codium" : "own-key", model: deps.env.MODEL, providers })
+  // V27 "The next run": a Codium run continues its thread's saved conversation when it can, otherwise starts a new
+  // session exactly as before. It runs before the log subscription, since the import publishes the restored parts and
+  // none of them may reach the public log. A signal during it ends the run here, before any session is created.
+  const restored = deps.codium
+    ? await restoreConversation(start, providers[model.providerID]?.models[model.modelID], deps)
+    : undefined
+  if (restored === "aborted") return { end: deps.halt.reason(), title: fallback(), body: "", comment: "" }
+  const sessionID = restored?.sessionID ?? (await deps.run(deps.sessions.create({ permission: NO_QUESTIONS }))).id
+  const shared = await publish(sessionID, deps)
   await GithubRunHelpers.subscribeSessionEvents({
     run: deps.run,
     sessions: deps.sessions,
-    sessionID: session.id,
+    sessionID,
     events: deps.events,
     permissions: deps.permissions,
     clean: deps.credentials.redact,
     write: deps.log,
   })
-  deps.log(`vector session ${session.id}`)
+  deps.log(`vector session ${sessionID}`)
   const chat = {
     run: deps.run,
     prompt: deps.prompt,
-    sessionID: session.id,
+    sessionID,
     model,
     halted: () => deps.halt.reason() !== undefined,
     // On Codium a turn's error object holds the gateway's own words, which no public log may print (P6).
@@ -537,7 +588,7 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
   const cancels = { over: false, clear: () => {} }
   const cancel = () => {
     if (cancels.over) return
-    void deps.run(deps.prompt.cancel(session.id)).catch(() => {})
+    void deps.run(deps.prompt.cancel(sessionID)).catch(() => {})
     cancels.clear = deps.clock.timer(CANCEL_REPEAT_MS, cancel)
   }
   const unhook = deps.halt.onHalt(cancel)
@@ -556,21 +607,19 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
   cancels.clear()
   // A stop that cut only the title turn still marks the run as stopped, the more conservative outcome (INV-S17).
   const end = reply.end ?? deps.halt.reason()
-  const evidence = await GithubRunHelpers.collectSessionEvidence({
-    run: deps.run,
-    sessions: deps.sessions,
-    sessionID: session.id,
-  })
+  const evidence = await GithubRunHelpers.collectSessionEvidence({ run: deps.run, sessions: deps.sessions, sessionID })
   const body = buildEvidenceBody({
     response: reply.response,
-    changes: await changesOf(start, session.id, deps),
-    messages: evidence.messages,
+    changes: await changesOf(start, sessionID, deps),
+    // Restored turns are earlier runs' own work: their checks and cost are not this run's evidence and are never
+    // posted again.
+    messages: evidence.messages.filter((message) => !restored?.messages.has(message.info.id)),
     judge: evidence.judge,
     runUrl: start.runUrl,
     shareUrl: shared?.url,
     trigger: start.route.kind === "dispatch" ? "Triggered by workflow_dispatch" : undefined,
   })
-  return { end, title, body, comment: reply.response, sessionID: session.id, shared: shared !== undefined }
+  return { end, title, body, comment: reply.response, sessionID, shared: shared !== undefined }
 }
 
 // A failure before the session could finish: the run's own stop, or the error's row, with the fixed title.
@@ -717,6 +766,89 @@ function portableArchive(local: SessionArchive.Local) {
 async function encryptSession(input: { identity: ArtifactIdentity; key: ArtifactKey; session: unknown }) {
   const { encryptConversation } = await import("./github.session")
   return encryptConversation(input)
+}
+
+/**
+ * V27 "The next run": a Codium run continues the conversation its thread's last run saved. The newest unexpired
+ * `vector-session-<thread>` artifact that a run of this repository (never a fork's) uploaded is read with the job's
+ * read-only GITHUB_TOKEN, opened under the ordinary key for this run's own thread and bound to the job's repository id
+ * and that thread, and imported into this instance as a new session, which gets the question rule. `model` is the run
+ * model, whose window bounds the restored history (RESTORE_CONTEXT_SHARE, by SessionCompaction.estimate). Failure is
+ * never fatal: no artifact, a list or download that fails, a key refusal, a file that does not open, Brain or proposal
+ * provenance, an archive the agent phase cannot continue, a history over the share or one that holds a compaction, or a
+ * failed import each start a new session from the thread with one fixed line. Nothing is attempted, and nothing is logged, without
+ * the runner's proof channel, on a desktop Brain run or a ticket dispatch, on a dispatch's first attempt, or once the
+ * run stopped; a signal that ended the run answers "aborted". It never rejects.
+ */
+async function restoreConversation(start: Start, model: Provider.Model | undefined, deps: Deps) {
+  // A key is asked for only where the run could also save its conversation: with the runner's proof channel. A
+  // desktop run (a Brain run, a ticket dispatch) never gets the ordinary key (2.8, ARTIFACT_KEY_NOT_ALLOWED).
+  if (deps.env.VECTOR_BRAIN_UPLOAD || start.route.ticket || !deps.credentials.sessionProof()) return undefined
+  // A dispatch's thread is dispatch-<runId>: only an earlier attempt of this run can have saved it.
+  if (start.route.kind === "dispatch" && !(Number(deps.env.GITHUB_RUN_ATTEMPT) > 1)) return undefined
+  const restored = await readConversation(start, model, deps).catch(() => undefined)
+  if (deps.signal.aborted) return "aborted" as const
+  if (restored === "stopped") return undefined
+  deps.log(restored ? SESSION_RESTORED : SESSION_NOT_RESTORED)
+  return restored
+}
+
+/**
+ * The restore's steps in order. The run's own checks come before the list, and the list and download before the key
+ * request, so a thread with no artifact spends none of its artifact-key requests. A stop (the deadline or the
+ * heartbeat) seen before the list, the key request or the import answers "stopped", so a stopped run spends nothing
+ * more on it. Any throw is the caller's fallback.
+ */
+async function readConversation(start: Start, model: Provider.Model | undefined, deps: Deps) {
+  if (deps.halt.reason()) return "stopped" as const
+  const repositoryId = deps.env.GITHUB_REPOSITORY_ID ?? ""
+  const importSession = deps.restore.importSession
+  const room = Math.floor((model?.limit.input || model?.limit.context || 0) * RESTORE_CONTEXT_SHARE)
+  if (!/^[1-9]\d{0,19}$(?![\s\S])/.test(repositoryId) || !importSession || !model || room <= 0) return undefined
+  // The codec loads zip.js, so only a run that restores loads it.
+  const { allowConversationRestore, decryptConversation, latestConversation } = await import("./github.session")
+  const thread = start.route.thread
+  const bytes = await latestConversation({
+    repository: `${start.owner}/${start.repo}`,
+    thread,
+    token: start.token,
+    baseUrl: deps.env.GITHUB_API_URL,
+    signal: deps.signal,
+    request: deps.restore.request,
+  })
+  if (deps.signal.aborted || !bytes) return undefined
+  if (deps.halt.reason()) return "stopped" as const
+  // The key is used only inside this callback, so nothing here holds it once the file is open.
+  const conversation = await deps.session
+    .artifactKey({ env: deps.env, holder: deps.credentials, services: deps.services, signal: deps.signal })
+    .then((answer) =>
+      answer.status === "ok"
+        ? decryptConversation({ bytes, key: answer.key, expected: { repositoryId, thread } })
+        : undefined,
+    )
+  if (deps.signal.aborted || !conversation) return undefined
+  // No run that reaches here holds live owner-desktop Brain authority, so history with Brain or proposal provenance
+  // falls back whole (the Brain history restriction).
+  if (!allowConversationRestore(conversation, undefined)) return undefined
+  // Only what the save writes for the agent phase's v1 sessions, decoded as the import decodes it: a legacy archive
+  // that is not owner-only. A native v2 archive cannot continue in the v1 agent phase.
+  const local = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.Union([SessionArchive.Native, SessionArchive.Legacy]))(conversation.session),
+  )
+  if (!local || "engine" in local || local.privacy === "owner-only") return undefined
+  // The import turns a compaction into plain text, so everything before it would be sent again in full.
+  if (local.messages.some((message) => message.parts.some((part) => part.type === "compaction"))) return undefined
+  // The estimate a compaction makes before a turn, over the history as its turns would send it: an image or a tool's
+  // attachment counts its visual tokens, a text file its text once. It only reads the decoded (readonly) messages.
+  const estimate = SessionCompaction.estimate({ messages: local.messages as SessionV1.WithParts[], model })
+  if ((await deps.run(estimate)) > room) return undefined
+  if (deps.halt.reason()) return "stopped" as const
+  const imported = await deps.run(importSession(conversation.session))
+  // A failure from here leaves an unused session in the runner's database, and the run starts a new one.
+  if (imported.engine !== "v1") return undefined
+  await deps.run(deps.sessions.setPermission({ sessionID: imported.sessionID, permission: NO_QUESTIONS }))
+  const messages = await deps.run(deps.sessions.messages({ sessionID: imported.sessionID }))
+  return { sessionID: imported.sessionID, messages: new Set<string>(messages.map((message) => message.info.id)) }
 }
 
 function bundleRoute(
