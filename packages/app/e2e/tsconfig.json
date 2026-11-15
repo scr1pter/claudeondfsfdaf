@@ -48,6 +48,7 @@
     "./regression/public-share-delete.spec.ts",
     "./regression/public-share-viewer.spec.ts",
     "./regression/remote-phone.spec.ts",
+    "./regression/codium-remote-helpers.spec.ts",
     "./regression/support-report.spec.ts",
     "./regression/swarm-stop.spec.ts",
     "./regression/teams.spec.ts",

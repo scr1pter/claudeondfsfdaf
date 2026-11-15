@@ -4601,3 +4601,204 @@ Re-run in the review round, on the current code:
 
 No flag, setting, listing, route, price or page changed; `REMOTE_ROUTES` is unchanged; no SDK or generated output
 changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged. Edits to `api/_lib/model-plan-*.ts`: none.
+
+## Codium finish: B09 browser acceptance (15 Nov 2026)
+
+Track B B09 (`codium-build-spec.md:947`), second half: the checkpoint's "Actual paired desktop/phone browser check"
+(`codium-track-b-checkpoint.md:16`). Read and built on `codium-finish` `03266e2e` (equal to origin/codium-finish; PR #33
+unmerged: `0ee486e3` is not an ancestor of origin/main, and it is the merge base with origin/release-finish). Scratch
+was under `/tmp/vector-v2/codium/b09b/`. CI: pending dispatch (see the dated checkpoint line once the Vector Codium and
+typecheck.yml runs finish).
+
+**What landed**
+
+- `packages/app/e2e/regression/codium-remote-helpers.spec.ts` (new; the path names codium, so the picker's
+  `CODIUM_PATH` selects it for the Codium browser specs job). Two cases on A42's fixture page:
+  - `:88` "a paired phone shows helper and background-job states, stops including helpers with exactly {helpers:
+    true}, and reaches no other route". The phone pairs with a passkey (Chromium's virtual authenticator, one credential
+    for rpId localhost), opens Sessions and the session "Fix the login", and its Tasks view shows five rows from the fake
+    engine's board through the phone's projection (`src/phone/remote/tasks.ts:6-22`, df3951ba): a helper waiting for
+    approval ("Waiting for you", "Waiting for your approval."), one working, one interrupted ("Stopped", "Interrupted.
+    Continue this task from Vector on your computer."), one disconnected ("Disconnected · last known state") and a
+    background command ("Working"). Nothing on the phone holds PRIVATE or 98765. Once the Stop button shows (it waits for
+    the capabilities answer, `session-tasks.tsx:46`), the engine's `/experimental/` log is exactly one capabilities read
+    and one tasks read with `{descendants, shells, limit: "100", directory: "/repo"}`. "Stop including helpers" (exact
+    name, so the plain "Stop" abort beside it never matches) gives the engine exactly one `POST
+    /experimental/session/ses_1/stop` with query `{directory: "/repo"}` and body `{helpers: true}`, then one tasks read,
+    and nothing else but a possible `GET /project`; no `/session/ses_1/abort` is ever sent. Three routes outside the
+    allowlist (`POST .../tasks/stop {all: true}`, `GET .../tasks/tsk_wait`, `POST /session/ses_1/shell`) answer 403
+    `REMOTE_ROUTE_REFUSED` and the engine log after them is strictly empty; Stop with `{helpers: true, sessionID:
+    "ses_other"}` answers 400 `REMOTE_BODY_REFUSED` and reaches the engine with nothing but a possible `GET /project`.
+  - `:176` "a waiting and an interrupted helper reach the paired phone as title-only alerts". After pairing, a helper's
+    waiting update alerts once its 3 s settle has passed (polled up to 15 s), then an interrupted update alerts at once.
+    Three views of each alert are checked: what the app hands the desktop is exactly `{event: "needsYou", title, route:
+    "sessions"}`; what the desktop posts to `https://vectordev.ai/api/notify/send` has exactly the keys `ciphertext`,
+    `key`, `urgency` (high) and no title; the sealed plaintext, opened in the page with the key the phone stored when it
+    paired, is exactly `{v: 1, title, route: "sessions"}`; and what the service worker would show (`openAlert` and
+    `notificationFor`) is the title with no body, tag `sessions` and `/phone/sessions`. Titles are exactly "A helper needs
+    you: Fix the login" and "A helper was interrupted: Fix the login" (so neither is the unreadable-alert notice); none of
+    the sealed or shown text holds PRIVATE, the helper's title "Check the login form" or "subagent".
+- `packages/app/e2e/fixtures/remote-phone.jsx` (extended; `remote-phone.html` unchanged). A header paragraph for B09; a
+  fake engine session list (`GET /session`, `/session/status`), capabilities, task board and Stop (its answer is a
+  SessionStopResult listing only the two helpers it stopped); the phone client's real alert-key store
+  (`saveAlertKey`/`forgetAlertKey`/`forgetAlertKeys`, as `app.tsx:187`); the helper alert path (`createHelperPhoneAlerts`
+  with `sessionNotificationAllowed` and `sendPhoneAlert`, the desktop's `createRemoteNotify` with `link.alertKey()` and a
+  fetch that only records); and `window.remoteFixture.engine`, `phone`, `helper`, `asked` and `alerts`. The phone pane
+  gains the real `SessionsRoute`; `navigate` maps `/phone/sessions` to it instead of to Approvals.
+- `packages/app/e2e/tsconfig.json`: the new spec is listed, so `bun run typecheck:e2e` checks it.
+
+No product source changed.
+
+**Readings**
+
+- The forwarder already runs in the page. The fixture builds the desktop's real `createRemoteLink`
+  (`remote-phone.jsx:13` at HEAD), which wires `createRemoteRoutes` (`packages/desktop/src/main/remote-link.ts:228-242`);
+  every phone `req` goes through `routes.handle` (`remote-link.ts:436-444`) and `matchRoute` (`remote-routes.ts:321-341`,
+  allowlist at `:53-79`) before the fixture's fake `engine.request` records it. A42's spec passing in CI (Codium browser
+  specs job 132651657817 in Vector Codium run 43661511343, and test.yml e2e jobs 132574288954 and 132574289008, as
+  `codium-a42-remote-phone-notes.md` records) shows that module graph loads under Vite, so the Node-side `page.route`
+  fallback was not built. Codium browser specs job 132869451570 (run 43733017049) did not run A42's spec: its log shows
+  `CODIUM_CI_BROWSER_SPECS` empty and only `codium-image-routing`, `codium-usage-labels` and `codium-vault-sections`
+  selected (9 passed), because `remote-phone.spec.ts` is unchanged against the base; that is why this package names it
+  in `browser_specs`. No test code restates `REMOTE_ROUTES`; the refused cases are real engine routes outside it,
+  and the full inventory stays in `remote-routes-combined.test.ts`.
+- `GET /project` is not a timer. It is the desktop's lazy directory cache (`DIRECTORIES_MS = 30_000`,
+  `remote-link.ts:58`, read at `:216-226`), refilled when a request names a folder and the cache is older than 30 s.
+  `matchRoute` refuses before the folder check (`remote-routes.ts:258-259`), so the three route-refused probes are
+  checked for a strictly empty log; the body-refused probe passes the folder check first (`:270-276` before `:281-285`),
+  so only it, and the Stop and tasks reads, filter out `GET /project`.
+- Typecheck coverage. `bun typecheck` in `packages/app` is `tsgo -b` over `tsconfig.json` (`src` and three
+  test-browser files) and does not cover `e2e/`. Only `bun run typecheck:e2e` (`tsgo -p e2e/tsconfig.json`,
+  `package.json:25`) does, for the specs its include list names. No Codium-lane or typecheck.yml job runs it (only
+  scope-app-validation.yml, on main and release-finish), so the local run is the type receipt. Playwright's transpile
+  does not typecheck, and the `.jsx` fixtures are not typechecked anywhere.
+- Fixture substitutions (each is the real module with a stand-in input): Settings → Notifications' choices are all on
+  with no quiet hours; the plan status is in-page data listing `alerts` and `remote` at rank 2; the conversation lookup
+  answers the fake engine's one session; nothing is viewed on screen; the helper's `session.updated` is handed to
+  `createHelperPhoneAlerts` directly (standing in for `notification.tsx:450-462`); the server relay is restated as
+  `{v: 1, kind: "e2e", c, k}` from `api/_lib/web-push.ts:336` (Node-only, not imported); and the service worker's open is
+  called in the page (`sw.ts:44-46`). Not composed: `NotificationProvider` and the Electron IPC
+  (`ipc.ts:448-451`, `phone-alert-send`); the provider's wiring is covered by `remote-turn-alerts.test.ts` and source
+  review. Hands' ask path (`ask-notifications.ts`) is not composed either, so B09a's "For the lead" item on its second,
+  helper-titled alert stands.
+- `openAlert` rebuilds an alert as `{title, tag, route}` and drops every other field (`alerts.ts:88-95`), and
+  `notificationFor` adds a body only from `alert.body`, which an end-to-end alert never has (`alerts.ts:99-108`). A check
+  of the shown notification alone therefore could not fail if the desktop sealed a report, prompt or command beside the
+  title. That is why the spec also checks the app's `phoneAlerts.send` argument and the raw sealed plaintext.
+- The extension's effect on A42: the phone's alert keys now go to the real IndexedDB store (the client's save is inside
+  its own try/catch, `client.ts:548-555`); A42 never navigates to Sessions or asks the new engine paths, and its nav
+  buttons and the Pair/Approvals switch are unchanged in behaviour.
+- The Tasks view shows each helper's task title. That title is the parent model's description and can be
+  prompt-derived (B09a "For the lead"). It travels only on the owner's end-to-end encrypted channel, as `tasks.ts:5`'s
+  design allows; alerts never carry it, which `:176` checks.
+- Not a defect, recorded: the capabilities and tasks routes came with df3951ba, so a desktop without them answers 403
+  and the phone shows "Tasks could not be loaded" rather than the 404 "Update Vector" hint. This is moot while no
+  released desktop has Remote.
+
+**Findings**
+
+None. No product defect was found: every expectation the spec makes was also checked locally against the real modules
+without a browser (below), and each held at HEAD.
+
+**Critique points taken and rejected**
+
+- Taken (major): `:176` checks the app's `phoneAlerts.send` argument and the raw sealed plaintext, not only the shown
+  notification (reading above).
+- Taken: the post-Stop check covers the whole slice (one Stop, one tasks read, only `GET /project` besides), uses the
+  exact button name, and asserts no abort was sent.
+- Taken: the `/experimental/` comparison waits for the Stop button, which shows only once both answers arrived.
+- Taken: the local e2e Vite build ran before any push (it needed an 8 GB heap; below).
+- Taken: B09a's CI receipts are recorded here and in the checkpoint (below), after reading the runs' jobs and logs.
+- Taken: the line numbers and the `GET /project` description are corrected (sessions.tsx `ComputerSessions` 83-185,
+  `SessionView` 187-349; the remote-notify body at `remote-notify.ts:89`).
+- Taken: the fake Stop answer lists the two helpers it stopped; the spec's `phone` and `alerts` are typed as Promises.
+- Taken: a retry or a "flaky" entry on either new case in CI counts as a failure needing a root cause (it is not in
+  RULES-v2.md's flake list; `playwright.config.ts:26` gives CI two retries). The receipt records each case's attempt as
+  the visible log shows it, or says the reporter lines are not visible.
+- Taken in part: the helper's lifecycle record carries no prompt field (engine `agent/subagent-kind.ts` SubagentRecord
+  has none), so the fixture puts private text in the fields it does have (`resultSummary`, `reason`, `error`,
+  `waiting.summary`) and in the helper session's own title, which is the prompt-derived text.
+
+**Review findings, round one (15 Nov 2026)**
+
+- Taken (blocking): the forwarder reading above cited Codium browser specs job 132869451570 as running A42's spec. Its
+  log (685 lines; the 400-line tail read holds the Select step and the whole Playwright group) shows it did not; the
+  reading now cites only jobs that ran it.
+- Taken: the checkpoint's B09b line said four disallowed requests were refused before the engine. Only the three
+  route-refused probes are; the body-refused Stop passes the folder check first (`remote-routes.ts:270-276` before
+  `:281-285`), so the line now says so.
+- Taken: the opening paragraph's "Not committed or pushed" sentence, which stops being true once the package is pushed,
+  is now "CI: pending dispatch".
+- Taken: the spec uses dot access instead of destructuring (`auth.cdp`, `auth.authenticatorId`, `stored.credentials`,
+  `(await pair(...)).phone`); the case lines stay `:88` and `:176`.
+- Taken: the fixture's `alerts` decrypt carries a comment that it mirrors `openAlert`'s on purpose to read the raw
+  plaintext. Not taken: exporting an `openSealed` from `alerts.ts` (a product change for a test's sake; the comment
+  marks the coupling).
+- Not taken: moving `authenticator` and `call` into a shared `e2e/fixtures/remote-phone-helpers.ts`. That would edit
+  A42's `remote-phone.spec.ts`, which this package keeps unchanged so its CI receipt stays comparable; a later package
+  that may touch A42's spec can share them.
+- Open until CI: the run and job ids, both specs' per-case results as the visible log shows them (`:88` and `:176`
+  here, `remote-phone.spec.ts:44` and `:102`), any retry recorded as a failure needing a root cause, and the
+  typecheck.yml run id, appended as dated lines here, in the checkpoint's B09 row (closing "Actual paired
+  desktop/phone browser check") and in the a42 notes.
+
+**B09a's CI receipts (recorded here, 15 Nov 2026)**
+
+For `03266e2e` ("Codium finish: B09 combined Remote authorization", whose "Open until CI" item this closes):
+
+- Vector Codium run 43733017049: every job passed except Codium tests job 132869451320, which failed only at "Run
+  HttpApi exerciser gates" with `summary pass=359 fail=0 skip=0 missing=4 extra=0` and exactly the four review-memory
+  lines (`MISS DELETE /experimental/review-memory/previews/{previewId}`, `MISS GET /experimental/review-memory`, `MISS
+  POST /experimental/review-memory/confirm`, `MISS POST /experimental/review-memory/prepare`). Its "Run the Codium test
+  files" and "Check generated client" steps passed. The per-file lines of B09a's test files were not read, so no
+  per-file count is claimed. Codium browser specs job 132869451570 passed.
+- typecheck.yml run 43733021027: success.
+- vector-hosted-ci.yml run 43733598222: every job passed; Hosted tests job 132871223524 ends "Hosted: 150/150 test files
+  passed" (the desktop `remote-*` files' own lines were not read).
+
+**For the lead**
+
+Nothing new. B09a's items stand.
+
+**Deferred verification**
+
+- No real phone, real relay, real push service or real service worker; no Electron, Windows or macOS. The page uses the
+  in-memory relay, a fake ticket API, a recording notify fetch and Chromium's virtual authenticator.
+- `typecheck:e2e` is not in the lane's CI; the local run is the only type receipt for the spec.
+- No Playwright mutations: the spec runs only in CI.
+
+**What ran**
+
+- Locally, through `/home/user/.tools/vector-serial`, one at a time:
+  - before the edits, unchanged-module receipts: app (`bun test --isolate --timeout 30000`)
+    `src/phone/remote/tasks.test.ts` 1/0, `src/phone/alerts.test.ts` 6/0, `src/phone/remote/client.test.ts` 7/0,
+    `src/context/helper-phone-alert.test.ts` 8/0, `src/context/phone-alerts.test.ts` 6/0,
+    `src/context/remote-turn-alerts.test.ts` 6/0; desktop (`bun --no-env-file test --timeout 30000`)
+    `src/main/remote-notify.test.ts` 6/0, `src/main/remote-link.test.ts` 20/0, `src/main/remote-routes.test.ts` 16/0,
+    `src/main/remote-routes-combined.test.ts` 13/0;
+  - app `bun run typecheck:e2e` clean before and after the edits; `tsgo --listFiles` lists the new spec, and a
+    deliberate type error appended to it was reported (`codium-remote-helpers.spec.ts(201,7)`, then the file was
+    restored and checked with `cmp`); app `bun typecheck` clean;
+  - the e2e build, `bunx vite build --config e2e/vite.config.ts --outDir /tmp/vector-v2/codium/b09b/dist-e2e`: the first
+    attempt ran out of Node's default heap (2 GB) while transforming; with `NODE_OPTIONS=--max-old-space-size=8192` it
+    built in 1 min 27 s with no missing export or unresolved import, and `remote-phone.html` with its chunks (which hold
+    "Stop including helpers", "A helper needs you" and `vector-alert-v1`) is in the output;
+  - scratch checks without a browser, under `/tmp/vector-v2/codium/b09b/check/`: the fixture's board (extracted from
+    the fixture file) through `decodeTasks`/`taskStatus`, before and after Stop, gave exactly the rows the spec expects;
+    the spec's seven phone requests through the desktop's real `createRemoteRoutes` gave exactly the engine calls and
+    refusals the spec expects; and the fixture's helper alert block, with the real `createHelperPhoneAlerts`,
+    `sendPhoneAlert`, `createRemoteNotify`, `openAlert` and `notificationFor` (IndexedDB replaced by a map of imported
+    keys), gave exactly the asked, sent, sealed and shown values `:176` expects;
+  - Prettier: the new spec and `e2e/tsconfig.json` are clean; the fixture's changed hunks follow it (its remaining
+    differences are HEAD's lines).
+  - after the round-one review fixes (dot access in the spec, the fixture's decrypt comment): app `bun run
+    typecheck:e2e` clean again, Prettier clean on the spec and `e2e/tsconfig.json`, and the fixture's changed hunks
+    still match Prettier's output.
+- CI only, not yet run: the Codium browser specs job (`codium-remote-helpers.spec.ts` selected by its path, and
+  `remote-phone.spec.ts` named in `browser_specs` because it is unchanged on main), the rest of the Vector Codium run,
+  and typecheck.yml. vector-hosted-ci.yml is not part of this package.
+
+No flag, setting, listing, route, `REMOTE_ROUTES` entry, price, copy or page changed; no SDK or generated output
+changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged. The fixture is built only by
+`e2e/vite.config.ts` (into the gitignored `dist-e2e`) for Playwright, not for the app, the phone build or vectordev.ai.
+Edits to `api/_lib/model-plan-*.ts`: none.
