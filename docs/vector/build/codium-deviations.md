@@ -3819,3 +3819,68 @@ and F28 used it too.
 - `handlers/memory.ts` and `groups/memory.ts`: unchanged. No setting, flag, route, copy on a public page, price or
   listing changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none.
+
+Part 2 (Codium finish R45b, 15 Nov 2026): the renderer (Settings → Memory → Backup), the bridge and Vector Local's
+inventory. Findings, repairs and tests are in `codium-p7-repairs.md` ("A45 Settings → Memory → Backup"). Read on
+`codium-finish` `420e729f`; scratch under `/tmp/vector-v2/codium/r45b/`.
+
+- **Only copy written for the person is shown, never a thrown IPC error (R45-24).** Brain Vault's refusals arrive as
+  results. Anything that throws through `invoke` carries Electron's "Error invoking remote method …" around a
+  main-process error, and the page now shows its fixed fallback for all of them. This differs on purpose from
+  `vercelErrorText` and `renderer/initialization.ts`, which strip the prefix and keep Vector's sentence: after R45-27
+  the page cannot reach the one plain thrown sentence ("Vector is still starting…"), and the rest (`assertTrustedRenderer`,
+  structured-clone failures) were never written for a person.
+- **B10's "restored as drafts for review" (R45-25).** Read as: the engine answers learned sections as waiting whatever
+  they were; the desktop counts restored skills and insights apart (`totals.skills`, `totals.insights`) and adds
+  nothing of theirs to in use, pinned or waiting; the page calls them "to review", and "as before" covers memory only.
+  A restore that brought back only learned content shows no "0 in use, 0 waiting … as before" part
+  (`memory-backup-model.ts` `restoreLine`); with no learned content the memory parts show even at zero, as before.
+  `RESTORE_COPY` on the card says learned skills and workflow insights come back as proposals; no separate note
+  repeats it.
+- **Learned known and refused stay in the shared totals (R45-38).** `vault-backup.ts` adds a learned file's `known`
+  and `refused` to the same totals as memory's, so "already in memory" and "refused (forgotten here, or past what may
+  wait for review)" also count learned skills and insights, and the reason does not name a skill refused for an unsafe
+  command. The review's optional split (`skillsKnown`, `skillsRefused`) was not taken: it adds fields to the restore
+  result shared by main, the preload types and the page for copy only, the counts are right, and the refused wording
+  was already a summary (it does not name a memory entry refused as secret or too long either).
+- **The startup stand-in is marked (R45-27).** `vaultStarting()` carries `starting: true`, and `startVault` broadcasts
+  the real status once. The page keeps a real status against a late stand-in answer (the broadcast can beat the
+  answer to the page's own read), shows no control while starting, and takes the repository field from the first real
+  status. `STARTING_COPY` makes no timing promise, because a failed engine start never runs `startVault` (R45-37).
+- **Vector Local's inventory text (R45-26).** The `brain-vault` source now says a backup carries memory, learned skills
+  and workflow insights. It is the in-app network inventory (Settings → Vector Local, the allow dialog's "Sends", the
+  blocked notice), not privacy or legal text. The privacy draft's `#vault` wording is unchanged and stays with the
+  owner's A60 read, which now names both. The page's own description says the same; `lastLine`'s "memory files" is
+  kept (R45-35).
+- **Validated in main, not in the preload (R45-28).** The preload passes the eight vault calls' arguments through. Main
+  asserts a trusted renderer, checks types, runs `parseRepo` for `configure` and the version pattern for `forget`.
+  Restore's `version` is checked only to be a string; it is kept safe by the stores (GitHub's synced-set lookup, the
+  Vault API's `encodeURIComponent`, the manifest's id check). No preload check was added.
+- **Storage sizes are counts, not amounts (R45-32).** The task's "no amount, size price or token figure" is read as no
+  amount of money, no price for a size, and no token figure. The page shows storage sizes on purpose: `bytes()` on
+  version rows, "Using X of Y", the plan's GB and version days from its entitlements, and the 1 GB repository warning.
+  None is money. The lead or owner confirms the entitlement figures before `vault` is listed (For the lead in the P7
+  record). The model test's existing "names no amount" case was widened to every line function and fixed copy instead
+  of adding a near-duplicate case.
+- **H1 is unchanged (R45-30).** Brain Vault on Vector still needs `vault` listed with storage, or to be the chosen
+  place already; the GitHub backend stays free on every plan. The Backup tab stays on every desktop build, the owner's
+  decision.
+- **The component test is happy-dom, not browser execution.** `memory-backup.test.tsx` compiles the real page with the
+  installed Solid preset, as `dialog-select-plugins.test.tsx` does, and replaces only the platform, the button and the
+  switch. Its button ignores `disabled`, so the busy guard itself is tested. Browser and running-app acceptance stay
+  B10's.
+- Files outside the listed scope: `packages/desktop/src/main/vault-backup.ts`, `vault-runtime.ts`, their tests
+  (`vault-backup.test.ts`, the new `vault-runtime.test.ts`) and the new `vault-preload.test.ts`.
+  `packages/app/src/context/settings.tsx`, `settings-memory.css` and `general.tsx`: unchanged.
+- **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`: app (`--isolate`)
+  `memory-backup-model.test.ts` (7), `memory-backup.test.tsx` (4), `browser-bundle.test.ts` (4),
+  `features/local/local-model.test.ts` (39), `settings-v2/local-model.test.ts` (15), `memory-model.test.ts` (18),
+  `settings-registry.test.ts` (21); desktop (`--no-env-file`) `vault-backup.test.ts` (24), `vault-runtime.test.ts` (1),
+  `vault-preload.test.ts` (1), `vault-secrets.sign-ins.test.ts` (5); core `test/local-mode/sources.test.ts` (16); engine
+  `test/compliance/egress-inventory.test.ts` (5). Red runs and eleven mutations are in the P7 record. `bun typecheck` in
+  app, desktop and core; `prettier --check`; `git diff --check`.
+- **Only in CI:** Vector Codium (Codium tests, the exerciser, the browser job), typecheck.yml and vector-hosted-ci.yml's
+  Hosted tests job. Pending: this step left the change uncommitted.
+- No flag, setting, route, listing, price or public page changed, and no SDK or generated output, so `MODEL-PLANS.md`
+  and the owner-actions files are unchanged.
+- Edits to `api/_lib/model-plan-*.ts`: none.

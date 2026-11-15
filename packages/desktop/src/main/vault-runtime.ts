@@ -90,6 +90,8 @@ export function startVault(input: {
   })
   state.backup = backup
   backup.start()
+  // A page opened while Vector started holds the stand-in status (vaultStarting); this is the real one.
+  broadcast(backup.status())
   return backup
 }
 
@@ -102,7 +104,7 @@ export const vaultBackup = () => state.backup
 
 /** What the renderer sees before the engine is up and Brain Vault has started. */
 export function vaultStarting(): VaultStatus {
-  return { secure: vaultSecrets.available(), enabled: false, backend: "github", hasVault: false }
+  return { secure: vaultSecrets.available(), enabled: false, backend: "github", hasVault: false, starting: true }
 }
 
 /** The engine's memory as backup files (GET /memory/backup). */

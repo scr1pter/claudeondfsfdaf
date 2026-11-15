@@ -332,6 +332,44 @@ describe("restoring, forgetting and deleting", () => {
     expect(run.restored[0]!.repository).toBe("")
   })
 
+  test("learned skills and workflow insights come back as proposals, counted apart from memory (B10)", async () => {
+    const learned = (section: "skills" | "insights", text: string): MemoryFile => ({
+      path: `${section}/repository-a.json`,
+      section,
+      text,
+      repository: "prj_a",
+      worktree: "/repo",
+    })
+    const answers: Record<Vault.Section, RestoreCounts> = {
+      memory: { restored: 3, active: 1, pinned: 1, waiting: 2, known: 0, refused: 0, documents: 0 },
+      // What the engine answers for a learned section: everything it brought back waits for review.
+      skills: { restored: 2, active: 0, pinned: 0, waiting: 2, known: 1, refused: 0, documents: 0 },
+      insights: { restored: 1, active: 0, pinned: 0, waiting: 1, known: 0, refused: 1, documents: 0 },
+    }
+    const run = harness({
+      memory: async () => [
+        memoryFile(),
+        learned("skills", JSON.stringify({ format: "vector-memory", version: 1, skills: [{ id: "s1" }] })),
+        learned("insights", JSON.stringify({ rows: [] })),
+      ],
+      restore: async (file) => answers[file.section ?? "memory"],
+    })
+    expect((await run.backup.backup()).ok).toBe(true)
+    const result = await run.backup.restore()
+    expect(result.ok).toBe(true)
+    expect(result.totals).toMatchObject({
+      restored: 6,
+      active: 1,
+      pinned: 1,
+      waiting: 2,
+      skills: 2,
+      insights: 1,
+      known: 1,
+      refused: 1,
+      unreadable: 0,
+    })
+  })
+
   test("another computer's vault needs its recovery code, and is kept here afterwards", async () => {
     const first = harness()
     const made = await first.backup.backup()

@@ -129,3 +129,18 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
   read" item is out of date: since B10 (`3b1ce6d5`) backups also carry `skills` and `insights` sections; that is
   flagged for the owner's legal read, and no privacy text was changed. Part 2 (R45b, the renderer) remains. Local
   receipts are in the P7 record; CI is pending.
+- **CI for R45a, 15 Nov 2026 (recorded by R45b).** `420e729f`: Vector Codium run 43700085301 passed every job that ran
+  except the HttpApi exerciser step of Codium tests job 132769096737, with exactly the four
+  `/experimental/review-memory` MISS lines and `fail=0` (the lane's baseline); typecheck.yml run 43700088239 passed;
+  vector-hosted-ci.yml run 43700704217 passed, its Hosted tests job 132770987031 ending "Hosted: 143/143 test files
+  passed". Details are in the P7 record.
+- **Status on 15 Nov 2026 (Codium finish R45b).** The renderer, the bridge and Vector Local's inventory were reviewed
+  (`codium-p7-repairs.md`, "A45 Settings → Memory → Backup"). Repaired: a call that throws shows fixed copy, never
+  Electron's text (R45-24); learned skills and workflow insights are counted apart and shown as proposals to review,
+  and "as before" covers memory only (R45-25); Vector Local's Brain Vault entry names learned skills and workflow
+  insights (R45-26); a page opened while Vector starts waits for Brain Vault instead of showing a stand-in status as
+  this computer's, and gets the real status when it starts (R45-27). Pinned: the preload's eight calls, the recovery
+  code kept out of storage, H1 and the busy guard. `src/browser-bundle.test.ts`, listed above as not run, now ran
+  locally: 4 pass. The "Backups hold memory only" sentence above is out of date, as R45a noted; the owner's A60 read
+  now also covers the allow dialog's new "Sends" text. Settings → Memory → Backup has still never run in a browser or
+  the running app (B10's package). Local receipts are in the P7 record; CI is pending.

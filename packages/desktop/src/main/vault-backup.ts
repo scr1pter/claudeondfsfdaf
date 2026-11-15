@@ -83,6 +83,8 @@ export type VaultStatus = {
   readonly storedBytes?: number
   /** When the nightly backup is next due, while it is on and a vault exists. */
   readonly nextAt?: number
+  /** Brain Vault has not started yet (the engine is not up); nothing else here is this computer's. */
+  readonly starting?: true
 }
 
 /** A file of the engine's backup (GET /memory/backup). */
@@ -131,7 +133,14 @@ export type VaultVersions =
 export type VaultRestoreResult = VaultResult & {
   /** The vault there is not this computer's: the recovery code opens it. */
   readonly needsCode?: boolean
-  readonly totals?: RestoreCounts & { readonly unreadable: number; readonly version: string; readonly newer: boolean }
+  readonly totals?: RestoreCounts & {
+    readonly unreadable: number
+    readonly version: string
+    readonly newer: boolean
+    /** B10: learned skills and workflow insights brought back, each a proposal waiting for review. */
+    readonly skills: number
+    readonly insights: number
+  }
 }
 
 export type VaultDeps = {
@@ -531,6 +540,8 @@ export function createVaultBackup(deps: VaultDeps) {
             active: 0,
             pinned: 0,
             waiting: 0,
+            skills: 0,
+            insights: 0,
             known: 0,
             refused: 0,
             documents: 0,
@@ -559,11 +570,17 @@ export function createVaultBackup(deps: VaultDeps) {
                 break
               }
               totals.restored += done.restored
+              totals.known += done.known
+              totals.refused += done.refused
+              // The engine brings learned sections back as proposals whatever they were, so they are counted apart
+              // from memory's in use, pinned and waiting (B10).
+              if (file.section === "skills" || file.section === "insights") {
+                totals[file.section] += done.restored
+                continue
+              }
               totals.active += done.active
               totals.pinned += done.pinned
               totals.waiting += done.waiting
-              totals.known += done.known
-              totals.refused += done.refused
             }
           }
           return {

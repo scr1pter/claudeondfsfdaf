@@ -353,6 +353,266 @@ ids go in a dated line here in the lane commit that follows the runs. Never exer
 real credential helper, a push to real GitHub, and Electron's Node itself. R45-4(a)'s `error`-event branch is run
 under Bun with the EACCES case.
 
+CI, 15 Nov 2026 (R45a, `420e729f`), recorded by R45b. Vector Codium run 43700085301 (dispatched with base
+`origin/release-finish`): 16 of its 18 jobs ran and all passed but one. The two Hosted services jobs the lane's call
+skips (`services_only`) were skipped. Codium tests job 132769096737 failed only in "Run HttpApi exerciser gates";
+"Run the Codium test files" and "Check generated client" passed. The exerciser's visible tail reads
+`summary pass=359 fail=0 skip=0 missing=4 extra=0`, with exactly these MISS lines and no FAIL:
+`DELETE /experimental/review-memory/previews/{previewId}`, `GET /experimental/review-memory`,
+`POST /experimental/review-memory/confirm` and `POST /experimental/review-memory/prepare`. That is the baseline the
+lane counts as green. Codium browser specs job 132769097037, the relay (132769096985), the ops Worker
+(132769097338), the Docker image (132769097274) and the 11 typecheck jobs passed. typecheck.yml run 43700088239:
+success. vector-hosted-ci.yml run 43700704217: all 12 jobs passed. Its Hosted tests job 132770987031 ends with
+"Hosted: 143/143 test files passed". That job runs the desktop `vault-*` and `remote-*` files and core's vault tests,
+but their own lines were not read here, so no per-file count is claimed.
+
 `handlers/memory.ts` and `groups/memory.ts`: unchanged.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+## A45 Settings → Memory → Backup
+
+Codium finish R45b, 15 Nov 2026. Part 2 of the A45 review: the renderer, the bridge and Vector Local's inventory.
+Read on `codium-finish` `420e729f`. Line numbers are at `420e729f` unless a line says "now". Scratch was under
+`/tmp/vector-v2/codium/r45b/` (the HEAD copies in `head/`, the mutation runs in `mut/`, the fresh XDG and `TMPDIR`
+roots in `xdg/`).
+
+### Scope
+
+`packages/app/src/components/settings-v2/memory-backup.tsx` (464 lines) and `memory-backup-model.ts` (135), with
+`memory-backup-model.test.ts`; the Backup wiring in `memory.tsx` (`:17-18`, `:86-88`, `:234-236`) and
+`settings-registry.ts` (`:139-144`); the vault types in `packages/app/src/context/platform.tsx` (`:78-140`, `:258-259`);
+`packages/app/src/features/local/local-model.ts:111`; `packages/core/src/local-mode/sources.ts` (brain-vault
+`:397-412`, git-remote `:634-648`); the vault calls of `packages/desktop/src/preload/index.ts` (`:99-112`) and
+`preload/types.ts` (`:99-100`, `:147-157`, `:933`); and `packages/desktop/src/renderer/index.tsx:273`.
+
+`git log c9cd1bdb..HEAD` lists no commit on `memory-backup*.ts(x)`. The vault block of the preload and the vault types
+in `platform.tsx` are byte-identical to `c9cd1bdb`. The later commits on the other files, by first-parent diff:
+`be5ac39e` is the merge that brings A45's renderer lines into the Hands line with `c9cd1bdb`'s content; `23a37c0b`
+changes only `memory.tsx:170`, the subtitle "an encrypted backup when those features are available" (text). The other
+29 commits on these files have no vault, backup, restore or recovery line.
+
+Two repairs reach outside the listed scope, because the cause is in the main process: `vault-backup.ts` (the restore
+totals, R45-25) and `vault-runtime.ts` (the startup status, R45-27).
+
+### Findings repaired here
+
+**R45-24. Confirmed: a call that throws showed Electron's text.**
+- Cause: `act`'s catch (`memory-backup.tsx:89-90`) showed `cause.message`. A rejected `ipcRenderer.invoke` reads
+  "Error invoking remote method '<channel>': Error: …" around the main process's error. Brain Vault's own refusals are
+  results, never throws (R45-2), so what still throws is `ipc.ts:456`'s "Vector is still starting…" (every vault call
+  but status, before `startVault`), `assertTrustedRenderer` (`ipc.ts:260`) and structured-clone failures. None of
+  them is copy written for the person.
+- Repair (now `:98-101`): the catch shows "Vector could not do that. Try again.", which was already the fallback. This
+  differs on purpose from the repository's other handling: `desktop/src/renderer/initialization.ts:7-11` and
+  `vercelErrorText` (`app/src/features/cloud/vercel/vercel-api.ts:210-214`) strip Electron's prefix and keep Vector's
+  own sentence. Here the one plain thrown sentence ("still starting") can no longer be reached from the page once
+  R45-27 shows no controls while starting, so nothing worth keeping is left after the prefix.
+- Test: `memory-backup.test.tsx` "a restore is sent once however fast it is pressed; a failure frees the page and shows
+  plain copy". The rejection carries Electron's text; the alert reads exactly the fixed copy and the page holds no
+  "Error invoking". Red on the HEAD component (it showed the whole Electron text); M1.
+
+**R45-25. Confirmed: B10's learned skills and workflow insights restore as proposals, but the page said they came back
+"as before".**
+- Cause: the engine imports a skills or insights file through `BrainExport.importText`, where each entry and skill
+  waits for approval (core `brain/export.ts:270-315`), and answers `active: 0, waiting: <restored>` (engine
+  `brain/vault-memory.ts:106-111`). The desktop added every section into `active`, `pinned` and `waiting`
+  (`vault-backup.ts:561-566`), and the page read that as "N waiting for your review as before"
+  (`memory-backup-model.ts:89`) under a card that says "what waited for your review waits again"
+  (`memory-backup.tsx:326-329`). Spec B10 (`codium-build-spec.md:949`) says "restored as drafts for review".
+- Repair:
+  - Desktop: `VaultRestoreResult.totals` gains `skills` and `insights` (now `vault-backup.ts:136-143`). In the restore
+    loop, `restored`, `known` and `refused` still add for every file; a `skills` or `insights` file then adds its
+    `restored` to its own count and nothing to `active`, `pinned` or `waiting` (now `:572-584`). Only memory files
+    count as "as before".
+  - App: the same two fields in `platform.tsx`'s `VaultRestoreResult`. `restoreLine` adds "N learned skill(s) to
+    review" and "N workflow insight(s) to review" after the waiting part, each only above 0 (now
+    `memory-backup-model.ts:95-96`). A restore that brought back only learned content leaves out the "in use" and
+    "waiting … as before" parts, which would read "0 … as before" (now `:90-94`); with no learned content they show
+    even at zero. The card now shows `RESTORE_COPY` (now `:131-132`, used at `memory-backup.tsx:341`),
+    which says learned skills and workflow insights come back as proposals for you to review. The page's description
+    (now `:203-205`) names them as part of a backup.
+- Tests: `vault-backup.test.ts` "learned skills and workflow insights come back as proposals, counted apart from memory
+  (B10)" (memory answers 3 restored, 1 in use, 1 pinned, 2 waiting; skills 2 waiting; insights 1 waiting and 1
+  refused; totals are 6 restored, 1, 1, 2 waiting, 2 skills, 1 insight). Red on HEAD (`waiting` 5, no `skills`); M3.
+  `memory-backup-model.test.ts` "learned skills and workflow insights come back as proposals for review, never as
+  before (B10)", whose learned-only and nothing-new cases pin the exact lines; M4.
+
+**R45-26. Confirmed (copy accuracy): Vector Local's inventory said Brain Vault sends memory only.**
+- Cause: since B10 a backup also carries `skills` and `insights` files (`vault-memory.ts:72-78`). `sources.ts:402-403`
+  said "Your Brain's memory, encrypted on this computer…" and "backs up and restores your memory when you ask". That
+  text is the Vector Local list (`settings-v2/local.tsx:734`), the "Sends" fact of the allow dialog
+  (`features/local/allow-dialog.tsx:80`) and the blocked notice (`features/local/local-model.ts:337`).
+- Repair (now `sources.ts:402-403`): "Your Brain's memory, learned skills and workflow insights, encrypted on this
+  computer, …" and "Brain Vault: backs up and restores your memory, learned skills and workflow insights when you
+  ask". `local: "blocked"`, the hosts and the call sites are unchanged. No generated file, doc or web page holds this
+  text. This is the in-app network inventory, not privacy or legal text; the allow-dialog wording is named for the
+  owner's A60 read next to the privacy draft's `#vault` item (For the lead).
+- Test: core `test/local-mode/sources.test.ts` "Brain Vault says a backup carries memory, learned skills and workflow
+  insights, and Vector Local blocks it". Red on HEAD; M8.
+
+**R45-27. Confirmed: a Backup page opened while Vector starts showed a stand-in status as real and never got the real
+one.**
+- Cause: until `startVault` runs, `vault-status` answers `vaultStarting()` (`ipc.ts:459`; `vault-runtime.ts:104-106`):
+  nightly off, the GitHub backend, no repository, no vault. `startVault` runs only after `serverReady`
+  (`index.ts:586`), the health wait and `vectorAccount.restore()` (`:656`), at `index.ts:669`, and broadcast nothing
+  (`vault-runtime.ts:64-93`). The page read the status once (`memory-backup.tsx:61-68`) and took the repository only
+  from that read (`:66`). A person with a vault saw nightly off, no repository and "Back up once to create your vault
+  and get its recovery code", and every control threw (R45-24).
+- Repair:
+  - Desktop: `VaultStatus.starting?: true` (now `vault-backup.ts:86-87`); `vaultStarting()` sets it (now
+    `vault-runtime.ts:107`); `startVault` broadcasts `backup.status()` right after `backup.start()` (now `:93-94`).
+  - App: the same optional field in `platform.tsx`. One `accept` (now `memory-backup.tsx:63-71`) takes both the page's
+    own read and `onChange`. It ignores a `starting` status once a real one is held, which covers the start broadcast
+    arriving before the answer to the page's read. It sets the repository field from the first real status. The outer
+    `Show` (now `:192-195`) renders no control while the status is `starting` and shows `STARTING_COPY` ("Vector is
+    still starting. Brain Vault shows here once it has started.", now `memory-backup-model.ts:135`), so the page sends
+    nothing before Brain Vault has started.
+- Tests: new `packages/desktop/src/main/vault-runtime.test.ts` "before Brain Vault starts its status says so; once it
+  starts, every open window gets its real status" (the stand-in carries `starting: true`; `startVault` sends exactly
+  one `vault-changed` with the stored settings and no `starting`; no engine request, since start only arms the
+  timers). Red on HEAD; M5, M6. `memory-backup.test.tsx` "while Vector starts the page waits for Brain Vault, then shows
+  its real place": a starting answer shows `STARTING_COPY` with no "Back up now" and no repository field, and the real
+  broadcast brings the controls, `octo/brain-vault` in the field and the Delete card; then, with the page's read held,
+  the real broadcast comes first and the late stand-in answer replaces nothing. Red on the HEAD component; M7a, M7b,
+  M9.
+
+### Checks that hold
+
+- **R45-28. The preload offers only what the page calls; arguments are checked in main, not in the preload.**
+  `window.api.vault` has exactly `status`, `onChange`, `versions`, `backup`, `configure`, `restore`, `forget` and
+  `remove` (`preload/index.ts:99-112`, `types.ts:147-157`, `renderer/index.tsx:273`), and the page uses each one
+  (`memory-backup.tsx` status `:63`, onChange `:69`, versions `:99`/`:111`/`:145`/`:155`, backup `:108`, configure
+  `:117`/`:128`/`:267`, restore `:136`, forget `:152`, remove `:161`). The preload passes every argument through. In
+  main, `handle` asserts a trusted renderer (`ipc.ts:258-262`); the handlers check types (`:460-473`); `configure`
+  runs `parseRepo` (`vault-backup.ts:662-689`); `forget` runs `/^v\d{13}-[0-9a-f]{8}$/` (`:593`); the recovery code is
+  parsed before scrypt (core `vault/recovery.ts:40-51`). Restore's `version` is only checked to be a string
+  (`ipc.ts:468`) and reaches `VaultBackup.read` unchanged; the stores keep it safe: the GitHub store reads only a
+  version in its synced set (core `vault/github.ts:313`), the Vault API store encodes it (`remote.ts:106`), and the
+  manifest must carry that id (`format.ts:136`). Pin: new `vault-preload.test.ts` "window.api.vault offers only the
+  calls Settings → Memory → Backup makes, each on its own channel" (the eight keys; each call on its channel with
+  exactly its arguments; `onChange` on `vault-changed`, and its unsubscribe removes the listener).
+- **R45-29. The recovery code reaches no renderer storage and no log.** It lives only in signals: `code`
+  (`memory-backup.tsx:46`, set at `:110`, shown at `:291-307`, cleared by "I saved it" `:301`) and `recovery` (`:50`,
+  a password input with `autocomplete="off"` `:357-365`, cleared after a restore `:144`). Neither file uses
+  `localStorage`, `persisted`, `platform.storage` or `console`. The desktop renderer's Sentry drops Breadcrumbs
+  (`renderer/index.tsx:77-85`) and is opt-in. Copy writes the clipboard only on a click (`:168-173`). Pin:
+  `memory-backup.test.tsx` "the recovery code shows once and reaches no storage" (the code shows, "I saved it" removes
+  it, the recovery input is a password field with autocomplete off and is emptied after a restore that sent
+  `{ version, code }`, and `localStorage`, `sessionStorage` and `platform.storage` stay untouched).
+- **R45-30. H1.** Brain Vault on Vector shows only when `vectorOffer` holds (signed in, no error, `vault` listed,
+  `gb` above 0; `memory-backup-model.ts:20-28`, `memory-backup.tsx:213`), or when it is already the chosen backend so
+  the person can move off it. Main checks again before a write (`vault-backup.ts:317-324`) and the Vault API decides
+  anyway (S1). The GitHub backend is free on every plan (spec §1.1). The Backup tab still shows on every desktop
+  build; hiding it until `vault` is listed is the owner's decision and is unchanged. Pin: `memory-backup.test.tsx`
+  "Brain Vault on Vector shows only for a listed vault with storage; GitHub always".
+- **R45-31. Vector Local.** The page does not hide the backends: main refuses both before any request (R45-15,
+  `localRefusal`, `vault-backup.ts:746-760`), and the page shows that copy. `brain-vault` is `local: "blocked"`
+  (`sources.ts:404`), pinned by the R45-26 test.
+- **R45-32. Copy.** No amount, price or token figure appears. The page shows counts, dates, storage sizes (`bytes()`
+  on rows, "Using X of Y", the plan's GB and version days, and the 1 GB warning, `vault-github.ts:152-159`) and
+  "update Vector" (`memory-backup-model.ts:95`). Storage sizes are read as counts, not amounts (deviations, P7 review
+  addendum Part 2). Pin: the model test's "names no amount" case now covers every line function and fixed copy the
+  page shows; the component's case for H1 checks a whole page with a usage line against the same pattern.
+- **R45-33. A restore cannot be submitted twice.** `act` returns while busy and sets busy before any await
+  (`memory-backup.tsx:79-80`); every action button is disabled while busy. Main's `exclusive`
+  (`vault-backup.ts:329-339`) answers "Brain Vault is busy. Try again in a moment." (`:346-350`) for a page reopened
+  during a running operation. Pin: the R45-24 case, whose stand-in button calls `onClick` whatever `disabled` says, so
+  the page's own guard is what is tested (M2).
+
+### Readings, not repaired
+
+- **R45-34.** A restore that answers `needsCode` while a stale listing says `mine` hides the code input
+  (`memory-backup.tsx:352`); "Refresh versions" shows it. This needs the key to change between the listing and the
+  restore.
+- **R45-35.** `lastLine`'s "memory files" (`memory-backup-model.ts:67`) counts every file of a backup, learned ones
+  included (`vault-backup.ts:431`). Kept as written; the description and the restore line now name learned content.
+- **R45-36.** `void props.vault.versions().then(setVersions)` (`memory-backup.tsx:111`, `:145`, `:155`) has no catch.
+  These run only after a call that answered, so Brain Vault has started and the IPC does not throw there.
+- **R45-37.** If the engine never reaches `serverReady`, or `vectorAccount.restore()` throws, `startVault` never runs
+  and the page keeps showing `STARTING_COPY`. Accepted: before, it showed controls that threw, and the copy makes no
+  timing promise.
+- **R45-38.** The refused part ("refused (forgotten here, or past what may wait for review)") does not name a learned
+  skill refused for an unsafe command (core `brain/export.ts:281`), nor a memory entry refused as secret or too long
+  (`:263`). Kept: the count is right and the wording was already a summary.
+
+### For the lead
+
+- None in other lanes' files. `packages/app/src/context/settings.tsx`, `settings-memory.css` and `general.tsx` are
+  unchanged.
+- Confirm before `vault` is listed (R45-32): the page shows storage sizes on purpose, read as counts rather than
+  amounts: `bytes()` on version rows, "Using X of Y", the plan's vault GB and version days from its entitlements
+  (`packages/schema/src/codium-entitlements.ts`, through `vectorCopy`), and the 1 GB repository warning. The lead or
+  owner confirms that showing the vault GB and version-day entitlements in client copy is acceptable.
+- For the owner's A60 read, next to R45a's item on the privacy draft's `#vault`: the Vector Local "Sends" text of
+  Brain Vault (shown in the allow dialog, `features/local/allow-dialog.tsx:80`) now names learned skills and workflow
+  insights (R45-26). No privacy text changed and the privacy patch was not applied.
+
+### Mutations
+
+Each was applied with an exact one-occurrence substitution, run, and restored from a saved copy; `diff -q` confirmed
+each restore (`/tmp/vector-v2/codium/r45b/mut/run.py`).
+
+| Mutation | Turns red |
+| --- | --- |
+| M1: the old catch (`cause.message`) | "a restore is sent once…" (R45-24) |
+| M2: drop `if (busy()) return` | "a restore is sent once…" (two restores sent) |
+| M3: the old summing loop (drop the learned branch) | vault-backup "learned skills and workflow insights come back as proposals…" |
+| M4: drop the learned parts of `restoreLine` | model "learned skills and workflow insights come back as proposals for review…" |
+| M5: drop `starting: true` from `vaultStarting()` | vault-runtime |
+| M6: drop the broadcast after `backup.start()` | vault-runtime |
+| M7a: the old outer `Show when={status()}` | "while Vector starts the page waits…" |
+| M7b: the repository only from the first answer (`if (!held)`) | "while Vector starts the page waits…" |
+| M8: the old brain-vault `sends` and `why` | sources "Brain Vault says a backup carries…" |
+| M9: drop the check that ignores a stand-in once a real status is held | "while Vector starts the page waits…" (the race part) |
+| M10: `restoreLine` always shows the memory parts (`const memory = true`) | model "learned skills and workflow insights come back as proposals for review…" (the learned-only line) |
+
+Red runs against HEAD: the new `memory-backup.test.tsx` on the HEAD component (with the new model constants, which the
+test imports): 2 pass, 2 fail (the R45-24 and R45-27 cases; the H1 and recovery-code pins pass). The new
+`vault-backup.test.ts` on the HEAD `vault-backup.ts`: 23 pass, 1 fail. `vault-runtime.test.ts` on the HEAD
+`vault-runtime.ts`: 0 pass, 1 fail. The new `sources.test.ts` on the HEAD `sources.ts`: 15 pass, 1 fail.
+`vault-preload.test.ts` pins unchanged code and passes on HEAD.
+
+### Tests run here (one file at a time)
+
+Through `vector-serial` with `--timeout 30000`, from each package directory: app with `bun test --isolate`; desktop
+with `bun --no-env-file test`; core with `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and
+`TMPDIR` under the scratch root; engine with `bun test` and `TMPDIR` under the scratch root.
+
+| Package | File | Before (HEAD `420e729f`) | After |
+| --- | --- | --- | --- |
+| app | `src/components/settings-v2/memory-backup-model.test.ts` | 6 cases (not re-run) | 7 pass (74 `expect()` calls) |
+| app | `src/components/settings-v2/memory-backup.test.tsx` | new | 4 pass (42) |
+| app | `src/browser-bundle.test.ts` | never run (A45 notes) | 4 pass (16) |
+| app | `src/features/local/local-model.test.ts` | — | 39 pass (1014) |
+| app | `src/components/settings-v2/local-model.test.ts` | — | 15 pass (36) |
+| app | `src/components/settings-v2/memory-model.test.ts` | — | 18 pass (313) |
+| app | `src/components/settings-v2/settings-registry.test.ts` | — | 21 pass (141) |
+| desktop | `src/main/vault-backup.test.ts` | 23 pass | 24 pass (143) |
+| desktop | `src/main/vault-runtime.test.ts` | new | 1 pass (6) |
+| desktop | `src/main/vault-preload.test.ts` | new | 1 pass (5) |
+| desktop | `src/main/vault-secrets.sign-ins.test.ts` | 5 pass | 5 pass (38) |
+| core | `test/local-mode/sources.test.ts` | 15 pass | 16 pass (53) |
+| engine | `test/compliance/egress-inventory.test.ts` | — | 5 pass (12) |
+
+Typecheck: `bun typecheck` clean in `packages/app` (`tsgo -b`), `packages/desktop` (`tsgo -b`) and `packages/core`.
+`prettier --check` (through `vector-serial`): every touched file is prettier-clean except `vault-backup.ts`, whose only
+prettier difference is HEAD's B10 lines (now `:555-556`, R45-23); the lines this package touched match prettier.
+`git diff --check` clean. The full turbo typecheck and the api tree are pre-push steps and were not run during the
+review. Commit gate, 15 Nov 2026: the six new or changed test files (app `memory-backup-model.test.ts` and
+`memory-backup.test.tsx`, core `test/local-mode/sources.test.ts`, desktop `vault-backup.test.ts`,
+`vault-runtime.test.ts` and `vault-preload.test.ts`) plus app `browser-bundle.test.ts` and
+`features/local/local-model.test.ts` were run again one at a time, with the "After" counts above; `bun typecheck` in
+`packages/app`, `packages/core` and `packages/desktop`, the full `bun turbo typecheck --concurrency=2` (27 of 27
+tasks) and the api tree (`bun typecheck --project ../../tsconfig.json` from `packages/engine`) were clean.
+
+**CI only:** Vector Codium's Codium tests job (it selects the changed and new test files since the base, the app
+component test included), the HttpApi exerciser (no route changed), the browser job (no spec added), typecheck.yml, and
+vector-hosted-ci.yml's Hosted tests job, which runs the desktop `vault-*` files whatever changed. CI: pending; the
+change is uncommitted, and the run and job ids go in a dated line here in the lane commit that follows the runs. Never
+exercised: the Backup screen in a real browser or the running app (B10's package), Electron's own invoke error text in
+a packaged app (read from the repository's handling), safeStorage, and a real startup race.
+
+`packages/app/src/context/settings.tsx`, `settings-memory.css` and `general.tsx`: unchanged.
 
 Edits to `api/_lib/model-plan-*.ts`: none.

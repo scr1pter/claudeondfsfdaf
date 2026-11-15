@@ -91,6 +91,8 @@ export type VaultStatus = {
   /** GitHub: the bytes the vault takes in the repository. */
   storedBytes?: number
   nextAt?: number
+  /** Brain Vault has not started yet (the engine is not up); nothing else here is this computer's. */
+  starting?: true
 }
 
 export type VaultResult = { ok: boolean; message: string; status: VaultStatus; code?: string }
@@ -116,6 +118,9 @@ export type VaultRestoreResult = VaultResult & {
     active: number
     pinned: number
     waiting: number
+    /** B10: learned skills and workflow insights brought back, each a proposal waiting for review. */
+    skills: number
+    insights: number
     known: number
     refused: number
     documents: number
