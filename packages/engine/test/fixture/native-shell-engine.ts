@@ -363,21 +363,25 @@ async function main() {
   }
 }
 
-void main().catch(async () => {
-  process.exitCode = 125
-  process.stderr.write("Native Shell engine fixture refused\n")
-  // Before the manifest nonce was known, a bounded Root read may still name the identity stage; nothing else is read.
-  const nonce =
-    progress.nonce ??
-    (await rootFile(MANIFEST, 16_384)
-      .then((bytes) => decodeManifest(json(bytes)).nonce)
-      .catch(() => undefined))
-  if (!nonce) return
-  // A protocol pipe the host already closed must not turn the refusal into an uncaught EPIPE and another exit code.
-  process.stdout.on("error", () => {})
-  process.stdout.write(
-    PREFIX +
-      JSON.stringify({ v: 1, event: "engine-failure", nonce, stage: progress.stage, case: progress.case }) +
-      "\n",
-  )
-})
+void main()
+  .catch(async () => {
+    process.exitCode = 125
+    process.stderr.write("Native Shell engine fixture refused\n")
+    // Before the manifest nonce was known, a bounded Root read may still name the identity stage; nothing else is read.
+    const nonce =
+      progress.nonce ??
+      (await rootFile(MANIFEST, 16_384)
+        .then((bytes) => decodeManifest(json(bytes)).nonce)
+        .catch(() => undefined))
+    if (!nonce) return
+    // A protocol pipe the host already closed must not turn the refusal into an uncaught EPIPE and another exit code.
+    process.stdout.on("error", () => {})
+    process.stdout.write(
+      PREFIX +
+        JSON.stringify({ v: 1, event: "engine-failure", nonce, stage: progress.stage, case: progress.case }) +
+        "\n",
+    )
+  })
+  // Exit code 125 is set first, so a throw inside the async refusal handler can neither become an unhandled
+  // rejection nor change it.
+  .catch(() => {})

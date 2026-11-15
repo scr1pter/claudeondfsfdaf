@@ -374,7 +374,7 @@ never calls `groupEmpty`.
 the lane head, it returns only under the two conditions above, and no code change is made.
 
 **SPAWN-1, POSIX half, is covered.** The new
-`packages/engine/test/task/shell-required-isolation-posix.test.ts` runs only on Linux and
+`packages/engine/test/task/shell-required-isolation-posix-owned.test.ts` runs only on Linux and
 is skipped explicitly elsewhere; CI runs it in the Linux engine shard of `test.yml`. Its
 child process calls `requireIsolation()` and runs an owned background command through
 `ShellJobs`. That command is a shell plus two sleepers, all ignoring SIGTERM. FLOOR is
@@ -517,14 +517,15 @@ fails closed.
 (`packages/core/src/process-isolation.ts:26`, `:326`).
 
 - Owned cleanup of the plain group under `required()` is covered by
-  `packages/engine/test/task/shell-required-isolation-posix.test.ts:187`. That test has
+  `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts:187`. That test has
   NQ-2's local passes only: `test.yml` has no run on `native-qualify`.
 - Two more POSIX S4-2 tests exist only on `origin/review-fixes`, in `fa5a5639`, not merged
   here:
   - a floor-on case in `packages/core/test/process/owned-process.test.ts`
     (`ProcessIsolation.decide` with the floor on, a bwrap leader and a `setsid` canary);
-  - a 136-line `packages/engine/test/task/shell-required-isolation-posix.test.ts` at the
-    same path as NQ-2's 286-line file.
+  - a 136-line `packages/engine/test/task/shell-required-isolation-posix.test.ts`, the path
+    NQ-2's 286-line file had until review round two renamed it (lane notes, D106), so the
+    two files no longer collide.
   This addendum makes no CI claim for either test.
 - The `setsid` escape from the plain group is pre-existing
   (`packages/engine/src/task/shells.ts:31`).

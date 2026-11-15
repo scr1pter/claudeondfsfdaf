@@ -90,67 +90,67 @@ type Stance =
 const INVENTORY = {
   "packages/core/src/cross-spawn-spawner.ts": {
     stance: "launch",
-    why: "The Effect spawner: ProcessIsolation.launch (:432), or commandPlan in a native build under required isolation (:413; owned commands refused at :411), then cross-spawn starts isolated.file (:452).",
+    why: "The Effect spawner: ProcessIsolation.launch, or ProcessIsolation.commandPlan in a native build under required isolation (an owned command, OwnedProcess.options, is refused there first), then cross-spawn starts isolated.file.",
   },
   "packages/core/src/untrusted-git.ts": {
     stance: "launch",
-    why: "Untrusted-repository Git: ProcessIsolation.launch (:66), then execFile(isolated.file) (:68).",
+    why: "Untrusted-repository Git: ProcessIsolation.launch, then execFile(isolated.file).",
   },
   "packages/core/src/brain/document/ocr.ts": {
     stance: "launch",
-    why: "Document OCR: ProcessIsolation.launch (:280), then spawn(isolated.file) (:282).",
+    why: "Document OCR's run(): ProcessIsolation.launch, then spawn(isolated.file).",
   },
   "packages/engine/src/util/process.ts": {
     stance: "launch",
-    why: "Process.spawn for LSP servers and installers: ProcessIsolation.launch (:81), then cross-spawn(isolated.file) (:82); its child_process import is a type.",
+    why: "Process.spawn for LSP servers and installers: ProcessIsolation.launch, then cross-spawn(isolated.file); its child_process import is a type.",
   },
   "packages/engine/src/cli/cmd/github.bundle.ts": {
     stance: "launch",
-    why: "The bundle's Git helper: ProcessIsolation.launch (:732), then spawn(isolated.file) (:734).",
+    why: "The bundle's Git helper: ProcessIsolation.launch, then spawn(isolated.file).",
   },
   "packages/engine/src/mcp/stdio.ts": {
     stance: "launch",
-    why: "Local MCP servers: ProcessIsolation.launch (:13), then the SDK's StdioClientTransport starts isolated.file (:14).",
+    why: "Local MCP servers (localTransport): ProcessIsolation.launch, then the SDK's StdioClientTransport starts isolated.file.",
   },
   "packages/core/src/pty/pty.bun.ts": {
     stance: "pty-backend",
-    why: "The bun-pty adapter behind #pty; only core/src/pty.ts loads it (:21), after ProcessIsolation.launch (:241).",
+    why: "The bun-pty adapter behind #pty; only core/src/pty.ts loads it (its lazy #pty import), after ProcessIsolation.launch.",
   },
   "packages/core/src/pty/pty.node.ts": {
     stance: "pty-backend",
-    why: "The @lydell/node-pty adapter behind #pty; only core/src/pty.ts loads it (:21), after ProcessIsolation.launch (:241).",
+    why: "The @lydell/node-pty adapter behind #pty; only core/src/pty.ts loads it (its lazy #pty import), after ProcessIsolation.launch.",
   },
   "packages/core/src/directory-identity.ts": {
     stance: "required-refusal",
-    why: "The fixed Python metadata reader refuses while isolation is required, at admission (:700) and right before spawn (:748).",
+    why: "The fixed Python metadata reader refuses while isolation is required, at admission (read()) and right before spawn.",
   },
   "packages/core/src/read-only-git.ts": {
     stance: "required-refusal",
-    why: "The fixed Python Git verifier requires !ProcessIsolation.required() at open (:1221) and right before spawn (:569).",
+    why: "The fixed Python Git verifier requires !ProcessIsolation.required() at open() and right before spawn.",
   },
   "packages/core/src/owned-process.ts": {
     stance: "fixed-helper",
-    why: "groupEmpty runs /bin/ps -A -o pgid=,stat= with the untrusted-child environment during an owned stop (:79); no caller input reaches its argv.",
+    why: "groupEmpty runs /bin/ps -A -o pgid=,stat= with the untrusted-child environment during an owned stop; no caller input reaches its argv.",
   },
   "packages/core/src/pty/process.ts": {
     stance: "fixed-helper",
-    why: "Reads a terminal's foreground group with `ps -o tpgid= -p <pid>` for the PTY's own pid (:55), resolved through PATH with the engine's environment.",
+    why: "foreground() reads a terminal's foreground group with `ps -o tpgid= -p <pid>` for the PTY's own pid, resolved through PATH with the engine's environment.",
   },
   "packages/core/src/shell.ts": {
     stance: "fixed-helper",
-    why: "killTree's Windows-only `taskkill /pid <pid> /f /t` (:38): a fixed argv, resolved through PATH and the working directory, with the untrusted-child environment.",
+    why: "killTree's Windows-only `taskkill /pid <pid> /f /t`: a fixed argv, resolved through PATH and the working directory, with the untrusted-child environment.",
   },
   "packages/core/src/config/managed.ts": {
     stance: "fixed-helper",
-    why: "Company-policy readers: plutil, ls -lde, reg.exe and powershell.exe at absolute paths with minimal environments (:312, :343, :410, :529).",
+    why: "Company-policy readers: plutil, ls -lde, reg.exe and powershell.exe at absolute paths (PLUTIL, LS, REG, POWERSHELL) with minimal environments.",
   },
   "packages/core/src/local-mode/hardware.ts": {
     stance: "fixed-helper",
-    why: "Vector Local's hardware read: vm_stat or nvidia-smi with fixed arguments, found with which outside the repository (:151), with the engine's environment.",
+    why: "Vector Local's hardware read (run()): vm_stat or nvidia-smi with fixed arguments, found with which outside the repository, with the engine's environment.",
   },
   "packages/engine/src/lsp/launch.ts": {
     stance: "type-only",
-    why: "Uses the ChildProcessWithoutNullStreams type; starts servers through Process.spawn (:12).",
+    why: "Uses the ChildProcessWithoutNullStreams type; starts servers through Process.spawn.",
   },
   "packages/engine/src/lsp/server.ts": {
     stance: "type-only",
@@ -158,59 +158,59 @@ const INVENTORY = {
   },
   "packages/engine/src/tool/shell/windows-process.ts": {
     stance: "windows-holder",
-    why: "The Job Object holder (System32 powershell.exe, :182); only task/shells.ts loads it (:23), and ShellJobs.start refuses a Windows background command while isolation is required (:464).",
+    why: "The Job Object holder (System32 powershell.exe, started by start()); only task/shells.ts loads it, and ShellJobs.start refuses a Windows background command while isolation is required (isolationRefusal).",
   },
   "packages/engine/src/cli/cmd/github.isolation.ts": {
     stance: "runner",
-    why: "The native adapter's control transport (:1116); only github.sandbox.ts loads it, as the runner in `vector github sandbox prepare` and `finish`.",
+    why: "The native adapter's control transport (execute()); only github.sandbox.ts loads it, as the runner in `vector github sandbox prepare` and `finish`.",
   },
   "packages/engine/src/cli/cmd/github.sandbox.ts": {
     stance: "runner",
-    why: "`vector github sandbox prepare|run|finish`, Linux-only: sets up the sandbox and launches the agent as vector-agent (:800); the agent never runs it.",
+    why: "`vector github sandbox prepare|run|finish`, Linux-only: sets up the sandbox and launches the agent as vector-agent (run()); the agent never runs it.",
   },
   "packages/engine/src/cli/cmd/github.publish.ts": {
     stance: "runner",
-    why: "`vector github publish`, in the separate publish job after the agent job; runs Git with hooks, helpers and credentials disabled (:309).",
+    why: "`vector github publish`, in the separate publish job after the agent job; runs Git with hooks, helpers and credentials disabled (createPublishGit).",
   },
   "packages/engine/src/cli/cmd/ship.ts": {
     stance: "runner",
-    why: "The hidden `vector ship capture`, in Ship Desk's own job that holds only a capture ticket (captureEnvironmentProblem :65, :556); it runs the repository's start command, Git and Chrome there unisolated by design (:212, :270, :304).",
+    why: "The hidden `vector ship capture`, in Ship Desk's own job that holds only a capture ticket (captureEnvironmentProblem); it runs the repository's start command, Git and Chrome there unisolated by design (startShell, git, shoot).",
   },
   "packages/engine/src/cli/cmd/db.ts": {
     stance: "cli",
-    why: "`vector db` opens sqlite3 on the person's local database (:39).",
+    why: "`vector db` opens sqlite3 on the person's local database.",
   },
   "packages/engine/src/installation/standalone.ts": {
     stance: "cli",
-    why: "A Windows-only cmd.exe start of the upgrade or removal script (:227) from `vector upgrade`, `vector uninstall` or the app's upgrade request; a hosted agent runs only on Linux.",
+    why: "A Windows-only cmd.exe start of the upgrade or removal script (launch()) from `vector upgrade`, `vector uninstall` or the app's upgrade request; a hosted agent runs only on Linux.",
   },
   "packages/engine/src/plugin/index.ts": {
     stance: "plugin-host",
-    why: "Hands Bun.$ to server plugins (:201); external plugin code is refused while isolation is required (assertExternalCodeAllowed, :124), and the internal plugins never call it.",
+    why: "Hands Bun.$ to server plugins; external plugin code is refused while isolation is required (assertExternalCodeAllowed in applyPlugin), and the internal plugins never call it.",
   },
   "packages/engine/src/mcp/index.ts": {
     stance: "url-opener",
-    why: "MCP OAuth opens the authorization URL (:1288) from `vector mcp auth` or the app's MCP auth request; its stdio import is a type, and servers start through mcp/stdio.ts (:490).",
+    why: "MCP OAuth opens the authorization URL from `vector mcp auth` or the app's MCP auth request; its stdio import is a type, and servers start through mcp/stdio.ts (localTransport).",
   },
   "packages/engine/src/plugin/snowflake-cortex.ts": {
     stance: "url-opener",
-    why: "Snowflake's external-browser sign-in opens the authorize URL (:484), only from a person's provider sign-in (ProviderAuth.authorize, provider/auth.ts:236).",
+    why: "Snowflake's external-browser sign-in opens the authorize URL, only from a person's provider sign-in (ProviderAuth.authorize in provider/auth.ts).",
   },
   "packages/engine/src/cli/cmd/web.ts": {
     stance: "url-opener",
-    why: "`vector web` opens the local UI (:75, :79).",
+    why: "`vector web` opens the local UI.",
   },
   "packages/engine/src/cli/vector-account.ts": {
     stance: "url-opener",
-    why: "`vector login`, or the account gate on a person's first interactive run (ensureVectorAccount, :438; refused without a TTY, :431), opens the approval page (:250).",
+    why: "`vector login`, or the account gate on a person's first interactive run (ensureVectorAccount, refused without a TTY), opens the approval page (browserLogin).",
   },
   "packages/engine/src/cli/cmd/invite.ts": {
     stance: "url-opener",
-    why: "`vector invite --open` opens the owner's page (:138).",
+    why: "`vector invite --open` opens the owner's page.",
   },
   "packages/engine/src/mcp/sdk.ts": {
     stance: "re-export",
-    why: "Re-exports StdioClientTransport (:17) for mcp/index.ts's instanceof check; only mcp/stdio.ts constructs it.",
+    why: "Re-exports StdioClientTransport for mcp/index.ts's instanceof check; only mcp/stdio.ts constructs it.",
   },
 } as const satisfies Record<string, { stance: Stance; why: string }>
 
@@ -219,7 +219,7 @@ const HELPER_CALLS = [
   {
     file: "packages/core/src/cross-spawn-spawner.ts",
     call: "NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`",
-    why: "killGroup's Windows tree kill of a process this spawner started (:523); Windows refuses every launch while isolation is required.",
+    why: "killGroup's Windows tree kill of a process this spawner started; Windows refuses every launch while isolation is required.",
   },
 ] as const
 
@@ -409,6 +409,8 @@ describe("direct process spawn inventory (spawn review §4, principle 5)", () =>
         ),
     ).toEqual([])
     expect(Object.keys(INVENTORY).filter((file) => !found.some((source) => source.file === file))).toEqual([])
+    // Reasons cite symbols, not line numbers, which no check here could keep from going stale.
+    expect([...Object.values(INVENTORY), ...HELPER_CALLS].filter((entry) => /:\d/.test(entry.why))).toEqual([])
   })
 
   test("a type-only entry reaches spawners only in types, and every other entry at run time", async () => {

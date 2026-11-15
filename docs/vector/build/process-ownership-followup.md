@@ -150,7 +150,7 @@ empty. At the `native-qualify` head that case cannot occur in any shipped or CI 
   in `OwnedProcess` work there.
 - A native CI build has an empty `/proc`, but it refuses owned commands before launch.
 
-The new Linux test `packages/engine/test/task/shell-required-isolation-posix.test.ts`
+The new Linux test `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts`
 covers this path. Under required isolation it stops an owned background group that
 ignores SIGTERM, and it shows:
 
@@ -179,12 +179,14 @@ head `ce5e5605`:
 
 The status of the rest:
 
-- The NQ-2 Linux test `packages/engine/test/task/shell-required-isolation-posix.test.ts`
+- The NQ-2 Linux test `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts`
   has no hosted run yet. `test.yml` has not run on `native-qualify`, so the Linux engine
   shard of the branch's PR is its first hosted run.
 - Two more POSIX tests for the same contract are on `origin/review-fixes` (`fa5a5639`, not
-  merged here). One of them is at the same path as the NQ-2 test, so merging the two lanes
-  needs a merge resolution that keeps both tests' scenarios.
+  merged here). One of them is
+  `packages/engine/test/task/shell-required-isolation-posix.test.ts`, the path the NQ-2
+  test had until review round two renamed it (lane notes, D106). The two files no longer
+  collide, so both tests' scenarios survive the merge without a hand resolution.
 - Native commands registered with `OwnedProcess` stay refused before launch
   (`packages/core/src/cross-spawn-spawner.ts:405-411`). The spawn review's §6 Q2,
   delegate versus refuse, stays open.

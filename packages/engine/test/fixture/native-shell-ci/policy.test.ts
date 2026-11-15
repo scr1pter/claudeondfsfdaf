@@ -458,31 +458,48 @@ test("the failure-only runtime probe varies only the engine sandbox's proc treat
   // The `own` treatment follows entry.py's command namespaces, which pair --unshare-pid with a private procfs.
   const read = async (name: string) =>
     (await Bun.file(path.join(import.meta.dir, name)).text()).replaceAll("\r\n", "\n")
-  const entry = await read("../../../../core/src/process-isolation/linux/entry.py")
-  expect(entry).toContain('"--dev", "/dev", "--proc", "/proc", "--cap-drop", "ALL"')
-  expect(entry).toContain('"--unshare-pid"')
+  // These source ties compare token sequences without whitespace or trailing commas, so a formatting-only edit of a
+  // production file cannot turn this first gate of every native dispatch red.
+  const tokens = (text: string) => text.replace(/\s+/g, "").replace(/,(?=[)\]}])/g, "")
+  const entry = tokens(await read("../../../../core/src/process-isolation/linux/entry.py"))
+  expect(entry).toContain(tokens('"--dev", "/dev", "--proc", "/proc", "--cap-drop", "ALL"'))
+  expect(entry).toContain(tokens('"--unshare-pid"'))
   // run()'s hosted inner chain and its native launch, which the probe repeats without the proof FD wrapper, the
   // checkout --chdir, the clean environment and the engine bundle.
-  const sandbox = await read("../../../src/cli/cmd/github.sandbox.ts")
-  expect(sandbox).toContain('  const launcher = hosted ? "/usr/bin/sudo" : binary\n')
-  expect(sandbox).toContain("engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope)")
+  const sandbox = tokens(await read("../../../src/cli/cmd/github.sandbox.ts"))
+  expect(sandbox).toContain(tokens('const launcher = hosted ? "/usr/bin/sudo" : binary const inner = hosted'))
   expect(sandbox).toContain(
-    [
-      '        "/usr/bin/prlimit",',
-      '        "--core=0:0",',
-      '        "--",',
-      '        "/usr/bin/setpriv",',
-      "        `--reuid=${state!.uid}`,",
-      "        `--regid=${state!.gid}`,",
-      '        "--clear-groups",',
-      '        ...(!state!.sudo ? ["--no-new-privs"] : []),',
-      '        "--",',
-      '        "/usr/bin/env",',
-      '        "-i",',
-      "",
-    ].join("\n"),
+    tokens("engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope)"),
   )
-  expect(sandbox).toContain('  return [\n    "-n",\n    ...(sudo || !floor\n')
+  expect(sandbox).toContain(
+    tokens(
+      [
+        '"/usr/bin/prlimit",',
+        '"--core=0:0",',
+        '"--",',
+        '"/usr/bin/setpriv",',
+        "`--reuid=${state!.uid}`,",
+        "`--regid=${state!.gid}`,",
+        '"--clear-groups",',
+        '...(!state!.sudo ? ["--no-new-privs"] : []),',
+        '"--",',
+        '"/usr/bin/env",',
+        '"-i",',
+      ].join(" "),
+    ),
+  )
+  expect(sandbox).toContain(tokens('return [ "-n", ...(sudo || !floor ? inner'))
+  // Only formatting is ignored: a rewrapped call still matches, and a renamed binding or an extra argument does not.
+  const call = tokens("engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope)")
+  expect(
+    tokens("engineLaunch(\n  inner,\n  workspace,\n  state!.sudo,\n  native || ProcessIsolation.FLOOR,\n  scope,\n)"),
+  ).toBe(call)
+  expect(
+    tokens("engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope, extra)"),
+  ).not.toContain(call)
+  expect(tokens('const launcher = hosted ? "/usr/bin/sudo" : binary2\nconst inner = hosted')).not.toContain(
+    tokens('const launcher = hosted ? "/usr/bin/sudo" : binary const inner = hosted'),
+  )
   const expected = (proc: readonly string[], runtime: string) => [
     "-n",
     "/usr/bin/bwrap",

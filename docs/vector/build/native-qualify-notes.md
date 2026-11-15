@@ -113,6 +113,9 @@ This corrects spawn review C9 and the PR #33 finding SPAWN-2.
   enabled (owner-gated) or native plus owned is ever delegated rather than refused. No
   `owned-process.ts` change is made. The missing proof (SPAWN-1, POSIX half) is a Linux
   `test.yml` child fixture in NQ-2.
+  (15 November 2026, superseded by D18: the second trigger is a native build routing an
+  owned command through `OwnedProcess.track`, not delegation. A §4.4 delegate never
+  signals and never calls `groupEmpty`.)
 
 ## Package table
 
@@ -341,11 +344,13 @@ line is unchanged since `597dbcc9`.
 
 ### What landed
 
-- New `packages/engine/test/task/shell-required-isolation-posix.test.ts` (SPAWN-1, POSIX
-  half). It follows the child pattern of `shell-required-isolation.test.ts`, which is not
-  edited. The parent test is `test.skipIf(process.platform !== "linux")`, so it is skipped
-  explicitly off Linux. It re-runs the file with `bun test --timeout 30000` from
-  `packages/engine` (so the bunfig preloads apply) and the fixed environment
+- New `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts` (SPAWN-1,
+  POSIX half; `f96e2456` added it as `shell-required-isolation-posix.test.ts`, and review
+  round two renamed it, D106). It follows the child pattern of
+  `shell-required-isolation.test.ts`, which is not edited. The parent test is
+  `test.skipIf(process.platform !== "linux")`, so it is skipped explicitly off Linux. It
+  re-runs the file with `bun test --timeout 30000` from `packages/engine` (so the bunfig
+  preloads apply) and the fixed environment
   `{ PATH: "/usr/bin:/bin", VECTOR_TEST_SHELL_REQUIRED_ISOLATION_POSIX: "1" }`, with no
   inherited `LD_*`, `NODE_OPTIONS` or other variable. Only on a GitHub-hosted runner
   (`RUNNER_ENVIRONMENT=github-hosted`) does it add
@@ -2565,14 +2570,18 @@ stays refused (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at 
      `READER_SHA` (`native-shell-ci/common.ts:11`, `c8283da6...`).
    - Without the re-pin, the compile step refuses before the preflight (D95).
 7. Root installation of the adapter or the `vector-sandbox-v1` profile outside hosted CI.
-8. The PR and merge of `native-qualify` (the lead), with two predicted conflicts against
-   `origin/review-fixes` (D99):
-   - the `native-shell.yml` job `if` line (NQ-1 `597dbcc9` against `48b76a5b`);
-   - an add/add conflict on `packages/engine/test/task/shell-required-isolation-posix.test.ts`
-     (NQ-2 `f96e2456` against `fa5a5639`), to be resolved by merge keeping both tests'
-     scenarios.
-9. D83 (the rule-breaching NQ-7 plan experiments; their inert files remain in
-   `/tmp/vector-v2/native/nq7`, not run or reused) and the NQ-7 commit title (D87).
+8. The PR and merge of `native-qualify` (the lead), with one predicted conflict against
+   `origin/review-fixes` (D99, D106): the `native-shell.yml` job `if` line (NQ-1 `597dbcc9`
+   against `48b76a5b`). The add/add conflict D99 predicted on
+   `packages/engine/test/task/shell-required-isolation-posix.test.ts` is gone: review round
+   two renamed NQ-2's test to `shell-required-isolation-posix-owned.test.ts`, so both lanes'
+   tests survive the merge without a hand resolution.
+9. D83 and D13, together: the two disclosed local-rule breaches (the NQ-7 plan's native and
+   privileged experiments, and NQ-1's execution of AST-extracted `entry.py` functions). The
+   lead acknowledges both before the PR. The NQ-7 files are quarantined in
+   `/tmp/vector-v2/native/quarantine/nq7-d83.tar.gz`, and `/tmp/vector-v2/native/nq7` no
+   longer exists (D106). Also the NQ-7 commit title (D87, D106): `ce5e5605`'s title
+   overstates the result and must not be reused in the PR title or description.
 10. S4-5 and SPAWN-3 landing from `review-fixes` (`d6a54241`, `c8b97625`, `8562dd7a`).
 11. The SPAWN-2 tracking contradiction.
     - `origin/review-fixes` `1433d105` (`docs/vector/build/v2-notes/v2-complete-plan.md`
@@ -2624,7 +2633,7 @@ From the worktree, read-only except for the four documents:
 ### Deferred verification
 
 - `test.yml` has no run on `native-qualify`. The branch's PR gives the first hosted run of:
-  - `packages/engine/test/task/shell-required-isolation-posix.test.ts`;
+  - `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts` (renamed, D106);
   - `packages/engine/test/spawn-inventory.test.ts`;
   - `packages/engine/test/cli/github.isolation.test.ts`;
   - `packages/core/test/process-isolation-linux.test.ts`.
@@ -2681,7 +2690,8 @@ From the worktree, read-only except for the four documents:
     The two edits conflict on the same line, and the resolution is the lead's.
   - `packages/engine/test/task/shell-required-isolation-posix.test.ts` is an add/add
     conflict: `f96e2456` has 286 lines and `fa5a5639` has 136, and the path is absent at
-    `0ee486e3`. Resolve it by merge, keeping both tests' scenarios.
+    `0ee486e3`. Resolve it by merge, keeping both tests' scenarios. (Superseded by D106:
+    NQ-2's file is renamed, so this conflict no longer arises.)
   - `review-fixes` also edits `v2-spawn-review.md` in place (the C10 note and the S4-5 row,
     `c8b97625`). That does not overlap this package's appended addendum: the file-level
     merge is clean.
@@ -2758,3 +2768,100 @@ From the worktree, read-only except for the four documents:
   - Every new `file:line` was re-read at HEAD with `grep -n` and `sed -n`. `git diff
     --check` is clean. No code, test or workflow changed, so no test or package typecheck
     applies.
+- D106. Review fixes, round two (native-qualify lane, 15 November 2026). All eleven
+  findings were non-blocking. Ten were accepted (the two engine-fixture findings are one
+  change) and one was declined. Nothing was committed in this step.
+  - C9 section: a dated pointer to D18 is appended to the C9 bullet of "C9 re-analysis at
+    `0ee486e3`". The original sentence stands.
+  - Engine fixture refusal handler (both findings): in
+    `packages/engine/test/fixture/native-shell-engine.ts`, a terminal `.catch(() => {})`
+    now follows the async refusal handler. It carries the host's comment: exit code 125 is
+    set first, so a throw inside the handler can neither become an unhandled rejection nor
+    change the exit code. The handler body and its stage assignments are unchanged.
+  - NQ-7 commit title: `ce5e5605`'s `fix(isolation): qualify the native Shell seam matrix`
+    overstates the result (D87). No cell passed, and only a failure-only probe landed.
+    History is not rewritten. The title must not be reused in the lane's PR title or
+    description. A PR summary describes NQ-7 as "add a failure-only engine runtime probe".
+    Open item 9 says the same.
+  - Probe policy ties: `native-shell-ci/policy.test.ts` now compares its `entry.py` and
+    `github.sandbox.ts` ties as token sequences. Whitespace is removed, and a comma before
+    a closing bracket is dropped, so a Prettier rewrap or re-indent cannot turn the native
+    workflow's first gate red. The behavioural tie through
+    `ProcessIsolation.engineArguments` is unchanged.
+    - The launcher tie now runs on to `const inner = hosted`, and the floor tie to
+      `? inner`. Those take over the job of the old trailing newlines: `binary2` or
+      `!floorX` still fails.
+    - Three self-checks pin the normalisation: a rewrapped `engineLaunch` call equals the
+      one-line form, while an extra argument and a renamed binding do not match.
+    - Local result: 10 pass, 0 fail, 767 `expect()` calls (764 at NQ-7, plus the three).
+    - A scratch check under `/tmp/vector-v2/native/nq8-review2` reprinted
+      `github.sandbox.ts` with Prettier at `--print-width 60 --trailing-comma none` and at
+      200, and all four ties still matched. A mutant with
+      `native || ProcessIsolation.FLOOR` replaced by `native` failed the `engineLaunch`
+      tie. M12 still holds, now insensitive to formatting.
+  - Inventory reasons: `packages/engine/test/spawn-inventory.test.ts` takes the finding's
+    first option. Every `INVENTORY` and `HELPER_CALLS` reason now cites symbols instead of
+    line numbers, for example `ProcessIsolation.launch`, `ProcessIsolation.commandPlan`
+    after the `OwnedProcess.options` refusal, `localTransport`, `run()`, `execute()`,
+    `createPublishGit`, `startShell`/`git`/`shoot`, `browserLogin` and `applyPlugin`.
+    - A new assertion fails if any reason cites `:<digit>` again.
+    - Local result: 11 pass, 0 fail, 24 `expect()` calls.
+    - The NQ-4 stance table ("Why (HEAD lines)") and the NQ-4 spawn-review addendum keep
+      their line numbers as dated evidence at their recorded heads. They are not a
+      maintained index, so they are not edited.
+  - D83: `/tmp/vector-v2/native/nq7` is quarantined.
+    - Its nine files (`attach.sh`, `loop.sh`, `strace-bun.txt`, `hello.ts` and five empty
+      output files) are archived in `/tmp/vector-v2/native/quarantine/nq7-d83.tar.gz`
+      (mode 0400, SHA-256
+      `e98465a5de9a84a3557cd4c87e193c08c95e36dba9cc02ef8bdc82b4b5dc2e9a`), and the folder
+      is removed, so no later step can run or reuse it.
+    - Nothing in it was run, extracted or used for a decision.
+    - The lead acknowledges D83 explicitly before the PR (open item 9).
+  - D13: no code change. It stays as recorded, and open item 9 now puts it before the lead
+    together with D83.
+  - Test rename: NQ-2's test is now
+    `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts`, a staged
+    `git mv` with unchanged content. The child re-run uses `import.meta.path`, so it
+    follows the rename, and the cited `:187` is unchanged.
+    - Citations are updated in place: this file's NQ-2 "What landed", open item 8 and
+      "Deferred verification"; `v2-spawn-review.md`'s NQ-2 addendum (the SPAWN-1 POSIX
+      paragraph) and NQ-8 addendum (the S4-2 lines); and both sections of
+      `process-ownership-followup.md`.
+    - These are the only in-place edits to the lane's own addenda in this round. They
+      change the path and the collision sentence only, as the finding asks; no review text
+      above the addenda changed.
+    - The D99 bullet gets a superseded pointer. The NQ-8 "Evidence (local)" merge
+      prediction stays as it was recorded at `2aa4ccd5`.
+    - Mentions of `review-fixes`' 136-line file keep the old path, which is still its path.
+  - New merge prediction:
+    - The working tree was written to a scratch tree and a dangling commit object, on no
+      ref and through a scratch index, so the worktree index is untouched. The prediction
+      was made after the code edits and again after the last document edit before this
+      entry, with the same result.
+    - `git merge-tree --write-tree` against `origin/review-fixes` `1433d105` reports exactly
+      one conflict, `.github/workflows/native-shell.yml` (content). `v2-spawn-review.md`
+      auto-merges. The merged tree holds both test files, and `review-fixes`' blob
+      `2b217049` is unchanged.
+    - Against `origin/release-finish` `cf2373c4` there is no conflict.
+    - Both tests use the child flag `VECTOR_TEST_SHELL_REQUIRED_ISOLATION_POSIX`, but each
+      parent re-runs only its own file, so the two cannot cross.
+    - Local run of the renamed file: 1 pass, 0 fail, 2 `expect()` calls, `elapsed` 3077,
+      `reaping` false.
+  - SPAWN-1, native half: no change, as the finding says. It stays open in all four
+    documents. The S10-2 lines of the NQ-8 spawn-review addendum already list what the
+    `owned` scenario must assert: the row ends with cleanup `"confirmed"`, `ShellJobs.start`
+    fails with the refusal, the row is cancelled and the slot is released.
+  - Declined: the placement of the status paragraph. The NQ-8 paragraph stays inside
+    `native-isolation-status.md`'s "Remaining qualification". D96 records that the brief
+    required that section to be updated in place by one paragraph, and the critique made it
+    mandatory. Moving the paragraph now would delete lines from a section the brief told
+    the lane to update. It is dated, adds lines only, and the lane-end section carries the
+    full list. The finding itself rates it acceptable as is.
+  - Checks:
+    - the engine package typecheck passes (`tsgo --noEmit`, exit 0);
+    - `prettier --check` passes on the four changed TypeScript files, after one
+      `prettier --write` of `policy.test.ts`;
+    - `git diff --check` is clean.
+    No production source, workflow or `owned-process.ts` changed, and every Bun command ran
+    through `/home/user/.tools/vector-serial`. The full typecheck before the push belongs
+    to the commit step. Both native build switches and FLOOR stay false.
