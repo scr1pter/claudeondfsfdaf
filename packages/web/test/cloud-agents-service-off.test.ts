@@ -116,13 +116,15 @@ test("the route list covers every exported cloud-agents route", () => {
 })
 
 test("every route refuses and touches no store while either switch is off", async () => {
-  for (const flags of [
-    {},
-    { MODEL_PLANS_ENABLED: "true" },
-    { VECTOR_GITHUB_BRAIN_ENABLED: "true" },
-    { MODEL_PLANS_ENABLED: "true", VECTOR_GITHUB_BRAIN_ENABLED: "1" },
-    { MODEL_PLANS_ENABLED: "TRUE", VECTOR_GITHUB_BRAIN_ENABLED: "true" },
-  ]) {
+  // Codium off keeps MODEL_PLANS_DISABLED, which the CLI shows as the service being off; the GitHub switch alone is
+  // the generic CLOUD_AGENTS_UNAVAILABLE.
+  for (const [flags, code] of [
+    [{}, "MODEL_PLANS_DISABLED"],
+    [{ MODEL_PLANS_ENABLED: "true" }, "CLOUD_AGENTS_UNAVAILABLE"],
+    [{ VECTOR_GITHUB_BRAIN_ENABLED: "true" }, "MODEL_PLANS_DISABLED"],
+    [{ MODEL_PLANS_ENABLED: "true", VECTOR_GITHUB_BRAIN_ENABLED: "1" }, "CLOUD_AGENTS_UNAVAILABLE"],
+    [{ MODEL_PLANS_ENABLED: "TRUE", VECTOR_GITHUB_BRAIN_ENABLED: "true" }, "MODEL_PLANS_DISABLED"],
+  ] as const) {
     delete process.env.MODEL_PLANS_ENABLED
     delete process.env.VECTOR_GITHUB_BRAIN_ENABLED
     Object.assign(process.env, flags)
@@ -132,7 +134,7 @@ test("every route refuses and touches no store while either switch is off", asyn
           route,
           source,
           status: 503,
-          body: { error: { code: "CLOUD_AGENTS_UNAVAILABLE", message: "This request could not be completed." } },
+          body: { error: { code, message: "This request could not be completed." } },
         })
   }
   expect(state).toEqual({ kv: [], store: [], fetched: [], called: [] })
