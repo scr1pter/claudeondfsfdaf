@@ -139,15 +139,15 @@ Also:
 Built in `e34523980`: 23 files, `desktop/src/main/github-agents.ts` and `github-agents-brain.ts`, IPC, preload and tests. Browser validation passed: 43216635830 and 43565027734.
 
 Remaining:
-1. **The version flip** (spec 2.11.4):
-   - `packages/core/src/review/workflow.ts:18` still has `GITHUB_WORKFLOW_VERSION = "2"`. Set it to `GithubAgents.WORKFLOW_VERSION`.
-   - Update the hard-coded `"2"` in `engine/test/cli/github.workflow.test.ts:145,195,279,328,483`, `github.review.test.ts:1780`, `github.run-routing.test.ts:122`, `engine/script/verify-sharing.ts:484` and `verify-github-app.ts:347`.
-   - Update the comment at `core/src/github-agents.ts:6-7`.
-2. A progress entry for V24. Today it is mentioned only in deviations ("Combined desktop integration review", `deviations.md:628`).
+1. **The version flip** (spec 2.11.4): **built in BT02** on `brain-transport` (progress and deviations, "2026-11-15 BT02").
+   - `GITHUB_WORKFLOW_VERSION` is now `GithubAgents.WORKFLOW_VERSION`, and the comments in `workflow.ts` and `core/src/github-agents.ts:6-7` are updated.
+   - Corrected line list: `github.workflow.test.ts:145,195,279,328` are legacy `buildWorkflowYaml` goldens and stay `"2"`. Only `:483` changed there, plus `github.review.test.ts:1780`, `github.run-routing.test.ts:122`, `engine/script/verify-sharing.ts:484` and `verify-github-app.ts:347`.
+2. A progress entry for V24: **added in BT02** (the "V24 record" in BT02's progress entry).
 3. **Waits on the owner (A1 and spec §4 step 7):**
    - `vectorRequiredCliVersion` is `"1.99.99"` (`packages/desktop/package.json:6`).
    - `MIN_AGENTS_CLI` is a provisional `"1.99.113"` (`github-agents.ts:12`).
    - Raise both only to an actually published CLI release.
+4. **V24's carries, not built:** publish learning the agent job's result (`VECTOR_AGENT_RESULT`, deviation V18b item 1) and `VECTOR_APP_BOT_ID` with the `sender.id` check (deviation V18c item 9). No package owns them yet; the lead assigns them (deviations "2026-11-15 BT02" item 5).
 
 ### V25: App UI
 
@@ -270,7 +270,7 @@ Also:
 2. Commit the test fixes: group 1 (`3d7283bda`), group 5 (`getBuiltinModule`), group 2 (one regenerated snapshot) unless the Build Agent has already landed them.
 3. Commit the bounded probe diagnostics (§1.5).
 4. Commit Fix A, or Fix B if the orchestrator picks it, with the docs and owner note.
-5. The V24 version flip.
+5. The V24 version flip (built in BT02 on `brain-transport`).
 6. Re-fetch and push `v2-vector` (fast-forward only). Open the draft PR once with `gh pr create -R scr1pter/claudeondfsfdaf --base v2 --head v2-vector --draft`.
    - `test`, `verify` and `typecheck` run on the PR. The lane runs on `pull_request` (path filter).
    - Dispatch `github-compat.yml` and `github-desktop-validation.yml` with `--ref v2-vector`.

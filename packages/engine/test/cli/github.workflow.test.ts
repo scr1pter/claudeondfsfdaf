@@ -480,7 +480,11 @@ describe("GitHub workflow compatibility", () => {
     expect(JSON.parse(env.VECTOR_CONFIG_CONTENT!)).toEqual({ lsp: false, formatter: false, snapshot: false })
   })
   test("current workflow preserves explicit config and task mode", () => {
-    const env = { GITHUB_ACTIONS: "true", VECTOR_WORKFLOW_VERSION: "2", VECTOR_CONFIG_CONTENT: '{"snapshot":true}' }
+    const env = {
+      GITHUB_ACTIONS: "true",
+      VECTOR_WORKFLOW_VERSION: GithubAgents.WORKFLOW_VERSION,
+      VECTOR_CONFIG_CONTENT: '{"snapshot":true}',
+    }
     expect(prepareGithubEnvironment(env, true)).toBeUndefined()
     expect(env.VECTOR_CONFIG_CONTENT).toBe('{"snapshot":true}')
     const task: Record<string, string | undefined> = { GITHUB_ACTIONS: "true" }
@@ -488,6 +492,32 @@ describe("GitHub workflow compatibility", () => {
     expect(task.VECTOR_PURE).toBeUndefined()
     expect(task.VECTOR_CONFIG_CONTENT).toBeUndefined()
     expect(prepareGithubEnvironment({}, true)).toBeUndefined()
+  })
+  // Both installers write v3 (V24). Each env passes its own configuration, so only the "2" can make it stale.
+  for (const [name, review, extra, pure] of [
+    ["review", true, {}, "1"],
+    ["task", false, {}, undefined],
+    ["App task", false, { VECTOR_GITHUB_AUTH: "auto" }, "1"],
+  ] as const)
+    test(`a v2 ${name} job is stale on its version alone now that both installers write v3`, () => {
+      const env: Record<string, string | undefined> = {
+        GITHUB_ACTIONS: "true",
+        VECTOR_WORKFLOW_VERSION: "2",
+        VECTOR_CONFIG_CONTENT: '{"snapshot":true}',
+        ...extra,
+      }
+      expect(prepareGithubEnvironment(env, review)).toContain("vector github install")
+      expect(env.VECTOR_CONFIG_CONTENT).toBe('{"snapshot":true}')
+      expect(env.VECTOR_PURE).toBe(pure)
+      expect(env.VECTOR_DISABLE_PROJECT_CONFIG).toBe(pure)
+      expect(prepareGithubEnvironment({ ...env, GITHUB_ACTIONS: undefined }, review)).toBeUndefined()
+    })
+  test("a v2 review without its configuration still gets the safe defaults", () => {
+    const env: Record<string, string | undefined> = { GITHUB_ACTIONS: "true", VECTOR_WORKFLOW_VERSION: "2" }
+    expect(prepareGithubEnvironment(env, true)).toContain("vector github install")
+    expect(env.VECTOR_PURE).toBe("1")
+    expect(env.VECTOR_DISABLE_PROJECT_CONFIG).toBe("1")
+    expect(JSON.parse(env.VECTOR_CONFIG_CONTENT!)).toEqual({ lsp: false, formatter: false, snapshot: false })
   })
 })
 
@@ -964,5 +994,40 @@ describe("workflow v3", () => {
           true,
         ),
       ).toContain("vector github install")
+  })
+
+  test("what the v3 builder writes is current for the CLI, and the legacy builder's stamp is stale", () => {
+    for (const options of [CODIUM, OWN_KEY, SCHEDULED]) {
+      const jobs = Object.values(agents(options).jobs)
+      const versions = jobs.flatMap((job) => [
+        job.env.VECTOR_WORKFLOW_VERSION,
+        ...job.steps.flatMap((step) => step.env?.VECTOR_WORKFLOW_VERSION ?? []),
+      ])
+      expect(new Set(versions)).toEqual(new Set([GithubAgents.WORKFLOW_VERSION]))
+      // The agent phase returns before prepareGithubEnvironment, so the review step is the only v3 step that reaches it.
+      for (const step of jobs.flatMap((job) => job.steps))
+        if (step.run?.includes("vector github run")) expect(step.run).toContain("--phase agent")
+      const reviews = jobs.flatMap((job) =>
+        job.steps
+          .filter((step) => step.run === "vector github review")
+          .map((step) => ({ ...job.env, ...step.env, GITHUB_ACTIONS: "true" })),
+      )
+      expect(reviews).toHaveLength(1)
+      for (const env of reviews) expect(prepareGithubEnvironment(env, true)).toBeUndefined()
+    }
+    // With App mode the legacy file adds a second review job and a second task job.
+    for (const [legacy, jobs] of [
+      [OPENAI, 2],
+      [{ ...OPENAI, auth: "auto" }, 4],
+    ] as const) {
+      const steps = Object.values(parse(buildWorkflowYaml(legacy)).jobs).flatMap((job) => job.steps)
+      expect(new Set(steps.flatMap((step) => step.env?.VECTOR_WORKFLOW_VERSION ?? []))).toEqual(new Set(["2"]))
+      const runs = steps.filter((step) => step.run === "vector github review" || step.run === "vector github run")
+      expect(runs).toHaveLength(jobs)
+      for (const step of runs)
+        expect(
+          prepareGithubEnvironment({ ...step.env, GITHUB_ACTIONS: "true" }, step.run === "vector github review"),
+        ).toContain("vector github install")
+    }
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { GithubAgents } from "@vectordevai/core/github-agents"
-import { buildWorkflowYaml, WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
+import { buildWorkflowYaml, GITHUB_WORKFLOW_VERSION, WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 
 const COMMANDS = ["/vector", "/vs", "/vectorscope", "/vx"]
 // Characters actions/upload-artifact refuses in an artifact name.
@@ -329,6 +329,10 @@ describe("shared names", () => {
     expect(GithubAgents.WORKFLOW_VERSION).toMatch(/^[1-9]\d*$/)
     expect(GithubAgents.MIN_CODIUM_WORKFLOW_VERSION).toBe(3)
     expect(Number(GithubAgents.WORKFLOW_VERSION)).toBeGreaterThanOrEqual(GithubAgents.MIN_CODIUM_WORKFLOW_VERSION)
+  })
+
+  test("the CLI compares installed workflows against what the v3 builder writes", () => {
+    expect(GITHUB_WORKFLOW_VERSION).toBe(GithubAgents.WORKFLOW_VERSION)
   })
 
   test("every endpoint is /api/cloud-agents/<kebab-case name>, and each audience is its endpoint's address", () => {

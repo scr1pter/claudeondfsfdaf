@@ -13,9 +13,11 @@ import { validCron } from "./schedule"
 
 export { WORKFLOW_FILE } from "../github-agents"
 export const CLI_PACKAGE = "@vectordevai/cli"
-// Written into every job as VECTOR_WORKFLOW_VERSION; the CLI asks for a reinstall when a workflow's differs. It stays
-// "2" while the CLI and the desktop install this v2 workflow; GithubAgents.WORKFLOW_VERSION is the v3 builder's.
-export const GITHUB_WORKFLOW_VERSION = "2"
+// Every job carries a workflow's version as VECTOR_WORKFLOW_VERSION, and the CLI asks for a reinstall when it is
+// missing, not a number, or lower than this (prepareGithubEnvironment). Both installers write the v3 builder's file
+// (V24), so this is its version. The legacy buildWorkflowYaml below still stamps "2": no installer writes its file, the
+// v3 builder restamps the own-key review job it reuses, and its goldens keep it byte-identical.
+export const GITHUB_WORKFLOW_VERSION = GithubAgents.WORKFLOW_VERSION
 
 export interface WorkflowOptions {
   provider: string

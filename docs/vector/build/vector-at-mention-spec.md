@@ -529,7 +529,7 @@ The file must have **no imports**, so `api/` can import it as `../../packages/co
 | Constant | Value |
 |---|---|
 | `WORKFLOW_FILE` | `".github/workflows/vector.yml"` (`workflow.ts` re-exports it) |
-| `WORKFLOW_VERSION` | `"3"`, written by the v3 builder. `workflow.ts`'s `GITHUB_WORKFLOW_VERSION` (what the CLI compares against) stays `"2"` until V24 sets it to this value (2.11.4) |
+| `WORKFLOW_VERSION` | `"3"`, written by the v3 builder. `workflow.ts`'s `GITHUB_WORKFLOW_VERSION` (what the CLI compares against) equals it since V24's flip, built in BT02 (2.11.4; deviations 2026-11-15 BT02) |
 | `MIN_CODIUM_WORKFLOW_VERSION` | `3` |
 | `MIN_AGENTS_CLI` | (added by V14) the first CLI version that carries V15–V22; set in V14 to the next CLI release's version and recorded in the progress file (section 4 step 7) |
 | `JOB` | `{ agent: "Vector agent", publish: "Vector publish", review: "Vector review", bind: "Vector bind", legacyTask: "Vector task" }` |
@@ -1206,7 +1206,7 @@ Plan limits are never enforced through Actions concurrency.
 - **Mint** refuses versions below 3 (426 `WORKFLOW_UPDATE_REQUIRED`).
 - **Bind** answers `workflowUpdate`.
 - **Desktop.** Its status reads the header and offers an update PR when the version is old or the handle is missing.
-- **CLI.** `prepareGithubEnvironment` warns when the workflow's version is numerically *below* `GITHUB_WORKFLOW_VERSION` (V14). V24, which moves the last caller to v3, sets `GITHUB_WORKFLOW_VERSION` to `GithubAgents.WORKFLOW_VERSION` and updates the engine tests and scripts that hard-code `"2"` (`github.workflow.test.ts`, `github.review.test.ts`, `github.run-routing.test.ts`, `script/verify-sharing.ts`, `script/verify-github-app.ts`). When the CLI gets 426 `CODIUM_UPDATE_REQUIRED` from the gateway, it says: "Update Vector: merge the workflow update from the Vector app, or run `vector github install` again." When id-token is added to more Codium jobs later, the version is bumped again.
+- **CLI.** `prepareGithubEnvironment` warns when the workflow's version is numerically *below* `GITHUB_WORKFLOW_VERSION` (V14). V24, which moves the last caller to v3, sets `GITHUB_WORKFLOW_VERSION` to `GithubAgents.WORKFLOW_VERSION` and updates the engine tests and scripts that hard-code `"2"` for a current workflow (`github.workflow.test.ts`, `github.review.test.ts`, `github.run-routing.test.ts`, `script/verify-sharing.ts`, `script/verify-github-app.ts`). As built (BT02; deviations 2026-11-15 BT02): an installed v2 file (`"2"`) now gets the reinstall warning and a v3 file does not; the warning never refuses a run; the legacy `buildWorkflowYaml` still stamps `"2"`, so its goldens are unchanged. When the CLI gets 426 `CODIUM_UPDATE_REQUIRED` from the gateway, it says: "Update Vector: merge the workflow update from the Vector app, or run `vector github install` again." When id-token is added to more Codium jobs later, the version is bumped again.
 - **Pinned CLI.** V3 requires the supplied version to be canonical semver; the v2 development fallback does not apply. A v3 file pins a CLI that has the v3 commands. `buildAgentsWorkflow` throws when the pinned version is below `GithubAgents.MIN_AGENTS_CLI`, and the desktop status says "Update Vector" instead of offering setup. The desktop's `vectorRequiredCliVersion` (`packages/desktop/package.json`) must be raised to that release before a desktop release offers @vector setup (section 4 step 7).
 
 ### 2.11.5 Own-key compatibility
@@ -1898,7 +1898,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - Bind sends the default branch as `defaultRef`.
   - Status reports `cli-too-old` when the pinned CLI is below `MIN_AGENTS_CLI`.
   - Sharing is offered on own key only.
-  - With both callers on v3, `GITHUB_WORKFLOW_VERSION` becomes `GithubAgents.WORKFLOW_VERSION`, and the engine tests and scripts that hard-code `"2"` are updated in this commit.
+  - With both callers on v3, `GITHUB_WORKFLOW_VERSION` becomes `GithubAgents.WORKFLOW_VERSION`, and the engine tests and scripts that hard-code `"2"` are updated in this commit. (The desktop commit did not flip it; the flip is BT02's own commit. Deviations 2026-11-15 BT02.)
 - **Tests:** with a fake fetch for both hosts:
   - status for missing, old, current and CLI-too-old workflows, and the listed flags;
   - setup PR content per mode; Codium refused when not listed;

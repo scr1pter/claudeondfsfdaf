@@ -216,8 +216,8 @@ Tiers: **A** = must land before the PR is ready (security or privacy, off-by-def
 | Red group 4 (Windows `writeBundle`) | Rewritten in `e88012584`. **Windows is unproven**; the first `test.yml` Windows shard is the proof. |
 | Red group 5 (agent-phase `require`) | **Remains in build-complete → fixed by `676674c17`.** |
 | Bounded probe diagnostics | **Fixed by `202b18947`** (`namespaceProbeFailure`). |
-| V24 version flip (`core/src/review/workflow.ts:18` is still `"2"`) | **Remains.** **B**, together with the `brain_upload` input below. Golden updates are listed in plan §3 V24. |
-| V24/V25 progress entries; V25 copy outside `i18n/en.ts` | Remains. **B**: docs or a deviation. |
+| V24 version flip (`core/src/review/workflow.ts:18` was `"2"`) | **Done in BT02** on `brain-transport` (deviations "2026-11-15 BT02"). The legacy goldens stay `"2"`; plan §3 V24 has the corrected line list. V24's two carries (`VECTOR_AGENT_RESULT`, `VECTOR_APP_BOT_ID`) are not built; they go to the lead to assign. |
+| V24/V25 progress entries; V25 copy outside `i18n/en.ts` | V24 entry **added in BT02**. The V25 entry and the V25 copy remain. **B**: docs or a deviation. |
 | V27 runtime: engine save and restore, `attestSessionArtifact` has no caller (`github.session-proof.ts:35`), no `brain_upload` workflow input (dispatch at `api/_lib/github-app.ts:725`; inputs at `workflow.ts:768-773`) | **Remains.** Behind `VECTOR_GITHUB_BRAIN_ENABLED` (off). Declare the `brain_upload` input (**B**, small; done in BT01 on `brain-transport`). Save, restore and attestation are **C**: a follow-up PR into v2 with a deviation entry. |
 | `github-compat.yml` is temporary | Remains. **A**: delete it before the PR is ready. |
 | A1 `vectorRequiredCliVersion` `1.99.99` (`desktop/package.json:6`) | Owner (needs a published CLI). |

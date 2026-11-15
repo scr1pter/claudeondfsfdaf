@@ -3,8 +3,8 @@
 // by its relative .js path, so it has no imports and uses nothing newer than ES2023.
 
 export const WORKFLOW_FILE = ".github/workflows/vector.yml"
-// What the v3 builder writes. review/workflow's GITHUB_WORKFLOW_VERSION, which the CLI compares against, stays "2" while
-// the CLI and the desktop still install the v2 workflow.
+// What the v3 builder writes, and what the CLI compares an installed workflow against: review/workflow's
+// GITHUB_WORKFLOW_VERSION is this value since V24.
 export const WORKFLOW_VERSION = "3"
 // Compare workflow versions as numbers: as strings, "10" sorts below "3".
 export const MIN_CODIUM_WORKFLOW_VERSION = 3
