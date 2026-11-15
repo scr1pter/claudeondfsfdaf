@@ -7,6 +7,11 @@ export type CloudWorkspace = {
   createdAt: number
   updatedAt: number
   revision: number
+  /**
+   * Whole percentages (0-100, rounded down) of the lifetime model-request allowance and of the current Start's running
+   * time. A host from before this field omits it.
+   */
+  usage?: { model: number; time: number }
 }
 
 export type EngineCommand = {
@@ -49,7 +54,7 @@ export const record = (value: unknown): value is Record<string, unknown> =>
 
 export function parsePublicWorkspace(value: unknown): CloudWorkspace {
   if (!record(value)) return invalid()
-  fields(value, ["id", "repository", "branch", "title", "state", "createdAt", "updatedAt", "revision"])
+  fields(value, ["id", "repository", "branch", "title", "state", "createdAt", "updatedAt", "revision", "usage"])
   if (
     !workspaceId(value.id) ||
     typeof value.repository !== "string" ||
@@ -68,6 +73,17 @@ export function parsePublicWorkspace(value: unknown): CloudWorkspace {
     value.revision < 1
   )
     return invalid()
+  const usage = value.usage
+  if (usage !== undefined) {
+    if (!record(usage)) return invalid()
+    fields(usage, ["model", "time"])
+    if (
+      ![usage.model, usage.time].every(
+        (part) => typeof part === "number" && Number.isSafeInteger(part) && part >= 0 && part <= 100,
+      )
+    )
+      return invalid()
+  }
   // Reuse the input boundary without allowing any private record fields through.
   parseCommand({
     action: "create",
@@ -85,6 +101,7 @@ export function parsePublicWorkspace(value: unknown): CloudWorkspace {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     revision: value.revision,
+    ...(record(usage) ? { usage: { model: usage.model as number, time: usage.time as number } } : {}),
   }
 }
 
