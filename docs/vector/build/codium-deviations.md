@@ -4360,3 +4360,244 @@ blocking.
 
 No flag, setting, listing, route, schema, price or public page changed, and no SDK or generated output, so
 `MODEL-PLANS.md` and the owner-actions files are unchanged. Edits to `api/_lib/model-plan-*.ts`: none.
+
+## Codium finish: B09 combined Remote authorization (15 Nov 2026)
+
+Track B B09 ("Phone Tasks view of helper and background-job states, "Stop including helpers", waiting and interrupted
+notes as push alerts", `codium-build-spec.md:947`), first half: the checkpoint's "combined remote authorization
+regression" (`codium-track-b-checkpoint.md:16`, v2-master-prompt 8.4). Read and built on `codium-finish` `dfef44e3`
+(equal to origin/codium-finish; PR #33 unmerged: `0ee486e3` is not an ancestor of origin/main), on `df3951ba`'s phone
+helper states and Stop route. `packages/sdk/openapi.json` was only read (blob `d99dc532`); no generator ran. Scratch
+was under `/tmp/vector-v2/codium/b09a/` (the review round's under `/tmp/vector-v2/codium/b09a-fix/`). Not committed or
+pushed: the package was left in the working tree, so no CI has run it. CI: pending dispatch. A review round the same
+day changed the code and this record before any commit ("Review round" below); line numbers here are the files' as they
+now stand.
+
+**Route inventory (openapi.json at `d99dc532`: 278 paths, 330 operations)**
+
+- The 20 allowlisted routes are all real operations with the same method, path template, path parameters and query
+  fields: `GET /project`, `GET /session`, `GET /session/status`, `GET /experimental/capabilities`,
+  `GET /experimental/session/:sessionID/tasks`, `POST /experimental/session/:sessionID/stop`, `GET /session/:sessionID`,
+  `GET /session/:sessionID/children`, `GET /session/:sessionID/todo`, `GET /session/:sessionID/diff`,
+  `GET /session/:sessionID/message`, `GET /session/:sessionID/message/:messageID`, `POST /session`,
+  `POST /session/:sessionID/prompt_async`, `POST /session/:sessionID/abort`, `GET /permission`,
+  `POST /permission/:requestID/reply`, `GET /question`, `POST /question/:requestID/reply`,
+  `POST /question/:requestID/reject`. No route is missing.
+- The other 310 operations are refused before the engine (GET and POST with `REMOTE_ROUTE_REFUSED`, other methods with
+  `REMOTE_REQUEST_INVALID`), and none collides with an allowlisted pattern when its parameters are filled. No route is
+  newly exposed. Families present and all refused (operations counted by path pattern): computer (Hands) 2, connect 8,
+  workspaces 7, memory 53 (`GET /memory/backup` and `POST /memory/restore` among them), review-memory 4, Playbooks 2,
+  hosted jobs 2, brain 2, config 9, file and find 10, pty 15, session shell and command 2, provider, auth, credential
+  and integration 20, share 10, mcp 9, tui 13, local 14, the v2 `/api/session` family 32, and the experimental tasks
+  sub-routes 12 (the tasks list itself is allowlisted).
+- Everywhere, GitHub and cloud-agents have no operation in openapi.json at this source. They are covered by fixed and
+  random deny-by-default probes (`/experimental/everywhere/run`, `/experimental/github/webhook`,
+  `/experimental/cloud-agents`, and a random suffix under each family prefix), plus `GET /doc` (served by the engine,
+  `server.ts:240`, not published) and `GET /remote/approval` (the desktop's own passkey route takes only POST). A probe
+  that a later regeneration publishes is filtered out of the probe list before the loop
+  (`remote-routes-combined.test.ts:110`), because it is then one of the published operations the inventory case
+  (`:90`) refuses; the eight random-suffix probes are never published, so the list is never empty. Neither case needs an
+  edit when such a path is published.
+- What the test catches and what it does not: a route another lane renames or removes (A1), and any published
+  operation the matcher would forward (A2). An addition to `REMOTE_ROUTES` itself is not caught by the inventory: it
+  drops out of the "others" set by design. It is caught by the existing exact list in `remote-routes.test.ts:239`
+  ("matches only plain id segments") and by review of `REMOTE_ROUTES`, which is the boundary the task accepts. The
+  list above is here so a later diff of it is visible.
+
+**Stop and tasks readings**
+
+- The phone's Stop forwards exactly `{helpers: boolean}`. `reason`, `sessionID`, `taskIDs`, `all`, any other field, a
+  non-boolean `helpers`, a query field, and any method but POST are refused. Plain abort forwards `{}` whatever the phone
+  sent. The published Stop body is `{helpers: boolean (required), reason?: string}` with `additionalProperties: false`.
+  The test (`:216`) pins only `helpers` as a required boolean: an optional field an engine lane adds to Stop needs no
+  edit, and no phone reaches it, because the forwarder sends a rebuilt `{helpers}` (`:165`).
+- The tasks read accepts only `descendants`, `active`, `shells` ("true" or "false") and `limit` (1-200). `"0200"`
+  passes as 200; the engine reads the same number, so it is not a widening. `directory` and `workspace` in the query
+  are refused as invalid requests (readRequest), as before.
+
+**Findings**
+
+- **B09a-1. Confirmed: a helper's request that auto-accept answers still reached the phone as "A helper needs you".**
+  - Cause: the engine records a helper's wait (`engine/src/task/attention.ts:197-246`) as soon as the request is asked,
+    and clears it when the request is answered. The app sent the helper alert on the first `session.updated` carrying
+    the wait (`notification.tsx:449-462` at `dfef44e3`), before auto-accept's answer could land.
+  - Repair (`packages/app/src/context/helper-phone-alert.ts`): `createHelperPhoneAlerts` now owns the helper path's
+    dedupe and gates (moved from `notification.tsx`, which now calls it once). It sends a waiting notice only if it is
+    still the helper's latest notice after a 3 s settle, and an interrupted notice at once (auto-accept never answers
+    an interruption). The waiting alert is kept, titled with the conversation's session ("A helper needs you: <root
+    title>", route sessions); `helperPhoneAlert` only gains a `waiting` flag, which decides the settle.
+  - Regression tests: `helper-phone-alert.test.ts:58` ("a request answered before the settle, as auto-accept answers
+    it, sends nothing"), `:99` ("an interruption goes at once") and `remote-turn-alerts.test.ts:123`. Red evidence: a
+    transcription of `notification.tsx:449-462` at `dfef44e3` with HEAD's `helperPhoneAlert`, run from `/tmp/vector-v2/codium/b09a/red/` (substitutions recorded
+    in its header: lookup from a map, the gate's own rule inline, viewed and disposed false, sends pushed to a list):
+    1 alert for a request answered at once. The repaired path sends 0. Nothing was put in the worktree for it.
+  - Reading: a waiting helper's phone alert now arrives about 3 s after the wait starts. A wait that moves on to the
+    helper's next request alerts once, for the request still waiting.
+  - Reading: the settle is a timing bound, not a signal. If auto-accept's answer lands more than 3 s after the ask
+    (the desktop `isPhoneTurn` IPC round trip, the reply itself, or timer throttling in a hidden Electron window), the
+    phone still gets "A helper needs you" for a request nobody needed. That is a spurious alert, never a missing hold.
+    Closing it needs a shared signal (the permission provider marking a `permission` wait whose `requestID` it is
+    answering); none exists, and adding one touches `permission.tsx`, so it is left open here.
+- **B09a-2. Confirmed: a helper a phone's turn started lost the person-only hold once the phone's turn ended.**
+  - Cause: `createRemoteTurns().observe` (`remote-routes.ts:93-102` at `dfef44e3`) cleared a mark only when that
+    session was idle, and only the phone's session was marked. Background subagents are on by default
+    (`engine/src/effect/runtime-flags.ts:33-38`); once the root was idle, `isPhoneTurn([helper, root])` answered false
+    and auto-accept answered the helper's later requests, against S6 (`codium-build-spec.md:175`).
+  - Repair (`remote-routes.ts`, header and `createRemoteTurns`): a `session.created` whose `info.parentID` is marked
+    marks `info.id` with the parent's time; so does a `session.updated` whose helper record is queued or running with a
+    `startedAt` at or after the parent's mark (a helper the phone's turn resumes: task.ts writes a new `startedAt` per
+    run). Such inherited marks clear at the helper's own idle or when its record's status is a string other than queued
+    or running (as `SubagentLifecycle.open`). A mark the phone set directly clears only at idle (or deletion, B09a-5), as
+    before, because a phone may prompt a finished helper's session whose record still reads completed. Roots carry no record and are
+    unaffected. `REMOTE_ROUTES` is unchanged.
+  - Regression tests: `remote-routes-combined.test.ts:294`, `:323`, `:344`, `:425` and `remote-link.test.ts:539`.
+    Red with `dfef44e3`'s `remote-routes.ts`: `remote-link.test.ts` 19 pass 1 fail (`:566`). The combined file, re-run
+    in the review round as it now stands: 8 pass 5 fail, first failing expects at `:307`, `:337` and `:369` (the helper
+    is never held), `:402` (a refused turn deletes a newer turn's mark, B09a-4) and `:413` (the B09a-5 case stops at the
+    missing inheritance). The B09a-4 and B09a-5 repairs' own red is in the mutation list below. The first draft's
+    citation (`:302`, `:328`) named `turns.observe` lines of an earlier version of the file, not failing expects.
+  - Kept from A41: the turn a helper's report later wakes in the root is the engine's, not the phone's, so auto-accept
+    applies to it.
+  - Recorded, not changed:
+    - A `session.created` the desktop misses while its engine stream is down (`remote-link.ts:345-375` reopens after
+      `retryMs * 5`) leaves that helper unmarked, so its later requests fail open once the root is idle. The root's mark
+      still covers it while the root's turn runs.
+    - Internal child sessions are held too, for their own run. Neither alert path surfaces their asks (both skip
+      internal sessions), but S6 makes no exception for them, the lineage check already held them for the root's turn,
+      and the change only holds more. The lead may prefer to skip inheritance for `info.internal` children.
+    - A long background helper keeps the desktop reading engine events (`remote-link.ts:346`, `turns.size > 0`) until it
+      ends, beyond A41's "until the engine reports the session idle". A mark whose idle, record end and deletion are
+      never seen keeps holding requests and reading events, as a root mark does today.
+- **B09a-3. Not a defect: a Stop body naming another session stops only the session in the path.** The handler builds
+  `{ sessionID: ctx.params.sessionID, ...ctx.payload }` (`handlers/experimental.ts:225`); `SessionStopInput`
+  (`groups/experimental.ts:109-112`) has no parse options, so excess fields are stripped. Measured locally: the engine
+  answers 200 and the manager sees only `{sessionID, helpers}`. The case (`session-stop.test.ts:217`) accepts 200 or 400
+  (the published body says `additionalProperties: false`, so refusing would be safer), never an action on the extras.
+  `session-stop.test.ts:239` adds that a guest controlling only another session or only the helper gets 403
+  (`allowsSession`, `protocol/src/middleware/authorization.ts:38`, decides before any lookup).
+
+**Review round (15 Nov 2026)**
+
+The package review's findings, each read against the code; three are confirmed defects in Codium's own files and are
+repaired here.
+
+- **B09a-4. Confirmed (blocking): a phone turn the engine refused released an earlier hold.** `createRemoteRoutes`
+  marked the session and, on a non-2xx answer (400 from the engine's admit, 502 when it does not answer, 413), called
+  `clear`, which deleted the mark (`remote-routes.ts:284` in the first draft). A helper an earlier phone turn started
+  and still running in the background lost its inherited hold when the phone's prompt to it was refused, so auto-accept
+  answered its later requests (S6); the same reset dropped a root mark an earlier, still-running phone turn had set
+  (older than this package; inheritance made the helper case reachable). The reviewer's probe
+  (`/tmp/vector-v2/codium/b09a-review/clear.ts`) showed `has([helper, root])` true before and false after. Repair: each
+  hold is an object (`{at, inherited}`), `mark` returns a restore function that puts back the hold that stood before,
+  and does nothing once something else has replaced or released this hold (a second phone turn the engine took, an
+  idle); `clear` is gone. Regression tests: `remote-routes-combined.test.ts:358` and `:384`. Reading: if the helper's
+  record closes while the refused turn waits on the engine, the put-back inherited hold stands until the helper's next
+  idle, closed-record update or deletion (held longer, never less).
+- **B09a-5. Confirmed (non-blocking): a deleted session kept its hold.** `observe` read no `session.deleted`, so a helper
+  deleted mid-run (its parent deleted: `session.ts:942-948` removes children first and publishes `session.deleted` for
+  each) kept its mark, `turns.size > 0` stayed true, and the desktop kept reading engine events (`remote-link.ts:346`).
+  Root marks had the same gap. Repair: `session.deleted` releases `info.id`'s hold, inherited or direct. Regression
+  test: `remote-routes-combined.test.ts:407`.
+- **B09a-6. Confirmed (non-blocking): a late update repeating an answered wait re-armed the alert.** `latest.set` ran
+  before the `sent.has` return, so a wait cleared during its settle and then repeated by a replayed or out-of-order
+  `session.updated` with the same key became the latest again, and the first settle sent "A helper needs you" for an
+  answered request (and left an entry in `latest`). Repair: the `sent.has` return comes first, so a sent or settling
+  key never re-arms `latest`. Regression test: `helper-phone-alert.test.ts:67`.
+- Taken (blocking): the fixed deny-by-default probes no longer assert absence from openapi.json; a published probe is
+  filtered out (reading above). The eight random-suffix probes are asserted to remain.
+- Taken: the settle applies only to a wait (B09a-1 above); its timing bound is recorded as a reading.
+- Taken: the Stop body test pins only `helpers` as a required boolean (reading above).
+- Taken: `remote-turn-alerts.test.ts:107` is renamed ("Codium's helper path alerts the phone once") and asserts every
+  push the phone gets, Hands' stand-in ask alert and Codium's, with a comment pointing to the "For the lead" item, so a
+  fix in Hands' lane visibly changes the expectation.
+- Taken: the B09a-2 red citation is corrected (above).
+- Not taken: pinning `session-stop.test.ts:217`'s excess-field status to 200. The "For the lead" item below recommends
+  that the engine refuse excess fields (matching the published `additionalProperties: false`); a pin to 200 would turn
+  that fix red. The case still fails if the engine ever acts on an extra field (calls must equal `{sessionID, helpers}`),
+  and the record says the engine answers 200 at this source (B09a-3).
+- Open until CI: the B09 checkpoint line and "What ran" get the Vector Codium, typecheck.yml and vector-hosted-ci.yml run
+  and job ids as new dated lines once those runs finish; nothing is dispatched before the package is committed and
+  pushed.
+
+**Critique points taken and rejected**
+
+- Taken: the waiting alert stays in `helper-phone-alert.ts` (the plan had removed it; B09 lists waiting notes as push
+  alerts, and the alert from Hands' path carries the helper's title). `helper-phone-alert.test.ts:6` is unchanged, so
+  no expectation was loosened. The combined app test pins Codium's alert and the fixture's stand-in for Hands' ask alert
+  (title "ask", route approvals), never Hands' real wording.
+- Taken: the plan's third mutation (adding `GET /config` to `REMOTE_ROUTES`) cannot turn A2 red; replaced by turning
+  `/session/:sessionID/todo` into `/session/:sessionID/:part`, which A1, A2 and A3 catch.
+- Taken: no case was added to the multiagent lane's `engine/test/tool/task-manage.test.ts`; the gap is under "For the
+  lead".
+- Taken: the excess-field Stop case accepts 200 or 400; the guest case uses only the other-session and child-only
+  claims (a guest with no claims is already `session-stop.test.ts:191`).
+- Taken: `directories()` is a static set outside the recorded engine; fixed deny-by-default probes were added; the
+  red evidence for B09a-1 stayed in `/tmp`; the reduced Hands case only shows its ask is held and adds no Codium alert.
+- Taken in part: the B09a-2 gaps are recorded above; internal children are held (reason above) rather than skipped.
+- Added beyond the plan: the resume rule (a `session.updated` with a running record started since the mark) and the
+  rule that only inherited marks release on a closed record, each with its own test.
+- The app test's `autoResponds` composes the exported rules the provider uses (`autoRespondsPermission`,
+  `phoneTurnAllows`, `sessionLineage`); the provider's own wiring stays pinned by the source guard at
+  `permission-auto-respond.test.ts:223`, because the provider needs a running app.
+
+**Mutations (each restored and checked with `cmp`)**
+
+First draft (lines renumbered to the files as they now stand):
+
+- Dropping the `session.created` rule: `remote-routes-combined.test.ts:294` and `remote-link.test.ts:539` fail.
+- The tasks limit accepting 0: `:233` fails.
+- `/session/:sessionID/todo` as `/session/:sessionID/:part`: `:71`, `:90` and `:110` fail.
+- Any closed record releasing any mark: `:344` fails.
+
+Re-run in the review round, on the current code:
+
+- No latest-notice check after the settle in `createHelperPhoneAlerts`: `helper-phone-alert.test.ts:58`, `:67`, `:77`
+  and `remote-turn-alerts.test.ts:123` fail.
+- The waiting branch removed from `helperPhoneAlert`: `helper-phone-alert.test.ts:6`, `:49`, `:77` and
+  `remote-turn-alerts.test.ts:107`, `:131` fail.
+- `latest.set` before the `sent.has` return (the first draft's order): `helper-phone-alert.test.ts:67` fails.
+- The settle applied to an interruption too: `helper-phone-alert.test.ts:99` times out (30 s).
+- A refused turn deleting the mark (the first draft's `clear`): `remote-routes-combined.test.ts:358` (expect `:369`)
+  and `:384` (`:402`) fail.
+- The restore without its "still this hold" guard: `:384` (`:402`) fails.
+- No `session.deleted` rule: `:407` (`:415`) fails.
+
+**For the lead**
+
+- Hands' ask path sends a second phone alert for a helper's ask: `packages/app/src/pages/layout/ask-notifications.ts:59-64`
+  through `ask-notification-controller.ts:68`, titled "Needs you: <helper session title>" (route approvals). Helper
+  sessions are not internal, so they are not skipped (`ask-notification-controller.ts:57`). The helper's title is
+  `${title} (@agent subagent)` (`engine/src/tool/task.ts:1368`), from the parent model's task description, so it can
+  carry prompt-derived text. The desktop dedupes on event plus title (`remote-notify.ts:73-74`), and the titles differ,
+  so a held helper ask gives the phone two needsYou pushes. Under auto-accept Hands' path is silent, and Codium's is now
+  silent too. To make one place own it: `ask-notifications.ts` skips asks from helper sessions (Codium's root-titled
+  alert stays), or the lead changes B09's contract so Codium drops its waiting alert. Not changed here.
+- `handlers/experimental.ts:225`: put `sessionID: ctx.params.sessionID` after the payload spread, so the path wins even
+  if the schema stops stripping excess fields. The runtime strips extras while openapi publishes
+  `additionalProperties: false`; refusing would match the published contract.
+- No test shows that `interrupt({ helpers: true })` leaves another conversation's helper tree and its background
+  commands running (`engine/test/tool/task-manage.test.ts:570`, `:716`; the multiagent lane's file).
+
+**What ran**
+
+- Locally, through `/home/user/.tools/vector-serial`, one file at a time (counts after the review round):
+  - desktop (`bun --no-env-file test --timeout 30000`): `src/main/remote-routes-combined.test.ts` 13/0,
+    `src/main/remote-link.test.ts` 20/0, `src/main/remote-routes.test.ts` 16/0, `src/main/remote-phone-app.test.ts` 15/0;
+  - app (`bun test --isolate --timeout 30000`): `src/context/remote-turn-alerts.test.ts` 6/0,
+    `src/context/helper-phone-alert.test.ts` 8/0, `src/context/permission-auto-respond.test.ts` 21/0,
+    `src/context/phone-alerts.test.ts` 6/0, `src/context/notification-event-gate.test.ts` 4/0,
+    `src/pages/layout/ask-notification-controller.test.ts` 10/0;
+  - engine (`bun test --timeout 30000`): `test/server/session-stop.test.ts` 6/0;
+  - `bun typecheck` in `packages/app`, `packages/desktop` and `packages/engine`: clean (app and desktop re-run after the
+    review round; the engine file did not change in it). The desktop typecheck excludes
+    `src/**/*.test.ts`; a scratch `tsgo --noEmit` over the two desktop test files showed no error in them (its one error
+    was the app's `@/` alias, outside them, because the scratch config drops the project reference); the same check
+    after the review round gave the same single error.
+  - Prettier: the two new test files and `helper-phone-alert.ts` are clean; `notification.tsx` is now clean; the changed
+    hunks of `remote-routes.ts` and `helper-phone-alert.test.ts` follow it (their remaining differences are HEAD's lines).
+- CI only, not yet run: the Vector Codium run (the picker selects the changed and new test files), typecheck.yml and
+  vector-hosted-ci.yml's Hosted tests (desktop `remote-*` tests). The paired desktop/phone browser check stays open
+  (B09b).
+
+No flag, setting, listing, route, price or page changed; `REMOTE_ROUTES` is unchanged; no SDK or generated output
+changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged. Edits to `api/_lib/model-plan-*.ts`: none.
