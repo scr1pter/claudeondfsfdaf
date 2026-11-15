@@ -908,6 +908,460 @@ local("the scoped typed port covers review collection and refuses option-shaped 
   await expect(repository.read({ kind: "resolve", revision: "HEAD" })).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
 })
 
+// Fixture commits and annotated tags name an identity on the command line; no user configuration is read.
+const author = ["-c", "user.name=Vector Fixture", "-c", "user.email=fixture@invalid"]
+const unset = { code: 1, bytes: Buffer.alloc(0) }
+const refusal = (pending: Promise<unknown>) =>
+  pending.then(
+    () => "answered",
+    (error: unknown) => (error instanceof ReadOnlyGit.Unavailable ? error.reason : "not a refusal"),
+  )
+// A repository-configured program counts a call if any private read reached the live configuration.
+async function guarded(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.git(["config", "filter.fixture.clean", f.command])
+  await f.git(["config", "filter.fixture.required", "true"])
+  await f.git(["config", "core.fsmonitor", f.command])
+  await fs.writeFile(f.counter, "")
+}
+// A fixture Git step during a view first proves no private read counted a call, then clears its own calls.
+async function liveGit(f: Awaited<ReturnType<typeof fixture>>, args: string[]) {
+  expect(await f.calls()).toBe(0)
+  const result = await f.git(args)
+  await fs.writeFile(f.counter, "")
+  return result
+}
+
+local(
+  "named references resolve to private-snapshot commits from loose and packed refs as rev-parse does",
+  async () => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    const branch = (await fs.readFile(path.join(f.gitDirectory, "HEAD"), "utf8")).trim().slice(16)
+    const side = (await f.git([...author, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side"])).stdout.trim()
+    await f.git(["branch", "packed-branch", side])
+    await f.git([...author, "tag", "-a", "annotated", "-m", "annotated", side])
+    await f.git(["branch", "dup", side])
+    await f.git(["tag", "tree-tag", "HEAD^{tree}"])
+    await f.git(["pack-refs", "--all"])
+    await f.git(["branch", "loose-branch", head])
+    await f.git(["update-ref", "refs/remotes/origin/main", side])
+    await f.git(["tag", "light", side])
+    await f.git(["tag", "dup", head])
+    await f.git([...author, "tag", "-a", "loose-annotated", "-m", "loose", side])
+    await f.git(["branch", "release", head])
+    await f.git(["tag", "release/1.0", side])
+    await f.git(["branch", "cafe", head])
+    await f.git(["branch", "v1-gcafe", side])
+    // A stale packed line below the loose branch release's file. Git's lstat there fails with ENOTDIR, and Git reads
+    // the name as missing without looking in packed-refs. Without the sorted trait, Git sorts the lines itself.
+    const packedFile = path.join(f.gitDirectory, "packed-refs")
+    await fs.writeFile(
+      packedFile,
+      (await fs.readFile(packedFile, "utf8")).replace(" sorted ", " ") + `${side} refs/heads/release/2.0\n`,
+    )
+    const tag = (await f.git(["rev-parse", "refs/tags/annotated"])).stdout.trim()
+    expect(tag).not.toBe(side)
+    expect(await fs.readFile(packedFile, "utf8")).toContain(`${tag} refs/tags/annotated\n^${side}\n`)
+    const resolved = [
+      ["loose-branch", head],
+      [branch, head],
+      [`refs/heads/${branch}`, head],
+      ["heads/loose-branch", head],
+      ["packed-branch", side],
+      ["refs/heads/packed-branch", side],
+      ["origin/main", side],
+      ["remotes/origin/main", side],
+      ["refs/remotes/origin/main", side],
+      ["light", side],
+      ["tags/light", side],
+      ["refs/tags/light", side],
+      ["annotated", side],
+      ["refs/tags/annotated", side],
+      // A branch named release beside the tag namespace release/, and a tag release/1.0 below that branch's file.
+      ["release", head],
+      ["release/1.0", side],
+      // Refs answer before Git reads a hex-shaped or describe-shaped name as an object id.
+      ["cafe", head],
+      ["v1-gcafe", side],
+    ]
+    for (const [name, oid] of resolved)
+      expect((await f.git(["rev-parse", "--verify", "--quiet", `${name}^{commit}`])).stdout.trim()).toBe(oid)
+    // No ref holds these, and none can be an object id: abc and x-gabc are too short, and -G is not describe output.
+    const missing = [
+      "missing",
+      "refs/heads/missing",
+      "origin/missing",
+      "heads/missing",
+      "release/2.0",
+      "refs/heads/release/2.0",
+      "abc",
+      "x-gabc",
+      "x-Gcafe",
+    ]
+    for (const name of missing)
+      await expect(f.git(["rev-parse", "--verify", "--quiet", `${name}^{commit}`])).rejects.toThrow()
+    await guarded(f)
+    const repository = await ReadOnlyGit.open(f.input)
+    try {
+      for (const [name, oid] of resolved)
+        expect(await repository.read({ kind: "reference", name })).toEqual({ code: 0, bytes: Buffer.from(oid + "\n") })
+      for (const name of missing) expect(await repository.read({ kind: "reference", name })).toEqual(unset)
+      // rev-parse warns and takes the tag; a base must not depend on that.
+      expect(await refusal(repository.read({ kind: "reference", name: "dup" }))).toBe("the reference name is ambiguous")
+      expect(await refusal(repository.read({ kind: "reference", name: "loose-annotated" }))).toBe(
+        "an annotated tag resolves only through its peeled packed line",
+      )
+      expect(await refusal(repository.read({ kind: "reference", name: "tree-tag" }))).toBe(
+        "the reference does not name a commit",
+      )
+      expect(repository.isOpen()).toBe(true)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+  60_000,
+)
+
+local(
+  "named references refuse unsafe names, links, symbolic or tampered refs and objects outside the snapshot",
+  async () => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    const side = (await f.git([...author, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side"])).stdout.trim()
+    await f.git(["branch", "packed-branch", side])
+    await f.git([...author, "tag", "-a", "annotated", "-m", "annotated", side])
+    await f.git(["pack-refs", "--all"])
+    await f.git(["branch", "loose-branch", head])
+    const heads = path.join(f.gitDirectory, "refs", "heads")
+    const packedFile = path.join(f.gitDirectory, "packed-refs")
+    const packed = await fs.readFile(packedFile, "utf8")
+    const peel = `^${side}\n`
+    const branchLine = `${side} refs/heads/packed-branch\n`
+    expect(packed).toContain(peel)
+    expect(packed).toContain(branchLine)
+    await guarded(f)
+    const repository = await ReadOnlyGit.open(f.input)
+    const named = (name: string) => repository.read({ kind: "reference", name })
+    try {
+      for (const name of [
+        "-x",
+        "--output=../counter",
+        "a..b",
+        "HEAD@{1}",
+        "x.lock",
+        "a//b",
+        "bad\u0001name",
+        "",
+        "refs/notes/x",
+        "refs/heads",
+        "x^{commit}",
+        "a\\b",
+        ".hidden",
+        "trailing.",
+        "x/",
+        "/x",
+        "@",
+        "HEAD",
+        "FETCH_HEAD",
+        "ORIG_HEAD",
+        "main-worktree/HEAD",
+        head,
+        // Git's get_oid_hex reads uppercase too, and rev-parse takes 40 hex as an object id before any ref.
+        head.toUpperCase(),
+        "lone\ud800",
+      ])
+        expect(await refusal(named(name))).toBe("the reference name is unsupported")
+      expect(await refusal(repository.read({ kind: "reference", name: 1 } as unknown as ReadOnlyGit.Read))).toBe(
+        "the reference name is unsupported",
+      )
+      // No ref holds these, but Git reads each as a short object id or `git describe` output, so code 1 would let a
+      // next candidate replace a commit Git found.
+      const short = head.slice(0, 7)
+      const objectNames = [
+        short,
+        short.toUpperCase(),
+        head.slice(0, 39),
+        `v1.0-3-g${short}`,
+        `refs/heads/x-g${short.toUpperCase()}`,
+      ]
+      for (const name of objectNames)
+        expect((await liveGit(f, ["rev-parse", "--verify", "--quiet", `${name}^{commit}`])).stdout.trim()).toBe(head)
+      for (const name of [...objectNames, "deadbeef"])
+        expect(await refusal(named(name))).toBe("the name may be an object id; fetch or pass a commit")
+      await liveGit(f, ["symbolic-ref", "refs/heads/symbolic", "refs/heads/loose-branch"])
+      await fs.writeFile(path.join(heads, "upper"), head.toUpperCase() + "\n")
+      await fs.writeFile(path.join(heads, "wide"), "a".repeat(64) + "\n")
+      for (const name of ["symbolic", "upper", "wide"])
+        expect(await refusal(named(name))).toBe("symbolic or non-SHA1 reference is unsupported")
+      await fs.writeFile(path.join(heads, "empty"), "")
+      expect(await refusal(named("empty"))).toBe("invalid metadata line")
+      const later = (
+        await liveGit(f, [...author, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "later"])
+      ).stdout.trim()
+      await liveGit(f, ["update-ref", "refs/heads/later", later])
+      await liveGit(f, [...author, "tag", "-a", "fresh", "-m", "fresh", side])
+      const fresh = (await liveGit(f, ["rev-parse", "refs/tags/fresh"])).stdout.trim()
+      for (const name of ["later", "fresh"])
+        expect(await refusal(named(name))).toBe(
+          "the reference's object is not in the private snapshot; fetch or pass a commit",
+        )
+      await fs.symlink("loose-branch", path.join(heads, "linked"))
+      for (const name of ["linked", "refs/heads/linked"])
+        expect(await refusal(named(name))).toBe("linked references are unsupported")
+      await fs.symlink("../heads", path.join(f.gitDirectory, "refs", "tags", "nested"))
+      expect(await refusal(named("nested/loose-branch"))).toBe("linked reference directories are unsupported")
+      for (const [content, name, reason] of [
+        [packed.replace(peel, ""), "annotated", "an annotated tag resolves only through its peeled packed line"],
+        [
+          packed.replace(peel, `^${head}\n`),
+          "annotated",
+          "the packed reference's peeled commit does not match its tag",
+        ],
+        [packed.replace(peel, `^${"z".repeat(40)}\n`), "annotated", "packed-refs is malformed"],
+        // Git reads a CRLF record's name as ending in a carriage return, and so the name itself as missing.
+        [packed.replace(branchLine, branchLine.replace("\n", "\r\n")), "packed-branch", "packed-refs is malformed"],
+        // Under the sorted trait Git's binary search may miss a record out of order.
+        [packed.replace(branchLine, "") + branchLine, "packed-branch", "packed-refs is malformed"],
+        [packed.slice(0, -1), "packed-branch", "packed-refs is malformed"],
+        [packed.replace(peel, peel + peel), "packed-branch", "packed-refs is malformed"],
+        [
+          packed.replace(branchLine, branchLine + branchLine),
+          "packed-branch",
+          "the packed reference has no unique commit",
+        ],
+        [
+          packed.replace(branchLine, branchLine + peel),
+          "packed-branch",
+          "a peeled packed line follows only an annotated tag",
+        ],
+        [
+          packed + `${side} refs/tags/peeled-commit\n${peel}`,
+          "peeled-commit",
+          "a peeled packed line follows only an annotated tag",
+        ],
+        [
+          packed + `${fresh} refs/tags/fresh-packed\n${peel}`,
+          "fresh-packed",
+          "the reference's object is not in the private snapshot; fetch or pass a commit",
+        ],
+      ]) {
+        await fs.writeFile(packedFile, content)
+        expect(await refusal(named(name))).toBe(reason)
+      }
+      // Decoded, the byte 0xff would read as U+FFFD and match this name, although Git compares other bytes.
+      const [before, after] = packed.split(branchLine)
+      await fs.writeFile(
+        packedFile,
+        Buffer.concat([
+          Buffer.from(`${before}${side} refs/heads/packed-branch`),
+          Buffer.from([0xff]),
+          Buffer.from(`\n${after}`),
+        ]),
+      )
+      expect(await refusal(named("packed-branch�"))).toBe("packed-refs is malformed")
+      await fs.writeFile(packedFile, packed)
+      expect(await named("annotated")).toEqual({ code: 0, bytes: Buffer.from(side + "\n") })
+      expect(await named("loose-branch")).toEqual({ code: 0, bytes: Buffer.from(head + "\n") })
+      expect(repository.isOpen()).toBe(true)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+  60_000,
+)
+
+local(
+  "a name rev-parse would also find outside branches and tags refuses rather than resolve differently",
+  async () => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    const side = (await f.git([...author, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side"])).stdout.trim()
+    await f.git(["update-ref", "refs/stash", side])
+    await f.git(["branch", "stash", head])
+    await f.git(["update-ref", "refs/notes/commits", side])
+    await f.git(["branch", "x", head])
+    await f.git(["update-ref", "refs/heads/heads/x", side])
+    await f.git(["update-ref", "refs/remotes/origin/main", side])
+    await f.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+    await f.git(["branch", "config", head])
+    await f.git(["branch", "shadow", head])
+    await fs.writeFile(path.join(f.gitDirectory, "shadow"), side + "\n")
+    // Git's own first places: refs/<name> before the tag and branch namespaces, and <remote> as <remote>/HEAD.
+    for (const [name, oid] of [
+      ["stash", side],
+      ["heads/x", head],
+      ["origin", side],
+    ])
+      expect((await f.git(["rev-parse", "--verify", "--quiet", `${name}^{commit}`])).stdout.trim()).toBe(oid)
+    const linked = path.join(f.base, "linked")
+    await f.git(["worktree", "add", "--quiet", "-b", "linked-branch", linked])
+    const gitDirectory = path.resolve(linked, (await f.git(["rev-parse", "--git-dir"], linked)).stdout.trim())
+    // refs/bisect is per worktree, so this one lives in the linked worktree's own Git directory.
+    await f.git(["update-ref", "refs/bisect/bad", side], linked)
+    expect(await fs.readFile(path.join(gitDirectory, "refs", "bisect", "bad"), "utf8")).toBe(side + "\n")
+    // Git reads branches only from the common directory. A stray branch-shaped file in the linked worktree's own Git
+    // directory answers nothing (ghost), and does not override the packed record (ghost-packed).
+    await fs.writeFile(path.join(f.gitDirectory, "packed-refs"), `${side} refs/heads/ghost-packed\n`)
+    await fs.mkdir(path.join(gitDirectory, "refs", "heads"), { recursive: true })
+    for (const name of ["ghost", "ghost-packed"])
+      await fs.writeFile(path.join(gitDirectory, "refs", "heads", name), head + "\n")
+    await expect(f.git(["rev-parse", "--verify", "--quiet", "ghost^{commit}"], linked)).rejects.toThrow()
+    expect((await f.git(["rev-parse", "--verify", "--quiet", "ghost-packed^{commit}"], linked)).stdout.trim()).toBe(
+      side,
+    )
+    await guarded(f)
+    const primary = await ReadOnlyGit.open(f.input)
+    try {
+      expect(await primary.read({ kind: "reference", name: "ghost" })).toEqual(unset)
+      expect(await primary.read({ kind: "reference", name: "ghost-packed" })).toEqual({
+        code: 0,
+        bytes: Buffer.from(side + "\n"),
+      })
+      for (const name of ["stash", "notes/commits", "origin", "config", "shadow"])
+        expect(await refusal(primary.read({ kind: "reference", name }))).toBe(
+          "the reference name resolves outside branches and tags",
+        )
+      expect(await refusal(primary.read({ kind: "reference", name: "heads/x" }))).toBe(
+        "the reference name is ambiguous",
+      )
+      for (const name of ["x", "refs/heads/x", "linked-branch"])
+        expect(await primary.read({ kind: "reference", name })).toEqual({ code: 0, bytes: Buffer.from(head + "\n") })
+      expect(await primary.read({ kind: "reference", name: "bisect/bad" })).toEqual(unset)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await primary.close()
+    }
+    const worktree = await ReadOnlyGit.open({ directory: linked, gitDirectory, commonDirectory: f.gitDirectory })
+    try {
+      for (const name of ["bisect/bad", "ghost", "ghost-packed"])
+        expect(await refusal(worktree.read({ kind: "reference", name }))).toBe(
+          "the reference name resolves outside branches and tags",
+        )
+      for (const name of ["x", "linked-branch"])
+        expect(await worktree.read({ kind: "reference", name })).toEqual({ code: 0, bytes: Buffer.from(head + "\n") })
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await worktree.close()
+    }
+  },
+  90_000,
+)
+
+local(
+  "a linked reference directory refuses even when the detached view never read it at open",
+  async () => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    const branch = (await fs.readFile(path.join(f.gitDirectory, "HEAD"), "utf8")).trim().slice(16)
+    await f.git(["checkout", "--detach", "--quiet"])
+    const heads = path.join(f.gitDirectory, "refs", "heads")
+    await fs.rename(heads, path.join(f.base, "heads-elsewhere"))
+    await fs.symlink(path.join(f.base, "heads-elsewhere"), heads)
+    await guarded(f)
+    const repository = await ReadOnlyGit.open(f.input)
+    try {
+      expect(repository.head).toBe(head)
+      expect(repository.branch).toBeUndefined()
+      // Without the refusal the branch would read as missing, and the next candidate could answer instead.
+      for (const name of [branch, `refs/heads/${branch}`, "missing"])
+        expect(await refusal(repository.read({ kind: "reference", name }))).toBe(
+          "linked reference directories are unsupported",
+        )
+      expect(repository.isOpen()).toBe(true)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+  60_000,
+)
+
+local(
+  "origin/HEAD reads as its validated remote-tracking target, unset as code 1, and malformed or linked as a refusal",
+  async () => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    await guarded(f)
+    const repository = await ReadOnlyGit.open(f.input)
+    const origin = path.join(f.gitDirectory, "refs", "remotes", "origin")
+    const pointer = path.join(origin, "HEAD")
+    const defaultBranch = () => repository.read({ kind: "default-branch" })
+    try {
+      expect(await defaultBranch()).toEqual(unset)
+      await liveGit(f, ["update-ref", "refs/remotes/origin/main", head])
+      expect(await defaultBranch()).toEqual(unset)
+      await liveGit(f, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+      expect(await fs.readFile(pointer, "utf8")).toBe("ref: refs/remotes/origin/main\n")
+      expect(await defaultBranch()).toEqual({ code: 0, bytes: Buffer.from("refs/remotes/origin/main\n") })
+      expect(await refusal(repository.read({ kind: "reference", name: "origin/HEAD" }))).toBe(
+        "symbolic or non-SHA1 reference is unsupported",
+      )
+      await fs.writeFile(pointer, "ref: refs/remotes/origin/release/2.0\n")
+      expect(await defaultBranch()).toEqual({ code: 0, bytes: Buffer.from("refs/remotes/origin/release/2.0\n") })
+      const malformed = "origin/HEAD does not name an origin branch"
+      for (const [content, reason] of [
+        [`${head}\n`, malformed],
+        ["ref: refs/remotes/upstream/main\n", malformed],
+        ["ref: refs/heads/main\n", malformed],
+        ["ref: refs/remotes/origin/a..b\n", malformed],
+        ["ref: refs/remotes/origin/\n", malformed],
+        ["ref: refs/remotes/origin/main \n", malformed],
+        ["ref:refs/remotes/origin/main\n", malformed],
+        ["ref: refs/remotes/origin/HEAD\n", malformed],
+        ["ref: refs/remotes/origin/main\r\n", "invalid metadata line"],
+        ["", "invalid metadata line"],
+        ["ref: refs/remotes/origin/main\nref: refs/remotes/origin/next\n", "invalid metadata line"],
+      ]) {
+        await fs.writeFile(pointer, content)
+        expect(await refusal(defaultBranch())).toBe(reason)
+      }
+      await fs.rm(pointer)
+      await fs.symlink("main", pointer)
+      expect(await refusal(defaultBranch())).toBe("linked references are unsupported")
+      await fs.rm(pointer)
+      expect(await defaultBranch()).toEqual(unset)
+      await fs.writeFile(path.join(f.gitDirectory, "packed-refs"), `${head} refs/remotes/origin/HEAD\n`)
+      expect(await refusal(defaultBranch())).toBe(malformed)
+      await fs.rm(path.join(f.gitDirectory, "packed-refs"))
+      // A linked remote directory refuses instead of reading as unset.
+      await fs.rename(origin, path.join(f.base, "origin-elsewhere"))
+      await fs.symlink(path.join(f.base, "origin-elsewhere"), origin)
+      expect(await refusal(defaultBranch())).toBe("linked reference directories are unsupported")
+      expect(repository.isOpen()).toBe(true)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+  60_000,
+)
+
+local("HEAD keeps its branch-name refusals after the reference validator is shared", async () => {
+  const f = await fixture()
+  const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await f.git(["branch", "team/feature"])
+  const marker = path.join(f.gitDirectory, "HEAD")
+  for (const name of [
+    "a..b",
+    "x.lock",
+    "a//b",
+    "x@{1}",
+    "bad\u0001name",
+    ".hidden",
+    "trailing.",
+    "x/",
+    "x^y",
+    "a\\b",
+  ]) {
+    await fs.writeFile(marker, `ref: refs/heads/${name}\n`)
+    expect(await refusal(ReadOnlyGit.metadataHead(f.directory))).toBe("invalid branch reference")
+  }
+  await fs.writeFile(marker, "ref: refs/heads/team/feature\n")
+  expect(await ReadOnlyGit.metadataHead(f.directory)).toMatchObject({ head, branch: "team/feature" })
+})
+
 local.each([
   "alternates",
   "include",

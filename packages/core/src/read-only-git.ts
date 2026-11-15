@@ -742,24 +742,28 @@ async function configuration(command: Command, data: Buffer | undefined) {
   return values
 }
 
+// Git's check-ref-format rules for a reference name. HEAD's branch and the named reference read share them.
+function referenceName(ref: string) {
+  return (
+    !/[\x00-\x20\x7f~^:?*\[\\]/.test(ref) &&
+    ref.length <= 1024 &&
+    ref.split("/").length <= 64 &&
+    !ref.includes("@{") &&
+    !ref.includes("..") &&
+    !ref.includes("//") &&
+    !ref.endsWith("/") &&
+    !ref.endsWith(".") &&
+    ref.split("/").every((part) => part && !part.startsWith(".") && !part.endsWith(".lock"))
+  )
+}
+
 async function head(git: FileHandle, common: FileHandle, captured?: Buffer, context?: Operation) {
   const value = metadataLine(captured ?? (await read(git, "HEAD", 4096, false, context))!)
   requireValue(value === value.trim(), "HEAD contains unsupported whitespace")
   if (/^[0-9a-f]{40}$/.test(value)) return value
   requireValue(value.startsWith("ref: refs/heads/"), "HEAD is neither a commit nor a branch")
   const ref = value.slice(5)
-  requireValue(
-    !/[\x00-\x20\x7f~^:?*\[\\]/.test(ref) &&
-      ref.length <= 1024 &&
-      ref.split("/").length <= 64 &&
-      !ref.includes("@{") &&
-      !ref.includes("..") &&
-      !ref.includes("//") &&
-      !ref.endsWith("/") &&
-      !ref.endsWith(".") &&
-      ref.split("/").every((part) => part && !part.startsWith(".") && !part.endsWith(".lock")),
-    "invalid branch reference",
-  )
+  requireValue(referenceName(ref), "invalid branch reference")
   const loose = await read(common, ref, 4096, true, context)
   if (loose) {
     const oid = metadataLine(loose)
@@ -770,6 +774,92 @@ async function head(git: FileHandle, common: FileHandle, captured?: Buffer, cont
   const matches = packed.split("\n").filter((line) => line.slice(41) === ref)
   requireValue(matches.length === 1 && /^[0-9a-f]{40} /.test(matches[0]!), "the captured branch has no unique commit")
   return matches[0]!.slice(0, 40)
+}
+
+/**
+ * One loose name below a pinned store, opened as Git's files backend finds it. It is undefined where Git reads the
+ * name as missing and then looks in packed-refs: absent, or a namespace directory. It is "shadowed" below a regular
+ * file, where Git's lstat fails with ENOTDIR and Git reads the name as missing without looking in packed-refs. A link
+ * at any component refuses instead of hiding or redirecting the name.
+ */
+async function looseEntry(store: FileHandle, name: string, context: Operation) {
+  const opened = await openWithin(store, name, constants.O_RDONLY, false, context).catch(
+    async (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return
+      requireValue(error.code !== "ELOOP", "linked references are unsupported")
+      if (error.code !== "ENOTDIR") throw error
+      await regularAncestor(store, name, context)
+      return "shadowed" as const
+    },
+  )
+  if (!opened || opened === "shadowed") return opened
+  const info = await step(context, () => opened.stat()).catch(async (error: unknown) => {
+    await releaseResource(context, opened)
+    throw error
+  })
+  if (info.isFile()) return opened
+  await releaseResource(context, opened)
+  // A directory is a namespace (tags release/1.0 beside a branch release), not a reference of that name.
+  requireValue(info.isDirectory(), "nonregular reference metadata is unsupported")
+}
+
+// ENOTDIR leaves a component above the leaf that is not a directory. Only a regular file there is Git's missing name
+// (a branch release while release/1.0 is a tag); a linked directory refuses rather than hide the names below it.
+async function regularAncestor(store: FileHandle, name: string, context: Operation) {
+  const parts = name.split("/")
+  for (const prefix of parts.slice(1).map((_, end) => parts.slice(0, end + 1).join("/"))) {
+    const ancestor = await openWithin(store, prefix, constants.O_RDONLY, false, context).catch(
+      (error: NodeJS.ErrnoException) => {
+        requireValue(error.code !== "ELOOP", "linked reference directories are unsupported")
+        throw error
+      },
+    )
+    const info = await step(context, () => ancestor.stat()).finally(() => releaseResource(context, ancestor))
+    if (info.isDirectory()) continue
+    requireValue(info.isFile(), "nonregular reference metadata is unsupported")
+    return
+  }
+  throw new Unavailable("references changed while being read")
+}
+
+/**
+ * packed-refs as Git's full parse accepts it: an optional header, then `<sha> <name>` lines, each optionally followed
+ * by one `^<sha>` line, and a final newline. Anything else refuses, so a malformed file poisons the read instead of
+ * hiding a name: a CRLF line, bytes that are not UTF-8, or records out of order under the `sorted` trait, where Git's
+ * binary search would miss a name that a line-by-line scan finds.
+ */
+async function packedRefs(common: FileHandle, context: Operation) {
+  const data = (await read(common, "packed-refs", LIMIT.refs, true, context)) ?? Buffer.alloc(0)
+  const text = data.toString("utf8")
+  const lines = text.split("\n")
+  const sorted = lines[0].startsWith("# pack-refs with: ") && lines[0].slice(18).split(" ").includes("sorted")
+  const names = lines.filter((line) => /^[0-9a-f]{40} /.test(line)).map((line) => Buffer.from(line.slice(41)))
+  requireValue(
+    Buffer.from(text).equals(data) &&
+      lines.at(-1) === "" &&
+      lines
+        .slice(0, -1)
+        .every(
+          (line, index) =>
+            /^[0-9a-f]{40} [^\x00-\x20\x7f]+$/.test(line) ||
+            (index === 0 && /^# pack-refs with: [^\r]*$/.test(line)) ||
+            (/^\^[0-9a-f]{40}$/.test(line) && /^[0-9a-f]{40} /.test(lines[index - 1] ?? "")),
+        ) &&
+      (!sorted || names.every((name, index) => index === 0 || Buffer.compare(names[index - 1], name) <= 0)),
+    "packed-refs is malformed",
+  )
+  return lines
+}
+
+/** A full name's unique packed-refs record, with the `^` line Git writes after an annotated tag's record. */
+function packedReference(lines: string[], ref: string) {
+  const found = lines.flatMap((line, index) => (/^[0-9a-f]{40} /.test(line) && line.slice(41) === ref ? [index] : []))
+  if (found.length === 0) return
+  requireValue(found.length === 1, "the packed reference has no unique commit")
+  const oid = lines[found[0]].slice(0, 40)
+  const peel = lines[found[0] + 1] ?? ""
+  if (!peel.startsWith("^")) return { oid }
+  return { oid, peeled: peel.slice(1) }
 }
 
 async function objects(common: FileHandle, target: string, context: Operation) {
@@ -1202,6 +1292,12 @@ export type Read =
     }
   | { readonly kind: "tree"; readonly revision: string; readonly file: string }
   | { readonly kind: "subjects"; readonly from: string; readonly to: string }
+  /** A branch, remote-tracking branch or tag name answered like `rev-parse --verify --quiet`: its commit in the
+   * private snapshot, or code 1 and no bytes when no ref of that name exists and the name cannot be an object id. */
+  | { readonly kind: "reference"; readonly name: string }
+  /** refs/remotes/origin/HEAD answered like `symbolic-ref --quiet`: its origin branch's full name, or code 1 and no
+   * bytes when it is unset. */
+  | { readonly kind: "default-branch" }
 
 function relative(file: string) {
   requireValue(
@@ -1734,6 +1830,120 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             "--format=%s",
             revision(operation.from) + ".." + revision(operation.to),
           ])
+        case "reference": {
+          const name = operation.name
+          requireValue(
+            typeof name === "string" &&
+              name.isWellFormed() &&
+              name !== "@" &&
+              !name.startsWith("-") &&
+              !name.startsWith("main-worktree/") &&
+              !/^[0-9a-f]{40}$/i.test(name) &&
+              !/^[A-Z_]*HEAD$/.test(name) &&
+              (!name.startsWith("refs/") || /^refs\/(heads|remotes|tags)\//.test(name)) &&
+              referenceName(name),
+            "the reference name is unsupported",
+          )
+          // Every place rev-parse looks a name up, in Git's order. Only a branch, remote-tracking branch or tag may
+          // answer. A second match, or one anywhere else, refuses where Git would warn or resolve something else.
+          const places = [
+            name,
+            ...["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"].map((prefix) => prefix + name),
+            `refs/remotes/${name}/HEAD`,
+          ]
+          const answers = (place: string, index: number) =>
+            index < places.length - 1 && /^refs\/(heads|remotes|tags)\//.test(place)
+          const loose: { place: string; oid: string }[] = []
+          const shadowed = new Set<string>()
+          // Loose names before packed-refs, as Git reads them, so a concurrent pack cannot hide a reference.
+          for (const [index, place] of places.entries())
+            for (const store of git === common ? [commonHandle] : [commonHandle, gitHandle]) {
+              const entry = await looseEntry(store, place, context)
+              if (entry === "shadowed" && store === commonHandle) shadowed.add(place)
+              if (!entry || entry === "shadowed") continue
+              try {
+                // A linked worktree's own Git directory holds only per-worktree refs and pseudo-refs for Git, and none
+                // of those may answer. Git never reads a branch or tag there, so a file of that shape refuses too.
+                requireValue(
+                  store !== gitHandle && answers(place, index),
+                  "the reference name resolves outside branches and tags",
+                )
+                loose.push({ place, oid: metadataLine(await readOpened(entry, 4096, context)) })
+              } finally {
+                await releaseResource(context, entry)
+              }
+            }
+          const packed = await packedRefs(commonHandle, context)
+          const found = places.flatMap((place, index) => {
+            const values = loose.filter((entry) => entry.place === place)
+            if (values.length > 0 || shadowed.has(place)) return values
+            const value = packedReference(packed, place)
+            if (!value) return []
+            requireValue(answers(place, index), "the reference name resolves outside branches and tags")
+            return [{ place, ...value }]
+          })
+          if (found.length === 0) {
+            // With no ref of the name, rev-parse still reads a short object id or `git describe` output.
+            requireValue(
+              !/^[0-9A-Fa-f]{4,39}$/.test(name) && !/-g[0-9A-Fa-f]{4,40}$/.test(name),
+              "the name may be an object id; fetch or pass a commit",
+            )
+            return { code: 1, bytes: Buffer.alloc(0) }
+          }
+          requireValue(found.length === 1, "the reference name is ambiguous")
+          const match: { place: string; oid: string; peeled?: string } = found[0]
+          requireValue(/^[0-9a-f]{40}$/.test(match.oid), "symbolic or non-SHA1 reference is unsupported")
+          // Only a regex-checked object id reaches Git, and only the private snapshot answers for it.
+          const type = async (oid: string) => {
+            const result = await run(["cat-file", "-t", oid])
+            requireValue(
+              result.code === 0,
+              "the reference's object is not in the private snapshot; fetch or pass a commit",
+            )
+            return result.bytes.toString("utf8")
+          }
+          if (match.peeled === undefined) {
+            const kind = await type(match.oid)
+            requireValue(kind !== "tag\n", "an annotated tag resolves only through its peeled packed line")
+            requireValue(kind === "commit\n", "the reference does not name a commit")
+            return { code: 0, bytes: Buffer.from(match.oid + "\n") }
+          }
+          // Git trusts a packed peel only after a tag and reads the tag object itself, so both must agree here.
+          requireValue(
+            match.place.startsWith("refs/tags/") && (await type(match.oid)) === "tag\n",
+            "a peeled packed line follows only an annotated tag",
+          )
+          const tag = await run(["cat-file", "tag", match.oid])
+          requireValue(
+            tag.code === 0 && tag.bytes.toString("utf8").startsWith(`object ${match.peeled}\ntype commit\n`),
+            "the packed reference's peeled commit does not match its tag",
+          )
+          requireValue((await type(match.peeled)) === "commit\n", "the reference does not name a commit")
+          return { code: 0, bytes: Buffer.from(match.peeled + "\n") }
+        }
+        case "default-branch": {
+          const entry = await looseEntry(commonHandle, "refs/remotes/origin/HEAD", context)
+          if (!entry || entry === "shadowed") {
+            // Git keeps origin/HEAD as a loose symbolic ref; a packed one names no origin branch.
+            requireValue(
+              !packedReference(await packedRefs(commonHandle, context), "refs/remotes/origin/HEAD"),
+              "origin/HEAD does not name an origin branch",
+            )
+            return { code: 1, bytes: Buffer.alloc(0) }
+          }
+          try {
+            const target = /^ref: (refs\/remotes\/origin\/.+)$/.exec(
+              metadataLine(await readOpened(entry, 4096, context)),
+            )?.[1]
+            requireValue(
+              target !== undefined && target !== "refs/remotes/origin/HEAD" && referenceName(target),
+              "origin/HEAD does not name an origin branch",
+            )
+            return { code: 0, bytes: Buffer.from(target + "\n") }
+          } finally {
+            await releaseResource(context, entry)
+          }
+        }
         default:
           throw new Unavailable("Git operation is not supported by the read-only port")
       }
