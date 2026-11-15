@@ -160,6 +160,15 @@ start", R2-R4):
   server-side image floor (H2a) is not built; when it is, it must not block download-only starts. The lane also tracks
   this as a defect for a later server package (`codium-a53-hosted-sessions-notes.md`, "Not done").
 
+**The screens (H1c).** Once `computer` is listed, a customer whose plan ended (or no longer includes a cloud computer)
+and whose disks are still kept sees, on the desktop's bar and the phone's Cloud computer page, "Your cloud
+computer's files" with the days left (a count, never an amount), "Download your files" (it asks first: "Vector starts
+the computer once to pack its files for download.") and, once packed, "Open the download". Packed files stay offered
+while new starts are closed (the switch at `no-new`, a hold, a refunded plan); a frozen plan, a lost dispute and an
+account being deleted see nothing. Before listing, an account on `VECTOR_HOSTED_ALLOW_ACCOUNTS` sees none of it in
+the apps (`codium-deviations.md` "Codium finish: H1 clients", D1); the route works for it. The email notice of the 14
+days is not built. Yours: the confirmation's wording names no payer, so it fits either answer to who pays the block.
+
 **Fair use.** A session that passes 600 page loads an hour, 5 GB (Max) or 15 GB (Ultra) of egress a day, or 30 minutes
 above 80% of the processor with no model request is stopped, the account's cloud computer is put on hold and you get an
 email. Release it from the owner's hosted flags once you have looked.
@@ -297,6 +306,10 @@ loads nothing but the computer's own viewer page. The phone's Cloud computer pag
 Morning's jobs and reports. When the computer's credential guard hands the computer to the subscriber, the session list
 says so and their phone gets one title-only alert ("Vector needs you on its cloud computer", tag `computer`). None of
 this shows until `computer` is listed (or for `VECTOR_HOSTED_ALLOW_ACCOUNTS`), and Vector Local blocks it.
+
+Correction, 15 Nov 2026 (Codium finish, H1c): "(or for `VECTOR_HOSTED_ALLOW_ACCOUNTS`)" above is wrong for the
+screens. Every one of them, the download-only offer included, shows only once `computer` is listed; an account on
+`VECTOR_HOSTED_ALLOW_ACCOUNTS` can use the routes before listing (step 4) but sees nothing in the desktop or phone app.
 
 ### The budget workflow
 

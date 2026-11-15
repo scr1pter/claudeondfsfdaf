@@ -173,3 +173,11 @@ download (every beat is refused) and is still charged the block and the retentio
 later server package ("Not done" above). Real computers are unverified until the image is rebuilt and a disk is made
 from it.
 `codium-deviations.md` "Codium finish: H1 computer (15 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H1c).** The client surfaces are built: `hostedStatus` now carries `kept` (the
+kept disks' date, each computer's preferred session, never one whose files were packed before a later job session on
+that computer, and whether a download-only start is `open`, `late` or `closed`; `keptDisks` in `hosted-sessions.ts`),
+and the desktop's bar and the phone's Cloud computer page offer the files from it. `startHostedDownload` and
+`hostedComputers` now share `knownComputers` and the margin constant; their behaviour is unchanged. `kept` is a hosted
+API field added by H1c rather than H1a (D2, for the lead). `codium-deviations.md` "Codium finish: H1 clients (15 Nov
+2026)".

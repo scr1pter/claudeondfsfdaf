@@ -11,17 +11,37 @@ import {
   decodeSessions,
   decodeViewer,
   handoffLine,
+  hostedErrorText,
+  keptView,
+  sessionControls,
+  stateLabel,
 } from "../packages/app/src/features/cloud/hosted/hosted-model"
-import { hostedRoute, viewerLinkAllowed, type HostedRequest } from "../packages/app/src/features/cloud/hosted/hosted-requests"
+import {
+  hostedRoute,
+  LIMITS,
+  viewerLinkAllowed,
+  type HostedRequest,
+} from "../packages/app/src/features/cloud/hosted/hosted-requests"
 import { handleHostedHeartbeat, handleHostedSessionAction, handleHostedSessions, handleHostedStatus } from "../api/_lib/hosted-api"
 import { HANDOFF_ALERT_GAP_MS, HANDOFF_ALERT_TITLE, handoffAlertHook } from "../api/_lib/hosted-handoff"
 import { HOSTED_JOB_SCRIPTS, type JobOptions } from "../api/_lib/hosted-jobs"
 import { handleHostedJobs } from "../api/_lib/hosted-jobs-api"
-import { computerName } from "../api/_lib/hosted-provider"
+import { reapHostedSessions } from "../api/_lib/hosted-crons"
+import { computerName, MAX_COMPUTERS } from "../api/_lib/hosted-provider"
 import { registerHostedHeartbeatHook, swapHostedHeartbeatHookForTest } from "../api/_lib/hosted-sessions"
 import { configuredPlanModels } from "../api/_lib/model-plan-config"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
-import { ACCOUNT_ID, HOUR, daemonBeat, hostedSessionEnvironment, hostedWorld, invoke, type HostedWorld } from "./hosted-sessions-fixture"
+import {
+  ACCOUNT_ID,
+  HOUR,
+  MINUTE,
+  daemonBeat,
+  endedWithDisk,
+  hostedSessionEnvironment,
+  hostedWorld,
+  invoke,
+  type HostedWorld,
+} from "./hosted-sessions-fixture"
 
 // WP A56: the cloud computer's clients against the real routes. Every request the desktop and the phone may send
 // (packages/app/src/features/cloud/hosted/hosted-requests.ts) is accepted by its route, and every answer is read by
@@ -233,6 +253,123 @@ describe("a hand-over to the person (WP A54 → A56)", () => {
   })
 })
 
+describe("the download-only start from the screens (H1c)", () => {
+  /** A refusal as the screens show it: vectordev.ai's own words. */
+  const refusal = (answer: { status: number; body: { error?: { code?: string; message?: string } } }) =>
+    hostedErrorText({ status: answer.status, code: answer.body.error?.code, message: answer.body.error?.message })
+
+  test("an ended plan's offer, the start, its progress, and the hand-over of the files' link", async () => {
+    const w = await hostedWorld(ledger)
+    const due = (await endedWithDisk(w))!
+    const offer = keptView(decodeHostedStatus((await send(w, { kind: "status" })).body), w.fakes.clock.now)
+    expect(offer).toEqual({
+      state: "open",
+      onHold: false,
+      until: due,
+      days: 14,
+      computers: [{ computer: 1, busy: false, start: true }],
+    })
+    // The desktop's account token (send's default), never a computer's run token.
+    const started = await send(w, { kind: "download-start", computer: 1 })
+    expect(started.status).toBe(201)
+    const session = decodeSessionAnswer(started.body)!
+    expect(session).toMatchObject({ computer: 1, mode: "download" })
+    expect(sessionControls(session)).toMatchObject({
+      watch: false,
+      takeover: false,
+      control: false,
+      stop: true,
+      files: false,
+    })
+
+    const progress = decodeHostedStatus((await send(w, { kind: "status" })).body)!
+    expect(progress.sessions.map((item) => item.id)).toEqual([session.id])
+    expect(stateLabel(progress.sessions[0]!)).toBe("Packing and uploading the files")
+    expect(keptView(progress, w.fakes.clock.now)?.computers).toEqual([{ computer: 1, busy: true, start: false }])
+    expect(decodeDownload((await send(w, { kind: "download", id: session.id })).body)).toEqual({ ready: false })
+
+    const told = await beat(w, session.id, {})
+    expect(told.body.pack).toBe(true)
+    const packed = await beat(w, session.id, { archiveBytes: 8192 })
+    w.bucket.set(decodeURIComponent(new URL(packed.body.upload.url).pathname.split("/").slice(2).join("/")), 8192)
+    await beat(w, session.id, { uploaded: true })
+    await reapHostedSessions({ ...w.options, budgetMs: 45_000 })
+
+    const ready = keptView(decodeHostedStatus((await send(w, { kind: "status" })).body), w.fakes.clock.now)!
+    expect(ready.computers).toEqual([{ computer: 1, busy: false, ready: session.id, start: true }])
+    const link = await send(w, { kind: "download", id: session.id })
+    expect(link.status).toBe(200)
+    const files = decodeDownload(link.body)
+    expect(files?.ready).toBe(true)
+    expect(files?.ready && files.expiresAt).toBeLessThanOrEqual(due)
+  })
+
+  test("only the account's own sign-in starts one: a run token and an unmarked token are refused", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const session = decodeSessionAnswer((await send(w, { kind: "download-start", computer: 1 })).body)!
+    expect(session.mode).toBe("download")
+    const run = await send(w, { kind: "download-start", computer: 1 }, w.provider.token(computerName(ACCOUNT_ID, 1))!)
+    expect([run.status, run.body.error.code]).toEqual([401, "SIGN_IN_REQUIRED"])
+    const unmarked = await send(w, { kind: "download-start", computer: 1 }, w.desktopToken("unmarked"))
+    expect([unmarked.status, unmarked.body.error.code]).toEqual([401, "CODIUM_SIGN_IN_REQUIRED"])
+    // A second start on the busy computer: the server's words.
+    const busy = await send(w, { kind: "download-start", computer: 1 })
+    expect(refusal(busy)).toBe("This computer is already getting its files ready.")
+  })
+
+  test("late, frozen, a lost dispute or before the owner's gate opens: no start, and the server's words", async () => {
+    const late = await hostedWorld(ledger)
+    const due = (await endedWithDisk(late))!
+    late.advance(due - 30 * MINUTE - late.fakes.clock.now)
+    late.setSnapshot({})
+    const lateView = keptView(decodeHostedStatus((await send(late, { kind: "status" })).body), late.fakes.clock.now)!
+    expect(lateView).toMatchObject({ state: "late", days: 0, computers: [{ computer: 1, start: false }] })
+    expect(refusal(await send(late, { kind: "download-start", computer: 1 }))).toBe(
+      "Too little time is left before this computer's disk is deleted.",
+    )
+
+    for (const [patch, words] of [
+      [{ state: "frozen", reason: "disputed" }, "The cloud computer is on hold for this account."],
+      [{ state: "ended", reason: "disputed" }, "This computer's files cannot be downloaded for this account."],
+    ] as const) {
+      const w = await hostedWorld(ledger)
+      await endedWithDisk(w, patch)
+      expect(keptView(decodeHostedStatus((await send(w, { kind: "status" })).body), w.fakes.clock.now)).toBeUndefined()
+      expect(refusal(await send(w, { kind: "download-start", computer: 1 }))).toBe(words)
+    }
+
+    // Off the owner's list with `computer` unlisted: nothing to offer (the screens do not even ask, keptCandidate).
+    const gated = await hostedWorld(ledger)
+    await endedWithDisk(gated)
+    process.env.VECTOR_HOSTED_ALLOW_ACCOUNTS = ""
+    const status = decodeHostedStatus((await send(gated, { kind: "status" })).body)
+    expect(status?.available).toBe(false)
+    expect(keptView(status, gated.fakes.clock.now)).toBeUndefined()
+    expect(refusal(await send(gated, { kind: "download-start", computer: 1 }))).toBe(
+      "The cloud computer is not available on Vector yet.",
+    )
+  })
+
+  test("the screens' computer limit is the server's, and both screens start one only from the confirmed button", () => {
+    expect(LIMITS.computers).toBe(MAX_COMPUTERS)
+    for (const file of [
+      "packages/app/src/features/cloud/hosted/hosted-composer.tsx",
+      "packages/app/src/phone/routes/computer.tsx",
+    ]) {
+      const text = readFileSync(path.join(root, file), "utf8")
+      const calls = [...text.matchAll(/startDownload\(item\.computer\)/g)]
+      expect({ file, calls: calls.length }).toEqual({ file, calls: 1 })
+      const before = text.slice(0, calls[0]!.index)
+      const gate = before.lastIndexOf("when={confirming() === `start-${item.computer}`}")
+      // The start button is the confirmed branch; its fallback only asks to confirm.
+      const asks = before.slice(gate).includes("setConfirming(`start-${item.computer}`)")
+      expect({ file, gated: gate >= 0, asks }).toEqual({ file, gated: true, asks: true })
+      expect(text).toContain("DOWNLOAD_CONFIRM")
+    }
+  })
+})
+
 describe("the clients' boundaries", () => {
   test("the screens never import the API's hosted modules or the rates", () => {
     for (const file of [
@@ -240,6 +377,9 @@ describe("the clients' boundaries", () => {
       "packages/app/src/features/cloud/hosted/hosted-requests.ts",
       "packages/app/src/features/cloud/hosted/hosted-composer.tsx",
       "packages/app/src/phone/routes/computer.tsx",
+      "packages/app/src/phone/api.ts",
+      "packages/app/src/phone/status.ts",
+      "packages/app/src/phone/app.tsx",
       "packages/desktop/src/main/hosted-client.ts",
       "packages/desktop/src/main/hosted-window.ts",
     ]) {

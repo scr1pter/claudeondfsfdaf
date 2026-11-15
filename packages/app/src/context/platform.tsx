@@ -174,10 +174,15 @@ export type HostedPlatform = {
     id: string
     mode: "view" | "control"
   }): Promise<{ ok: true } | { ok: false; status?: number; code?: string; message: string }>
-  /** Asks for the session's files and opens the download in the browser once they are packed. */
+  /**
+   * Asks for the session's files and opens the download in the browser once they are packed; `expiresAt` is when its
+   * link stops working.
+   */
   files(input: {
     id: string
-  }): Promise<{ ok: true; ready?: boolean } | { ok: false; status?: number; code?: string; message: string }>
+  }): Promise<
+    { ok: true; ready?: boolean; expiresAt?: number } | { ok: false; status?: number; code?: string; message: string }
+  >
   /** Opens a job's pull request or a recording link in the browser. */
   open(input: {
     kind: "pull-request" | "recording"

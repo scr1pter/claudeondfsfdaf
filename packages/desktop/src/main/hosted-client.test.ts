@@ -114,6 +114,43 @@ describe("requests", () => {
     expect(await down.client.request({ kind: "status" })).toMatchObject({ ok: false, message: expect.stringContaining("reach") })
   })
 
+  test("a download-only start (H1c): one computer, the account token, no redirects; computer 0 stays", async () => {
+    const fixture = world(() =>
+      Response.json({ session: { id: SESSION, state: "starting", mode: "download" } }, { status: 201 }),
+    )
+    expect(await fixture.client.request({ kind: "download-start", computer: 2 })).toMatchObject({ ok: true })
+    expect(fixture.calls).toEqual([
+      {
+        url: `${SITE}/api/hosted/sessions`,
+        method: "POST",
+        authorization: `Bearer ${TOKEN}`,
+        body: { mode: "download", computer: 2 },
+        redirect: "error",
+      },
+    ])
+    for (const computer of [0, 4, "1"])
+      expect(await fixture.client.request({ kind: "download-start", computer })).toMatchObject({ ok: false })
+    expect(fixture.calls).toHaveLength(1)
+    // The account token is the only credential: there is no run token on this computer to send.
+    const late = "Too little time is left before this computer's disk is deleted."
+    const refused = world(() =>
+      Response.json({ error: { code: "HOSTED_DOWNLOAD_UNAVAILABLE", message: late } }, { status: 409 }),
+    )
+    expect(await refused.client.request({ kind: "download-start", computer: 1 })).toEqual({
+      ok: false,
+      status: 409,
+      code: "HOSTED_DOWNLOAD_UNAVAILABLE",
+      message: late,
+    })
+    const local = world(() => Response.json({}))
+    Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+    expect(await local.client.request({ kind: "download-start", computer: 1 })).toMatchObject({
+      ok: false,
+      code: "LOCAL_OFF",
+    })
+    expect(local.calls).toEqual([])
+  })
+
   test("Vector Local keeps the cloud computer off: nothing is sent, and the screen says why", async () => {
     const fixture = world(() => Response.json({}))
     Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
@@ -203,8 +240,11 @@ describe("files and links", () => {
     expect(packing.opened).toEqual([])
     const link = `${SITE}/api/hosted/sessions/${SESSION}/download?t=abc.def`
     const ready = world(() => Response.json({ ready: true, url: link, expiresAt: 1 }))
-    expect(await ready.client.files({ id: SESSION })).toEqual({ ok: true, ready: true })
+    // The link's own end goes back to the screen (never past the disks' deletion date, H1a).
+    expect(await ready.client.files({ id: SESSION })).toEqual({ ok: true, ready: true, expiresAt: 1 })
     expect(ready.opened).toEqual([link])
+    const odd = world(() => Response.json({ ready: true, url: link, expiresAt: "tomorrow" }))
+    expect(await odd.client.files({ id: SESSION })).toEqual({ ok: true, ready: true })
     const elsewhere = world(() => Response.json({ ready: true, url: "https://evil.example/x", expiresAt: 1 }))
     expect(await elsewhere.client.files({ id: SESSION })).toMatchObject({ ok: false })
     expect(elsewhere.opened).toEqual([])

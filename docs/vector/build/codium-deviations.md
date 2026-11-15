@@ -2322,6 +2322,14 @@ unchanged.
   Ending the session at its first refused beat keeps those minutes short. Who pays a download start's block stays the
   owner's question (H1a). No H1b code change. The owner bullet in `owner-actions/hosted-computer.md` stays; tracked in
   `codium-a53-hosted-sessions-notes.md` ("Not done") and "Codium finish: H1 computer (15 Nov 2026)", O6.
+- **15 Nov 2026 (Codium finish, H1c).** The client half of H1 is built in the working tree, not committed by its build
+  step: the desktop's bar and the phone's Cloud computer page offer an ended plan's kept files, from a new `kept` field
+  on `GET /api/hosted/status`. Two deviations from the package text are for the lead: D1 (an account on
+  `VECTOR_HOSTED_ALLOW_ACCOUNTS` sees nothing in the clients before `computer` is listed) and D2 (H1c, not H1a, adds the
+  hosted API field `kept` to `GET /api/hosted/status` and the `Hosted.KeptDisks` type, against the lane rule that only
+  H1a adds a hosted API field; the lead accepts it or sends the field back to H1a). Its Vector Codium, typecheck.yml and
+  vector-hosted-ci.yml runs follow the lead's commit; H1c is done only once they are green. See "Codium finish: H1
+  clients (15 Nov 2026)".
 
 ## P4 review decisions (8 Nov 2026)
 
@@ -5328,5 +5336,305 @@ then typecheck.yml, then vector-hosted-ci.yml once the Vector Codium run has fin
 **For the lead.** None in another lane's files. Records also touched: `codium-a53-hosted-sessions-notes.md`,
 `codium-a54-hosted-image-notes.md`, `codium-p8-repairs.md`, `docs/vector/MODEL-PLANS.md` and
 `docs/vector/owner-actions/hosted-computer.md`.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+**H1b's CI receipts (recorded by Codium finish H1c, 15 Nov 2026)**
+
+For `539cddf5` (this section's commit), read from the runs' jobs and logs:
+
+- Vector Codium run 43752968478 (18 jobs): every job passed or was skipped by `services_only` (Hosted services'
+  typecheck and Hosted tests) except Codium tests job 132930785610, which failed only at "Run HttpApi exerciser gates"
+  with `summary pass=359 fail=0 skip=0 missing=4 extra=0` and exactly the four review-memory lines (`MISS DELETE
+  /experimental/review-memory/previews/{previewId}`, `MISS GET /experimental/review-memory`, `MISS POST
+  /experimental/review-memory/confirm`, `MISS POST /experimental/review-memory/prepare`). Its "Run the Codium test
+  files" and "Check generated client" steps passed, so the run is green under the lane's baseline rule. No per-file
+  count is claimed. Hosted services / Cloud computer image (Docker) job 132930785857 and Codium browser specs job
+  132930785921 passed.
+- typecheck.yml run 43752971608: success.
+- vector-hosted-ci.yml run 43753689797: all 12 jobs passed; Hosted tests job 132933033151 ends "Hosted: 150/150 test
+  files passed", and its Cloud computer image (Docker) job 132933033157 passed.
+
+## Codium finish: H1 clients (15 Nov 2026)
+
+Package H1c, the client half of H1 (H1a is the server's start, H1b the computer's side). For an account whose plan
+ended, or no longer includes a cloud computer, while its computers' disks are kept for download (§4.4,
+`codium-build-spec.md:354`), the desktop's bar above the composer and the phone's Cloud computer page offer "Download
+your files" with the days left, start H1a's download-only session after a confirmation, show its progress as a live
+session, and then hand over the usual download link. Built on `codium-finish` `539cddf5` (H1b; equal to
+origin/codium-finish; PR #33 unmerged: origin/main `58f85edc`, origin/release-finish `cf2373c4`). Scratch under
+`/tmp/vector-v2/codium/h1c/`. Not committed by this build step, so no CI has run on it; the dispatches follow the
+lead's commit.
+
+**What landed**
+
+- Server, read-only (`api/_lib/hosted-sessions.ts`): `hostedStatus` (`:1598`) reads `listHostedSessions` once
+  (`:1610`) and adds `kept` from the new `keptDisks` (`:1651`). `kept` is sent only while all of these hold: the hosted
+  configuration;
+  the plan's download answer (`hostedDownloadAccess`) is not `live`, `frozen` or `closing`, and the plan did not end
+  after a lost dispute (the same rule as `requireFilesAllowed`); the media bucket is set; the deletion date is ahead;
+  the account has a computer; and either a download-only start could go ahead or some session has packed files. Its
+  `state` is `open` when a start could go ahead (the start's own gates in `startHostedDownload`'s order: configured,
+  `hostedOpen`, the switch on, no hold, then the plan's `final` or `current` answer), `late` when it could but less than
+  `DOWNLOAD_START_MARGIN_MS` (`:120`, the start's old inline sum, now shared) is left, and `closed` otherwise. Each
+  computer comes with its preferred session: the live download-only session, else the newest session (job sessions
+  included) whose files are packed, else the newest download-only session; files packed before a later job session
+  started on that computer never count (review fix F1). `knownComputers` (`:771`) is the
+  `hosted:computers` read, now shared by `startHostedDownload`, `hostedComputers` and `keptDisks` with the same filter
+  (1 to `MAX_COMPUTERS`). No new route, store key, setting, error message, flag or amount.
+- Schema (`packages/schema/src/hosted.ts:238`): `Hosted.KeptDisks` `{state: "open" | "late" | "closed", until, disks:
+  [{computer, session?}]}`, the return type of `keptDisks`.
+- Shared app code. `hosted-requests.ts`: `{kind: "download-start", computer}` → `POST /api/hosted/sessions {mode:
+  "download", computer}` (`:120`), computer 1 to `LIMITS.computers` (`:51`, 3). `hosted-model.ts`: `customer` on the
+  status shape; `mode` kept on a session only for `"download"`, and such a session never gets `handoff`;
+  `decodeKept` (`:261`, lenient); `keptCandidate` (`:109`); `keptView` (`:307`), `keptLine` (`:331`), `keptNote`
+  (`:337`), `keptLabels` (`:345`) and `linkLine` (`:354`); download-aware `stateLabel` (`downloadStateLabel`, `:404`),
+  `reasonLine` (`:433`), `sessionLine` (`:446`) and `sessionControls` (`:452`: no Watch, Take over or control; Stop as
+  any session; Files once `readyAt` is set); the copy constants `KEPT_TITLE` (`:33`) to `DOWNLOAD_STARTED`.
+  `context/platform.tsx`: the files answer's `expiresAt`.
+- Desktop. `packages/desktop/src/main/hosted-client.ts`: `files()` returns the link's `expiresAt` (`:141`); the header
+  (`:29`) says the start is one of `request`'s shapes with the account token. No IPC, preload or window change.
+  `hosted-composer.tsx`: the status is read with a mode per composer (`"computer"` or `"kept"`), every 10 minutes
+  (`KEPT_POLL_MS`, `:78`) when only the offer is read, 15 seconds while any session is live, 60 seconds otherwise; a
+  plan that changes while the app is open is read again at once (`on(mode, …)`, `:147`). `useHostedComputer` adds
+  `candidate` (`:131`) and `kept`; `HostedRunButton` still follows `shown()` only. `HostedBar` shows its live rows for
+  either mode, and a quiet offer block (`data-component="hosted-kept"`, `:360`) with the line, the note, each
+  computer's ended reason, "Open the download" for packed files, the start behind a confirmation
+  (`startDownload`, `:268`) and "Not now". `hosted.css`: `.hosted-bar--quiet` (`:226`).
+- Phone. `status.ts`: `customer` and `kept` on `PhoneStatus`; the computer route shows with `kept` (`:110`) and its
+  summary says "Your cloud computer's files, kept for download." (`:128`). `api.ts`: `readPhoneStatus` (`:56`) asks
+  `/api/hosted/status` only for a `keptCandidate` and keeps the last read's `kept` when that request fails.
+  `app.tsx:198`: passes the last status in. `routes/computer.tsx`: `included` (`:79`) gates the plan lines, the alerts
+  offer and the "Nothing runs" text; a kept-only page shows only the on-hold line (when no offer card shows, since the
+  card says the hold itself), the offer card (`data-component="phone-kept"`, `:325`) with the same buttons and
+  confirmation (`startDownload`, `:156`), and "Your cloud computer's files are not kept for download now." (`:236`)
+  once the offer is gone and the status read succeeded; the files link line is the link's own end, or "The download
+  link is ready." when the answer has no `expiresAt`.
+- Tests (below). Not changed: every route, the provider, the image, the workflows and the generators (no engine route,
+  SDK input or config schema change).
+
+**Readings**
+
+- **R1, where the offer comes from: the server's `kept`.** Only the server knows the plan's download answer, the
+  deletion date, `hostedOpen` (the allowlist) and the margin, and `BLOCK_MINUTES` lives in `hosted-rates.ts`, which no
+  client may import. Rejected: building it from `/api/hosted/computers`' `disksDeletedAt`, which would offer refunded,
+  frozen and lost-dispute disks that are always refused.
+- **D1 (a deviation from the package text, for the lead), who sees it.** The package says nothing shows "unless the
+  account may see the computer (computer listed, or VECTOR_HOSTED_ALLOW_ACCOUNTS on the server, as H1 and the existing
+  gating decide)". The clients ask about kept disks only for `keptCandidate` (`computer` listed, a customer, the plan
+  without the computer), so an allowlisted account before listing sees nothing in the clients, though H1a's route lets
+  it start. That follows H1 (spec §3, "A perk shows only when listed") and A56's own gating (`computerShown`: every A56
+  surface needs `computer` listed; `VECTOR_HOSTED_ALLOW_ACCOUNTS` never reaches a client). Rejected: reading the hosted
+  status for every customer without the hosted entitlement before listing. Its cost: a hosted read every 10 minutes
+  from every such desktop and on every phone status read, for a perk nobody may see yet, and a surface of an unlisted
+  perk for the allowlisted few. Both readings stay possible: the server's `kept` already checks `hostedOpen`, so
+  showing it to allowlisted accounts would be a client-only change to `keptCandidate` (and a way for the client to
+  know the account is allowlisted, which no answer carries today). The owner can still try the route before listing
+  (`owner-actions/hosted-computer.md` step 4); the screens need the listing. owner-actions line 299 ("or for
+  `VECTOR_HOSTED_ALLOW_ACCOUNTS`") was already wrong for every A56 surface; a dated correction line now follows it.
+- **D2 (a deviation from the lane rule, for the lead), a hosted API field added outside H1a.** The lane rule for H1 is
+  that only H1a adds a hosted API field. H1c adds one: `kept` on `GET /api/hosted/status` (`hostedStatus`,
+  `api/_lib/hosted-sessions.ts:1598`; `keptDisks`, `:1651`), with the new exported type `Hosted.KeptDisks`
+  (`packages/schema/src/hosted.ts:238`). The reason is R1's: only the server knows the plan's download answer
+  (`hostedDownloadAccess`), `hostedOpen` (the owner's allowlist), the start margin and `BLOCK_MINUTES`, which lives in
+  the rates file (`hosted-rates.ts`) that no client may import, so a client cannot work out the offer on its own.
+  Rejected: building the offer in the clients from `/api/hosted/computers`' `disksDeletedAt` plus the server's
+  refusals, which would offer refunded, frozen and lost-dispute disks that are always refused, and would show a start
+  that the allowlist, the switch, a hold or the margin then refuses. `kept` is read-only: no new route, store key,
+  setting, error code or amount, and it is a vectordev.ai route, not an engine `HttpApi` change, so no generator run
+  is needed (`bun run generate`, the legacy SDK build). The lead accepts the field here or sends it back to H1a; either
+  way the clients' decoder (`decodeKept`) stays as it is.
+- **R2, the three states (critique, major).** "May start" and "has packed files" are split: `requestDownload` gives a
+  link with the switch at `no-new`, off the allowlist, during a hold and for a refunded plan, so `kept` is still sent
+  then, `closed`, carrying the packed session, and the clients offer only "Open the download". The clients also offer
+  no start unless `kept` is `open`, the status says `available`, and there is no hold. The status does not read the
+  account's deletion tombstone (O2).
+- **R3, cadence.** 10 minutes while the offer is the only reason to read, 15 seconds while a session is live (the
+  download's progress), 60 seconds for a plan with the computer, as before. Once `computer` is listed, every customer
+  without the computer reads the hosted status every 10 minutes while the app is open (the route allows 600 an hour).
+- **R4, days.** Whole days left until the account's one deletion date, rounded down: "Kept for download for N more
+  days, then deleted.", "1 more day", "less than a day". A count of days only, never an amount.
+- **R5, the link's end.** The files notice now gives the link's own `expiresAt` ("Its link works until …") instead of
+  "24 hours", for job sessions too, since H1a caps every link at the deletion date.
+- **R6, the phone starts download-only sessions.** A56's "the phone does not start jobs" was about the pre-start
+  ceiling, which needs an account token. A download-only start runs no job, so there is no job length or size to
+  estimate, and a refusal for the money is H1a's 402 with no amount.
+- **R7, a confirmation before the start (critique, major).** One tap would start the computer and spend a block. Both
+  clients now use the bar's existing two-step pattern: the first button asks, the confirmed one ("Start the computer")
+  sends. The line shown while confirming is "Vector starts the computer once to pack its files for download.": it
+  names no payer and no amount, because who pays the block is still the owner's question (H1a R2), so either answer
+  stays possible.
+- **R8, Stop.** A download session shows Stop; the minutes it ran stay charged (M8).
+- **R9, "Pack them again" and packed job files (critique, minor).** A computer whose files are packed offers "Open the
+  download" and the start labelled "Pack them again" (the bucket's own rule can remove packed files early, H1a R11; the
+  link then answers 410 in the server's words). A job session's packed files count as the computer's files, since they
+  are a copy of the same disk (H1a R11); the newest packed session wins, so a later download's packed files replace a
+  job's. Files packed before a later job session started on that computer are out of date, since that job may have
+  changed the disk, so they are not offered at all and the computer gets only a new start (review fix F1). A
+  download-only session leaves the disk as it was, so a later one that ended without files does not hide them. Not
+  handled: a job session that packed its files and then kept running; its own pack still counts (H1a R11's reading).
+- **R10, ended reasons.** A download session's ended line follows its files, not only its reason: "Your files are
+  ready." with `readyAt`; "The computer stopped before its files were ready." for `finished` without it (the reaper also
+  ends one `finished` on the daemon's `done`, `hosted-crons.ts`); "The computer could not get the files ready in time."
+  for `deadline`; otherwise A56's lines.
+- **R11, the notice.** The offer's line is the desktop and phone part of §4.4's "(notice)". The email notice is not
+  built.
+- **R12, Vector Local.** The desktop's status read and start go through `Egress.fetch("cloud-computer")`, so Vector
+  Local answers LOCAL_OFF and nothing is sent (tested). The phone is a website and has no Vector Local.
+- **R13, the phone's second read (critique, minor).** The route's visibility now depends on the hosted status. A failed
+  hosted read keeps what the last status read said, so a page does not turn into "This isn't part of what your plan
+  shows" in the middle of a download; an answer without `kept` drops it. It keeps the last answer through any number
+  of failures, not just one: the server decides every start and link anyway, and the page shows the hosted error.
+- **R14, the offer's look (critique, minor).** The offer is not something the computer is doing, so it uses a quiet
+  variant (`.hosted-bar--quiet`: grey edge, no purple ring). "Not now" hides it in that window until the deletion date
+  changes or the app restarts; it is not persisted, so the offer comes back before the files are deleted.
+- **R15, new strings** (no amount, price, token or credit figure, no GitHub or Actions, no time promise): "Your cloud
+  computer's files"; "Download your files"; "Getting your cloud computer's files ready"; "Vector starts the computer
+  once to pack its files for download."; "Vector is starting the computer to get its files ready."; "Kept for download
+  for N more days, then deleted." (and its two variants); "Too little time is left to get them ready before they are
+  deleted."; "Getting them ready again is not available right now."; "Pack them again"; "Open the download"; "Download
+  computer N's files", "Pack computer N's files again", "Open computer N's download"; "Packing and uploading the
+  files"; "Your files are ready" (and "."); "The computer stopped before its files were ready."; "The computer could not
+  get the files ready in time."; "Its link works until …"; "Start the computer", "Not now", "Cancel"; on the phone "Your
+  cloud computer's files, kept for download." and "Your cloud computer's files are not kept for download now."
+
+**Critique points taken and rejected**
+
+- Taken (major): may start vs packed files (R2), with server cases for `no-new`, the allowlist removed, a hold and a
+  refunded plan, a model case for a hold and unavailability, and mutations.
+- Taken (major): the confirmation (R7), with a source check in `test/hosted-clients.test.ts` that each screen sends
+  `download-start` only from the confirmed branch.
+- Taken (major): the bundle walk. `packages/app/src/phone/phone.test.ts` is unchanged on this branch, so the Codium
+  picker does not select it and its bundle walk runs in no CI here; the walk was run by hand (below), as A56 did.
+- Taken (major): D1 is recorded as a deviation and for the lead, with H1 cited, the rejected alternative and its cost,
+  and a dated correction line under owner-actions line 299.
+- Taken (minor): packed job files (R9); ended copy from `readyAt` (R10); `LIMITS.computers === MAX_COMPUTERS` asserted
+  in `test/hosted-clients.test.ts`; `hosted-jobs.test.ts` and `security-policy.test.ts` added to the regressions, and
+  the H1a describe "download-only starts for an ended plan's kept disk (H1a)" in `test/hosted-sessions-api.test.ts` is
+  the regression for the `knownComputers` swap (it passes); the phone's on-hold line and the failed second read (R13);
+  the quiet variant and "Not now" (R14); the schema type used as `keptDisks`'s return type and the array named `disks`.
+- Partly taken (minor): the CI receipts. This build step may not commit, so nothing can be dispatched from it. H1c is
+  not done until the lead's commit has a green Vector Codium run (with `base: "origin/release-finish"`), a green
+  typecheck.yml run and, after the Vector Codium run finished, a green vector-hosted-ci.yml run; the package that pushes
+  next records them here, as H1c recorded H1b's.
+
+**Review fixes (15 Nov 2026)**
+
+The H1c review's findings, each read against the code before it was changed. Still not committed.
+
+- F1 (non-blocking, confirmed, fixed): `keptDisks` (`api/_lib/hosted-sessions.ts:1666`) took the newest packed
+  session on a computer even when a later job session had run there, so both apps offered "Open the download" for
+  files older than the disk. Now files packed before the computer's newest job session started are left out (R9);
+  download-only sessions do not count as changing the disk, so the existing "a newer download that ended without
+  files does not hide the packed ones" case still holds. Regression: the "each computer's session" case in
+  `test/hosted-sessions-api.test.ts` gains a packed job session followed by a later unpacked job session, which must
+  offer only a new start (`disks: [{ computer: 1 }]`); with the filter removed that case fails.
+- F2 (non-blocking, confirmed, fixed): on a kept-only phone page a failed hosted status read showed the error and also
+  "Your cloud computer's files are not kept for download now.", which the client cannot know. That text now shows
+  only when the read succeeded (`routes/computer.tsx:235`). No runnable regression: JSX, and no Playwright locally;
+  checked by the app typecheck.
+- F3 (non-blocking, confirmed, fixed): on a kept-only phone page for an account on hold the hold sentence showed twice,
+  as the access line and as the card's note. The access line now shows only when no offer card shows
+  (`routes/computer.tsx:205`), so the hold still reaches a person whose card is hidden. No runnable regression (JSX).
+- F4 (non-blocking, confirmed, fixed): `readShared` shares a read already in flight, so `act`'s refresh after a start
+  could answer the status from before the start, and `schedule()` would then pick the 10-minute cadence. `refresh`
+  (`hosted-composer.tsx:160`, called only after an action) now waits for any read in flight and then reads again. No
+  runnable regression: module-level Solid signals and timers, no component test harness here.
+- F5 and F8 (non-blocking, confirmed, fixed; one finding reported at two lines): the `refusal` helper in
+  `test/hosted-clients.test.ts:258` typed `body` as `any`. It is now `{ error?: { code?: string; message?: string } }`.
+  The file's four refusal cases still pass.
+- F6 (non-blocking, confirmed, fixed): `phoneFeatures` chose the kept summary by truthiness of `hosted`, while the
+  page's `included()` (`computerShown`) and `keptCandidate` use a record check. It now uses the same record check
+  (`status.ts:127`), so the summary always matches what the page shows. `routeShown`'s `entitled("hosted")` is A38's
+  and was left as it is: it only decides visibility, and with any value that is not a record the page shows the kept
+  view. Regression: `src/phone/status.test.ts` "the computer route shows for an ended plan with kept disks, with its
+  own summary" now also checks `hosted: true` with `kept`; with the old check it fails.
+- F7 (blocking, confirmed, recorded; no code change): H1c added the hosted API field `kept` and the type
+  `Hosted.KeptDisks` against the lane rule that only H1a adds one, and the record did not flag it. Now D2 in the
+  readings, the "For the lead" paragraph below and the 15 Nov lane-status bullet all say so.
+- F9 (non-blocking, confirmed, left for a later package as the finding itself says): O1 below. The later package must
+  keep the check exactly as strict, by replacing session ids with a fixed placeholder before the check or by
+  deterministic ids that cannot spell a money word, and must not narrow which fields it covers.
+- F10 (non-blocking, confirmed, fixed): line citations in "What landed" corrected to the working tree:
+  `hostedStatus` `:1598` (its `listHostedSessions` read `:1610`), `hosted-client.ts` `:141`, `app.tsx:198`, and
+  `status.ts` `:110` (the computer case) and `:128` (the summary; the finding's `:125` moved down three lines with
+  F6's doc comment). Citations into `hosted-composer.tsx`, `routes/computer.tsx` and `schema/src/hosted.ts` that
+  these fixes moved were updated too.
+- F11 (non-blocking, confirmed, fixed): the phone's files notice was empty when the answer had no `expiresAt`. It now
+  falls back to "The download link is ready." (`routes/computer.tsx:153`), which names no duration. The desktop
+  already always says "The download opened in your browser." No runnable regression (JSX); the copy scans in
+  `hosted-model.test.ts` and `phone.test.ts` read the new string and pass.
+
+**Observations (not changed)**
+
+- O1, own lane's test helper: `expectNoAmounts` in `test/hosted-sessions-api.test.ts:114` matches its money words
+  anywhere in the JSON, random session ids included (a 26-character base32 id can spell `usd` or `cost`). Seen once
+  while writing the new status case, whose id is now replaced before the check. The existing A53 and H1a callers keep
+  that rare false failure; fixing the helper is left to a later package, since this one must not loosen a test. The
+  review confirmed it (F9): the fix must keep the check exactly as strict (fixed placeholders for session ids, or
+  deterministic ids that cannot spell the words), never check fewer fields.
+- O2, the status does not read the account's deletion tombstone, so an account being deleted whose snapshot is not yet
+  `closing` may show `open`; the start then refuses with `MODEL_PLAN_ACCOUNT_CLOSING`'s words.
+- O3, cost: `keptDisks` adds at most two store reads (the deletion date, then the computers) per status read, only for
+  accounts whose plan answer is not `live`, `frozen` or `closing`; accounts with no date stop after the first.
+
+**Not built**
+
+- The email notice of the 14 days (R11), a browser spec (optional; none added), a Settings page.
+
+**Unverified.** Nobody has seen the bar's offer or the phone's card in a browser or the app (no dev server, no
+Playwright locally). A real computer is unverified until the owner rebuilds the image (H1b).
+
+**Ran locally** (through `vector-serial`, one file at a time, `--timeout 30000`, after the last code edit):
+- `packages/app` with `--isolate`: `src/features/cloud/hosted/hosted-model.test.ts` 23/0 (14 at HEAD, 9 new in
+  "download-only start (H1c)"); `src/features/cloud/hosted/hosted-requests.test.ts` 7/0 (1 new);
+  `src/phone/status.test.ts` 14/0 (3 new in "an ended plan's kept disks (H1c)"); regressions
+  `src/features/local/local-model.test.ts` 39/0, `src/security-policy.test.ts` 2/0, `src/phone/phone.test.ts
+  --test-name-pattern honesty` 1/0 (6 filtered out).
+- `packages/desktop` with `bun --no-env-file test`: `src/main/hosted-client.test.ts` 11/0 (1 new, the files case now
+  expects `expiresAt`).
+- `test/`: `hosted-sessions-api.test.ts` 49 pass, 1 skip (Valkey; 7 new in "the kept disks on the status (H1c)", run
+  three times after the id fix); `hosted-clients.test.ts` 12/0 (4 new in "the download-only start from the screens
+  (H1c)"); `hosted-copy.test.ts` 6/0 (1 new); regressions `hosted-reaper` 26/0, `hosted-lifecycle` 19/0, `phone-app`
+  10 pass 1 skip, `hosted-jobs` 31 pass 1 skip.
+- The phone bundle walk by hand: `cd packages/app && bun script/browser-imports.ts src/phone/entry.tsx src/phone/sw.ts`:
+  43 modules, `runtime: []` (no Node or Bun module); `hosted-model.ts` and `hosted-requests.ts` are in it.
+- Mutations, each restored afterwards: dropping the frozen and closing gate in `keptDisks` fails "packed files are
+  never offered where §4.4 gives no download"; dropping the lost-dispute gate fails the same case; dropping the margin
+  fails the late case; dropping `hostedOpen` from the start's gates fails the `no-new`/allowlist/hold case; sending
+  `kept` only when a start may go ahead fails that case too; dropping `customer` from `keptCandidate`, offering a start
+  on a busy computer, ignoring the hold and availability in `keptView`, and reading `finished` without files as ready
+  each fail their model case; dropping the phone's last-answer fallback fails the `readPhoneStatus` case.
+- Typechecks: `packages/app` (`tsgo -b`), `packages/desktop` (`tsgo -b`), `packages/schema` (`tsgo --noEmit`) and the api
+  tree (`packages/engine`: `bun typecheck --project ../../tsconfig.json`), all clean. The full turbo typecheck is the
+  pre-push step and did not run here.
+- `prettier --write` on the six edited files that were prettier-clean at HEAD (`phone/status.ts`, `phone/api.ts`,
+  `phone/app.tsx`, `context/platform.tsx`, `phone/status.test.ts`, `hosted.css`; no change). The other edited files
+  were not prettier-clean at HEAD; their added lines are kept to 120 characters.
+- After the review fixes (same commands, after the last code edit): `packages/app` `--isolate`:
+  `hosted-model.test.ts` 23/0, `hosted-requests.test.ts` 7/0, `src/phone/status.test.ts` 14/0 (the new `hosted: true`
+  check is in an existing case), `src/phone/phone.test.ts` with `--test-name-pattern honesty` 1/0 and with
+  `--test-name-pattern "style attribute"` 1/0 (6 filtered out each); `packages/desktop` `src/main/hosted-client.test.ts`
+  11/0; `test/`: `hosted-sessions-api.test.ts` 49 pass, 1 skip (the F1 lines are in an existing case),
+  `hosted-clients.test.ts` 12/0, `hosted-copy.test.ts` 6/0. Mutations, each restored: removing F1's filter fails "each
+  computer's session"; going back to F6's truthiness check fails the status case above. Typechecks `packages/app`,
+  `packages/desktop`, `packages/schema` and the api tree: clean. `prettier --check`: `phone/status.ts` and
+  `phone/status.test.ts` still clean; no added line over 120 characters elsewhere. The phone's import graph did not
+  change, so the bundle walk was not run again.
+
+**Only in CI.** The Valkey and Postgres cases, the HttpApi exerciser, `check:generated` (no generator input changed),
+the Codium browser specs (none added) and the typecheck matrix. The Codium unit job selects every test file changed
+since the base, so the seven changed test files run there; `phone.test.ts`'s bundle walk does not (above).
+vector-hosted-ci.yml's Hosted tests run every `test/*.test.ts` and the desktop's `hosted-*` tests. Dispatches after
+the lead's commit, in order: Vector Codium on `codium-finish` with `base: "origin/release-finish"` and no
+`browser_specs`, then typecheck.yml, then vector-hosted-ci.yml once the Vector Codium run has finished.
+
+**For the lead.** D1 above (a deviation from the package text, nothing to fix in another lane). D2 above (a deviation
+from the lane rule that only H1a adds a hosted API field): H1c adds `kept` to `GET /api/hosted/status` and the
+`Hosted.KeptDisks` type, for R1's reason (only the server knows the plan's download answer, `hostedOpen`, the margin
+and the rates file's `BLOCK_MINUTES`); the rejected alternative is `/api/hosted/computers`' `disksDeletedAt` plus the
+server's refusals. It is not an engine `HttpApi` change, so no generator run is needed. Accept it here or send the
+field back to H1a. None in another lane's files. Records also touched: `codium-a56-hosted-clients-notes.md`, `codium-a53-hosted-sessions-notes.md`,
+`codium-p8-repairs.md`, `docs/vector/MODEL-PLANS.md` and `docs/vector/owner-actions/hosted-computer.md`.
 
 Edits to `api/_lib/model-plan-*.ts`: none.

@@ -7,6 +7,12 @@
 // Copy rules: the cloud computer is one Vector runs for you, and its copy never mentions GitHub or Actions (H4); nothing
 // shows an amount, a price or a token count, only shares and counts (P1); a Done by Morning job "aims to deliver by" a
 // time and promises nothing (H3).
+//
+// Download-only starts (H1c). After a plan ends, or no longer includes a cloud computer, its computers' disks are kept
+// for download until a date (§4.4). The status then carries `kept` (H1a's server decides it), read here into one
+// offer per computer: "Download your files" starts a download-only session, which packs the disk; its progress shows
+// as a live session; once its files are ready, "Open the download" hands over the usual link. The offer names a count
+// of days, never an amount, and promises no time.
 
 import {
   downloadLinkAllowed,
@@ -24,6 +30,13 @@ export const DELIVER_LABEL = "Aims to deliver by"
 export const COMPOSER_ACTION = "Run on my cloud computer"
 export const HOSTED_LINE =
   "A computer Vector runs for you: close the laptop and Vector finishes the job. Watch it live and take over whenever you like. Password, card and CAPTCHA steps are always handed to you, and the browser profile is wiped after each job."
+export const KEPT_TITLE = "Your cloud computer's files"
+export const DOWNLOAD_ACTION = "Download your files"
+export const DOWNLOAD_LINE = "Getting your cloud computer's files ready"
+/** What the person confirms before a download-only start: no payer and no amount, so either owner answer fits. */
+export const DOWNLOAD_CONFIRM = "Vector starts the computer once to pack its files for download."
+export const DOWNLOAD_STARTED = "Vector is starting the computer to get its files ready."
+const HOLD_LINE = "Your cloud computer is on hold. Contact Vector support to look at it with you."
 
 const SESSION_STATES = ["starting", "running", "takeover", "wrapping", "stopping", "ended"] as const
 export type SessionState = (typeof SESSION_STATES)[number]
@@ -36,6 +49,8 @@ const JOB_STATES = ["queued", "running", "reported", "incomplete", "cancelled", 
 export type JobState = (typeof JOB_STATES)[number]
 const QUEUE_STATES = ["open", "waiting", "paused", "closed"] as const
 export type QueueState = (typeof QUEUE_STATES)[number]
+const KEPT_STATES = ["open", "late", "closed"] as const
+export type KeptState = (typeof KEPT_STATES)[number]
 export const BANDS = [
   "under 1%",
   "1–2%",
@@ -74,6 +89,8 @@ type StatusLike = {
   entitlements?: Readonly<Record<string, unknown>>
   signedIn?: boolean
   error?: unknown
+  /** The account has had a Codium plan (§4.11), so its computers may be kept for download after it ended. */
+  customer?: boolean
 }
 
 const listedSet = (status: StatusLike | undefined) => new Set<string>(status?.listed ? [...status.listed] : [])
@@ -82,6 +99,16 @@ const listedSet = (status: StatusLike | undefined) => new Set<string>(status?.li
 export function computerShown(status: StatusLike | undefined) {
   if (!status || status.signedIn === false || status.error) return false
   return listedSet(status).has("computer") && isRecord(status.entitlements?.hosted)
+}
+
+/**
+ * Whether the screens ask the hosted status about kept disks (H1c): `computer` listed (H1) for a customer whose plan
+ * does not include it now (an ended plan, or one without a cloud computer). The status then says whether any disk is
+ * kept for download; nothing shows otherwise.
+ */
+export function keptCandidate(status: StatusLike | undefined) {
+  if (!status || status.signedIn === false || status.error || status.customer !== true) return false
+  return listedSet(status).has("computer") && !isRecord(status.entitlements?.hosted)
 }
 
 /** Whether Done by Morning shows: listed (it lists only with the cloud computer) and in the plan. */
@@ -105,6 +132,8 @@ export type HostedSession = {
   wrapBy?: number
   takeover?: { since: number; until: number }
   download?: { requestedAt: number; readyAt?: number }
+  /** A download-only session (H1a): it only packs the computer's files; no job, live view or take-over. */
+  mode?: "download"
   handoff?: { reason: Handoff; since: number }
 }
 
@@ -144,7 +173,8 @@ export function decodeSession(value: unknown): HostedSession | undefined {
     ...(time(value.wrapBy) ? { wrapBy: value.wrapBy } : {}),
     ...(takeover && state === "takeover" ? { takeover } : {}),
     ...(download ? { download } : {}),
-    ...(handoff && state === "running" ? { handoff } : {}),
+    ...(value.mode === "download" ? { mode: "download" as const } : {}),
+    ...(handoff && state === "running" && value.mode !== "download" ? { handoff } : {}),
   }
 }
 
@@ -169,6 +199,13 @@ export type HostedPlan = {
   rampUntil?: number
 }
 
+/** The account's kept disks (H1c): `open`, `late` or `closed` for a download-only start, until the deletion date. */
+export type KeptDisks = {
+  state: KeptState
+  until: number
+  disks: { computer: number; session?: HostedSession }[]
+}
+
 export type HostedStatus = {
   available: boolean
   access: Access
@@ -177,6 +214,7 @@ export type HostedStatus = {
   /** The share of this month's cloud computer hours used, 0..1. */
   hoursUsed?: number
   sessions: HostedSession[]
+  kept?: KeptDisks
 }
 
 export function decodeHostedStatus(body: unknown): HostedStatus | undefined {
@@ -203,6 +241,7 @@ export function decodeHostedStatus(body: unknown): HostedStatus | undefined {
         }
       : undefined
   const hours = isRecord(body.hours) && share(body.hours.used) ? body.hours.used : undefined
+  const kept = decodeKept(body.kept)
   return {
     available: body.available === true,
     access,
@@ -210,7 +249,110 @@ export function decodeHostedStatus(body: unknown): HostedStatus | undefined {
     ...(decodedPlan ? { plan: decodedPlan } : {}),
     ...(hours !== undefined ? { hoursUsed: hours } : {}),
     sessions: list(body.sessions, decodeSession),
+    ...(kept ? { kept } : {}),
   }
+}
+
+/**
+ * `kept`, leniently: dropped with an unknown state, no deletion date or no valid computer; a computer named twice keeps
+ * its first entry, and an entry's session is kept only when it is on that computer and is a download-only session or
+ * has packed files.
+ */
+function decodeKept(value: unknown): KeptDisks | undefined {
+  if (!isRecord(value)) return undefined
+  const state = oneOf(KEPT_STATES, value.state)
+  if (!state || !time(value.until)) return undefined
+  const seen = new Set<number>()
+  const disks = list(value.disks, (item) => {
+    if (!isRecord(item)) return undefined
+    const computer = item.computer
+    if (typeof computer !== "number" || !Number.isSafeInteger(computer) || computer < 1 || computer > LIMITS.computers)
+      return undefined
+    if (seen.has(computer)) return undefined
+    seen.add(computer)
+    const session = decodeSession(item.session)
+    const fits =
+      session?.computer === computer && (session.mode === "download" || session.download?.readyAt !== undefined)
+    return { computer, ...(session && fits ? { session } : {}) }
+  })
+  return disks.length > 0 ? { state, until: value.until, disks } : undefined
+}
+
+export type KeptComputer = {
+  computer: number
+  /** A download-only session runs on it now; the live sessions show its progress. */
+  busy: boolean
+  /** The session whose files are packed: "Open the download" asks for its link. */
+  ready?: string
+  /** Why its last download-only session ended without files. */
+  ended?: string
+  /** "Download your files" (or "Pack them again") may be offered for it now. */
+  start: boolean
+}
+
+export type KeptView = {
+  state: KeptState
+  onHold: boolean
+  until: number
+  /** Whole days left before the disks are deleted, rounded down. */
+  days: number
+  computers: KeptComputer[]
+}
+
+/**
+ * The offer for an account's kept disks, or undefined when there is none. A start is offered only while the server
+ * says `open` and the cloud computer is available and not on hold, and never on a computer whose download runs now;
+ * packed files are offered whatever the state, since vectordev.ai still gives their link (it decides, S1).
+ */
+export function keptView(status: HostedStatus | undefined, now = Date.now()): KeptView | undefined {
+  const kept = status?.kept
+  if (!status || !kept || kept.until <= now) return undefined
+  const startable = kept.state === "open" && status.available && !status.onHold
+  const state = startable ? "open" : kept.state === "late" ? "late" : "closed"
+  const computers = kept.disks.map((disk): KeptComputer => {
+    const session = disk.session
+    const busy = Boolean(session && session.mode === "download" && isLive(session))
+    const ready = session?.download?.readyAt !== undefined ? session.id : undefined
+    const ended = session && session.state === "ended" && !ready ? reasonLine(session) : undefined
+    return {
+      computer: disk.computer,
+      busy,
+      ...(ready ? { ready } : {}),
+      ...(ended ? { ended } : {}),
+      start: startable && !busy,
+    }
+  })
+  if (state === "closed" && !computers.some((item) => item.ready || item.busy)) return undefined
+  const days = Math.floor((kept.until - now) / 86_400_000)
+  return { state, onHold: status.onHold, until: kept.until, days, computers }
+}
+
+/** How long the disks are kept, as a count of days (never an amount). */
+export function keptLine(view: Pick<KeptView, "days">) {
+  if (view.days < 1) return "Kept for download for less than a day, then deleted."
+  return `Kept for download for ${view.days} more ${view.days === 1 ? "day" : "days"}, then deleted.`
+}
+
+/** Why no download-only start is offered, when none is. */
+export function keptNote(view: Pick<KeptView, "state" | "onHold">) {
+  if (view.onHold) return HOLD_LINE
+  if (view.state === "late") return "Too little time is left to get them ready before they are deleted."
+  if (view.state === "closed") return "Getting them ready again is not available right now."
+  return undefined
+}
+
+/** The offer's buttons for one computer; with several computers each names its computer. */
+export function keptLabels(item: Pick<KeptComputer, "computer" | "ready">, many: boolean) {
+  if (!many) return { start: item.ready ? "Pack them again" : DOWNLOAD_ACTION, open: "Open the download" }
+  return {
+    start: item.ready ? `Pack computer ${item.computer}'s files again` : `Download computer ${item.computer}'s files`,
+    open: `Open computer ${item.computer}'s download`,
+  }
+}
+
+/** When a download link stops working, from the link's own `expiresAt` (never past the disks' deletion date). */
+export function linkLine(expiresAt: number | undefined, when: (at: number) => string) {
+  return expiresAt === undefined ? undefined : `Its link works until ${when(expiresAt)}.`
 }
 
 /** Whether a new session may start now, as far as the screens can tell (the server decides). */
@@ -241,7 +383,8 @@ export function decodeDownload(body: unknown, site?: string) {
 
 // ── Copy ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export function stateLabel(session: Pick<HostedSession, "state">) {
+export function stateLabel(session: Pick<HostedSession, "state" | "mode" | "download">) {
+  if (session.mode === "download") return downloadStateLabel(session)
   switch (session.state) {
     case "starting":
       return "Starting the computer"
@@ -256,6 +399,18 @@ export function stateLabel(session: Pick<HostedSession, "state">) {
     case "ended":
       return "Ended"
   }
+}
+
+function downloadStateLabel(session: Pick<HostedSession, "state" | "download">) {
+  switch (session.state) {
+    case "starting":
+      return "Starting the computer"
+    case "stopping":
+      return "Stopping"
+    case "ended":
+      return "Ended"
+  }
+  return session.download?.readyAt !== undefined ? "Your files are ready" : "Packing and uploading the files"
 }
 
 const END_REASONS: Record<string, string> = {
@@ -275,25 +430,44 @@ const END_REASONS: Record<string, string> = {
   lapsed: "Vector could not keep the job running.",
 }
 
-export function reasonLine(session: Pick<HostedSession, "state" | "reason">) {
+export function reasonLine(session: Pick<HostedSession, "state" | "reason" | "mode" | "download">) {
+  // A download-only session's line follows its files, not only its reason: the reaper also ends one "finished" when
+  // the computer said it was done without uploading.
+  if (session.mode === "download" && session.download?.readyAt !== undefined) return "Your files are ready."
+  if (session.mode === "download" && session.reason === "finished")
+    return "The computer stopped before its files were ready."
+  if (session.mode === "download" && session.reason === "deadline")
+    return "The computer could not get the files ready in time."
   if (!session.reason) return undefined
   return END_REASONS[session.reason]
 }
 
 /** The line on the purple-edged bar: who has the computer now. */
-export function sessionLine(session: Pick<HostedSession, "state">) {
+export function sessionLine(session: Pick<HostedSession, "state" | "mode">) {
+  if (session.mode === "download") return DOWNLOAD_LINE
   return session.state === "takeover" ? CONTROL_LINE : USING_LINE
 }
 
 /** What the person can do with a live session now, as far as the screens can tell (the server decides). */
-export function sessionControls(session: Pick<HostedSession, "state">) {
+export function sessionControls(session: Pick<HostedSession, "state" | "mode" | "download">) {
+  const stop = session.state !== "ended" && session.state !== "stopping"
+  // A download-only session has no live view or take-over; its files are offered once packed, and Stop ends it.
+  if (session.mode === "download")
+    return {
+      watch: false,
+      takeover: false,
+      control: false,
+      release: false,
+      stop,
+      files: session.download?.readyAt !== undefined,
+    }
   const viewable = session.state === "running" || session.state === "takeover" || session.state === "wrapping"
   return {
     watch: viewable && session.state !== "takeover",
     takeover: session.state === "running",
     control: session.state === "takeover",
     release: session.state === "takeover",
-    stop: session.state !== "ended" && session.state !== "stopping",
+    stop,
     files: viewable,
   }
 }
@@ -324,7 +498,7 @@ export function handoffLine(handoff: { reason: Handoff } | undefined) {
 
 export function accessLine(status: HostedStatus | undefined) {
   if (!status) return undefined
-  if (status.onHold) return "Your cloud computer is on hold. Contact Vector support to look at it with you."
+  if (status.onHold) return HOLD_LINE
   switch (status.access) {
     case "continue":
       return "Your plan is renewing: running jobs continue, and new ones can start once it renews."

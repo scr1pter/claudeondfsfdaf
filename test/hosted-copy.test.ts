@@ -10,7 +10,15 @@ import {
 } from "../api/_lib/hosted-api"
 import { computerName } from "../api/_lib/hosted-provider"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
-import { ACCOUNT_ID, daemonBeat, hostedSessionEnvironment, hostedWorld, invoke } from "./hosted-sessions-fixture"
+import {
+  ACCOUNT_ID,
+  daemonBeat,
+  endedWithDisk,
+  hostedSessionEnvironment,
+  hostedWorld,
+  invoke,
+  startDownload,
+} from "./hosted-sessions-fixture"
 
 // WP A53: what the cloud computer tells people and computers carries copy fields and numeric fields named as counts,
 // shares and times only, never an amount (P1); its copy never mentions GitHub or Actions and makes no promise (H3,
@@ -147,6 +155,23 @@ describe("hosted answers carry copy fields and counts only (P1)", () => {
     }
     // The upload link is signed for exactly the packed size, not a figure about money.
     expect(answers[6].upload.headers["content-length"]).toBe("1024")
+  })
+
+  test("an ended plan's status with its kept disks, a live download-only session and its start (H1c)", async () => {
+    const w = await hostedWorld(ledger)
+    await endedWithDisk(w)
+    const status = () =>
+      invoke((q, r) => handleHostedStatus(q, r, w.options), { method: "GET", authorization: w.desktopToken() })
+    const before = await status()
+    expect(before.body.kept.state).toBe("open")
+    const start = await startDownload(w)
+    expect(start.status).toBe(201)
+    const during = await status()
+    expect(during.body.kept.disks[0].session.mode).toBe("download")
+    for (const answer of [before.body, start.body, during.body]) {
+      expect(answer.error).toBeUndefined()
+      expectCopyAndCounts(answer)
+    }
   })
 
   test("the schema's vocabulary names no amount", () => {

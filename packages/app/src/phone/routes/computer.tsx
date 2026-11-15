@@ -1,12 +1,16 @@
 import { createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import {
   accessLine,
+  computerShown,
   decodeApprove,
   decodeDownload,
   decodeHostedStatus,
   decodeJobs,
+  decodeSessionAnswer,
   decodeViewer,
   DELIVER_LABEL,
+  DOWNLOAD_CONFIRM,
+  DOWNLOAD_STARTED,
   handoffLine,
   HOSTED_LINE,
   hostedErrorText,
@@ -14,6 +18,12 @@ import {
   isLive,
   jobReasonLine,
   jobStateLabel,
+  KEPT_TITLE,
+  keptLabels,
+  keptLine,
+  keptNote,
+  keptView,
+  linkLine,
   overnightShown,
   queueLine,
   rampLine,
@@ -40,6 +50,10 @@ import { Empty, Notice, Panel, type RouteProps } from "./parts"
 // website session; the server decides each one from the plan (S1). Links the server gives (the live view, the files,
 // a job's pull request) open as links the person taps, in the browser, with no referrer: the live view's single-use
 // pass stays in its fragment. Starting a job stays on the desktop, which shows the most it can use first.
+//
+// After a plan ends, or no longer includes a cloud computer, the page shows only the kept disks' files (H1c): how many
+// days they are kept, "Download your files" (confirmed first: it starts the computer once to pack them, and shows no
+// ceiling because it runs no job), the download-only session's progress as a live session, and "Open the download".
 const POLL_MS = 15_000
 
 type Link = { id: string; label: string; url: string }
@@ -61,6 +75,9 @@ export function ComputerRoute(props: RouteProps) {
     }
   })
   const overnight = () => overnightShown(props.status)
+  // The plan includes the computer: everything above. Otherwise only the kept disks' files (H1c).
+  const included = () => computerShown(props.status)
+  const kept = () => keptView(status()?.status)
   const [jobs, { refetch: refetchJobs }] = createResource(overnight, async () => {
     try {
       return { jobs: decodeJobs(await call({ kind: "jobs" })) }
@@ -126,13 +143,21 @@ export function ComputerRoute(props: RouteProps) {
       await call({ kind: "stop", id: session.id })
       return "Vector is saving the computer's disk and stopping it."
     })
-  const files = (session: HostedSession) =>
+  // The link's own end: 24 hours at most, and never past the disks' deletion date (H1a).
+  const files = (id: string) =>
     act(async () => {
-      const answer = decodeDownload(await call({ kind: "download", id: session.id }))
+      const answer = decodeDownload(await call({ kind: "download", id }))
       if (!answer) throw new PhoneApiError(502, undefined, "Vector could not read the files' link.")
       if (!answer.ready) return "The computer is packing the files. Ask again in a minute."
-      setLink({ id: session.id, label: "Download the files", url: answer.url })
-      return "The link works for 24 hours."
+      setLink({ id, label: "Download the files", url: answer.url })
+      return linkLine(answer.expiresAt, when) ?? "The download link is ready."
+    })
+  // A download-only start (H1c), sent only once the person confirmed it; a refusal shows vectordev.ai's own words.
+  const startDownload = (computer: number) =>
+    act(async () => {
+      if (!decodeSessionAnswer(await call({ kind: "download-start", computer })))
+        throw new PhoneApiError(502, undefined, "Vector could not read the cloud computer's answer.")
+      return DOWNLOAD_STARTED
     })
   const approve = (job: HostedJob) =>
     act(async () => {
@@ -152,7 +177,10 @@ export function ComputerRoute(props: RouteProps) {
   // Alerts: the computer tells the phone when it needs you, so a phone without alerts is offered them here.
   const support = alertsSupport(props.environment)
   const push = support === "ready" ? browserPush() : undefined
-  const [alerts] = createResource(() => (push && props.status.listed.has("alerts") ? push : undefined), alertsState)
+  const [alerts] = createResource(
+    () => (push && included() && props.status.listed.has("alerts") ? push : undefined),
+    alertsState,
+  )
 
   const LinkFor = (linkProps: { id: string }) => (
     <Show when={link()?.id === linkProps.id ? link() : undefined}>
@@ -167,8 +195,16 @@ export function ComputerRoute(props: RouteProps) {
   return (
     <Panel title="Cloud computer">
       <Notice text={planNotice(props.status)} />
-      <p class="phone-meta">{HOSTED_LINE}</p>
-      <For each={[accessLine(status()?.status), rampLine(status()?.status?.plan), hoursLine(status()?.status)].filter(Boolean)}>
+      <Show when={included()}>
+        <p class="phone-meta">{HOSTED_LINE}</p>
+      </Show>
+      <For
+        each={(included()
+          ? [accessLine(status()?.status), rampLine(status()?.status?.plan), hoursLine(status()?.status)]
+          : // The kept files' card says the hold itself when it shows.
+            [status()?.status?.onHold && !kept() ? accessLine(status()?.status) : undefined]
+        ).filter(Boolean)}
+      >
         {(line) => <p class="phone-meta">{line}</p>}
       </For>
       <Show when={alerts() === "off"}>
@@ -193,10 +229,19 @@ export function ComputerRoute(props: RouteProps) {
         when={live().length > 0}
         fallback={
           <Show when={!status.loading}>
-            <Empty>
-              Nothing runs on your cloud computer now. Start a job from Vector on your computer: "Run on my cloud
-              computer" shows the most it can use of your month first.
-            </Empty>
+            <Show
+              when={included()}
+              fallback={
+                <Show when={!kept() && !status()?.error}>
+                  <Empty>Your cloud computer's files are not kept for download now.</Empty>
+                </Show>
+              }
+            >
+              <Empty>
+                Nothing runs on your cloud computer now. Start a job from Vector on your computer: "Run on my cloud
+                computer" shows the most it can use of your month first.
+              </Empty>
+            </Show>
           </Show>
         }
       >
@@ -236,7 +281,12 @@ export function ComputerRoute(props: RouteProps) {
                       </button>
                     </Show>
                     <Show when={actions().files}>
-                      <button type="button" class="phone-button phone-button--quiet" disabled={busy()} onClick={() => void files(session)}>
+                      <button
+                        type="button"
+                        class="phone-button phone-button--quiet"
+                        disabled={busy()}
+                        onClick={() => void files(session.id)}
+                      >
                         Files
                       </button>
                     </Show>
@@ -266,6 +316,90 @@ export function ComputerRoute(props: RouteProps) {
             }}
           </For>
         </div>
+      </Show>
+      <Show when={kept()}>
+        {(view) => {
+          const many = () => view().computers.length > 1
+          const offered = () => view().computers.filter((item) => !item.busy)
+          return (
+            <div class="phone-card" data-component="phone-kept">
+              <div class="phone-row-text">
+                <strong>{KEPT_TITLE}</strong>
+                <span class="phone-meta">{keptLine(view())}</span>
+                <Show when={keptNote(view())}>{(line) => <span class="phone-meta">{line()}</span>}</Show>
+                <For each={offered().filter((item) => item.ended)}>
+                  {(item) => (
+                    <span class="phone-meta">
+                      {many() ? `Computer ${item.computer}: ` : ""}
+                      {item.ended}
+                    </span>
+                  )}
+                </For>
+                <Show when={offered().some((item) => confirming() === `start-${item.computer}`)}>
+                  <span class="phone-meta">{DOWNLOAD_CONFIRM}</span>
+                </Show>
+              </div>
+              <div class="phone-actions">
+                <For each={offered()}>
+                  {(item) => {
+                    const labels = () => keptLabels(item, many())
+                    return (
+                      <>
+                        <Show when={item.ready}>
+                          {(id) => (
+                            <>
+                              <button
+                                type="button"
+                                class="phone-button phone-button--quiet"
+                                disabled={busy()}
+                                onClick={() => void files(id())}
+                              >
+                                {labels().open}
+                              </button>
+                              <LinkFor id={id()} />
+                            </>
+                          )}
+                        </Show>
+                        <Show when={item.start}>
+                          <Show
+                            when={confirming() === `start-${item.computer}`}
+                            fallback={
+                              <button
+                                type="button"
+                                class="phone-button phone-button--quiet"
+                                disabled={busy()}
+                                onClick={() => setConfirming(`start-${item.computer}`)}
+                              >
+                                {labels().start}
+                              </button>
+                            }
+                          >
+                            <button
+                              type="button"
+                              class="phone-button"
+                              disabled={busy()}
+                              onClick={() => void startDownload(item.computer)}
+                            >
+                              Start the computer
+                            </button>
+                            <button
+                              type="button"
+                              class="phone-button phone-button--quiet"
+                              disabled={busy()}
+                              onClick={() => setConfirming(undefined)}
+                            >
+                              Cancel
+                            </button>
+                          </Show>
+                        </Show>
+                      </>
+                    )
+                  }}
+                </For>
+              </div>
+            </div>
+          )
+        }}
       </Show>
       <Show when={overnight()}>
         <h3>Done by Morning</h3>

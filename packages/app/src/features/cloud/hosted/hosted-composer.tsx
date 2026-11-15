@@ -21,6 +21,8 @@ import {
   defaultDeliverBy,
   DELIVER_LABEL,
   deliverByFromTime,
+  DOWNLOAD_CONFIRM,
+  DOWNLOAD_STARTED,
   handoffLine,
   HOSTED_LINE,
   hostedErrorText,
@@ -28,6 +30,13 @@ import {
   isLive,
   jobReasonLine,
   jobStateLabel,
+  KEPT_TITLE,
+  keptCandidate,
+  keptLabels,
+  keptLine,
+  keptNote,
+  keptView,
+  linkLine,
   minuteChoices,
   minutesLabel,
   overnightShown,
@@ -52,26 +61,37 @@ import "./hosted.css"
 // computer" with Watch, Take over and Stop, and Done by Morning's jobs and reports. The main process holds the account
 // token and asks vectordev.ai (platform.hosted); the live view opens in its own sandboxed window. Everything shows only
 // when `computer` is listed and in the plan (H1); vectordev.ai decides every start, take-over and stop (S1).
+//
+// After a plan ends, or no longer includes a cloud computer, the bar offers the kept disks' files instead (H1c): for a
+// customer with `computer` listed, the status is read every 10 minutes, and while it carries `kept` a quiet line says
+// how many days the files are kept, with "Download your files" (confirmed first: it starts the computer once) and,
+// once they are packed, "Open the download". The download-only session shows as a live session while it packs.
 
 type Answer = Awaited<ReturnType<HostedPlatform["request"]>>
 type Result = { ok: true } | { ok: false; status?: number; code?: string; message: string }
 const UNREACHABLE: Answer = { ok: false, message: "Vector could not reach the cloud computer. Try again shortly." }
 // One reader for every composer in this window (the status route allows 600 reads an hour per account): every 15
-// seconds while a session is live, every 60 seconds otherwise, and not while the window is hidden.
+// seconds while a session is live, every 60 seconds otherwise, every 10 minutes while the only reason to read is an
+// ended plan's kept disks (H1c), and not while the window is hidden.
 const LIVE_POLL_MS = 15_000
 const IDLE_POLL_MS = 60_000
+const KEPT_POLL_MS = 600_000
+/** The notice and busy key of the kept disks' offer (sessions use their ids). */
+const KEPT = "kept"
 
 const when = (at: number) =>
   new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
 
 const [sharedStatus, setSharedStatus] = createSignal<HostedStatus>()
-const readers = new Set<() => Promise<Answer>>()
+const readers = new Map<() => Promise<Answer>, "computer" | "kept">()
+// The kept disks' offer hidden with "Not now", until the deletion date it was hidden for changes or the app restarts.
+const [keptHidden, setKeptHidden] = createSignal<number>()
 let polling: ReturnType<typeof setTimeout> | undefined
 let reading: Promise<void> | undefined
 
 /** Reads the status once with any composer's reader; concurrent asks share one request. */
 function readShared() {
-  const read = readers.values().next().value
+  const read = readers.keys().next().value
   if (!read) return Promise.resolve()
   reading ??= read()
     .then((answer) => {
@@ -86,12 +106,13 @@ function schedule() {
   polling = undefined
   if (readers.size === 0) return
   const live = (sharedStatus()?.sessions ?? []).some(isLive)
+  const idle = [...readers.values()].includes("computer") ? IDLE_POLL_MS : KEPT_POLL_MS
   polling = setTimeout(
     () => {
       const hidden = globalThis.document?.visibilityState === "hidden"
       void (hidden ? Promise.resolve() : readShared()).finally(schedule)
     },
-    live ? LIVE_POLL_MS : IDLE_POLL_MS,
+    live ? LIVE_POLL_MS : idle,
   )
 }
 
@@ -106,6 +127,10 @@ export function useHostedComputer(sessionID: () => string | undefined) {
   onCleanup(onCodiumChange(() => void refetchPlan()))
   const shown = createMemo(() => Boolean(platform.hosted) && computerShown(plan.latest))
   const overnight = createMemo(() => shown() && overnightShown(plan.latest))
+  // An ended plan's kept disks (H1c): asked about only for a customer with `computer` listed and not in the plan.
+  const candidate = createMemo(() => Boolean(platform.hosted) && !shown() && keptCandidate(plan.latest))
+  const mode = createMemo(() => (shown() ? "computer" : candidate() ? "kept" : undefined))
+  const visible = () => mode() !== undefined
 
   const request = async (input: HostedRequest): Promise<Answer> =>
     platform.hosted ? platform.hosted.request(input).catch(() => UNREACHABLE) : UNREACHABLE
@@ -119,22 +144,27 @@ export function useHostedComputer(sessionID: () => string | undefined) {
     }
   }
   createEffect(
-    on(shown, (visible) => {
-      if (!visible) return leave()
+    on(mode, (current, previous) => {
+      if (!current) return leave()
       const first = readers.size === 0
-      readers.add(reader)
-      if (first) void readShared().finally(schedule)
+      readers.set(reader, current)
+      // A plan that changed while the app is open is read again now, at its own cadence from then on.
+      if (first || previous) void readShared().finally(schedule)
     }),
   )
   onCleanup(leave)
 
-  const status = () => (shown() ? sharedStatus() : undefined)
+  const status = () => (visible() ? sharedStatus() : undefined)
+  // Called after an action: a read already in flight may have begun before the action and answer the status from
+  // before it, so it is waited for and the status read again.
   const refresh = async () => {
-    if (!shown()) return
+    if (!visible()) return
+    await reading
     await readShared()
     schedule()
   }
   const live = createMemo(() => (status()?.sessions ?? []).filter(isLive))
+  const kept = createMemo(() => keptView(status()))
   const [linked, { refetch: reconnect }] = createResource(
     () => shown() && sessionID() ? { client: sdk().client, sessionID: sessionID()! } : undefined,
     async (input) => input.client.experimental.hosted.jobs({ sessionID: input.sessionID }, { throwOnError: true })
@@ -158,14 +188,31 @@ export function useHostedComputer(sessionID: () => string | undefined) {
     await sdk().client.experimental.hosted.attach({ sessionID: id, jobID }, { throwOnError: true })
     void reconnect()
   }
-  return { platform, shown, overnight, status, live, refresh, request, sessionID, linked, prepareReturn, returnHere }
+  return {
+    platform,
+    shown,
+    candidate,
+    overnight,
+    status,
+    live,
+    kept,
+    refresh,
+    request,
+    sessionID,
+    linked,
+    prepareReturn,
+    returnHere,
+  }
 }
 
 export type HostedComputer = ReturnType<typeof useHostedComputer>
 
 // ── The bar above the composer ─────────────────────────────────────────────────────────────────────────────────────
 
-/** One purple-edged line per live session: who has the computer, why it needs the person, and what they can do. */
+/**
+ * One purple-edged line per live session: who has the computer, why it needs the person, and what they can do; and,
+ * while an ended plan's disks are kept (H1c), a quiet line offering their files.
+ */
 export function HostedBar(props: { computer: HostedComputer }) {
   const dialog = useDialog()
   const [busy, setBusy] = createSignal<string>()
@@ -173,14 +220,14 @@ export function HostedBar(props: { computer: HostedComputer }) {
   const [notice, setNotice] = createSignal<{ id: string; text: string; error?: boolean }>()
   const hosted = () => props.computer.platform.hosted
 
-  const act = async (session: HostedSession, label: string, run: () => Promise<Result>) => {
+  const act = async (key: string, label: string, run: () => Promise<Result>) => {
     if (busy()) return
-    setBusy(session.id)
+    setBusy(key)
     setNotice(undefined)
     try {
       const answer: Result = await run().catch(() => UNREACHABLE)
-      if (!answer.ok) setNotice({ id: session.id, text: hostedErrorText(answer), error: true })
-      else if (label) setNotice({ id: session.id, text: label })
+      if (!answer.ok) setNotice({ id: key, text: hostedErrorText(answer), error: true })
+      else if (label) setNotice({ id: key, text: label })
       await props.computer.refresh()
     } finally {
       setBusy(undefined)
@@ -189,36 +236,50 @@ export function HostedBar(props: { computer: HostedComputer }) {
   }
 
   const watch = (session: HostedSession, mode: "view" | "control") =>
-    act(session, "", () => hosted()!.liveView({ id: session.id, mode }))
+    act(session.id, "", () => hosted()!.liveView({ id: session.id, mode }))
   const takeover = (session: HostedSession) =>
-    act(session, "You have control. Vector waits until you give it back.", async () => {
+    act(session.id, "You have control. Vector waits until you give it back.", async () => {
       const answer = await props.computer.request({ kind: "takeover", id: session.id })
       if (!answer.ok) return answer
       // Control links are issued only during a take-over, so the window opens once the server agreed.
       return hosted()!.liveView({ id: session.id, mode: "control" })
     })
   const release = (session: HostedSession) =>
-    act(session, "Vector has the computer again.", () => props.computer.request({ kind: "release", id: session.id }))
+    act(session.id, "Vector has the computer again.", () => props.computer.request({ kind: "release", id: session.id }))
   const stop = (session: HostedSession) =>
-    act(session, "Vector is saving the computer's disk and stopping it.", () =>
+    act(session.id, "Vector is saving the computer's disk and stopping it.", () =>
       props.computer.request({ kind: "stop", id: session.id }),
     )
-  const files = (session: HostedSession) =>
-    act(session, "", async () => {
-      const answer = await hosted()!.files({ id: session.id })
+  // The link's own end: 24 hours at most, and never past the disks' deletion date (H1a).
+  const files = (id: string, key = id) =>
+    act(key, "", async () => {
+      const answer = await hosted()!.files({ id })
       if (answer.ok)
         setNotice({
-          id: session.id,
+          id: key,
           text:
             answer.ready === false
               ? "The computer is packing the files. Ask again in a minute."
-              : "The download opened in your browser. Its link works for 24 hours.",
+              : ["The download opened in your browser.", linkLine(answer.expiresAt, when)].filter(Boolean).join(" "),
         })
       return answer.ok ? ({ ok: true } as const) : answer
     })
+  // A download-only start (H1c), sent only once the person confirmed it; a refusal shows vectordev.ai's own words.
+  const startDownload = (computer: number) =>
+    act(KEPT, DOWNLOAD_STARTED, async () => {
+      const answer = await props.computer.request({ kind: "download-start", computer })
+      if (!answer.ok) return answer
+      return decodeSessionAnswer(answer.body)
+        ? ({ ok: true } as const)
+        : { ok: false, message: "Vector could not read the cloud computer's answer. Try again shortly." }
+    })
+  const kept = () => {
+    const view = props.computer.kept()
+    return view && keptHidden() !== view.until ? view : undefined
+  }
 
   return (
-    <Show when={props.computer.shown() && props.computer.live().length > 0}>
+    <Show when={props.computer.live().length > 0 || kept()}>
       <div class="hosted-bar-stack">
         <For each={props.computer.live()}>
           {(session) => {
@@ -267,7 +328,7 @@ export function HostedBar(props: { computer: HostedComputer }) {
                     </ButtonV2>
                   </Show>
                   <Show when={actions().files}>
-                    <ButtonV2 variant="ghost" disabled={busy() === session.id} onClick={() => void files(session)}>
+                    <ButtonV2 variant="ghost" disabled={busy() === session.id} onClick={() => void files(session.id)}>
                       Files
                     </ButtonV2>
                   </Show>
@@ -290,6 +351,98 @@ export function HostedBar(props: { computer: HostedComputer }) {
             )
           }}
         </For>
+        <Show when={kept()}>
+          {(view) => {
+            const many = () => view().computers.length > 1
+            const offered = () => view().computers.filter((item) => !item.busy)
+            const confirmingStart = () => offered().some((item) => confirming() === `start-${item.computer}`)
+            return (
+              <div class="hosted-bar hosted-bar--quiet" role="status" data-component="hosted-kept">
+                <div class="hosted-bar-text">
+                  <strong>{KEPT_TITLE}</strong>
+                  <span class="hosted-bar-meta">{keptLine(view())}</span>
+                  <Show when={keptNote(view())}>{(line) => <span class="hosted-bar-meta">{line()}</span>}</Show>
+                  <For each={offered().filter((item) => item.ended)}>
+                    {(item) => (
+                      <span class="hosted-bar-meta">
+                        {many() ? `Computer ${item.computer}: ` : ""}
+                        {item.ended}
+                      </span>
+                    )}
+                  </For>
+                  <Show when={confirmingStart()}>
+                    <span class="hosted-bar-meta">{DOWNLOAD_CONFIRM}</span>
+                  </Show>
+                  <Show when={notice()?.id === KEPT ? notice() : undefined}>
+                    {(shown) => (
+                      <span
+                        classList={{ "hosted-bar-meta": !shown().error, "hosted-bar-error": Boolean(shown().error) }}
+                      >
+                        {shown().text}
+                      </span>
+                    )}
+                  </Show>
+                </div>
+                <div class="hosted-bar-actions">
+                  <For each={offered()}>
+                    {(item) => {
+                      const labels = () => keptLabels(item, many())
+                      return (
+                        <>
+                          <Show when={item.ready}>
+                            {(id) => (
+                              <ButtonV2
+                                variant="ghost"
+                                disabled={busy() !== undefined}
+                                onClick={() => void files(id(), KEPT)}
+                              >
+                                {labels().open}
+                              </ButtonV2>
+                            )}
+                          </Show>
+                          <Show when={item.start}>
+                            <Show
+                              when={confirming() === `start-${item.computer}`}
+                              fallback={
+                                <ButtonV2
+                                  variant="ghost"
+                                  disabled={busy() !== undefined}
+                                  onClick={() => setConfirming(`start-${item.computer}`)}
+                                >
+                                  {labels().start}
+                                </ButtonV2>
+                              }
+                            >
+                              <ButtonV2
+                                variant="contrast"
+                                disabled={busy() !== undefined}
+                                onClick={() => void startDownload(item.computer)}
+                              >
+                                Start the computer
+                              </ButtonV2>
+                            </Show>
+                          </Show>
+                        </>
+                      )
+                    }}
+                  </For>
+                  <Show
+                    when={confirmingStart()}
+                    fallback={
+                      <ButtonV2 variant="ghost" onClick={() => setKeptHidden(view().until)}>
+                        Not now
+                      </ButtonV2>
+                    }
+                  >
+                    <ButtonV2 variant="ghost" onClick={() => setConfirming(undefined)}>
+                      Cancel
+                    </ButtonV2>
+                  </Show>
+                </div>
+              </div>
+            )
+          }}
+        </Show>
         <Show when={props.computer.overnight()}>
           <div class="hosted-bar-jobs">
             <button

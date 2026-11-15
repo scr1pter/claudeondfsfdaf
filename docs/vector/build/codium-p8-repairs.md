@@ -173,3 +173,7 @@ own Bun process. No generator input changed.
     signed heartbeats cannot complete a download and are still charged (an open server defect, O6). A HEAD that never
     confirms strands a download session for its block (O4). `codium-deviations.md` "Codium finish: H1 computer
     (15 Nov 2026)".
+  - 15 Nov 2026 (Codium finish, H1c): the client surfaces are built. The desktop's bar and the phone's Cloud computer
+    page offer "Download your files" with the days left, behind a confirmation, show the session's progress and hand
+    over the link. They show only once `computer` is listed. `codium-deviations.md` "Codium finish: H1 clients
+    (15 Nov 2026)".

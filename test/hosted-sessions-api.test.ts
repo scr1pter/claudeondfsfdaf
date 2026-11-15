@@ -673,20 +673,20 @@ describe("the session's files", () => {
   })
 })
 
+/** The daemon packs and uploads the disk as the answers ask (WP A54): pack, size, upload, done. */
+async function upload(w: HostedWorld, id: string, bytes = 8192) {
+  const told = await beat(w, id, {})
+  expect(told.body.pack).toBe(true)
+  const packed = await beat(w, id, { archiveBytes: bytes })
+  const key = decodeURIComponent(new URL(packed.body.upload.url).pathname.split("/").slice(2).join("/"))
+  w.bucket.set(key, bytes)
+  return beat(w, id, { uploaded: true })
+}
+
 describe("download-only starts for an ended plan's kept disk (H1a)", () => {
   const NAME = () => computerName(ACCOUNT_ID, 1)
   const RETENTION = () => `hr-${NAME()}-sub_renewing-${P1.start}`
   const rows = async () => (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
-
-  /** The daemon packs and uploads the disk as the answers ask (WP A54): pack, size, upload, done. */
-  async function upload(w: HostedWorld, id: string, bytes = 8192) {
-    const told = await beat(w, id, {})
-    expect(told.body.pack).toBe(true)
-    const packed = await beat(w, id, { archiveBytes: bytes })
-    const key = decodeURIComponent(new URL(packed.body.upload.url).pathname.split("/").slice(2).join("/"))
-    w.bucket.set(key, bytes)
-    return beat(w, id, { uploaded: true })
-  }
 
   test("an ended plan inside the window starts one; the computer is asked only to pack and upload, never a job", async () => {
     const w = await hostedWorld(ledger)
@@ -1046,6 +1046,196 @@ describe("status, computers and the owner's flags", () => {
       sessions: [{ id: session.id, state: "running" }],
     })
     expectNoAmounts(answer.body)
+  })
+
+  describe("the kept disks on the status (H1c)", () => {
+    const status = async (w: HostedWorld) => {
+      const answer = await invoke((request, response) => handleHostedStatus(request, response, w.options), {
+        method: "GET",
+        authorization: w.desktopToken(),
+      })
+      expect(answer.status).toBe(200)
+      return answer.body
+    }
+    const flags = (w: HostedWorld, body: Record<string, unknown>) =>
+      invoke((request, response) => handleHostedFlags(request, response, w.options), {
+        method: "POST",
+        authorization: w.ownerToken(),
+        body,
+      })
+    /** A download-only session on computer 1 that packed and uploaded its files and was then ended by the reaper. */
+    async function packed(w: HostedWorld) {
+      const answer = await startDownload(w)
+      expect([answer.status, answer.body.error]).toEqual([201, undefined])
+      const session = answer.body.session as Hosted.SessionView
+      await upload(w, session.id)
+      await reapHostedSessions({ ...w.options, budgetMs: 45_000 })
+      expect((await readSessionRecord(session.id, w.fetcher))?.state).toBe("ended")
+      return session.id
+    }
+
+    test("sent while a download-only start could go ahead: open, the date, each computer and its session", async () => {
+      const w = await hostedWorld(ledger)
+      const due = (await endedWithDisk(w))!
+      const before = await status(w)
+      expect(before.kept).toEqual({ state: "open", until: due, disks: [{ computer: 1 }] })
+      expectNoAmounts(before)
+      const started = (await startDownload(w)).body.session as Hosted.SessionView
+      const running = await status(w)
+      expect(running.kept.state).toBe("open")
+      expect(running.kept.disks).toEqual([
+        { computer: 1, session: expect.objectContaining({ id: started.id, mode: "download" }) },
+      ])
+      expect(running.sessions.map((item: Hosted.SessionView) => item.id)).toEqual([started.id])
+      await upload(w, started.id)
+      await reapHostedSessions({ ...w.options, budgetMs: 45_000 })
+      const after = await status(w)
+      expect(after.sessions).toEqual([])
+      expect(after.kept.disks[0].session).toMatchObject({ id: started.id, state: "ended", reason: "finished" })
+      expect(after.kept.disks[0].session.download.readyAt).toBeGreaterThan(0)
+      // The random session id is not copy: it could spell one of the words by chance.
+      expectNoAmounts(JSON.parse(JSON.stringify(after).replaceAll(started.id, "hs_session")))
+    })
+
+    test("a plan without a cloud computer gets it too, from its current period", async () => {
+      const w = await hostedWorld(ledger)
+      const job = await started(w)
+      await action(w, job.id, "stop")
+      const from = w.snapshot()
+      const to = w.setSnapshot({ plan: "vector-50" })
+      await applyHostedTransition({ account: ACCOUNT_ID, from, to, cause: "downgrade" }, w.options)
+      const due = w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)
+      expect((await status(w)).kept).toEqual({ state: "open", until: due, disks: [{ computer: 1 }] })
+    })
+
+    test("late once less than a block and an hour is left: the start's own boundary minute", async () => {
+      const spare = 15 * MINUTE + Hosted.DOWNLOAD_LINK_MS / 24
+      const w = await hostedWorld(ledger)
+      const due = (await endedWithDisk(w))!
+      w.advance(due - spare - w.fakes.clock.now)
+      w.setSnapshot({})
+      expect((await status(w)).kept.state).toBe("open")
+      w.advance(MINUTE)
+      w.setSnapshot({})
+      expect((await status(w)).kept).toEqual({ state: "late", until: due, disks: [{ computer: 1 }] })
+      expect((await startDownload(w)).status).toBe(409)
+      w.advance(spare)
+      w.setSnapshot({})
+      expect((await status(w)).kept).toBeUndefined()
+    })
+
+    test("absent for a live plan, frozen, a lost dispute, refunded with nothing packed, or no bucket", async () => {
+      const live = await hostedWorld(ledger)
+      await started(live)
+      expect((await status(live)).kept).toBeUndefined()
+      for (const patch of [
+        { state: "frozen", reason: "early_fraud_warning" },
+        { state: "frozen", reason: "disputed" },
+        { state: "ended", reason: "disputed" },
+        { state: "ended", reason: "refunded" },
+      ] as const) {
+        const w = await hostedWorld(ledger)
+        await endedWithDisk(w, patch)
+        expect([patch, (await status(w)).kept]).toEqual([patch, undefined])
+      }
+      const bucket = await hostedWorld(ledger)
+      await endedWithDisk(bucket)
+      delete process.env.VECTOR_R2_MEDIA_SECRET_ACCESS_KEY
+      expect((await status(bucket)).kept).toBeUndefined()
+    })
+
+    test("packed files are never offered where §4.4 gives no download: frozen, lost dispute, closing", async () => {
+      const w = await hostedWorld(ledger)
+      await endedWithDisk(w)
+      const id = await packed(w)
+      expect((await status(w)).kept.disks[0].session.id).toBe(id)
+      for (const [patch, code] of [
+        [{ state: "frozen", reason: "disputed" }, "HOSTED_FROZEN"],
+        [{ state: "ended", reason: "disputed" }, "HOSTED_DOWNLOAD_UNAVAILABLE"],
+        [{ state: "ended", reason: "closing" }, "MODEL_PLAN_ACCOUNT_CLOSING"],
+      ] as const) {
+        w.setSnapshot(patch)
+        expect([patch, (await status(w)).kept]).toEqual([patch, undefined])
+        // The status says what the link route answers.
+        expect((await action(w, id, "download")).body.error?.code).toBe(code)
+      }
+    })
+
+    test("switch at no-new, off the allowlist or on hold: no start, packed files still offered", async () => {
+      const w = await hostedWorld(ledger)
+      await endedWithDisk(w)
+      const setSwitch = (value: string, changedAt: number) => {
+        w.fakes.store.set(switchKey("hosted"), JSON.stringify({ value, changedAt, generation: `g${changedAt}` }))
+        w.advance(31_000) // past the switch's 30-second cache
+        w.setSnapshot({})
+      }
+      // Nothing packed yet: no-new leaves nothing to offer.
+      setSwitch("no-new", 1)
+      expect((await status(w)).kept).toBeUndefined()
+      setSwitch("on", 2)
+      const id = await packed(w)
+      const ready = { computer: 1, session: expect.objectContaining({ id, download: expect.objectContaining({}) }) }
+      setSwitch("no-new", 3)
+      expect((await status(w)).kept).toMatchObject({ state: "closed", disks: [ready] })
+      expect((await action(w, id, "download")).status).toBe(200)
+      setSwitch("on", 4)
+      expect((await status(w)).kept.state).toBe("open")
+      // Off the owner's list before `computer` is listed: closed, the link still given.
+      process.env.VECTOR_HOSTED_ALLOW_ACCOUNTS = ""
+      expect((await status(w)).kept).toMatchObject({ state: "closed", disks: [ready] })
+      expect((await action(w, id, "download")).status).toBe(200)
+      process.env.VECTOR_HOSTED_ALLOW_ACCOUNTS = ACCOUNT_ID
+      expect((await flags(w, { action: "suspend", account: ACCOUNT_ID, reason: "check" })).body.onHold).toBe(true)
+      const held = await status(w)
+      expect(held).toMatchObject({ onHold: true, kept: { state: "closed", disks: [ready] } })
+      expect((await action(w, id, "download")).status).toBe(200)
+      // A refunded plan's packed files are offered too (requestDownload gives their link), never a start.
+      await flags(w, { action: "release", account: ACCOUNT_ID })
+      w.setSnapshot({ state: "ended", reason: "refunded" })
+      expect((await status(w)).kept).toMatchObject({ state: "closed", disks: [ready] })
+    })
+
+    test("each computer's session: the live download, else the newest packed, else the newest download", async () => {
+      const w = await hostedWorld(ledger)
+      await endedWithDisk(w)
+      const ready = await packed(w)
+      // A newer download that ended without files does not hide the packed ones.
+      const failed = (await startDownload(w)).body.session as Hosted.SessionView
+      await action(w, failed.id, "stop")
+      expect((await status(w)).kept.disks[0].session.id).toBe(ready)
+      // While another runs, that one is the computer's session.
+      const running = (await startDownload(w)).body.session as Hosted.SessionView
+      expect((await status(w)).kept.disks[0].session.id).toBe(running.id)
+
+      // A job session's packed files count: a copy of the same disk (H1a R11).
+      const packJob = async (world: HostedWorld) => {
+        const job = await started(world)
+        await action(world, job.id, "download")
+        await beat(world, job.id, {})
+        const archived = await beat(world, job.id, { archiveBytes: 4096 })
+        const key = decodeURIComponent(new URL(archived.body.upload.url).pathname.split("/").slice(2).join("/"))
+        world.bucket.set(key, 4096)
+        await beat(world, job.id, { uploaded: true })
+        await action(world, job.id, "stop")
+        return job
+      }
+      const jobs = await hostedWorld(ledger)
+      const job = await packJob(jobs)
+      await endedWithDisk(jobs)
+      const kept = (await status(jobs)).kept
+      expect(kept.state).toBe("open")
+      expect(kept.disks).toEqual([{ computer: 1, session: expect.objectContaining({ id: job.id }) }])
+
+      // Until a later job session starts on that computer: it may have changed the disk, so the packed files are out
+      // of date and only a new start is offered.
+      const later = await hostedWorld(ledger)
+      await packJob(later)
+      later.advance(MINUTE)
+      const next = await started(later)
+      await action(later, next.id, "stop")
+      const due = (await endedWithDisk(later))!
+      expect((await status(later)).kept).toEqual({ state: "open", until: due, disks: [{ computer: 1 }] })
+    })
   })
 
   test("computers lists what runs; a computer is deleted only when nothing runs on it", async () => {

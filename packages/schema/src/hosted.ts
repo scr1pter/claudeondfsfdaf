@@ -223,6 +223,25 @@ export type SessionView = {
 }
 
 /**
+ * The account's kept disks on `GET /api/hosted/status` (H1c): sent while the account's computers are kept for download
+ * after its plan ended or no longer includes a cloud computer (§4.4), and either a download-only start could go ahead
+ * short of the money and the lease, or a session has packed files the account may still download.
+ * - `state`: `open` while a download-only start may go ahead now; `late` when less than a block and an hour is left
+ *   before `until`; `closed` while no download-only start may go ahead for another reason (the owner's switch or gate,
+ *   a hold on the account, or the plan), so only packed files are offered.
+ * - `until`: when the disks and their packed files are deleted.
+ * - `disks`: each computer the account has, with its preferred session: the live download-only session, else the
+ *   newest session whose files are packed, else the newest download-only session. Files packed before a later job
+ *   session started on the computer are out of date and never count.
+ * Times, states and counts only (P1).
+ */
+export type KeptDisks = {
+  state: "open" | "late" | "closed"
+  until: number
+  disks: { computer: number; session?: SessionView }[]
+}
+
+/**
  * Why the computer asks for the person (WP A54): its credential guard met a password or one-time-code field
  * (`credential`) or a card field (`payment_details`), a CAPTCHA (`captcha`), or the agent asked (`other`). The agent's
  * own words never travel: the reason is all the server hears.

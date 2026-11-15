@@ -113,6 +113,11 @@ export const START_STALE_MS = 10 * 60_000
 export const STOP_GIVE_UP_MS = 30 * 60_000
 /** S3's largest single upload, which R2 shares: the packed files must fit one PUT. */
 const ARCHIVE_MAX_BYTES = 5 * 1024 ** 3
+/**
+ * A download-only start needs this long before the disk's deletion date (H1a): its one block, and an hour for the
+ * person to fetch the files before the disk and its packed copy are deleted.
+ */
+const DOWNLOAD_START_MARGIN_MS = BLOCK_MINUTES * 60_000 + Hosted.DOWNLOAD_LINK_MS / 24
 
 export type SessionOptions = ProviderOptions & { fetcher?: typeof fetch; clock?: () => number }
 
@@ -699,15 +704,13 @@ export async function startHostedDownload(
   const due = await readDiskDue(account, fetcher)
   if (due === undefined || due <= now) throw diskGone()
   // The block must end, and the person have time to fetch the files, before the disk and its packed copy are deleted.
-  if (due - now < BLOCK_MINUTES * 60_000 + Hosted.DOWNLOAD_LINK_MS / 24)
+  if (due - now < DOWNLOAD_START_MARGIN_MS)
     throw new ApiError(
       409,
       "HOSTED_DOWNLOAD_UNAVAILABLE",
       "Too little time is left before this computer's disk is deleted.",
     )
-  const known = await store(["SMEMBERS", hostedComputersKey(account)], fetcher)
-  if (!(Array.isArray(known) ? known : []).map(Number).includes(input.computer))
-    throw request("Choose one of your computers.")
+  if (!(await knownComputers(account, fetcher)).includes(input.computer)) throw request("Choose one of your computers.")
   const id = newSessionId()
   const computer = await claimComputer(
     account,
@@ -762,6 +765,15 @@ async function readDiskDue(account: string, fetcher: typeof fetch) {
   const raw = await store(["ZSCORE", hostedDiskDueKey(), account], fetcher)
   const due = Number(raw)
   return raw !== null && raw !== undefined && Number.isFinite(due) && due > 0 ? due : undefined
+}
+
+/** The computer numbers the account has had (`hosted:computers:<account>`), 1 to `MAX_COMPUTERS`, in order. */
+async function knownComputers(account: string, fetcher: typeof fetch) {
+  const known = await store(["SMEMBERS", hostedComputersKey(account)], fetcher)
+  const numbers = (Array.isArray(known) ? known : [])
+    .map(Number)
+    .filter((value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_COMPUTERS)
+  return [...new Set(numbers)].sort((a, b) => a - b)
 }
 
 function diskGone() {
@@ -1578,8 +1590,10 @@ export async function recordHeartbeat(
 
 /**
  * What the person's surfaces show about the cloud computer (`GET /api/hosted/status`): whether it can be used here, what
- * the plan's state lets it do now, the plan's public caps (with the trust ramp), the share of this month's hours used
- * and the live sessions. Shares, counts and times only (P1). Reads the snapshot (no Stripe call while it is fresh, M4).
+ * the plan's state lets it do now, the plan's public caps (with the trust ramp), the share of this month's hours used,
+ * the live sessions and, while the account's disks are kept for download after its plan ended or no longer includes a
+ * cloud computer, the kept disks (`kept`, H1c; `keptDisks`). Shares, counts and times only (P1). Reads the snapshot (no
+ * Stripe call while it is fresh, M4).
  */
 export async function hostedStatus(account: string, snapshot: EntitlementSnapshot | undefined, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1593,8 +1607,13 @@ export async function hostedStatus(account: string, snapshot: EntitlementSnapsho
   const configured = hostedSessionsConfigured(options)
   const caps = snapshot ? hostedCaps(snapshot, now) : null
   const access = hostedAccess(snapshot, service === "off" ? "stop" : service, now)
-  const sessions = (await listHostedSessions(account, fetcher)).filter((session) => session.state !== "ended")
+  const all = await listHostedSessions(account, fetcher)
+  const sessions = all.filter((session) => session.state !== "ended")
   const hours = caps && snapshot ? await hoursUsedShare(snapshot, fetcher, now).catch(() => undefined) : undefined
+  // The start's own gates, in `startHostedDownload`'s order: configured, no hold, the switch on and the owner's gate.
+  const kept = configured
+    ? await keptDisks(account, snapshot, all, open && service === "on" && !suspension, fetcher, now)
+    : undefined
   return {
     available: configured && open && service === "on",
     access: suspension ? ("stop" as const) : access,
@@ -1614,7 +1633,52 @@ export async function hostedStatus(account: string, snapshot: EntitlementSnapsho
       : {}),
     ...(hours !== undefined ? { hours: { used: hours } } : {}),
     sessions,
+    ...(kept ? { kept } : {}),
   }
+}
+
+/**
+ * The account's kept disks for the status (H1c), or undefined when the screens have nothing to offer about them. They
+ * show while the disks have a deletion date still ahead (§4.4) and the media bucket is set, and only for a plan whose
+ * files may be downloaded (`requireFilesAllowed`: not frozen, not after a lost dispute, not while closing) that no
+ * longer includes a cloud computer. Then `open` when a download-only start could go ahead now as far as the status can
+ * tell (`startable`: the start's own gates, and the plan's `final` or `current` answer), `late` when it could but less
+ * than a block and an hour is left (`DOWNLOAD_START_MARGIN_MS`), and `closed` otherwise, sent only while some session
+ * has packed files to offer: `requestDownload` still gives their link. The money and the lease are the start's to
+ * decide (S1). Each computer comes with its preferred session (`Hosted.KeptDisks`); a job session's packed files count,
+ * since they are a copy of the same disk (H1a R11), until a later job session starts on that computer.
+ */
+async function keptDisks(
+  account: string,
+  snapshot: EntitlementSnapshot | undefined,
+  sessions: Hosted.SessionView[],
+  startable: boolean,
+  fetcher: typeof fetch,
+  now: number,
+): Promise<Hosted.KeptDisks | undefined> {
+  const access = hostedDownloadAccess(snapshot)
+  if (access === "live" || access === "frozen" || access === "closing") return undefined
+  if (snapshot?.state === "ended" && snapshot.reason === "disputed") return undefined
+  if (!r2Configured("media")) return undefined
+  const due = await readDiskDue(account, fetcher)
+  if (due === undefined || due <= now) return undefined
+  // `listHostedSessions` answers live sessions first, then the newest first.
+  const disks = (await knownComputers(account, fetcher)).map((computer) => {
+    const mine = sessions.filter((session) => session.computer === computer)
+    // Files packed before a later job session started on the computer may be older than its disk, so they are not
+    // offered; a download-only session leaves the disk as it was.
+    const changed = Math.max(0, ...mine.filter((item) => item.mode !== "download").map((item) => item.createdAt))
+    const current = mine.filter((item) => item.download?.readyAt === undefined || item.createdAt >= changed)
+    const session =
+      current.find((item) => item.mode === "download" && item.state !== "ended") ??
+      current.find((item) => item.download?.readyAt !== undefined) ??
+      current.find((item) => item.mode === "download")
+    return { computer, ...(session ? { session } : {}) }
+  })
+  const mayStart = startable && (access === "final" || access === "current")
+  const packed = disks.some((disk) => disk.session?.download?.readyAt !== undefined)
+  if (disks.length === 0 || (!mayStart && !packed)) return undefined
+  return { state: !mayStart ? "closed" : due - now < DOWNLOAD_START_MARGIN_MS ? "late" : "open", until: due, disks }
 }
 
 /** The account's computers: which are running a session, and when their disks are deleted if a deletion is set. */
@@ -1622,10 +1686,7 @@ export async function hostedComputers(account: string, snapshot: EntitlementSnap
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
   const now = clock()
-  const known = await store(["SMEMBERS", hostedComputersKey(account)], fetcher)
-  const numbers = new Set(
-    (Array.isArray(known) ? known : []).map(Number).filter((value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_COMPUTERS),
-  )
+  const numbers = new Set(await knownComputers(account, fetcher))
   const caps = snapshot ? hostedCaps(snapshot, now) : null
   for (let n = 1; n <= (caps?.computers ?? 0); n++) numbers.add(n)
   const leases = await readLeases(account, fetcher, now)
