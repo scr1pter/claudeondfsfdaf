@@ -9,6 +9,7 @@ import {
   matchRoute,
   projectDirectories,
   REMOTE_ROUTES,
+  type EngineAnswer,
   type EngineRequest,
 } from "./remote-routes"
 
@@ -27,12 +28,25 @@ async function setup() {
   const pending = [{ id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["rm -rf build"] }]
   const turns = createRemoteTurns()
   const marksAtCall: boolean[] = []
+  // The engine's capabilities answer (no answer: the read throws), and how it answers a review start.
+  const capabilities: { answer?: EngineAnswer } = { answer: { status: 200, body: { connections: true } } }
+  const starts = { gate: Promise.resolve(), refuse: false }
   const engine = async (request: EngineRequest) => {
     calls.push(request)
     marksAtCall.push(turns.has(["ses_1"]))
     if (request.path === "/project") return { status: 200, body: PROJECTS }
     if (request.path === "/permission") return { status: 200, body: pending }
     if (request.path === "/session/ses_fail/prompt_async") return { status: 400, body: { error: "bad" } }
+    if (request.path === "/experimental/capabilities") {
+      if (!capabilities.answer) throw new Error("engine down")
+      return capabilities.answer
+    }
+    if (request.path === "/experimental/session/ses_fail/connect") return { status: 400, body: { error: "bad" } }
+    if (request.path === "/experimental/session/ses_down/connect") throw new Error("timed out")
+    if (request.path.endsWith("/connect")) {
+      await starts.gate
+      if (starts.refuse) return { status: 400, body: { error: "busy" } }
+    }
     return { status: 200, body: { ok: true, path: request.path } }
   }
   const passkey = softPasskey({ origin: ORIGIN })
@@ -56,7 +70,22 @@ async function setup() {
   })
   const ask = (request: Record<string, unknown>, phone = PHONE) => routes.handle(phone, request)
   const engineCalls = () => calls.filter((call) => call.path !== "/permission" && call.path !== "/project")
-  return { clock, calls, engineCalls, ask, passkey, credentials, turns, marksAtCall, pending, approvals }
+  const connectCalls = () => calls.filter((call) => call.path.includes("/connect"))
+  return {
+    clock,
+    calls,
+    engineCalls,
+    connectCalls,
+    ask,
+    passkey,
+    credentials,
+    turns,
+    marksAtCall,
+    pending,
+    approvals,
+    capabilities,
+    starts,
+  }
 }
 
 const code = (answer: { body: unknown }) => (answer.body as { error?: { code?: string } }).error?.code
@@ -219,6 +248,9 @@ describe("route allowlist", () => {
     // Every allowlisted route is a V1 instance route the app itself uses; none writes files or settings.
     expect(REMOTE_ROUTES.map((route) => `${route.method} ${route.path}`).sort()).toEqual([
       "GET /experimental/capabilities",
+      "GET /experimental/connect",
+      "GET /experimental/connect/runs",
+      "GET /experimental/connect/runs/:runID",
       "GET /experimental/session/:sessionID/tasks",
       "GET /permission",
       "GET /project",
@@ -231,6 +263,8 @@ describe("route allowlist", () => {
       "GET /session/:sessionID/message/:messageID",
       "GET /session/:sessionID/todo",
       "GET /session/status",
+      "POST /experimental/connect/runs/:runID/cancel",
+      "POST /experimental/session/:sessionID/connect",
       "POST /experimental/session/:sessionID/stop",
       "POST /permission/:requestID/reply",
       "POST /question/:requestID/reject",
@@ -407,5 +441,528 @@ describe("turns started from the phone (auto-approve suppression)", () => {
       body: { parts: [{ type: "text", text: "x" }] },
     })
     expect(turns.has(["ses_fail"])).toBe(false)
+  })
+})
+
+describe("connected tools from a phone (CW-23b)", () => {
+  type Setup = Awaited<ReturnType<typeof setup>>
+  const START = "/experimental/session/ses_1/connect"
+  const UNCOMMITTED = { kind: "uncommitted" }
+  const CAPABILITIES = { method: "GET", path: "/experimental/capabilities", query: { directory: "/repo" } }
+  const challengeOf = (answer: { body: unknown }) => (answer.body as { challenge: string }).challenge
+  /** A review challenge for `review` ({sessionID, target}) from a phone. */
+  const issue = async (
+    t: Setup,
+    review: Record<string, unknown>,
+    options: { directory?: string; phone?: string } = {},
+  ) =>
+    challengeOf(
+      await t.ask(
+        { method: "POST", path: "/remote/approval", directory: options.directory ?? "/repo", body: { review } },
+        options.phone,
+      ),
+    )
+  /** A review start with a passkey answer (none when `assertion` is undefined). */
+  const start = (
+    t: Setup,
+    assertion: unknown,
+    options: { session?: string; directory?: string; target?: unknown; phone?: string } = {},
+  ) =>
+    t.ask(
+      {
+        method: "POST",
+        path: `/experimental/session/${options.session ?? "ses_1"}/connect`,
+        directory: options.directory ?? "/repo",
+        body: {
+          to: "vectorscope",
+          action: "review",
+          target: options.target ?? UNCOMMITTED,
+          ...(assertion === undefined ? {} : { passkey: assertion }),
+        },
+      },
+      options.phone,
+    )
+
+  test("lists members and a conversation's runs and reads a run, with only a session id", async () => {
+    const t = await setup()
+    const run = "cr_" + "A1b-_".repeat(12) + "z"
+    expect(run.length).toBe(64)
+    const reads: [string, Record<string, string> | undefined][] = [
+      ["/experimental/connect", undefined],
+      ["/experimental/connect", { sessionID: "ses_1" }],
+      ["/experimental/connect/runs", { sessionID: "ses_1" }],
+      [`/experimental/connect/runs/${run}`, { sessionID: "ses_1" }],
+    ]
+    for (const [path, query] of reads) {
+      const answer = await t.ask({ method: "GET", path, directory: "/repo", ...(query ? { query } : {}) })
+      expect(answer.status).toBe(200)
+      // Each read is offered only after the engine said connected tools are on, in that same folder.
+      expect(t.calls.slice(-2)).toEqual([
+        CAPABILITIES,
+        { method: "GET", path, query: { ...query, directory: "/repo" } },
+      ])
+    }
+    const refused: [string, Record<string, string> | undefined, string][] = [
+      ["/experimental/connect", { limit: "5" }, "REMOTE_QUERY_REFUSED"],
+      ["/experimental/connect", { sessionID: "wrk_1" }, "REMOTE_QUERY_REFUSED"],
+      ["/experimental/connect/runs", { sessionID: "ses_1", roots: "true" }, "REMOTE_QUERY_REFUSED"],
+      ["/experimental/connect/runs", { sessionID: "ses_1", limit: "5" }, "REMOTE_QUERY_REFUSED"],
+      ["/experimental/connect/runs", { sessionID: "ses 1" }, "REMOTE_QUERY_REFUSED"],
+      ["/experimental/connect/runs", { sessionID: "ses_1", workspace: "wrk_1" }, "REMOTE_REQUEST_INVALID"],
+      ["/experimental/connect", { directory: "/" }, "REMOTE_REQUEST_INVALID"],
+      // A run list or a run is read only for a conversation the phone names.
+      ["/experimental/connect/runs", undefined, "REMOTE_QUERY_REFUSED"],
+      [`/experimental/connect/runs/${run}`, undefined, "REMOTE_QUERY_REFUSED"],
+    ]
+    for (const [path, query, expected] of refused) {
+      const answer = await t.ask({ method: "GET", path, directory: "/repo", ...(query ? { query } : {}) })
+      expect({ path, query, status: answer.status, code: code(answer) }).toEqual({
+        path,
+        query,
+        status: 400,
+        code: expected,
+      })
+    }
+    expect(t.engineCalls().length).toBe(reads.length * 2)
+  })
+
+  test("a cancel carries no body, and its session id is optional", async () => {
+    const t = await setup()
+    const path = "/experimental/connect/runs/cr_1/cancel"
+    for (const [body, query] of [
+      [undefined, undefined],
+      [{}, { sessionID: "ses_1" }],
+    ] as const) {
+      const answer = await t.ask({
+        method: "POST",
+        path,
+        directory: "/repo",
+        ...(body === undefined ? {} : { body }),
+        ...(query ? { query } : {}),
+      })
+      expect(answer.status).toBe(200)
+      expect(t.calls.slice(-2)).toEqual([
+        CAPABILITIES,
+        { method: "POST", path, query: { ...query, directory: "/repo" }, body: {} },
+      ])
+    }
+    const before = t.engineCalls().length
+    for (const body of [{ reason: "x" }, { sessionID: "ses_1" }, { findings: ["f1"] }, [], null, "x", 1])
+      expect({ body, code: code(await t.ask({ method: "POST", path, directory: "/repo", body })) }).toEqual({
+        body,
+        code: "REMOTE_BODY_REFUSED",
+      })
+    // Refused before the engine is asked anything, even whether connected tools are on.
+    expect(t.engineCalls().length).toBe(before)
+  })
+
+  test("a run id must be connect's own, and a start names a conversation", async () => {
+    const t = await setup()
+    for (const runID of ["run_1", "cr_", "cr_" + "a".repeat(62), "CR_1", "xcr_1", "ses_1"]) {
+      for (const request of [
+        { method: "GET", path: `/experimental/connect/runs/${runID}`, query: { sessionID: "ses_1" } },
+        { method: "POST", path: `/experimental/connect/runs/${runID}/cancel`, body: {} },
+      ]) {
+        const answer = await t.ask({ ...request, directory: "/repo" })
+        expect({ runID, status: answer.status, code: code(answer) }).toEqual({
+          runID,
+          status: 400,
+          code: "REMOTE_PATH_REFUSED",
+        })
+      }
+    }
+    expect(code(await t.ask({ method: "GET", path: "/experimental/connect/runs/cr_a.b", directory: "/repo" }))).toBe(
+      "REMOTE_ROUTE_REFUSED",
+    )
+    for (const session of ["wrk_1", "per_1", "cr_1"])
+      expect(code(await start(t, undefined, { session }))).toBe("REMOTE_PATH_REFUSED")
+    expect(t.engineCalls()).toEqual([])
+  })
+
+  test("a review start needs a passkey check bound to its conversation, folder and target", async () => {
+    const t = await setup()
+    const targets = [
+      { kind: "uncommitted" },
+      { kind: "staged" },
+      { kind: "branch" },
+      ...["main", "origin/main", "1a2b3c4", "0123456789abcdef0123456789abcdef01234567", "feature/x"].map((base) => ({
+        kind: "branch",
+        base,
+      })),
+    ]
+    for (const target of targets) {
+      const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target }))
+      expect(t.turns.has(["ses_1"])).toBe(false)
+      const answer = await start(t, assertion, { target })
+      expect(answer.status).toBe(200)
+      // Only VectorScope's review of that target goes on, always as the background run the phone can follow.
+      expect(t.calls.slice(-2)).toEqual([
+        CAPABILITIES,
+        {
+          method: "POST",
+          path: START,
+          query: { directory: "/repo" },
+          body: { to: "vectorscope", target, background: true },
+        },
+      ])
+      // Held before the engine was asked to start, so no ask the review raises reaches the app's auto-accept.
+      expect(t.marksAtCall.slice(-2)).toEqual([false, true])
+      expect(t.turns.has(["ses_1"])).toBe(true)
+      // Each challenge starts one review.
+      const before = t.engineCalls().length
+      expect(code(await start(t, assertion, { target }))).toBe("REMOTE_APPROVAL_EXPIRED")
+      expect(t.engineCalls().length).toBe(before)
+      // The hold ends when the conversation is idle again, as a phone's turn does.
+      t.turns.observe({ type: "session.idle", properties: { sessionID: "ses_1" } })
+    }
+    expect(t.connectCalls().length).toBe(targets.length)
+    expect(t.credentials.get(PHONE)?.signCount).toBe(targets.length)
+  })
+
+  test("fixes, other members, extra fields and other targets are refused before the engine", async () => {
+    const t = await setup()
+    const base = { to: "vectorscope", action: "review", target: UNCOMMITTED }
+    const refused: unknown[] = [
+      { ...base, action: "fix" },
+      { to: "vectorscope", action: "fix", run: "cr_1", findings: ["f1"], mode: "here" },
+      { ...base, action: "Review" },
+      { ...base, to: "VectorScope" },
+      { ...base, to: "vectorscope " },
+      { ...base, to: "github-agent" },
+      { ...base, to: "hands" },
+      { action: "review", target: UNCOMMITTED },
+      { to: "vectorscope", target: UNCOMMITTED },
+      { to: "vectorscope", action: "review" },
+      { ...base, budget: { maxCostUsd: 1 } },
+      { ...base, security: true },
+      { ...base, security: false },
+      { ...base, since: "cr_1" },
+      { ...base, background: false },
+      { ...base, background: true },
+      { ...base, requestKey: "00000000-0000-4000-8000-000000000000" },
+      { ...base, target: { kind: "task", task: "ses_2" } },
+      { ...base, target: { kind: "uncommitted", extra: 1 } },
+      { ...base, target: { kind: "staged", base: "main" } },
+      { ...base, target: { kind: "Branch" } },
+      { ...base, target: "uncommitted" },
+      ...["-x", "--upload-pack=x", "", "a b", "a\nb", "a\tb", "a\u007fb", "x".repeat(257), 7, null].map((value) => ({
+        ...base,
+        target: { kind: "branch", base: value },
+      })),
+      [base],
+      null,
+      "x",
+      undefined,
+    ]
+    for (const body of refused) {
+      const answer = await t.ask({ method: "POST", path: START, directory: "/repo", body })
+      expect({ body, status: answer.status, code: code(answer) }).toEqual({
+        body,
+        status: 400,
+        code: "REMOTE_BODY_REFUSED",
+      })
+    }
+    // Not even whether connected tools are on is asked.
+    expect(t.engineCalls()).toEqual([])
+    // The longest base a git ref may have still passes.
+    const target = { kind: "branch", base: "x".repeat(256) }
+    expect(
+      (await start(t, await t.passkey.get(await issue(t, { sessionID: "ses_1", target })), { target })).status,
+    ).toBe(200)
+  })
+
+  test("a missing, reused, mismatched or lapsed passkey answer starts nothing", async () => {
+    const t = await setup()
+    t.credentials.set(OTHER, t.credentials.get(PHONE)!)
+    const review = (sessionID = "ses_1", target: unknown = UNCOMMITTED) => ({ sessionID, target })
+    const answer = async (challenge: string, options?: { origin?: string; flags?: number }) =>
+      t.passkey.get(challenge, options)
+
+    expect(code(await start(t, undefined))).toBe("REMOTE_APPROVAL_INVALID")
+    expect(code(await start(t, "not a passkey answer"))).toBe("REMOTE_APPROVAL_INVALID")
+    expect(code(await start(t, { id: "x", clientDataJSON: "", authenticatorData: "", signature: "" }))).toBe(
+      "REMOTE_APPROVAL_EXPIRED",
+    )
+    // Another target, another base, another conversation or another folder than the one the passkey allowed.
+    expect(code(await start(t, await answer(await issue(t, review())), { target: { kind: "staged" } }))).toBe(
+      "REMOTE_APPROVAL_INVALID",
+    )
+    const main = { kind: "branch", base: "main" }
+    expect(
+      code(
+        await start(t, await answer(await issue(t, review("ses_1", main))), {
+          target: { kind: "branch", base: "dev" },
+        }),
+      ),
+    ).toBe("REMOTE_APPROVAL_INVALID")
+    expect(
+      code(await start(t, await answer(await issue(t, review("ses_1", main))), { target: { kind: "branch" } })),
+    ).toBe("REMOTE_APPROVAL_INVALID")
+    expect(code(await start(t, await answer(await issue(t, review())), { session: "ses_2" }))).toBe(
+      "REMOTE_APPROVAL_INVALID",
+    )
+    expect(code(await start(t, await answer(await issue(t, review())), { directory: "/repo-sandbox" }))).toBe(
+      "REMOTE_APPROVAL_INVALID",
+    )
+    // A permission's challenge never starts a review, and a review's never allows a permission.
+    const permission = challengeOf(
+      await t.ask({ method: "POST", path: "/remote/approval", directory: "/repo", body: { requestID: "per_1" } }),
+    )
+    expect(code(await start(t, await answer(permission)))).toBe("REMOTE_APPROVAL_INVALID")
+    expect(
+      code(
+        await t.ask({
+          method: "POST",
+          path: "/permission/per_1/reply",
+          directory: "/repo",
+          body: { reply: "once", passkey: await answer(await issue(t, review())) },
+        }),
+      ),
+    ).toBe("REMOTE_APPROVAL_INVALID")
+    // Another phone's challenge, a lapsed one, another site's passkey, or no user check.
+    expect(code(await start(t, await answer(await issue(t, review(), { phone: OTHER }))))).toBe(
+      "REMOTE_APPROVAL_EXPIRED",
+    )
+    const lapsed = await issue(t, review())
+    t.clock.now += APPROVAL_TTL_MS + 1
+    expect(code(await start(t, await answer(lapsed)))).toBe("REMOTE_APPROVAL_EXPIRED")
+    expect(code(await start(t, await answer(await issue(t, review()), { origin: "https://vectordev.ai" })))).toBe(
+      "REMOTE_PASSKEY_REFUSED",
+    )
+    expect(code(await start(t, await answer(await issue(t, review()), { flags: 0x01 })))).toBe("REMOTE_PASSKEY_REFUSED")
+    expect(code(await start(t, await softPasskey({ origin: ORIGIN }).get(await issue(t, review()))))).toBe(
+      "REMOTE_PASSKEY_REFUSED",
+    )
+    // An unpaired phone gets no challenge and starts nothing, without the engine being asked.
+    const unpaired = "BBBBBBBBBBBBBBBBBBBBBA"
+    const before = t.engineCalls().length
+    expect(
+      code(
+        await t.ask(
+          { method: "POST", path: "/remote/approval", directory: "/repo", body: { review: review() } },
+          unpaired,
+        ),
+      ),
+    ).toBe("REMOTE_NOT_PAIRED")
+    expect(code(await start(t, await answer(await issue(t, review())), { phone: unpaired }))).toBe("REMOTE_NOT_PAIRED")
+    // A challenge is only for one conversation and one target a phone may review.
+    for (const body of [
+      { review: { ...review(), extra: 1 } },
+      { review: review("wrk_1") },
+      { review: review("ses_1", { kind: "task", task: "ses_2" }) },
+      { review: review("ses_1", { kind: "branch", base: "-x" }) },
+      { review: { sessionID: "ses_1" } },
+      { review: "ses_1" },
+      { requestID: "per_1", review: review() },
+    ])
+      expect(code(await t.ask({ method: "POST", path: "/remote/approval", directory: "/repo", body }))).toBe(
+        "REMOTE_REQUEST_INVALID",
+      )
+    // Since then only the challenge for the unpaired phone's start asked the engine anything: whether connect is on.
+    expect(t.engineCalls().slice(before)).toEqual([CAPABILITIES])
+    expect(t.calls.filter((call) => call.path.includes("/connect") || call.path.endsWith("/reply"))).toEqual([])
+    expect(t.turns.size).toBe(0)
+  })
+
+  test("dismissals, registered findings, the folder review and other connect paths never reach the engine", async () => {
+    const t = await setup()
+    for (const [method, path, body] of [
+      ["POST", "/experimental/connect/runs/cr_1/dismiss", { findings: ["f1"] }],
+      ["GET", "/experimental/connect/runs/cr_1/dismiss", undefined],
+      ["POST", "/experimental/connect/findings", { sessionID: "ses_1", findings: [] }],
+      [
+        "POST",
+        "/experimental/connect/review",
+        { requestKey: "00000000-0000-4000-8000-000000000000", target: UNCOMMITTED },
+      ],
+      ["GET", "/experimental/connect/review", undefined],
+      ["GET", "/experimental/session/ses_1/connect", undefined],
+      ["POST", "/experimental/connect", {}],
+      ["POST", "/experimental/connect/runs", {}],
+      ["POST", "/experimental/connect/runs/cr_1", {}],
+      ["GET", "/experimental/connect/runs/cr_1/cancel", undefined],
+      ["POST", "/experimental/session/ses_1/connect/fix", {}],
+    ] as const) {
+      const answer = await t.ask({ method, path, directory: "/repo", query: { sessionID: "ses_1" }, body })
+      expect({ method, path, status: answer.status, code: code(answer) }).toEqual({
+        method,
+        path,
+        status: 403,
+        code: "REMOTE_ROUTE_REFUSED",
+      })
+    }
+    expect(t.engineCalls()).toEqual([])
+  })
+
+  test("offered only while the engine reports connected tools on, read for each request", async () => {
+    for (const answer of [
+      { status: 200, body: { connections: false } },
+      { status: 500, body: { connections: true } },
+      { status: 403, body: { connections: true } },
+      { status: 200, body: {} },
+      { status: 200, body: { connections: "true" } },
+      { status: 200, body: { connections: 1 } },
+      { status: 200, body: null },
+      { status: 200, body: [true] },
+      undefined,
+    ]) {
+      const t = await setup()
+      t.capabilities.answer = answer
+      const requests = [
+        { method: "GET", path: "/experimental/connect" },
+        { method: "GET", path: "/experimental/connect/runs", query: { sessionID: "ses_1" } },
+        { method: "GET", path: "/experimental/connect/runs/cr_1", query: { sessionID: "ses_1" } },
+        { method: "POST", path: "/experimental/connect/runs/cr_1/cancel", body: {} },
+        { method: "POST", path: "/remote/approval", body: { review: { sessionID: "ses_1", target: UNCOMMITTED } } },
+      ]
+      for (const request of requests) {
+        const refused = await t.ask({ ...request, directory: "/repo" })
+        expect({ answer, path: request.path, status: refused.status, code: code(refused) }).toEqual({
+          answer,
+          path: request.path,
+          status: 403,
+          code: "REMOTE_CONNECT_OFF",
+        })
+      }
+      expect(t.engineCalls()).toEqual(requests.map(() => CAPABILITIES))
+      // A start with no passkey answer is refused without the engine being asked anything.
+      expect(code(await start(t, undefined))).toBe("REMOTE_APPROVAL_INVALID")
+      expect(t.engineCalls().length).toBe(requests.length)
+    }
+  })
+
+  test("a start after connected tools were turned off is refused, though its passkey check passed", async () => {
+    const t = await setup()
+    const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target: UNCOMMITTED }))
+    t.capabilities.answer = { status: 200, body: { connections: false } }
+    expect(code(await start(t, assertion))).toBe("REMOTE_CONNECT_OFF")
+    expect(t.connectCalls()).toEqual([])
+    expect(t.turns.has(["ses_1"])).toBe(false)
+    // Turned on again, a new challenge is needed: the first was used up.
+    t.capabilities.answer = { status: 200, body: { connections: true } }
+    expect(code(await start(t, assertion))).toBe("REMOTE_APPROVAL_EXPIRED")
+    expect(t.connectCalls()).toEqual([])
+  })
+
+  test("the questions a review raises are still answered once, with a passkey", async () => {
+    const t = await setup()
+    t.pending.push({ id: "per_c", sessionID: "ses_1", permission: "connect_model", patterns: ["*"] })
+    for (const reply of ["always", "allow"])
+      expect(
+        code(await t.ask({ method: "POST", path: "/permission/per_c/reply", directory: "/repo", body: { reply } })),
+      ).toBe("REMOTE_ONCE_ONLY")
+    expect(
+      code(
+        await t.ask({ method: "POST", path: "/permission/per_c/reply", directory: "/repo", body: { reply: "once" } }),
+      ),
+    ).toBe("REMOTE_APPROVAL_INVALID")
+    const permission = challengeOf(
+      await t.ask({ method: "POST", path: "/remote/approval", directory: "/repo", body: { requestID: "per_c" } }),
+    )
+    const answer = await t.ask({
+      method: "POST",
+      path: "/permission/per_c/reply",
+      directory: "/repo",
+      body: { reply: "once", passkey: await t.passkey.get(permission) },
+    })
+    expect(answer.status).toBe(200)
+    expect(t.calls.at(-1)).toEqual({
+      method: "POST",
+      path: "/permission/per_c/reply",
+      query: { directory: "/repo" },
+      body: { reply: "once" },
+    })
+  })
+
+  test("a start the engine refuses or never answers keeps its hold until the conversation is idle", async () => {
+    const t = await setup()
+    const review = async (session: string) =>
+      start(t, await t.passkey.get(await issue(t, { sessionID: session, target: UNCOMMITTED })), { session })
+    // A phone's turn may have begun while the start waited, so only the conversation's next idle releases the hold.
+    expect((await review("ses_fail")).status).toBe(400)
+    expect(code(await review("ses_down"))).toBe("REMOTE_ENGINE_UNAVAILABLE")
+    expect(t.turns.has(["ses_fail"])).toBe(true)
+    expect(t.turns.has(["ses_down"])).toBe(true)
+    t.turns.observe({ type: "session.idle", properties: { sessionID: "ses_fail" } })
+    t.turns.observe({ type: "session.status", properties: { sessionID: "ses_down", status: { type: "idle" } } })
+    expect(t.turns.size).toBe(0)
+    // A phone's turn holds ses_1; a start the engine refuses there leaves that hold.
+    await t.ask({
+      method: "POST",
+      path: "/session/ses_1/prompt_async",
+      directory: "/repo",
+      body: { parts: [{ type: "text", text: "Go" }] },
+    })
+    expect(t.turns.has(["ses_1"])).toBe(true)
+    t.starts.refuse = true
+    expect((await review("ses_1")).status).toBe(400)
+    expect(t.turns.has(["ses_1"])).toBe(true)
+  })
+
+  test("a phone's turn that starts while a review start waits keeps its hold, whether the start succeeds or is refused", async () => {
+    for (const refuse of [false, true]) {
+      const t = await setup()
+      const release = Promise.withResolvers<void>()
+      t.starts.gate = release.promise
+      t.starts.refuse = refuse
+      const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target: UNCOMMITTED }))
+      const started = start(t, assertion)
+      const deadline = Date.now() + 3_000
+      while (!t.calls.some((call) => call.path === START) && Date.now() < deadline) await Bun.sleep(1)
+      expect(t.turns.has(["ses_1"])).toBe(true)
+      await t.ask({
+        method: "POST",
+        path: "/session/ses_1/prompt_async",
+        directory: "/repo",
+        body: { parts: [{ type: "text", text: "And the docs" }] },
+      })
+      release.resolve()
+      expect({ refuse, status: (await started).status }).toEqual({ refuse, status: refuse ? 400 : 200 })
+      // The prompt's questions still wait for a person, whatever the engine answered the start.
+      expect({ refuse, held: t.turns.has(["ses_1"]) }).toEqual({ refuse, held: true })
+      t.turns.observe({ type: "session.status", properties: { sessionID: "ses_1", status: { type: "idle" } } })
+      expect(t.turns.size).toBe(0)
+    }
+  })
+
+  test("a review start carrying any query field is refused before the engine and before its passkey check", async () => {
+    const t = await setup()
+    const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target: UNCOMMITTED }))
+    const before = t.engineCalls().length
+    for (const query of [{ background: "false" }, { sessionID: "ses_1" }, { action: "fix" }, { security: "true" }]) {
+      const answer = await t.ask({
+        method: "POST",
+        path: START,
+        directory: "/repo",
+        query,
+        body: { to: "vectorscope", action: "review", target: UNCOMMITTED, passkey: assertion },
+      })
+      expect({ query, status: answer.status, code: code(answer) }).toEqual({
+        query,
+        status: 400,
+        code: "REMOTE_QUERY_REFUSED",
+      })
+    }
+    expect(t.engineCalls().length).toBe(before)
+    expect(t.connectCalls()).toEqual([])
+    expect(t.turns.size).toBe(0)
+    // The challenge was not used up by the refusals: the same answer still starts the review without them.
+    expect((await start(t, assertion)).status).toBe(200)
+    expect(t.connectCalls().length).toBe(1)
+  })
+
+  test("a start whose capability read fails is refused as off, though its passkey check passed", async () => {
+    const t = await setup()
+    const assertion = await t.passkey.get(await issue(t, { sessionID: "ses_1", target: UNCOMMITTED }))
+    const before = t.engineCalls().length
+    // The engine stopped answering between the challenge and the start.
+    t.capabilities.answer = undefined
+    const answer = await start(t, assertion)
+    expect({ status: answer.status, code: code(answer) }).toEqual({ status: 403, code: "REMOTE_CONNECT_OFF" })
+    expect(t.engineCalls().slice(before)).toEqual([CAPABILITIES])
+    expect(t.connectCalls()).toEqual([])
+    expect(t.turns.size).toBe(0)
+    // The passkey check ran first and used the challenge up.
+    expect(t.credentials.get(PHONE)?.signCount).toBe(1)
   })
 })

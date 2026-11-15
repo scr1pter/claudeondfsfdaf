@@ -31,9 +31,12 @@ function engine() {
   const queue: DesktopEvent[] = []
   let wake: (() => void) | undefined
   const permissions: { id: string; sessionID: string; permission: string; patterns: string[] }[] = []
+  // Whether connected tools are on, and the id of a `connect` question a review start raises and waits on.
+  const connect: { connections: boolean; ask?: string } = { connections: true }
   return {
     requests,
     permissions,
+    connect,
     push(event: DesktopEvent) {
       queue.push(event)
       wake?.()
@@ -46,6 +49,21 @@ function engine() {
         if (request.path === "/session") return { status: 200, body: [{ id: "ses_1", title: "Fix the login" }] }
         if (request.path === "/permission") return { status: 200, body: permissions }
         if (request.path === "/session/ses_big/message") return { status: 200, body: [{ text: "y".repeat(90_000) }] }
+        if (request.path === "/experimental/capabilities")
+          return { status: 200, body: { connections: connect.connections } }
+        if (request.path === "/experimental/connect/runs")
+          return { status: 200, body: [{ id: "cr_01", status: "running" }] }
+        if (request.path === "/experimental/session/ses_1/connect") {
+          // As the engine's background start: it answers once the review's own question has been answered.
+          const ask = connect.ask
+          if (ask) {
+            permissions.push({ id: ask, sessionID: "ses_1", permission: "connect", patterns: ["vectorscope"] })
+            await until(() => !permissions.some((item) => item.id === ask))
+          }
+          return { status: 200, body: { id: "cr_02", status: "running" } }
+        }
+        if (request.path.startsWith("/experimental/connect/runs/") && request.path.endsWith("/cancel"))
+          return { status: 200, body: true }
         if (request.path.startsWith("/permission/") && request.path.endsWith("/reply")) {
           const id = request.path.split("/")[2]
           const index = permissions.findIndex((item) => item.id === id)
@@ -351,6 +369,115 @@ describe("using a paired computer from the phone", () => {
     })
     expect(bare.status).toBe(403)
     expect(desktop.fake.requests.some((request) => request.path === "/permission/per_3/reply")).toBe(false)
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("a paired phone lists connected runs, starts a VectorScope review with its passkey and cancels it (CW-23b)", async () => {
+    const { desktop, mobile, computerID } = await paired()
+    const list = {
+      method: "GET",
+      path: "/experimental/connect/runs",
+      directory: "/repo",
+      query: { sessionID: "ses_1" },
+    } as const
+    expect(await mobile.remote.request(computerID, list)).toEqual({
+      status: 200,
+      body: [{ id: "cr_01", status: "running" }],
+    })
+
+    // The computer issues a challenge for this conversation and target, the phone's passkey signs it, and the computer
+    // checks the signature before the engine hears of the review.
+    const target = { kind: "branch", base: "main" }
+    const issued = await mobile.remote.request(computerID, {
+      method: "POST",
+      path: "/remote/approval",
+      directory: "/repo",
+      body: { review: { sessionID: "ses_1", target } },
+    })
+    expect(issued.status).toBe(200)
+    const passkey = await mobile.key.get((issued.body as { challenge: string }).challenge)
+    const start = {
+      method: "POST",
+      path: "/experimental/session/ses_1/connect",
+      directory: "/repo",
+      body: { to: "vectorscope", action: "review", target, passkey },
+    } as const
+    expect(await mobile.remote.request(computerID, start)).toEqual({
+      status: 200,
+      body: { id: "cr_02", status: "running" },
+    })
+    const starts = () => desktop.fake.requests.filter((request) => request.path === start.path)
+    expect(starts()).toEqual([
+      {
+        method: "POST",
+        path: start.path,
+        query: { directory: "/repo" },
+        body: { to: "vectorscope", target, background: true },
+      },
+    ])
+    // The review's questions wait for a person, as a phone's turn does.
+    expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
+    // The same passkey answer starts nothing more, and a fix is refused.
+    expect((await mobile.remote.request(computerID, start)).status).toBe(403)
+    expect((await mobile.remote.request(computerID, { ...start, body: { ...start.body, action: "fix" } })).status).toBe(
+      400,
+    )
+    expect(starts().length).toBe(1)
+
+    const cancelled = await mobile.remote.request(computerID, {
+      method: "POST",
+      path: "/experimental/connect/runs/cr_02/cancel",
+      directory: "/repo",
+      query: { sessionID: "ses_1" },
+    })
+    expect(cancelled).toEqual({ status: 200, body: true })
+    expect(desktop.fake.requests.at(-1)).toEqual({
+      method: "POST",
+      path: "/experimental/connect/runs/cr_02/cancel",
+      query: { sessionID: "ses_1", directory: "/repo" },
+      body: {},
+    })
+
+    // Connected tools turned off on the computer: the phone reaches none of them.
+    desktop.fake.connect.connections = false
+    const reached = desktop.fake.requests.filter((request) => request.path.includes("/connect")).length
+    const off = await mobile.remote.request(computerID, list)
+    expect(off.status).toBe(403)
+    expect((off.body as { error: { code: string } }).error.code).toBe("REMOTE_CONNECT_OFF")
+    expect(desktop.fake.requests.filter((request) => request.path.includes("/connect")).length).toBe(reached)
+    desktop.link.stop()
+    mobile.remote.disconnect()
+  })
+
+  test("a review start waits on its own question, which the phone allows once with its passkey (CW-23b)", async () => {
+    const { desktop, mobile, computerID } = await paired()
+    desktop.fake.connect.ask = "per_c"
+    const target = { kind: "uncommitted" }
+    const issued = await mobile.remote.request(computerID, {
+      method: "POST",
+      path: "/remote/approval",
+      directory: "/repo",
+      body: { review: { sessionID: "ses_1", target } },
+    })
+    const passkey = await mobile.key.get((issued.body as { challenge: string }).challenge)
+    const started = mobile.remote.request(computerID, {
+      method: "POST",
+      path: "/experimental/session/ses_1/connect",
+      directory: "/repo",
+      body: { to: "vectorscope", action: "review", target, passkey },
+    })
+    await until(() => desktop.fake.permissions.some((item) => item.id === "per_c"))
+    // While the start waits on the review's question, the conversation is held, so the app's auto-accept leaves the
+    // question to a person.
+    expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
+    const allowed = await mobile.remote.approve(computerID, "/repo", "per_c")
+    expect(allowed).toMatchObject({ kind: "answered", answer: { status: 200 } })
+    expect(desktop.fake.requests.find((request) => request.path === "/permission/per_c/reply")!.body).toEqual({
+      reply: "once",
+    })
+    expect(await started).toEqual({ status: 200, body: { id: "cr_02", status: "running" } })
+    expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(true)
     desktop.link.stop()
     mobile.remote.disconnect()
   })
