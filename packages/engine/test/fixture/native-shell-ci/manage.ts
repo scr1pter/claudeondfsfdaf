@@ -234,6 +234,7 @@ async function main() {
       "/tmp",
       "/var/tmp",
       "/run",
+      "/home/runner",
       TEMP,
       "/home/vector-agent/.config/vector",
       "/home/vector-agent/.local/share/vector",

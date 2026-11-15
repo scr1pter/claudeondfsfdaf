@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { assets, cell, controllerAction } from "./common"
+import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
+import { CONTROL, ROOT, TEMP, WORKSPACE, assets, cell, controllerAction } from "./common"
 
 test("the actual controller gate accepts only the two exact production control operations", () => {
   expect(controllerAction(["github", "sandbox", "prepare"])).toBe("prepare")
@@ -52,4 +53,28 @@ test("fresh matrix cells cannot select sudo, an unknown runtime or mixed familie
     ["bun", "codium", "combined"],
   ])
     expect(() => cell(values[0], values[1], values[2])).toThrow()
+})
+test("every copied runtime, control tree and spec path stays outside every native mask", () => {
+  // run() refuses a runtime beneath any mask, so the fixture runs only the copies under /usr/libexec.
+  for (const value of [
+    ROOT,
+    CONTROL,
+    `${ROOT}/runtime/node`,
+    `${ROOT}/runtime/bun`,
+    `${CONTROL}/runtime/node`,
+    `${CONTROL}/runtime/bun`,
+    `${CONTROL}/vector`,
+    LinuxIsolation.ROOT,
+    LinuxIsolation.ENTRY,
+    LinuxIsolation.PYTHON,
+    ...LinuxIsolation.CONTAINERS.flatMap((container) => [
+      container,
+      `${container}/checkout`,
+      `${container}/tool-scratch`,
+      `${container}/tool-namespaces/broker.sock`,
+    ]),
+  ])
+    expect(() => LinuxIsolation.assertUnmaskedRuntime(value)).not.toThrow()
+  for (const value of [TEMP, WORKSPACE, "/home/runner/.bun/bin/bun"])
+    expect(() => LinuxIsolation.assertUnmaskedRuntime(value)).toThrow(LinuxIsolation.Unavailable)
 })

@@ -123,7 +123,7 @@ const FAILURE_STAGES = {
     "prepare-mask-origins",
     "prepare-mask-aliases",
     // The fixed mask/step product carries no path or host metadata. Keep it aligned with entry.py.
-    ...["home", "tmp", "var-tmp", "run", "host-temp"].flatMap((mask) => [
+    ...["home", "tmp", "var-tmp", "run", "runner-home"].flatMap((mask) => [
       ...[
         "target-stat",
         "target-type",
@@ -139,7 +139,7 @@ const FAILURE_STAGES = {
         // Checked after every other mask predicate; see keeper_searchable in entry.py.
         "keeper-search",
       ].map((step) => `prepare-mask-${mask}-${step}`),
-      ...(mask === "home" || mask === "host-temp" ? [`prepare-mask-${mask}-target-mode`] : []),
+      ...(mask === "home" || mask === "runner-home" ? [`prepare-mask-${mask}-target-mode`] : []),
     ]),
     "prepare-images",
     "prepare-keeper-search-checkout",
@@ -175,7 +175,7 @@ const FAILURE_STAGES = {
         "bwrap-source",
         "bwrap-destination",
         // Fixed ABI targets, alone or with one closed C-locale errno cause. Keep them aligned with entry.py.
-        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].flatMap(
+        ...["root", "home", "tmp", "var-tmp", "run", "runner-home", "dev", "proc", "checkout", "scratch"].flatMap(
           (target) => [
             `bwrap-destination-${target}`,
             ...["eacces", "erofs", "enoent", "enotdir", "eloop", "eperm"].map(
@@ -672,7 +672,7 @@ def mask_proof(value, public):
          keeper != construction["mount"] and keeper != construction["parentMount"] and
          construction["user"] != {"device":public["devices"]["user"],"inode":public["namespaces"]["user"]})
     targets = value["protectedMountTargets"]
-    parents = ("/home/vector-agent","/tmp","/var/tmp","/run","/home/runner/work/_temp")
+    parents = ("/home/vector-agent","/tmp","/var/tmp","/run","/home/runner")
     need(type(targets) is list and len(targets) <= 64)
     for target in targets:
         need(type(target) is str and 0 < len(target.encode("utf-8","strict")) <= 4096 and

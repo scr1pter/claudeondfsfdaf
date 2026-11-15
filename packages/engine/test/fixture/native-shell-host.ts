@@ -31,8 +31,9 @@ const ENV = { PATH: "/usr/bin:/bin", LC_ALL: "C" }
 const OBSERVE = String.raw`
 import errno, fcntl, json, os, pathlib, select, signal, stat, sys
 ROOT='/usr/libexec/vector-native-shell'
-MASKS=('/home/vector-agent','/tmp','/var/tmp','/run','/home/runner/work/_temp')
-CANARIES=MASKS+('/home/vector-agent/.config/vector','/home/vector-agent/.local/share/vector','/home/vector-agent/.cache/vector','/home/vector-agent/tmp/vector-agent')
+MASKS=('/home/vector-agent','/tmp','/var/tmp','/run','/home/runner')
+CANARIES=MASKS+('/home/runner/work/_temp','/home/vector-agent/.config/vector','/home/vector-agent/.local/share/vector','/home/vector-agent/.cache/vector','/home/vector-agent/tmp/vector-agent')
+HOSTED=tuple(parent for parent in CANARIES if parent=='/home/runner' or parent.startswith('/home/runner/'))
 CASES=('engine','inspect','nonzero','timeout','abort','shell-pipeline','stdio','delayed','pipeline','fd-source','fd-dest','death')
 def need(ok):
     if not ok: raise RuntimeError('Fixed Shell observer refused')
@@ -132,8 +133,11 @@ def alive_engine():
     return value
 if operation=='controls':
     need(len(sys.argv)==3)
+    # Host DAC may deny the agent beneath the runner home, so Root proves those seeds exist before the drop.
+    for parent in HOSTED:
+        need(regular(parent+'/native-shell-canary-'+nonce,0,128)==b'native-shell-synthetic-canary\n')
     os.setgroups([]); os.setresgid(gid,gid,gid); os.setresuid(uid,uid,uid)
-    for parent in CANARIES:
+    for parent in (item for item in CANARIES if item not in HOSTED):
         fd=os.open(parent+'/native-shell-canary-'+nonce,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
         try:
             info=os.fstat(fd)
@@ -142,7 +146,7 @@ if operation=='controls':
         finally: os.close(fd)
     fd=os.open(ROOT+'/readonly-control.txt',os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
     os.close(fd)
-    result={'readableCanaries':len(CANARIES),'dacWritableControl':True}
+    result={'readableCanaries':len(CANARIES)-len(HOSTED),'rootCanaries':len(HOSTED),'dacWritableControl':True}
 elif operation=='register':
     need(len(sys.argv)==4 and sys.argv[3].isdigit())
     value=member(int(sys.argv[3]),True); need(value)
@@ -357,8 +361,16 @@ async function main() {
     return values.map(identity)
   }
   const controls = await root("controls")
-  exact(controls, ["readableCanaries", "dacWritableControl"])
-  need(controls.readableCanaries === CANARY_ROOTS.length && controls.dacWritableControl === true)
+  exact(controls, ["readableCanaries", "rootCanaries", "dacWritableControl"])
+  const hosted = CANARY_ROOTS.filter(
+    (parent) => parent === LinuxIsolation.RUNNER_HOME || parent.startsWith(LinuxIsolation.RUNNER_HOME + "/"),
+  )
+  need(
+    hosted.length === 2 &&
+      controls.readableCanaries === CANARY_ROOTS.length - hosted.length &&
+      controls.rootCanaries === hosted.length &&
+      controls.dacWritableControl === true,
+  )
   const ack = async (name: string, phase: string) => {
     await root("ack", name, phase)
   }

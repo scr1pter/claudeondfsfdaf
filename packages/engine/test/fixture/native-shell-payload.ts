@@ -39,8 +39,10 @@ export interface Asset {
   readonly bytes: number
   readonly sha256: string
 }
+// The hosted temporary root stays a canary although only its runner home ancestor is a mask root.
 export const CANARY_ROOTS = Object.freeze([
   ...LinuxIsolation.MASKS,
+  LinuxIsolation.HOST_TEMP,
   "/home/vector-agent/.config/vector",
   "/home/vector-agent/.local/share/vector",
   "/home/vector-agent/.cache/vector",
@@ -415,6 +417,9 @@ async function main() {
     `${spec.stage}/native-shell-canary-link`,
     `/proc/${parent.pid}/cmdline`,
   )
+  // Beneath the runner home only the empty mask may answer, through the command's own root as well: EACCES there
+  // would mean host DAC hid the canary instead. Only the /proc/1/root alias may also be refused by permission.
+  const hosted = [LinuxIsolation.RUNNER_HOME, "/proc/self/root" + LinuxIsolation.RUNNER_HOME]
   for (const target of targets) {
     let visible = false
     try {
@@ -424,7 +429,9 @@ async function main() {
       need(
         error instanceof Error &&
           "code" in error &&
-          ["ENOENT", "EACCES", "ESRCH", "EPERM"].includes(String(error.code)),
+          (hosted.some((root) => target.startsWith(root + "/"))
+            ? error.code === "ENOENT"
+            : ["ENOENT", "EACCES", "ESRCH", "EPERM"].includes(String(error.code))),
       )
     }
     need(!visible)
@@ -439,6 +446,19 @@ async function main() {
       }
       need(readonly)
     }
+  }
+  // The hidden hosted temporary root cannot be rebuilt inside the empty read-only runner home mask.
+  for (const alias of [
+    path.dirname(LinuxIsolation.HOST_TEMP),
+    "/proc/self/root" + path.dirname(LinuxIsolation.HOST_TEMP),
+  ]) {
+    let readonly = false
+    try {
+      await fs.mkdir(alias)
+    } catch (error) {
+      readonly = error instanceof Error && "code" in error && error.code === "EROFS"
+    }
+    need(readonly)
   }
   const trusted = `${ROOT}/readonly-control.txt`
   let immutable = false

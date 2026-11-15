@@ -3,8 +3,10 @@
 Run from packages/core in the approved native CI job:
     /usr/bin/python3 -I -S -B test/fixture/native-mask-origins.py
 
-The asset is parsed as data. Only the explicit pure-function allowlist and its
-two path constants are compiled; module initialization, ctypes and live native
+The asset is parsed as data. Only the explicit pure-function allowlist, its
+three path constants (CONTAINERS, RUNNER_HOME, MASKS) and the four fixed guarded
+statements of supported_mask_sources named in FRAGMENTS are compiled, the latter
+on synthetic metadata only; module initialization, ctypes and live native
 operations are never imported or executed by this fixture.
 """
 
@@ -18,6 +20,7 @@ import pathlib
 import re
 import stat
 import unittest
+from types import SimpleNamespace
 
 
 ENTRY = pathlib.Path(__file__).resolve().parents[2] / "src/process-isolation/linux/entry.py"
@@ -30,7 +33,7 @@ PURE = {
     "require_capture_closure", "keeper_log_stage", "keeper_environment", "keeper_log_classification",
     "keeper_info_progress", "keeper_failure_stage", "keeper_destination_stage", "keeper_searchable",
 }
-CONSTANTS = {"HOST_TEMP", "MASKS"}
+CONSTANTS = {"CONTAINERS", "RUNNER_HOME", "MASKS"}
 SELECTED = [node for node in TREE.body if
             isinstance(node, ast.FunctionDef) and node.name in PURE or
             isinstance(node, ast.Assign) and len(node.targets) == 1 and
@@ -115,11 +118,11 @@ def calls(function, name):
 DESTINATION_PREFIXES = (b"bwrap: Can't mkdir ", b"bwrap: Can't mkdir parents for ")
 DESTINATIONS = (
     ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
-    ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+    ("run", b"/run"), ("runner-home", b"/home/runner"), ("dev", b"/dev"), ("proc", b"/proc"),
 ) + tuple((kind, container + suffix)
           for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox", b"/home/vector-agent-sandbox")
           for kind, suffix in (("checkout", b"/checkout"), ("scratch", b"/tool-scratch")))
-DESTINATION_KINDS = ("root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch")
+DESTINATION_KINDS = ("root", "home", "tmp", "var-tmp", "run", "runner-home", "dev", "proc", "checkout", "scratch")
 # The exact C-locale strerror text bubblewrap v0.9.0 prints for each closed cause (utils.c:die_with_error).
 CAUSES = (("eacces", errno.EACCES, b"Permission denied"), ("erofs", errno.EROFS, b"Read-only file system"),
           ("enoent", errno.ENOENT, b"No such file or directory"), ("enotdir", errno.ENOTDIR, b"Not a directory"),
@@ -131,7 +134,7 @@ KEEPER_LOGS = (
     "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
     "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
     "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
-    "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
+    "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-runner-home",
     "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
     "bwrap-destination-scratch",
     "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec",
@@ -567,7 +570,7 @@ class KeeperDiagnosticTests(unittest.TestCase):
     def test_destination_diagnostics_name_only_exact_fixed_targets(self):
         targets = (
             ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
-            ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+            ("run", b"/run"), ("runner-home", b"/home/runner"), ("dev", b"/dev"), ("proc", b"/proc"),
         )
         targets += tuple((kind, container + suffix)
                          for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox",
@@ -613,9 +616,13 @@ class KeeperDiagnosticTests(unittest.TestCase):
                                          "prepare-keeper-child-exit-log-" + label + "-info-child-created")
         for prefix in DESTINATION_PREFIXES:
             with self.subTest(prefix=prefix):
+                log = classify(prefix + b"/home/runner: Permission denied\n")
+                self.assertEqual(NATIVE["keeper_failure_stage"]("child-exit", log, "child-created"),
+                                 "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces-info-child-created")
+                # The former hosted temporary target is no longer a fixed destination, so it fails closed unsuffixed.
                 log = classify(prefix + b"/home/runner/work/_temp: Permission denied\n")
                 self.assertEqual(NATIVE["keeper_failure_stage"]("child-exit", log, "child-created"),
-                                 "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created")
+                                 "prepare-keeper-child-exit-log-bwrap-destination-info-child-created")
 
     def test_destination_unknown_or_inexact_errno_tails_keep_the_unsuffixed_target_label(self):
         classify = NATIVE["keeper_log_classification"]
@@ -641,7 +648,8 @@ class KeeperDiagnosticTests(unittest.TestCase):
                     with self.subTest(prefix=prefix, kind=kind, target=target, data=data):
                         self.assertEqual(destination(data), "bwrap-destination")
                         self.assertEqual(classify(data + b"\n"), "bwrap-destination")
-            for target in (b"/owner/private", b"/home/runner/work/_temp/", b"/home/runner/work", b"/home/runner"):
+            for target in (b"/owner/private", b"/home/runner/", b"/home/runner/work", b"/home/runner/work/_temp",
+                           b"/home/runnerx"):
                 for cause, _, text in CAUSES:
                     with self.subTest(prefix=prefix, target=target, cause=cause):
                         data = prefix + target + b": " + text
@@ -651,7 +659,7 @@ class KeeperDiagnosticTests(unittest.TestCase):
     def test_destination_errno_lines_keep_the_complete_unique_bounded_line_contract(self):
         classify = NATIVE["keeper_log_classification"]
         destination = NATIVE["keeper_destination_stage"]
-        data = b"bwrap: Can't mkdir parents for /home/runner/work/_temp: Permission denied"
+        data = b"bwrap: Can't mkdir parents for /home/runner: Permission denied"
         results = []
         for log in (
             data, data + b"\n" + data + b"\n",
@@ -668,10 +676,10 @@ class KeeperDiagnosticTests(unittest.TestCase):
         exact = b"x" * (65536 - len(data) - 2) + b"\n" + data + b"\n"
         self.assertEqual(len(exact), 65536)
         results.append(classify(exact))
-        self.assertEqual(results[-1], "bwrap-destination-host-temp-eacces")
+        self.assertEqual(results[-1], "bwrap-destination-runner-home-eacces")
         results.append(classify(b"x" + exact))
         self.assertEqual(results[-1], "invalid")
-        self.assertEqual(destination(data + b"\0" * (65536 - len(data))), "bwrap-destination-host-temp")
+        self.assertEqual(destination(data + b"\0" * (65536 - len(data))), "bwrap-destination-runner-home")
         self.assertEqual(destination(data + b"\0" * (65537 - len(data))), "bwrap-destination")
         for value in (data.decode("ascii"), bytearray(data), memoryview(data), None):
             with self.subTest(value=type(value)):
@@ -738,14 +746,17 @@ class KeeperDiagnosticTests(unittest.TestCase):
             ("child-exit", "empty", "ready"), ("timeout", "empty", "invalid\nprivate-value"),
             (None, "empty", "empty"), (b"child-exit", "empty", "empty"), (True, "empty", "empty"),
             ("child-exit", "bwrap-destination-eacces", "child-created"),
-            ("child-exit", "bwrap-destination-host-temp-eio", "child-created"),
-            ("child-exit", "bwrap-destination-host-temp-EACCES", "child-created"),
-            ("child-exit", "bwrap-destination-host-temp-eacces-eacces", "child-created"),
+            ("child-exit", "bwrap-destination-runner-home-eio", "child-created"),
+            ("child-exit", "bwrap-destination-runner-home-EACCES", "child-created"),
+            ("child-exit", "bwrap-destination-runner-home-eacces-eacces", "child-created"),
             ("child-exit", "bwrap-destination-private-eacces", "child-created"),
             ("child-exit", "bwrap-bind-eacces", "child-created"),
-            ("child-exit", "bwrap-destination-host-temp-Permission denied", "child-created"),
-            ("child-exit", "bwrap-destination-host-temp-", "child-created"),
-            ("timeout", "bwrap-destination-host-temp-eacces", "child-created-eacces"),
+            ("child-exit", "bwrap-destination-runner-home-Permission denied", "child-created"),
+            ("child-exit", "bwrap-destination-runner-home-", "child-created"),
+            ("timeout", "bwrap-destination-runner-home-eacces", "child-created-eacces"),
+            # The removed hosted temporary destination kind.
+            ("child-exit", "bwrap-destination-host-temp", "child-created"),
+            ("child-exit", "bwrap-destination-host-temp-eacces", "child-created"),
         ):
             with self.subTest(values=values), self.assertRaises(RuntimeError):
                 NATIVE["keeper_failure_stage"](*values)
@@ -765,6 +776,39 @@ def stage_assignments(function):
     return sorted((node for node in ast.walk(FUNCTIONS[function]) if isinstance(node, ast.Assign) and
                    any(isinstance(target, ast.Name) and target.id == "_DIAGNOSTIC_STAGE" for target in node.targets)),
                   key=lambda node: node.lineno)
+
+
+# The only statements of the non-pure supported_mask_sources this fixture compiles: each fixed stage assignment with
+# the one guarded statement after it. They run on synthetic metadata; no lstat, realpath, pin or mount call is reached.
+FRAGMENTS = {
+    "runner-identity": "_DIAGNOSTIC_STAGE = 'prepare-mask-runner-identity'",
+    "target-owner": "_DIAGNOSTIC_STAGE = f'prepare-mask-{label}-target-owner'",
+    "parent-owner": "_DIAGNOSTIC_STAGE = f'prepare-mask-{label}-parent-owner'",
+    "parent-mode": "_DIAGNOSTIC_STAGE = f'prepare-mask-{label}-parent-mode'",
+}
+FRAGMENT_CALLS = {"require", "integer"}
+FRAGMENT_NAMES = FRAGMENT_CALLS | {"_DIAGNOSTIC_STAGE", "label", "target", "info", "item", "uid", "gid", "runner",
+                                   "RUNNER_HOME"}
+RUNNER = SimpleNamespace(pw_uid=1001, pw_dir="/home/runner")
+
+
+def fragment(step):
+    stage = ast.dump(ast.parse(FRAGMENTS[step]).body[0])
+    found = [body[index:index + 2] for node in ast.walk(FUNCTIONS["supported_mask_sources"])
+             for body in (getattr(node, "body", None), getattr(node, "orelse", None)) if type(body) is list
+             for index in range(len(body) - 1) if ast.dump(body[index]) == stage]
+    if len(found) != 1:
+        raise AssertionError("A guarded mask admission statement moved")
+    nodes = [node for statement in found[0] for node in ast.walk(statement)]
+    if ({ast.unparse(node.func) for node in nodes if isinstance(node, ast.Call)} - FRAGMENT_CALLS or
+            {node.id for node in nodes if isinstance(node, ast.Name)} - FRAGMENT_NAMES or
+            not all(isinstance(node, (ast.Assign, ast.Expr, ast.If)) for node in nodes if isinstance(node, ast.stmt))):
+        raise AssertionError("A guarded mask admission statement gained a native operation")
+    return found[0]
+
+
+def metadata(mode, uid, gid):
+    return SimpleNamespace(st_mode=stat.S_IFDIR | mode, st_uid=uid, st_gid=gid)
 
 
 class KeeperSearchTests(unittest.TestCase):
@@ -877,18 +921,18 @@ class SourceStructureTests(unittest.TestCase):
                   for child in ast.iter_child_nodes(node)}
         modes = [node for node in formatted if node.value.values[-1].value == "-target-mode"]
         self.assertEqual([ast.unparse(parent[node].test) for node in modes],
-                         ["target == '/home/vector-agent'", "target == HOST_TEMP"])
+                         ["target == '/home/vector-agent'", "target == RUNNER_HOME"])
         self.assertTrue(all(node in parent[node].body for node in modes))
         labels = next(node.value for node in ast.walk(FUNCTIONS["supported_mask_sources"]) if
                       isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "labels")
         self.assertEqual([ast.unparse(key) for key in labels.keys],
-                         ["'/home/vector-agent'", "'/tmp'", "'/var/tmp'", "'/run'", "HOST_TEMP"])
-        self.assertEqual(tuple(NATIVE["HOST_TEMP"] if isinstance(key, ast.Name) else key.value for key in labels.keys),
+                         ["'/home/vector-agent'", "'/tmp'", "'/var/tmp'", "'/run'", "RUNNER_HOME"])
+        self.assertEqual(tuple(NATIVE["RUNNER_HOME"] if isinstance(key, ast.Name) else key.value for key in labels.keys),
                          MASKS)
         names = [ast.literal_eval(value) for value in labels.values]
-        self.assertEqual(names, ["home", "tmp", "var-tmp", "run", "host-temp"])
+        self.assertEqual(names, ["home", "tmp", "var-tmp", "run", "runner-home"])
         product = {*MASK_LITERALS, *(f"prepare-mask-{name}-{step}" for name in names for step in MASK_STEPS
-                                     if step != "target-mode" or name in ("home", "host-temp"))}
+                                     if step != "target-mode" or name in ("home", "runner-home"))}
         self.assertEqual(len(product), 73)
         self.assertEqual([node.value.value for node in stage_assignments("prepare_in_capture")], [
             "prepare-input", "prepare-masks", "prepare-images", "prepare-keeper-search-checkout", "prepare-record",
@@ -908,6 +952,18 @@ class SourceStructureTests(unittest.TestCase):
                     self.assertNotIn(ast.unparse(node.func), forbidden)
                     self.assertFalse(ast.unparse(node.func).startswith(("LIBC.", "os.open", "os.stat", "os.fstat",
                                                                         "os.unshare", "fcntl.", "subprocess.")))
+        # Beyond PURE, only these fixed guarded statements of supported_mask_sources are ever compiled.
+        self.assertEqual(tuple(FRAGMENTS), ("runner-identity", "target-owner", "parent-owner", "parent-mode"))
+        for step in FRAGMENTS:
+            statements = fragment(step)
+            nodes = [node for statement in statements for node in ast.walk(statement)]
+            called = {ast.unparse(node.func) for node in nodes if isinstance(node, ast.Call)}
+            with self.subTest(step=step):
+                self.assertEqual(len(statements), 2)
+                self.assertEqual(called, FRAGMENT_CALLS if step == "runner-identity" else {"require"})
+                self.assertFalse(called & forbidden)
+                self.assertLessEqual({node.id for node in nodes if isinstance(node, ast.Name)}, FRAGMENT_NAMES)
+                self.assertIs(type(statements[1]), ast.If if step == "target-owner" else ast.Expr)
 
     def test_destination_classifier_returns_only_fixed_labels_from_the_closed_vocabulary(self):
         stage = FUNCTIONS["keeper_destination_stage"]
@@ -1093,6 +1149,132 @@ class SourceStructureTests(unittest.TestCase):
         broker_stop = next(node.lineno for node in ast.walk(cleanup) if isinstance(node, ast.Constant) and
                            node.value == "cleanup-broker-stop")
         self.assertLess(uid_stop, broker_stop)
+
+
+class RunnerHomeMaskTests(unittest.TestCase):
+    def admission(self, step, label, refused, **names):
+        scope = {"require": NATIVE["require"], "integer": NATIVE["integer"], "RUNNER_HOME": NATIVE["RUNNER_HOME"],
+                 "label": label, "uid": KEEPER[0], "gid": KEEPER[1], "runner": RUNNER, **names}
+        code = compile(ast.Module(body=fragment(step), type_ignores=[]), str(ENTRY), "exec", dont_inherit=True)
+        if refused is None:
+            exec(code, scope)
+            return scope["_DIAGNOSTIC_STAGE"]
+        with self.assertRaises(RuntimeError):
+            exec(code, scope)
+        self.assertEqual(scope["_DIAGNOSTIC_STAGE"], refused)
+        return refused
+
+    def test_runner_home_replaces_the_hosted_temporary_mask_and_still_hides_it(self):
+        hidden = NATIVE["hidden"]
+        self.assertEqual(MASKS, ("/home/vector-agent", "/tmp", "/var/tmp", "/run", "/home/runner"))
+        self.assertEqual(NATIVE["RUNNER_HOME"], "/home/runner")
+        self.assertNotIn("HOST_TEMP", {target.id for node in TREE.body if isinstance(node, ast.Assign)
+                                       for target in node.targets if isinstance(target, ast.Name)})
+        # Every former mask root stays hidden, so coverage only grows.
+        for path in ("/home/vector-agent", "/tmp", "/var/tmp", "/run", "/home/runner/work/_temp",
+                     "/home/runner/work/_temp/_github_workflow/event.json", "/home/runner/work",
+                     "/home/runner/.bun/bin/bun"):
+            with self.subTest(path=path):
+                self.assertTrue(hidden(path))
+        for path in ("/", "/home", "/home/runnerx", "/home/vector-agentx", "/home/vector-agent-sandbox"):
+            with self.subTest(path=path):
+                self.assertFalse(hidden(path))
+        self.assertEqual(tuple(target.decode("ascii") for _, target in DESTINATIONS[1:6]), MASKS)
+
+    def test_spec_paths_and_copied_runtime_trees_stay_outside_every_mask(self):
+        hidden = NATIVE["hidden"]
+        for container in NATIVE["CONTAINERS"]:
+            for path in (container, container + "/checkout", container + "/tool-scratch", container + "/tool-namespaces",
+                         container + "/tool-namespaces/broker.sock"):
+                with self.subTest(path=path):
+                    self.assertFalse(hidden(path))
+        for path in ("/usr/libexec/vector-sandbox/v1", "/usr/libexec/vector-sandbox/v1/entry.py",
+                     "/usr/libexec/vector-native-shell", "/usr/libexec/vector-native-shell/runtime/node",
+                     "/usr/libexec/vector-native-shell-control", "/usr/libexec/vector-native-shell-control/runtime/bun",
+                     "/usr/bin/python3", "/usr/bin/bwrap"):
+            with self.subTest(path=path):
+                self.assertFalse(hidden(path))
+        validate = FUNCTIONS["validate_spec"]
+        derived = next(index for index, node in enumerate(validate.body) if isinstance(node, ast.Expr) and
+                       "/broker.sock" in ast.unparse(node))
+        self.assertEqual(ast.dump(validate.body[derived + 1]), ast.dump(ast.parse(
+            "require(not any(hidden(value[key]) for key in ('container', 'stage', 'scratch', 'directory', 'socket')))"
+        ).body[0]))
+
+    def test_runner_home_target_is_admitted_only_when_runner_owned_without_shared_write(self):
+        home = NATIVE["RUNNER_HOME"]
+        for mode, owner, group in ((0o750, 1001, 118), (0o755, 1001, 1001), (0o700, 1001, 1001)):
+            with self.subTest(mode=oct(mode), owner=owner, group=group):
+                self.assertEqual(self.admission("target-owner", "runner-home", None, target=home,
+                                                info=metadata(mode, owner, group)),
+                                 "prepare-mask-runner-home-target-mode")
+        for mode, owner, group, step in ((0o750, 0, 0, "target-owner"), (0o750, 1002, 1002, "target-owner"),
+                                         (0o750, 118, 118, "target-owner"), (0o770, 1001, 1001, "target-mode"),
+                                         (0o757, 1001, 1001, "target-mode"),
+                                         (stat.S_ISVTX | 0o777, 1001, 1001, "target-mode")):
+            with self.subTest(mode=oct(mode), owner=owner, group=group):
+                self.admission("target-owner", "runner-home", "prepare-mask-runner-home-" + step, target=home,
+                               info=metadata(mode, owner, group))
+        # The other two branches are unchanged.
+        self.assertEqual(self.admission("target-owner", "home", None, target="/home/vector-agent",
+                                        info=metadata(0o700, *KEEPER)), "prepare-mask-home-target-mode")
+        self.admission("target-owner", "home", "prepare-mask-home-target-owner", target="/home/vector-agent",
+                       info=metadata(0o700, 1001, 1001))
+        self.admission("target-owner", "home", "prepare-mask-home-target-mode", target="/home/vector-agent",
+                       info=metadata(0o770, *KEEPER))
+        self.assertEqual(self.admission("target-owner", "tmp", None, target="/tmp",
+                                        info=metadata(stat.S_ISVTX | 0o777, 0, 0)), "prepare-mask-tmp-target-owner")
+        self.admission("target-owner", "tmp", "prepare-mask-tmp-target-owner", target="/tmp",
+                       info=metadata(0o755, 1001, 1001))
+        # The literal runner home is bound to the runner account it hides.
+        self.assertEqual(self.admission("runner-identity", "runner-home", None), "prepare-mask-runner-identity")
+        for runner in (SimpleNamespace(pw_uid=1001, pw_dir="/home/runner/"),
+                       SimpleNamespace(pw_uid=1001, pw_dir="/home/runnerx"),
+                       SimpleNamespace(pw_uid=1001, pw_dir="/root"),
+                       SimpleNamespace(pw_uid=KEEPER[0], pw_dir="/home/runner"),
+                       SimpleNamespace(pw_uid=0, pw_dir="/home/runner")):
+            with self.subTest(runner=runner):
+                self.admission("runner-identity", "runner-home", "prepare-mask-runner-identity", runner=runner)
+
+    def test_every_mask_parent_must_be_root_owned_without_shared_write(self):
+        for label in ("home", "runner-home"):
+            for owner, group in ((0, 0), (0, 118)):
+                with self.subTest(label=label, owner=owner, group=group):
+                    self.admission("parent-owner", label, None, item=metadata(0o755, owner, group))
+            # A runner-owned parent was admitted before the runner home became the mask.
+            for owner, group in ((1001, 1001), KEEPER):
+                with self.subTest(label=label, owner=owner, group=group):
+                    self.admission("parent-owner", label, f"prepare-mask-{label}-parent-owner",
+                                   item=metadata(0o755, owner, group))
+            self.admission("parent-mode", label, None, item=metadata(0o755, 0, 0))
+            for mode in (0o775, 0o757, stat.S_ISVTX | 0o777):
+                with self.subTest(label=label, mode=oct(mode)):
+                    self.admission("parent-mode", label, f"prepare-mask-{label}-parent-mode",
+                                   item=metadata(mode, 0, 0))
+
+    def test_nested_mount_beneath_runner_home_is_a_captured_origin(self):
+        rows = (line(), line(2, 1, "0:99", target="/run/private", kind="tmpfs"),
+                line(3, 1, "0:100", target="/home/runner/work", kind="tmpfs"))
+        topology = mounts(*rows)
+        value = records()
+        value["topology"] = NATIVE["json_digest"](topology)
+        value["origins"] = [source("/home/runner/work", 3, "0:100", inode=701), source("/run/private")]
+        seal(value)
+        NATIVE["mask_records"](value)
+        NATIVE["require_capture_closure"](value, topology)
+        NATIVE["refuse_mask_aliases"](value, topology)
+        for origins in ([source("/run/private")], [source("/home/runner/work", 4, "0:100", inode=701),
+                                                   source("/run/private")]):
+            changed = copy.deepcopy(value)
+            changed["origins"] = origins
+            with self.subTest(origins=origins), self.assertRaises(RuntimeError):
+                NATIVE["require_capture_closure"](seal(changed), topology)
+        with self.assertRaises(RuntimeError):
+            NATIVE["refuse_mask_aliases"](value, mounts(*rows, line(4, 1, "0:100", "/", "/mnt/copy", kind="tmpfs")))
+        NATIVE["refuse_mask_aliases"](value, mounts(*rows, line(4, 1, "0:100", "/", "/home/runner/copy", kind="tmpfs")))
+        with self.assertRaises(RuntimeError):
+            NATIVE["require_known_mask_origins"](
+                value, mounts(*rows, line(4, 3, "0:101", target="/home/runner/work/_temp", kind="tmpfs")), set())
 
 
 if __name__ == "__main__":

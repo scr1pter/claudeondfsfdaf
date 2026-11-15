@@ -124,7 +124,7 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-2 | Prove owned background cleanup under required isolation on Linux, and correct C9 | None (typecheck; test.yml at the lane end) | Committed (see below); passes locally; the Linux engine shard of `test.yml` runs it at the lane end |
 | NQ-3 | Refuse at admission any mask whose ancestors the keeper cannot search | Once, `{"diagnostic_cell": true}` | Committed (see below; D45); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log |
 | NQ-4 | Inventory direct process spawn sites and their isolation stance | None (typecheck; test.yml at the lane end) | Committed (see below; D56); passes locally; the engine shards of `test.yml` run it at the lane end |
-| NQ-5 | Mask the runner home instead of its unreachable temporary leaf | Once, `{"diagnostic_cell": true}` | Planned |
+| NQ-5 | Mask the runner home instead of its unreachable temporary leaf | Once, `{"diagnostic_cell": true}` | Committed (see below; D57-D74); the guard-unit and typecheck gate results and the native dispatch run/job IDs and head are recorded in the dispatch log by a later package (D45) |
 | NQ-6 | Native baseline cell follow-up A | Once, `{"diagnostic_cell": true}` | Planned |
 | NQ-7 | Native baseline follow-up B and the full matrix | Exactly one: the diagnostic cell, or `{"diagnostic_cell": false}` (eight cells) only if the diagnostic cell is green with the `owned` refusal case. Any full-matrix spend beyond that one bounded dispatch is owner-gated. | Planned |
 | NQ-8 | Close the lane's native qualification and spawn-review records | None (typecheck) | Planned |
@@ -136,7 +136,8 @@ Rows are copied from the lane's package list. "Planned" means not started.
 | NQ-1 | [43660129312](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660129312) (`workflow_dispatch`, attempt 1, failure) | `132647364562` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `597dbcc922b44a0e53e0c311cbe416b26cdf6252` | `{"diagnostic_cell": true}` (the run has this single job) | `prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created` (entry `CalledProcessError` exit 1; control `native-prepare` `CalledProcessError` exit 125; transport `close` `ChildExit` exit 1) | Gate: guard-unit [43660083062](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660083062) passed at the same head (typecheck [43660085781](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43660085781) passed too). Steps 1-12 passed: control policy (3 pass, 0 fail, 33 `expect()` calls), pure Python (`Ran 35 tests` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" failed (exit 125). Steps 14-16 (seed, verify, lifecycle witness) were skipped. Step 17 "Always finish the exact owned native operation; missing state is refused" printed `cleanup-proof` (entry `RuntimeError`; control `native-cleanup` exit 125) and reports conclusion `success` in the API. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'failure' 'skipped' 'failure'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded the receipts (artifact `14139517979`). |
 | NQ-2 | None: not a native package | | | | | Only the runner's automatic `native-guard-unit.yml` and `typecheck.yml` dispatches follow the push. |
 | NQ-3 | [43675930370](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675930370) (`workflow_dispatch`, attempt 1, failure) | `132695971881` `Shell seam (bun, own-key, baseline)`, `ubuntu-24.04` | `f05f991616584eb0542f9ac1fead49e730ba1027` | `{"diagnostic_cell": true}` (the run has this single job) | `prepare-mask-host-temp-keeper-search` (entry `RuntimeError`, errno and exit null; control `native-prepare` `CalledProcessError` exit 125; transport `close` `ChildExit` exit 1) | Gate: guard-unit [43675734735](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675734735) (job `132695351609`, `Ran 40 tests in 0.132s` ... `OK`) and typecheck [43675737341](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43675737341) both passed at the same head. Steps 1-12 passed: control policy (3 pass, 0 fail, 33 `expect()` calls), pure Python (`Ran 40 tests in 0.197s` ... `OK`), compile, install, workspace and both Node/Bun metadata preflights (`readerSHA256` `c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8`, `sourceRevision` the head above). Step 13 "Actual native prepare without SUDO mode or diagnostic profile" failed (exit 125). Steps 14-16 (seed, verify, lifecycle witness) were skipped. Step 17 "Always finish the exact owned native operation; missing state is refused" printed transport `close` `ChildExit` exit 1 and control `native-state` `FileNotFoundError` `ENOENT` (no entry record), exit 125, and reports conclusion `success` in the API. Step 18 "Preserve every earlier failure and cleanup uncertainty" ran `manage.mjs assert 'success' 'failure' 'skipped' 'failure'`, printed "Native Shell CI management refused" and failed (exit 125). Step 19 "Retain bounded public receipts" uploaded the receipts (artifact `14146243257`). |
-| NQ-4 | None: not a native package | | | | | Only the runner's automatic `native-guard-unit.yml` and `typecheck.yml` dispatches follow the push. |
+| NQ-4 | None: not a native package | | `b861736d4c130dde51506500c951e40da9b452e1` | | | Only the runner's automatic dispatches followed the push: guard-unit [43680012678](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43680012678) and typecheck [43680015135](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43680015135), both `workflow_dispatch`, attempt 1, completed, success, at the head above (D70). |
+| NQ-5 | Pending: dispatched by the NQ-5 commit step after the push and the guard-unit gate | | | `{"diagnostic_cell": true}` | | Filled from the API by a follow-up docs commit if the commit step allows, else by NQ-6. |
 
 Before NQ-1, `list_workflow_runs` for `native-shell.yml` on `native-qualify` returned
 `total_count` 0, and `origin/native-qualify` did not exist.
@@ -153,6 +154,11 @@ tails, read on 15 November 2026 (D52). The row records those API and log facts o
 a plain string comparison, the entry stage equals the one the NQ-3 section lists first
 in its interpretation table; reading what it says about the blocking ancestor is
 NQ-5's, and NQ-4 does not interpret it.
+
+NQ-5 filled the NQ-4 row from `get_workflow_run` for both gate runs and re-read
+`list_workflow_runs` for `native-shell.yml` on `native-qualify` (`total_count` 2, newest
+43675930370, completed, no run in progress), on 15 November 2026. NQ-5 interprets the
+NQ-1 and NQ-3 rows (D58) and does not record them again.
 
 ## NQ-1, 15 November 2026
 
@@ -1180,3 +1186,392 @@ From `packages/engine`, one Bun workload at a time through the lock:
   "Committed" in the NQ-4 commit itself, as in D45. Before the push, the commit step
   reran the test file (11 pass, 0 fail), the engine `bun typecheck` and the full
   `bun turbo typecheck --concurrency=2` with `TURBO_CACHE_DIR` inside the worktree.
+
+## NQ-5, 15 November 2026
+
+All citations are at the lane head `b861736d` before this change (D57).
+
+### Precondition
+
+- The newest completed `native-shell.yml` run on `native-qualify` is 43675930370 (job
+  `132695971881`, head `f05f9916`), recorded in the dispatch log by NQ-4. Its entry
+  stage `prepare-mask-host-temp-keeper-search` is row 1 of the NQ-3 interpretation table,
+  so the brief's precondition is met. NQ-1's run 43660129312 (job `132647364562`, head
+  `597dbcc9`) closed with the brief's alternative precondition,
+  `...-bwrap-destination-host-temp-eacces-...`. No native run was in progress when this
+  package was planned or implemented.
+- What each row proves is split in D58: hosted evidence on one side, code reading on the
+  other.
+
+### What landed
+
+Phase 5a (Python), then phase 5b (TypeScript and fixtures), as one working-tree change
+(D68):
+
+- `packages/core/src/process-isolation/linux/entry.py`:
+  - `RUNNER_HOME = "/home/runner"` replaces `HOST_TEMP`, which is dropped because nothing
+    in `entry.py` would use it (D60). `MASKS` is
+    `("/home/vector-agent", "/tmp", "/var/tmp", "/run", RUNNER_HOME)`, and `RUNNER_HOME`
+    takes `HOST_TEMP`'s index 4. So the keeper argv (it iterates `MASKS`), the per-command
+    bwrap, `mask_records`, `validate_masks`, cleanup and every index-aligned copy keep
+    their order.
+  - `validate_spec` requires that no mask hides the container, stage, scratch, directory
+    or socket (D64).
+  - `keeper_destination_stage` names `("runner-home", b"/home/runner")` in place of the
+    hosted temporary target. `keeper_failure_stage` accepts `bwrap-destination-runner-home`
+    and its six causes in place of the `host-temp` ones (D59).
+  - `supported_mask_sources`:
+    - `prepare-mask-runner-identity` also requires `runner.pw_dir == RUNNER_HOME` (D62);
+    - the labels dict maps `RUNNER_HOME` to `runner-home`;
+    - the `elif target == RUNNER_HOME` branch keeps the former hosted temporary body: the
+      runner uid owns it (`target-owner`), with no group or other write (`target-mode`);
+    - every mask parent must now be Root-owned (`parent-owner`, D61).
+    Mount-present, mount-device, `pin_source`, `source_record`, the origins pass
+    (`hidden()` over the new `MASKS` enumerates and pins nested mounts beneath
+    `/home/runner`), `require_capture_closure`, `refuse_mask_aliases`,
+    `validate_source_view` and the keeper-search pass are unchanged. Nothing runs
+    `chmod` or `chown`, and nothing adds a stage shape or a function.
+- `packages/core/test/fixture/native-mask-origins.py` (CI-only, 40 to 45 tests):
+  - `CONSTANTS` is `{"CONTAINERS", "RUNNER_HOME", "MASKS"}`, so 26 + 3 definitions are
+    selected;
+  - the destination and keeper-log tables use `runner-home`;
+  - `FRAGMENTS`/`fragment()` compile exactly four guarded statements of
+    `supported_mask_sources` on synthetic metadata (D63);
+  - the allowlist test now lists those fragments;
+  - the edited destination, failure-stage and mask-product tests;
+  - the new `RunnerHomeMaskTests` class (5 tests).
+- `packages/core/src/process-isolation/linux.ts`:
+  - exports `RUNNER_HOME`;
+  - `MASKS` ends with `RUNNER_HOME`;
+  - `HOST_TEMP` stays for `hostedTemporary` (RUNNER_TEMP equality);
+  - a private `masked()` serves `parseMaskProof` and `assertUnmaskedRuntime`;
+  - `parseSpec` refuses a published path under any mask.
+  Signatures are unchanged.
+- `packages/engine/src/cli/cmd/github.isolation.ts`:
+  - `FAILURE_STAGES` uses `runner-home` for the mask list, the `target-mode` condition
+    and the destination targets;
+  - the control-side `mask_proof` validator's `parents` tuple ends with `/home/runner`.
+- CI fixtures:
+  - `native-shell-payload.ts`:
+    - `CANARY_ROOTS` is `MASKS`, then `HOST_TEMP`, then the four agent-home roots;
+    - canaries beneath the runner home must be exactly `ENOENT`, both directly and through
+      `/proc/self/root`;
+    - `mkdir` of `/home/runner/work` must be `EROFS` (D65).
+  - `native-shell-host.ts`:
+    - `OBSERVE` `MASKS` ends with `/home/runner`;
+    - `CANARIES` adds `/home/runner/work/_temp`;
+    - Root reads the `HOSTED` canaries before the privilege drop;
+    - `controls` returns `readableCanaries`, `rootCanaries` and `dacWritableControl`
+      (D65).
+  - `native-shell-ci/manage.ts` seeds a Root-owned `0444` canary in `/home/runner`. No
+    runner path changes mode or owner.
+  - `native-shell-ci/policy.test.ts` adds a 4th test.
+- Bun tests:
+  - `process-isolation-linux.test.ts` (17 to 18);
+  - `github.isolation.test.ts` (33 to 34, including the agreement test, D67).
+
+### Mask geometry and proof obligations
+
+`MASKS` = `/home/vector-agent`, `/tmp`, `/var/tmp`, `/run`, `/home/runner`, each built as
+`--tmpfs T --remount-ro T` in that order. The fixed `RUNNER_TEMP` `/home/runner/work/_temp`
+is no longer a mask root; it is hidden beneath `/home/runner`. Coverage is a superset
+of the former list: every former root is still hidden, and the mask now also hides every
+other runner-home path (the runner install and diagnostic trees, `~/.bun`, tool caches and
+the synthetic CI workspace `/home/runner/work/vector-native-shell-checkout`, whose
+checkout prepare moves into the container stage with `rename(2)` before the native
+prepare starts, leaving a placeholder; `github.sandbox.ts:467-468`).
+
+The source enforces these obligations at admission:
+
+- Runner home: a canonical directory (`lstat`, `S_ISDIR`, `realpath` equality) owned by
+  the runner uid, with no group or other write. The `runner` account's `pw_dir` must be
+  exactly `/home/runner`.
+- Every mask parent, including `/home` and `/`: canonical, a directory, Root-owned, with
+  no group or other write. After every other predicate, each parent must also be
+  keeper-searchable.
+- Each mask root's mount is present, descriptor-pinned and on the recorded device.
+- Nested mounts beneath any mask, `/home/runner` included, are pinned as origins.
+  `require_capture_closure`, `refuse_mask_aliases` and `validate_source_view` are
+  unchanged.
+- No published container, stage, scratch, directory or socket path lies under a mask
+  (`validate_spec` and `parseSpec`).
+
+At construction, `validate_masks` checks each mask twice as a live, read-only, empty,
+keeper-owned `0755` tmpfs (unchanged).
+
+At run time, `run()` refuses any engine or runtime beneath a mask, now including
+`/home/runner` (D66).
+
+These CI witness obligations stay open until a hosted run passes prepare:
+
+- the runner-home canaries are exactly `ENOENT` through the mask;
+- `/home/runner/work` cannot be rebuilt (`EROFS`);
+- Root reads both hosted seeds before the privilege drop.
+
+### Counts
+
+| Item | Before | After |
+| --- | --- | --- |
+| Mask admission product (`entry.py`) | 73 | 73 |
+| TypeScript per-mask entries | 62 | 62 |
+| Keeper logs / stages | 97 / 582 | 97 / 582 |
+| Python fixture tests (CI) | 40 | 45 |
+| `github.isolation.test.ts` | 33 pass, 2964 `expect()` | 34 pass, 2989 `expect()` |
+| `process-isolation-linux.test.ts` | 17 | 18 pass, 274 `expect()` |
+| `native-shell-ci/policy.test.ts` | 3 pass, 33 `expect()` (CI step 7) | 4 pass, 58 `expect()` |
+
+### Expected hosted outcome for NQ-6 to verify
+
+A prediction from code reading, not a result (D71):
+
+- Guard-unit prints `Ran 45 tests` ... `OK`. In the native job, the control policy has
+  4 pass and the pure Python step prints `Ran 45 tests` ... `OK`. Compile, install,
+  workspace and both metadata preflights pass.
+- Mask admission passes:
+  - `prepare-mask-runner-identity` holds the runner's `pw_dir`;
+  - `/home/runner` is runner-owned without group or other write;
+  - `/home` and `/` are Root-owned `0755`;
+  - the `home` mask's ancestor checks already passed on the same `/home` and `/` in
+    NQ-3.
+- `prepare-images` and `prepare-keeper-search-checkout` pass, and bwrap builds the
+  `/home/runner` tmpfs.
+- Every label after that point is open.
+
+| Label seen | Meaning | Action |
+| --- | --- | --- |
+| `prepare-mask-runner-identity` | NQ-3 passed this stage with the uid conditions alone, so the `pw_dir` binding refused (D62) | Root-cause it; never widen the binding without a reviewed reason |
+| `prepare-mask-runner-home-target-owner` / `-target-mode` | Runner-home ownership or mode refused | Root-cause it; never `chmod` or `chown` |
+| `prepare-mask-<label>-parent-owner` | The Root-only tightening (D61) refused a parent | Root-cause it |
+| `prepare-mask-runner-home-keeper-search` | Contradicts NQ-3 (the same `/home` and `/` passed for `home`) | Root-cause it |
+| `prepare-mask-origins` / `prepare-mask-aliases` | A nested mount or alias beneath `/home/runner` | Record it; design separately, with no weakening |
+| `prepare-keeper-search-checkout` | The container ancestry blocks the keeper | Design separately |
+| `...-bwrap-destination-runner-home-*` | The admission model missed a denial | Root-cause it |
+| `...-bwrap-destination-info-*` on the mask step | An unknown destination, for example the former hosted temporary path | Root-cause it |
+| A refusal after prepare passed, in the mask-source re-check (`validate_source_view` or `validate_masks`, reached in the host or finish step, for example through the control `inspect` operation's `live-client` check) | `validate_source_view` re-checks each root record with `source_record(...) == record`, which includes mode, uid and gid. `/home/runner` is now a root record and the runner owns it, so a runner-owned step that changed `$HOME`'s mode or owner after prepare makes validation refuse. The runner-owned `_temp` root had the same exposure, but no earlier run passed prepare, so it was never observed | Record it and root-cause it; never widen the check |
+| Any later keeper, broker or publish label, or prepare success with a host-step failure | | NQ-6 |
+| Transport-only cause | A vocabulary mismatch (D9) | Fix the vocabulary |
+
+### Evidence (local)
+
+From the worktree, one Bun workload at a time through the lock:
+
+- Both Python sources parse with `ast.parse` (`python3 -I -S -B`). The fixture was not
+  executed locally, and neither were `entry.py` or any extracted function (the D13
+  rule).
+- Supplementary, AST-only: `/tmp/vector-v2/native/nq5/static-check.py` passed 49 checks.
+  It never imports, compiles or executes `entry.py` or the fixture. It covers:
+  - `MASKS`, `RUNNER_HOME` and no top-level `HOST_TEMP`;
+  - the destination targets literal (with targets 1-5 equal to `MASKS`);
+  - the 97 accepted keeper logs with no `host-temp`;
+  - the 73-stage mask product with no `host-temp`;
+  - the fixture's 29 selected definitions and constant shapes;
+  - each of the 4 fragments, which matches exactly once with the allowed calls, names
+    and shape, and the `target-owner` branch tests;
+  - 45 unique test names;
+  - a coarse unbound-name scan of the fixture;
+  - `SimpleNamespace` as the only named import;
+  - every `prepare-mask-` string in the new class is a product stage;
+  - the host `OBSERVE` script parses.
+- From `packages/core`: `bun test --timeout 30000 test/process-isolation-linux.test.ts`
+  gives 18 pass, 0 fail, 274 `expect()` calls (286 before the review fixes, D73).
+- From `packages/engine`:
+  - `test/cli/github.isolation.test.ts` gives 34 pass, 0 fail, 2989 `expect()` calls
+    (2987 before the review fixes, D73);
+  - `test/fixture/native-shell-ci/policy.test.ts` gives 4 pass, 0 fail, 58 `expect()`
+    calls.
+  All three files were re-run after Prettier and the mutations, with the same results.
+- `bun typecheck` passes in `packages/core` and `packages/engine` (`tsgo --noEmit`).
+- Prettier reformatted `github.isolation.test.ts` and `native-shell-payload.ts` and
+  reported the other six TypeScript files unchanged. `git diff --check` is clean.
+- Mutations, from `/tmp/vector-v2/native/nq5/mutate.sh`. Each was run once, then
+  restored from `/tmp/vector-v2/native/nq5/current` and checked with `cmp`:
+  - M1, the control `parents` tuple back to `/home/runner/work/_temp`: 33 pass, 1 fail
+    (the agreement test);
+  - M2, `entry.py` `MASKS` ending with `"/home/runner/work/_temp"`: 33 pass, 1 fail (the
+    agreement test);
+  - M3, `runner-home` dropped from the `FAILURE_STAGES` mask list: 31 pass, 3 fail (mask
+    stage projection, keeper-search stages, and the source-agreement test);
+  - M4, `/var/lib` appended to the TypeScript `MASKS`:
+    - `process-isolation-linux.test.ts` 14 pass, 4 fail (hidden roots, the new spec-path
+      test, and the two proof-target tests);
+    - `policy.test.ts` 3 pass, 1 fail (the new test). The `parseSpec` check fires (D64).
+  - M5, the TypeScript `MASKS` back to `HOST_TEMP`:
+    - `process-isolation-linux.test.ts` 16 pass, 2 fail (hidden roots, proof targets);
+    - `github.isolation.test.ts` 33 pass, 1 fail (the agreement test).
+  - After the review fixes (D73), from `/tmp/vector-v2/native/nq5/review`, each restored
+    and checked with `cmp`:
+    - M6, `/home/runner` dropped from the `manage.ts` seed list: `github.isolation.test.ts`
+      33 pass, 1 fail (the agreement test);
+    - M4 again, against the renamed spec test: `process-isolation-linux.test.ts` 14 pass,
+      4 fail (the same four tests).
+- Tooling notes (D72).
+
+### Deferred
+
+- The 45-test fixture and the hosted label run only in CI: guard-unit, then the single
+  diagnostic-cell dispatch by the commit step. NQ-6 reads the result.
+- Commit-step gate (D73): the 5 new `RunnerHomeMaskTests` and the edited destination and
+  failure-stage fixture tests have never run, because the rules forbid running the fixture
+  locally. The commit step waits until the automatic `native-guard-unit.yml` run at the
+  pushed head prints `Ran 45 tests` ... `OK`, then makes the single `diagnostic_cell`
+  dispatch, and records the guard-unit run and job IDs in the NQ-5 dispatch-log row. If
+  guard-unit is red, it fixes the cause in a follow-up commit and does not dispatch.
+- Which of `/home/runner` and `/home/runner/work` blocked the keeper stays unproven
+  (D34). The runner-home mask does not depend on it.
+- Commit, push, the guard-unit and typecheck gate, the dispatch and the NQ-5
+  dispatch-log row belong to the commit step.
+
+### Deviations and decisions
+
+- D57. Line drift: NQ-1 and NQ-3 grew `entry.py`, so the brief's `0ee486e3` lines moved
+  (for example `validate_spec` 106, `keeper_destination_stage` 916, `keeper_failure_stage`
+  1043, `supported_mask_sources` 1395, the keeper argv 1730-1745). The brief's "CLIENT
+  `mask_proof` `parents` tuple at `github.isolation.ts:666`" is the control-side
+  `mask_proof` validator (line 675 at `b861736d`), which validates CLIENT output.
+- D58 (critique accepted: NQ-1 is cited next to NQ-3). Interpretation of the two rows:
+  - Hosted evidence:
+    - NQ-3's label is an admission-time refusal on the hosted temporary mask's parents.
+    - NQ-1's label names the fifth mask's destination with `EACCES`. Bubblewrap applies
+      its setup operations in argv order (code reading of v0.9.0) and stops at the first
+      fatal error, so the four earlier `--tmpfs`/`--remount-ro` masks over Root-owned,
+      unmapped host directories did not die. That supports building a tmpfs on
+      `/home/runner` through Root-owned `/home`.
+  - Code reading: the keeper-search pass runs over `searches` in `MASKS` order. So the
+    refusal at `host-temp` means the `home`, `tmp`, `var-tmp` and `run` ancestors (`/`,
+    `/home`, `/var`) passed it.
+  - The workflow sets `continue-on-error: true` on the finish step (`native-shell.yml`).
+    That is why the API reports step 17 as `success` while `steps.finish.outcome` is
+    `failure` (the fourth `manage.mjs assert` argument). This closes D38's open point.
+- D59. Both `host-temp` families are removed where they no longer exist, consistently in
+  `entry.py`, the fixture and `FAILURE_STAGES`:
+  - the 13 `prepare-mask-host-temp-*` stages;
+  - `bwrap-destination-host-temp`;
+  - its 6 causes.
+  The `runner-home` families replace each in place, so every product count is unchanged.
+  A hosted line naming `/home/runner/work/_temp` now classifies as the generic
+  `bwrap-destination`, which fails closed. The fixture and the Bun tests refuse the
+  removed labels, including NQ-1's and NQ-3's observed ones.
+- D60 (critique accepted). `HOST_TEMP` is dropped from `entry.py` and from the fixture
+  `CONSTANTS`, because after the change `MASKS`, the labels and the `target-owner` branch
+  all use `RUNNER_HOME`. The brief's "`HOST_TEMP` stays for hostedTemporary/RUNNER_TEMP
+  equality" is the TypeScript `hostedTemporary` (`linux.ts`), where it stays, as it does
+  in the payload and host fixtures. This answers NQ-3's deferred question: the covered
+  hosted temporary mask is replaced by its ancestor, not kept beside it, and no hidden
+  ancestor is exempted from keeper-search. No mask is dropped; the root moved up one
+  covered level.
+- D61. Every mask parent must now be Root-owned (`require(item.st_uid == 0)`). This goes
+  beyond the brief's `/home` wording and is stricter: the former rule admitted the runner
+  only because `/home/runner` and `/home/runner/work` were parents of the hosted
+  temporary root. It supersedes D32's statement that "the parent-owner predicate admits
+  only Root or the runner". The `keeper_searchable` capability override becomes even less
+  reachable from admission and is still exercised only by the helper tests.
+- D62 (critique's optional point taken). The runner-home owner check stays uid-only, as it
+  was for the hosted temporary root. `prepare-mask-runner-identity` now also requires
+  `runner.pw_dir == RUNNER_HOME`, which binds the literal to the account it hides,
+  without a new stage. NQ-3's run passed this stage with the two uid conditions, so a
+  hosted refusal there would name the binding alone (interpretation table).
+- D63 (critique's major point accepted). The fixture runs four fixed guarded statements of
+  the non-pure `supported_mask_sources` instead of extracting a single-use helper into
+  production. They are `runner-identity`, the `target-owner` `if/elif/else`, and
+  `parent-owner` and `parent-mode`, each run with its stage assignment. Each is found by
+  an exact AST match of its stage assignment and must be unique. Before compiling, each is
+  checked to call only `require` (with `integer` for `runner-identity`), to use only
+  allowlisted names and to contain only `Assign`, `Expr` and `If` statements. It runs on
+  `SimpleNamespace` metadata, so no `lstat`, `realpath`, pin or mount call is reached.
+  `test_only_allowlisted_pure_definitions_are_executed` now pins the fragment list and
+  each one's call and name sets against the existing forbidden set. The matrices keep to
+  the brief's cases: runner-owned admitted; group or other write, Root, keeper or foreign
+  owner refused; runner- or keeper-owned parents refused; unchanged `home` and `tmp`
+  branches. One deviation from the plan: `runner-identity` is a fourth fragment, for D62.
+- D64. The spec-path invariant cannot be reached today for the three fixed `CONTAINERS`.
+  It binds the invariant on both sides, and M4 shows that the TypeScript `parseSpec`
+  check fires. The refusal itself is covered only by that mutation: no test input reaches
+  it, because every `CONTAINERS` entry passes `container()` and lies outside the masks.
+  The test is named as a reachability guard, "every fixed container spec parses and stays
+  outside every mask" (D73).
+- D65. A latent host-controls defect is fixed. The `_temp` canary would have refused
+  step 16 as soon as prepare passed, because the agent cannot search `/home/runner` or
+  `/home/runner/work` (D34; which of the two is unproven).
+  Root now reads the `HOSTED` canaries (`/home/runner` and `/home/runner/work/_temp`)
+  before the privilege drop, and the TypeScript side requires both counts.
+  - Critique accepted: beneath the runner home, the direct and `/proc/self/root` reads
+    must be exactly `ENOENT`, because `EACCES` would mean host DAC hid the canary instead
+    of the mask. Only `/proc/1/root` keeps the permissive set.
+  - `mkdir` of `/home/runner/work` (direct and `/proc/self/root`) must be `EROFS`.
+- D66. `run()`'s `assertUnmaskedRuntime(node/binary)` (`github.sandbox.ts:680-681`, native
+  intent only) now refuses any runtime beneath `/home/runner`, for example setup-bun's
+  `~/.bun`. That is stricter. The native CI fixture runs only its `/usr/libexec` copies
+  (`native-shell.yml` 124-128), and the new policy test pins them as unmasked. The
+  hosted `run()` case in `github.isolation.test.ts` refuses at `fromBuild` before
+  `assertUnmaskedRuntime`, so a `test.yml` `process.execPath` beneath `~/.bun` does not
+  change it.
+- D67 (critique accepted for scope). The agreement test checks only the copies that
+  cannot import `LinuxIsolation`:
+  - `entry.py`'s `MASKS` and `RUNNER_HOME`, and that it has no `HOST_TEMP`;
+  - the control `parents` tuple;
+  - the host `OBSERVE` `MASKS` and `CANARIES`, against `CANARY_ROOTS`;
+  - the `HOSTED` expression;
+  - that the runner-home subset is exactly `[RUNNER_HOME, HOST_TEMP]`.
+  The review fixes (D73) add the `manage.ts` `manifest`-branch seed list, with `TEMP`
+  taken from `common.ts`, against `CANARY_ROOTS` in order. The kept mutations M1, M2, M4,
+  M5 and M6 prove the test and the `parseSpec` check; M3 was cheap and is kept too.
+- D68. The package is one implement step in two ordered phases (5a Python, 5b
+  TypeScript), and there is one commit. A 5a-only commit would make the Python and
+  TypeScript mask lists disagree, which the brief forbids, and the agreement test would
+  fail.
+- D69. `v2-spawn-review.md`, `process-ownership-followup.md` and `native-shell.yml` are
+  unchanged. No spawn hot-spot file or ownership contract is touched, and the job `if`
+  already allows `native-qualify`.
+- D70. The NQ-4 row records its two gate runs from `get_workflow_run` (see the dispatch
+  log).
+- D71. The expected hosted outcome above is a prediction only. Nothing here qualifies
+  native isolation. Both native build switches and `FLOOR` stay false, native plus
+  `OwnedProcess` stays refused (`cross-spawn-spawner.ts:405-411`), and the §4.4 and §6
+  Q2/Q3 decisions stay open and owner-gated.
+- D72. Tooling notes:
+  - A `pyflakes` run over the fixture, from a scratch install, was denied by the
+    permission system. It was not retried, and the scratch install was removed. The
+    AST-only `static-check.py` covers unbound names instead, coarsely.
+  - One `bun test` invocation from the worktree root was refused by the repository's
+    `do-not-run-tests-from-root` guard, so no test ran. Every recorded run is from a
+    package directory.
+- D73 (review round one; every finding accepted, none disputed). Uncommitted, like the
+  rest of NQ-5:
+  - The agreement test in `github.isolation.test.ts` now also reads the `manage.ts`
+    seed list in the `manifest` branch and requires it to equal `CANARY_ROOTS` in order,
+    with `TEMP` from `common.ts` (two findings, one fix; it closes D67's deferral).
+    `manage.ts` keeps its literal list, because importing `native-shell-payload.ts` would
+    change the separately bundled management entry (`native-shell.yml:65`) and pull
+    `LinuxIsolation` into it. M6 proves the check.
+  - The `entry.py` `RUNNER_HOME` comment no longer states as fact that the keeper cannot
+    search the runner-owned ancestors. It says at least one of them could not be
+    searched, and cites run 43675930370 and `prepare-mask-host-temp-keeper-search`. D65
+    now names `/home/runner` or `/home/runner/work` (D34). The `linux.ts` `HOST_TEMP`
+    comment states the admission requirement, not a hosted fact.
+  - The spec-path test in `process-isolation-linux.test.ts` is renamed "every fixed
+    container spec parses and stays outside every mask", is commented as a reachability
+    guard, and drops its repeated `assertUnmaskedRuntime` loop: 286 to 274 `expect()`
+    calls, the same 18 tests. D64 records that only M4 covers the refusal.
+  - The interpretation table gains a row for a refusal after prepare in the mask-source
+    re-check, which can mean that a runner-owned step changed `/home/runner`'s mode or
+    owner. The status section names the same fail-closed exposure.
+  - The commit-step gate on guard-unit before the single dispatch is written under
+    Deferred.
+  - Re-run: both Python files parse; `static-check.py` passes 49 checks;
+    `process-isolation-linux.test.ts` 18 pass, 274 `expect()`;
+    `github.isolation.test.ts` 34 pass, 2989 `expect()`; `policy.test.ts` 4 pass, 58
+    `expect()`; `bun typecheck` passes in `packages/core` and `packages/engine`; Prettier
+    reports the three edited TypeScript files unchanged.
+- D74 (commit step). The commit stages only the twelve NQ-5 paths: `entry.py`,
+  `linux.ts`, `github.isolation.ts`, the Python fixture, the two Bun test files, the four
+  native-shell fixtures, `native-isolation-status.md` and this file. The package-table
+  row reads "Committed" in the NQ-5 commit itself, as in D45, and the NQ-5 dispatch-log
+  row stays pending: the commit step's report carries the guard-unit and typecheck run
+  IDs and the native run ID, and NQ-6 fills the row from the API. Before the push, the
+  commit step re-parsed both Python files with `ast.parse`, reran the three Bun test files
+  one at a time (`process-isolation-linux.test.ts` 18 pass, 274 `expect()`;
+  `github.isolation.test.ts` 34 pass, 2989 `expect()`; `policy.test.ts` 4 pass, 58
+  `expect()`), ran `bun typecheck` in `packages/core` and `packages/engine`, and ran the
+  full `bun turbo typecheck --concurrency=2` with `TURBO_CACHE_DIR` inside the worktree
+  (27 of 27 tasks). The single `diagnostic_cell` dispatch follows the guard-unit gate
+  written under Deferred.

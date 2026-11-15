@@ -263,3 +263,61 @@ depend on it, but a narrower `/home/runner/work` mask would need a per-ancestor 
 first. ACLs and mandatory access control are not modelled, and the hosted run is the
 authority. The run and its result are logged in `native-qualify-notes.md`. No production
 activation is authorized by this document.
+
+## Runner-home mask, 15 November 2026
+
+The bounded lane dispatch `43675930370` (job `132695971881`, head `f05f9916`) closed at
+admission with `prepare-mask-host-temp-keeper-search`. The keeper cannot search a strict
+ancestor of the fixed hosted temporary root `/home/runner/work/_temp`, which is
+`/home/runner` or `/home/runner/work`; which of the two is still unproven. The earlier
+dispatch `43660129312` closed with `...-bwrap-destination-host-temp-eacces-...` on that
+same fifth mask. Bubblewrap applies its operations in order, so the four earlier masks
+over Root-owned host directories did not fail. That last step is code reading of
+bubblewrap, not a hosted witness.
+
+The mask list is now `/home/vector-agent`, `/tmp`, `/var/tmp`, `/run` and `/home/runner`,
+each an empty read-only tmpfs in that order. This supersedes every earlier mask list in
+this document that names `/home/runner/work/_temp` as a mask root. The fixed
+`RUNNER_TEMP` stays `/home/runner/work/_temp` for the TypeScript `hostedTemporary`
+equality and is hidden beneath the runner-home mask. The mask now also hides every other
+runner-home path, such as the runner install and diagnostic trees, `~/.bun` and tool
+caches. This is a fact about the mask's extent, not a security or qualification claim.
+
+Proof obligations in the source:
+
+- Admission requires the following:
+  - the runner home is a canonical directory owned by the runner uid, with no group or
+    other write;
+  - the runner account's home directory is exactly `/home/runner`;
+  - every mask parent is canonical, Root-owned, without group or other write, and
+    keeper-searchable;
+  - each mask root's mount is descriptor-pinned on its recorded device;
+  - nested mounts beneath any mask are pinned origins.
+  Alias refusal and the capture closure are unchanged.
+- Construction checks each mask twice as a live, read-only, empty, keeper-owned `0755`
+  tmpfs.
+- No published container, stage, scratch, directory or socket path may lie under a mask
+  (`validate_spec`, `parseSpec`).
+- The native `run()` refuses any engine or runtime beneath a mask. That now includes
+  `/home/runner`, so a runtime installed there (for example by setup-bun) is refused, which
+  is stricter. The CI fixture runs only its copies under `/usr/libexec`.
+- After prepare, mask-source validation re-checks each root record's mode, uid and gid,
+  and the runner-owned `/home/runner` is now one of those records. A runner-owned step
+  that changes `/home/runner`'s mode or owner after prepare therefore makes validation
+  refuse in a later step. That fails closed; the check is not to be widened.
+- Still open until a hosted run passes prepare, as CI witnesses:
+  - the runner-home canaries are exactly `ENOENT` through the mask;
+  - `/home/runner/work` cannot be recreated (`EROFS`);
+  - Root reads both hosted seeds before the agent's privilege drop.
+
+The hosted temporary label families are removed and replaced in place by `runner-home`
+ones, consistently in `entry.py`, the CI-only Python fixture (45 tests) and the
+TypeScript decoder with its test file `github.isolation.test.ts` (34 tests). The mask
+admission product stays 73 stages, the TypeScript per-mask entries 62, and the keeper
+product 97 logs and 582 stages. No `chmod` or `chown` is added, no mask is dropped, and
+no alias or capture check is weakened. The run and its result are logged in
+`native-qualify-notes.md`.
+
+No qualification follows from this change. Both native build switches and `FLOOR` stay
+false, and native plus `OwnedProcess` stays refused. No production activation is
+authorized by this document.
