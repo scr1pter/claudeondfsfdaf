@@ -3,35 +3,49 @@
 // as the gateway would; vectordev.ai is a recorder behind the cloud client's Services seam; GitHub is a loopback fake;
 // time, the deadline timer and the heartbeat interval come from a fake clock. Everything runs under the strict network
 // guard, and credentials come from holders of the test's own. It spawns only git and the tools' commands, so it runs
-// locally as well as in the lane. One case emits SIGTERM to this process, as the lifecycle tests do in a child, and
-// restores process.exitCode afterwards.
+// locally as well as in the lane. Some cases emit SIGTERM to this process, as the lifecycle tests do in a child, and
+// restore process.exitCode afterwards. The conversation save (V27) runs here because only this file's runtime has the
+// Codium catalog a Codium session needs.
 
 import { afterAll, describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { APICallError } from "ai"
-import { Clock, Duration, Effect, Exit, Fiber, Layer, Schedule } from "effect"
+import { Clock, Context, Duration, Effect, Exit, Fiber, Layer, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
+import { Database } from "@vectordevai/core/database/database"
+import { EventV2 } from "@vectordevai/core/event"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { ModelPlans } from "@vectordevai/core/model-plans"
+import { ProjectV2 } from "@vectordevai/core/project"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { PublicSessionShare } from "@vectordevai/core/public-session-share"
+import { SessionArchive } from "@vectordevai/core/share/archive"
 import { InvalidRequestReason, LLMError } from "@vectordevai/llm"
 import {
   BOT_REFUSED,
   CANCEL_REPEAT_MS,
   DEADLINE_MISSING,
   SERVICE_TASK,
+  SESSION_HEADROOM,
+  SESSION_NOT_SAVED,
+  SESSION_SAVED,
+  SESSION_TOO_LARGE,
   gatewayRetry,
   gatewayRule,
   githubAgentPhase,
   runDeadline,
   stoppedLine,
   type AgentPhaseInput,
+  type SessionExport,
+  type SessionSave,
 } from "../../src/cli/cmd/github.agent"
 import { GithubBundle } from "../../src/cli/cmd/github.bundle"
 import { verifyGithubRun } from "../../src/cli/cmd/github.cloud"
 import { untrustedJson } from "../../src/cli/cmd/github.policy"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
+import { allowConversationRestore, decryptConversation, encryptConversation } from "../../src/cli/cmd/github.session"
+import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
@@ -42,7 +56,10 @@ import { runtime, setup } from "../lib/research"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import {
+  ARTIFACT_KEY,
   CHANNEL,
+  REPOSITORY_ID,
+  RID,
   RUN_ID,
   TICKET_FIXTURE,
   cleanup,
@@ -51,6 +68,7 @@ import {
   commitSetup,
   eventFile,
   fakeClock,
+  folder,
   fakeGithub,
   holder,
   resetTree,
@@ -864,6 +882,742 @@ describe("signals", () => {
           process.exitCode = exitCode ?? 0
           github.stop()
         }
+      }),
+    { git: true },
+    60_000,
+  )
+})
+
+// V27 "The file" (BT05): a Codium run with the runner's proof channel saves its conversation as vector-out/session.vsa
+// under the ordinary key, attested to the runner; anything that cannot save costs only that file and one fixed line.
+describe("the conversation save (V27, BT05)", () => {
+  const THREAD = `dispatch-${RUN_ID}`
+  const LIMIT = GithubAgents.PATCH_LIMITS.sessionBytes
+  const ROOM = LIMIT - SESSION_HEADROOM
+  const SAVE_LINES = [SESSION_SAVED, SESSION_NOT_SAVED, SESSION_TOO_LARGE]
+  const WORDS = "fixture gateway words: credits, plan, $9"
+  // P6: nothing public names a plan, a price, a billing state or a gateway's words.
+  const P6 =
+    /dispute|fraud|past_due|payment_failed|vector-(?:10|50|100|200)|\b(?:Plus|Pro|Max|Ultra) plan|fixture gateway|credits|[$€£]\s*\d/i
+  const keyRequest = { path: GithubAgents.ENDPOINT.artifactKey, body: { thread: THREAD }, authorization: BEARER }
+  const keyOk: SessionSave["artifactKey"] = async () => ({ status: "ok", key: ARTIFACT_KEY })
+  const sessionFile = (dir: string) => path.join(dir, "vector-out", "session.vsa")
+  const exists = (file: string) =>
+    fs.lstat(file).then(
+      () => true,
+      () => false,
+    )
+  const listing = (dir: string) =>
+    fs.readdir(path.join(dir, "vector-out")).then(
+      (names) => names.sort(),
+      () => [] as string[],
+    )
+  const saveLines = (lines: string[]) => lines.filter((line) => SAVE_LINES.includes(line))
+  const sessionOf = (lines: string[]) =>
+    lines.find((line) => line.startsWith("vector session "))?.slice("vector session ".length)
+  const opened = (bytes: Uint8Array, expected: { key?: typeof ARTIFACT_KEY; thread?: string; rid?: string } = {}) =>
+    decryptConversation({
+      bytes,
+      key: expected.key ?? ARTIFACT_KEY,
+      expected: { repositoryId: REPOSITORY_ID, thread: expected.thread ?? THREAD, rid: expected.rid ?? RID },
+    })
+  const proofHolder = () => Effect.promise(() => holder("codium", true, { sessionProof: true }))
+
+  /** The repository as the base left it, with no vector-out, and the model's two turns: the write, then its text. */
+  const fresh = Effect.fn("AgentCodiumTest.fresh")(function* (
+    test: Effect.Success<ReturnType<typeof start>>,
+    text = `Wrote the notes. ${CHANNEL.runToken}`,
+  ) {
+    yield* Effect.promise(() => resetTree(test.dir))
+    yield* Effect.promise(() => fs.rm(path.join(test.dir, "vector-out"), { recursive: true, force: true }))
+    codium.reset({})
+    yield* test.llm.tool("write", writeNotes(test.dir))
+    yield* test.llm.text(text)
+  })
+
+  /** A Codium dispatch's step env with the job's repository id and the run id mint wrote; `extra` replaces names. */
+  const saveEnv = Effect.fn("AgentCodiumTest.saveEnv")(function* (
+    github: string,
+    time: ReturnType<typeof fakeClock>,
+    extra: Record<string, string | undefined> = {},
+  ) {
+    return {
+      ...(yield* dispatch({ github, deadline: String(time.state.now + HOUR) })),
+      GITHUB_REPOSITORY_ID: REPOSITORY_ID,
+      VECTOR_RUN_ID: RID,
+      ...extra,
+    }
+  })
+
+  /** The test's stand-in for the archive export: the run's own session messages, as plain JSON. */
+  const archiveOf = Effect.fn("AgentCodiumTest.archiveOf")(function* () {
+    const sessions = yield* Session.Service
+    const exportSession: SessionExport = (sessionID) =>
+      sessions
+        .messages({ sessionID })
+        .pipe(Effect.map((messages) => ({ fixture: "session-archive", sessionID, messages })))
+    return exportSession
+  })
+
+  /** An attestation that records each call and answers `answer`. */
+  const attestation = (answer: boolean) => {
+    const calls: Uint8Array[] = []
+    return {
+      calls,
+      attest: (bytes: Uint8Array) => {
+        calls.push(Uint8Array.from(bytes))
+        return answer
+      },
+    }
+  }
+
+  it.instance(
+    "a Codium run saves its conversation as session.vsa that opens with the run's key and identity, and the runner attests exactly those bytes",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        yield* fresh(test)
+        const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+        const proof = attestation(true)
+        const time = fakeClock()
+        const run = yield* phase({
+          env: yield* saveEnv(github.url, time),
+          credentials: yield* proofHolder(),
+          services: cloud.services,
+          clock: time.clock,
+          session: { exportSession: yield* archiveOf(), attest: proof.attest },
+        })
+        github.stop()
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(yield* Effect.promise(() => listing(test.dir))).toEqual(["patch.diff", "session.vsa", "summary.json"])
+        const file = sessionFile(test.dir)
+        // Windows reports its ACL-backed files as 0666, as github.bundle.test.ts notes for the bundle's own files.
+        if (process.platform !== "win32") expect((yield* Effect.promise(() => fs.stat(file))).mode & 0o777).toBe(0o600)
+        const bytes = yield* Effect.promise(() => fs.readFile(file))
+        expect(proof.calls.length).toBe(1)
+        expect(Buffer.from(proof.calls[0]!).equals(bytes)).toBe(true)
+        const conversation = yield* Effect.promise(() => opened(bytes))
+        expect(conversation).toBeDefined()
+        expect(conversation!.header).toMatchObject({
+          keyId: ARTIFACT_KEY.keyId,
+          repositoryId: REPOSITORY_ID,
+          thread: THREAD,
+          rid: RID,
+        })
+        expect(conversation!.manifest.files.map((entry) => entry.path)).toEqual(["session.json"])
+        const sessionID = sessionOf(run.lines)
+        expect(sessionID).toBeDefined()
+        expect(conversation!.session).toMatchObject({ fixture: "session-archive", sessionID })
+        // The archive is redacted with the run's credentials before it is encrypted.
+        const json = JSON.stringify(conversation!.session)
+        expect(json).toContain("Wrote the notes.")
+        expect(json).toContain("[redacted]")
+        expect(json).not.toContain(CHANNEL.runToken)
+        expect(allowConversationRestore(conversation!)).toBe(true)
+        // Another key, thread or run opens nothing.
+        const other = { key: Buffer.alloc(32, 8).toString("base64url"), keyId: ARTIFACT_KEY.keyId }
+        expect(yield* Effect.promise(() => opened(bytes, { key: other }))).toBeUndefined()
+        expect(
+          yield* Effect.promise(() => opened(bytes, { key: { ...ARTIFACT_KEY, keyId: "fedcba9876543210" } })),
+        ).toBeUndefined()
+        expect(yield* Effect.promise(() => opened(bytes, { thread: `dispatch-${Number(RUN_ID) + 1}` }))).toBeUndefined()
+        expect(
+          yield* Effect.promise(() => opened(bytes, { rid: `gh-${REPOSITORY_ID}-${RUN_ID}-1-98` })),
+        ).toBeUndefined()
+        // The bundle is the run's as before; the session file is no part of the patch.
+        const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+        expect(bundle.summary).toMatchObject({ mode: "codium", outcome: "changes", draft: false })
+        expect(bundle.patch).toContain("NOTES.md")
+        expect(bundle.patch).not.toContain("vector-out")
+        // One key request for the run's own thread with its token, then the settle; the key is masked.
+        expect(cloud.requests).toEqual([keyRequest, settle("changes")])
+        expect(cloud.masks).toContain(ARTIFACT_KEY.key)
+        expect(saveLines(run.lines)).toEqual([SESSION_SAVED])
+        const output = JSON.stringify({ lines: run.lines, summary: bundle.summary, notices: cloud.notices })
+        expect(output).not.toMatch(P6)
+        expect(output).not.toContain(ARTIFACT_KEY.key)
+        expect(output).not.toContain(CHANNEL.runToken)
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "a refused, expired, unavailable, malformed or failed key answer saves nothing and leaves the bundle and outcome as they were",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const credentials = yield* proofHolder()
+        const exportSession = yield* archiveOf()
+        const answers: [string, () => Response][] = [
+          [
+            "not allowed",
+            () => Response.json({ error: { code: "ARTIFACT_KEY_NOT_ALLOWED", message: WORDS } }, { status: 403 }),
+          ],
+          [
+            "expired",
+            () => Response.json({ error: { code: "MODEL_PLAN_RUN_EXPIRED", message: WORDS } }, { status: 401 }),
+          ],
+          ["refused", () => Response.json({ error: { code: "RUN_TOKEN_INVALID", message: WORDS } }, { status: 401 })],
+          [
+            "unavailable",
+            () => Response.json({ error: { code: "RUN_ARTIFACTS_UNAVAILABLE", message: WORDS } }, { status: 503 }),
+          ],
+          ["malformed", () => Response.json({ key: "short", keyId: ARTIFACT_KEY.keyId })],
+          [
+            "outage",
+            () => {
+              throw new Error(WORDS)
+            },
+          ],
+        ]
+        for (const [name, answer] of answers) {
+          yield* fresh(test)
+          const cloud = cloudRecorder({ artifactKey: answer })
+          const proof = attestation(true)
+          const time = fakeClock()
+          const run = yield* phase({
+            env: yield* saveEnv(github.url, time),
+            credentials,
+            services: cloud.services,
+            clock: time.clock,
+            session: { exportSession, attest: proof.attest },
+          })
+          expect({ name, result: run.result }).toMatchObject({ name, result: { exitCode: 0, outcome: "changes" } })
+          expect({ name, files: yield* Effect.promise(() => listing(test.dir)) }).toEqual({
+            name,
+            files: ["patch.diff", "summary.json"],
+          })
+          const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+          expect({ name, patch: bundle.patch.includes("NOTES.md"), stop: bundle.summary?.stop }).toEqual({
+            name,
+            patch: true,
+            stop: undefined,
+          })
+          expect({ name, attested: proof.calls.length }).toEqual({ name, attested: 0 })
+          expect({ name, lines: saveLines(run.lines) }).toEqual({ name, lines: [SESSION_NOT_SAVED] })
+          expect({ name, cloud: cloud.requests }).toEqual({ name, cloud: [keyRequest, settle("changes")] })
+          const output = JSON.stringify({ lines: run.lines, summary: bundle.summary, notices: cloud.notices })
+          expect({ name, leaked: P6.test(output) }).toEqual({ name, leaked: false })
+        }
+        github.stop()
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    180_000,
+  )
+
+  it.instance(
+    "an attestation the runner does not record removes session.vsa, and the real attestation refuses without the runner's proof channel",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const credentials = yield* proofHolder()
+        const exportSession = yield* archiveOf()
+
+        // The runner records nothing: the file was written, its bytes were offered, and it is gone.
+        yield* fresh(test)
+        const refused = attestation(false)
+        const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+        const time = fakeClock()
+        const run = yield* phase({
+          env: yield* saveEnv(github.url, time),
+          credentials,
+          services: cloud.services,
+          clock: time.clock,
+          session: { exportSession, attest: refused.attest },
+        })
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(refused.calls.length).toBe(1)
+        expect(yield* Effect.promise(() => opened(refused.calls[0]!))).toBeDefined()
+        expect(yield* Effect.promise(() => exists(sessionFile(test.dir)))).toBe(false)
+        expect(yield* Effect.promise(() => listing(test.dir))).toEqual(["patch.diff", "summary.json"])
+        expect(saveLines(run.lines)).toEqual([SESSION_NOT_SAVED])
+        expect(cloud.requests).toEqual([keyRequest, settle("changes")])
+
+        // The default is the real attestation, which writes only to the runner's FD3; this process has none, so the
+        // file it would vouch for is removed.
+        yield* fresh(test)
+        const real = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+        const later = fakeClock()
+        const unattested = yield* phase({
+          env: yield* saveEnv(github.url, later),
+          credentials,
+          services: real.services,
+          clock: later.clock,
+          session: { exportSession },
+        })
+        github.stop()
+        expect(GithubSecrets.credentials.sessionProof()).toBe(false)
+        expect(unattested.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(yield* Effect.promise(() => exists(sessionFile(test.dir)))).toBe(false)
+        expect(saveLines(unattested.lines)).toEqual([SESSION_NOT_SAVED])
+        expect(real.requests).toEqual([keyRequest, settle("changes")])
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "SIGTERM while the conversation is exported, its key is fetched or it is encrypted writes no file and no bundle and logs no save line",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const credentials = yield* proofHolder()
+        const exportSession = yield* archiveOf()
+        const aborted = (signal: AbortSignal | undefined) =>
+          new Promise<void>((done) => {
+            if (!signal || signal.aborted) return done()
+            signal.addEventListener("abort", () => done(), { once: true })
+          })
+        const seen: { signal?: AbortSignal } = {}
+        // Each stage's own SIGTERM, then the stage waits for the run's abort before it answers, so the check right
+        // after that stage is the one that stops the save.
+        const variants: [string, Partial<SessionSave>][] = [
+          [
+            "export",
+            {
+              exportSession: () =>
+                Effect.sync(() => {
+                  process.emit("SIGTERM")
+                }).pipe(Effect.andThen(Effect.never)),
+            },
+          ],
+          [
+            "key",
+            {
+              exportSession,
+              artifactKey: async (input) => {
+                process.emit("SIGTERM")
+                await aborted(input?.signal)
+                return { status: "ok", key: ARTIFACT_KEY }
+              },
+            },
+          ],
+          [
+            "encrypt",
+            {
+              exportSession,
+              artifactKey: async (input) => {
+                seen.signal = input?.signal
+                return { status: "ok", key: ARTIFACT_KEY }
+              },
+              encrypt: async (input) => {
+                process.emit("SIGTERM")
+                await aborted(seen.signal)
+                return encryptConversation(input)
+              },
+            },
+          ],
+        ]
+        const exitCode = process.exitCode
+        const listeners = process.listenerCount("SIGTERM")
+        try {
+          for (const [name, stage] of variants) {
+            yield* fresh(test)
+            const calls = { key: 0, encrypt: 0, attest: 0 }
+            const cloud = cloudRecorder()
+            const time = fakeClock()
+            const run = yield* phase({
+              env: yield* saveEnv(github.url, time),
+              credentials,
+              services: cloud.services,
+              clock: time.clock,
+              session: {
+                ...stage,
+                artifactKey: (input) => {
+                  calls.key++
+                  return (stage.artifactKey ?? keyOk)(input)
+                },
+                encrypt: (input) => {
+                  calls.encrypt++
+                  return (stage.encrypt ?? encryptConversation)(input)
+                },
+                attest: () => {
+                  calls.attest++
+                  return true
+                },
+              },
+            })
+            expect({ name, result: run.result }).toEqual({ name, result: undefined })
+            expect({ name, exitCode: process.exitCode }).toEqual({ name, exitCode: 143 })
+            // The phase's own work ends with its deadline timer cleared; only then is the absence of files meaningful.
+            yield* Effect.promise(async () => {
+              const until = Date.now() + 20_000
+              while (!time.state.timers[0]?.cleared && Date.now() < until)
+                await new Promise((done) => setTimeout(done, 20))
+            })
+            expect({ name, cleared: time.state.timers.map((timer) => timer.cleared) }).toEqual({
+              name,
+              cleared: [true],
+            })
+            expect({ name, none: yield* Effect.promise(() => noBundle(test.dir)) }).toEqual({ name, none: true })
+            expect({ name, calls }).toEqual({
+              name,
+              calls: { key: name === "export" ? 0 : 1, encrypt: name === "encrypt" ? 1 : 0, attest: 0 },
+            })
+            expect({ name, lines: saveLines(run.lines) }).toEqual({ name, lines: [] })
+            expect({ name, cloud: cloud.requests }).toEqual({ name, cloud: [settle("cancelled")] })
+            expect({ name, listeners: process.listenerCount("SIGTERM") }).toEqual({ name, listeners })
+            process.exitCode = 0
+          }
+        } finally {
+          // Bun keeps an exit code that was set once, so a cleared one is set back to 0.
+          process.exitCode = exitCode ?? 0
+          github.stop()
+        }
+      }),
+    { git: true },
+    90_000,
+  )
+
+  it.instance(
+    "own key asks for no conversation key, exports nothing and writes no session file, even with a proof channel and a run identity",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start("own-key")
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const owner = yield* Effect.promise(() => holder("own-key"))
+        yield* test.llm.tool("write", writeNotes(test.dir))
+        yield* test.llm.text("Wrote the notes.")
+        const calls = { key: 0, export: 0, attest: 0 }
+        const cloud = cloudRecorder()
+        const run = yield* phase({
+          env: {
+            ...(yield* dispatch({ github: github.url, mode: "own-key" })),
+            GITHUB_REPOSITORY_ID: REPOSITORY_ID,
+            VECTOR_RUN_ID: RID,
+          },
+          credentials: { ...owner, sessionProof: () => true },
+          services: cloud.services,
+          clock: fakeClock().clock,
+          session: {
+            artifactKey: (input) => {
+              calls.key++
+              return keyOk(input)
+            },
+            exportSession: () => {
+              calls.export++
+              return Effect.succeed({})
+            },
+            attest: () => {
+              calls.attest++
+              return true
+            },
+          },
+        })
+        github.stop()
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(calls).toEqual({ key: 0, export: 0, attest: 0 })
+        expect(cloud.requests).toEqual([])
+        expect(codium.state.requests).toEqual([])
+        expect(yield* Effect.promise(() => listing(test.dir))).toEqual(["patch.diff", "summary.json"])
+        expect(saveLines(run.lines)).toEqual([])
+        expect((yield* Effect.promise(() => bundleOf(test.dir))).patch).toContain("NOTES.md")
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "a conversation past PATCH_LIMITS.sessionBytes less the codec's headroom is skipped before any key request, and one at that size is saved",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const credentials = yield* proofHolder()
+        // JSON.stringify({p}) is the string's length plus 8 bytes.
+        for (const [name, length] of [
+          ["over", ROOM - 7],
+          ["at", ROOM - 8],
+        ] as const) {
+          yield* fresh(test, "Wrote the notes.")
+          const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+          const proof = attestation(true)
+          const time = fakeClock()
+          const run = yield* phase({
+            env: yield* saveEnv(github.url, time),
+            credentials,
+            services: cloud.services,
+            clock: time.clock,
+            session: { exportSession: () => Effect.succeed({ p: "x".repeat(length) }), attest: proof.attest },
+          })
+          expect({ name, result: run.result }).toMatchObject({ name, result: { exitCode: 0, outcome: "changes" } })
+          expect({ name, patch: (yield* Effect.promise(() => bundleOf(test.dir))).patch.includes("NOTES.md") }).toEqual(
+            { name, patch: true },
+          )
+          if (name === "over") {
+            expect(saveLines(run.lines)).toEqual([SESSION_TOO_LARGE])
+            expect(cloud.requests).toEqual([settle("changes")])
+            expect(proof.calls.length).toBe(0)
+            expect(yield* Effect.promise(() => exists(sessionFile(test.dir)))).toBe(false)
+            continue
+          }
+          // At the bound the key is asked for once and the codec takes it: the file opens to the same conversation.
+          expect(saveLines(run.lines)).toEqual([SESSION_SAVED])
+          expect(cloud.requests).toEqual([keyRequest, settle("changes")])
+          const bytes = yield* Effect.promise(() => fs.readFile(sessionFile(test.dir)))
+          expect(bytes.byteLength).toBeLessThanOrEqual(LIMIT)
+          expect(proof.calls.length).toBe(1)
+          const conversation = yield* Effect.promise(() => opened(bytes))
+          expect((conversation?.session as { p?: string } | undefined)?.p?.length).toBe(length)
+        }
+        github.stop()
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "a desktop Brain run saves nothing until BT07b and asks for no key, and a session file the model wrote is removed",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        yield* Effect.promise(() => resetTree(test.dir))
+        codium.reset({})
+        yield* test.llm.tool("write", { filePath: sessionFile(test.dir), content: "planted by the model\n" })
+        yield* test.llm.tool("write", writeNotes(test.dir))
+        yield* test.llm.text("Wrote the notes.")
+        const calls = { export: 0, attest: 0 }
+        const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+        const time = fakeClock()
+        const run = yield* phase({
+          env: yield* saveEnv(github.url, time, { VECTOR_BRAIN_UPLOAD: `vbu_${"A".repeat(16)}${"b-".repeat(8)}` }),
+          credentials: yield* proofHolder(),
+          services: cloud.services,
+          clock: time.clock,
+          session: {
+            exportSession: () => {
+              calls.export++
+              return Effect.succeed({})
+            },
+            attest: () => {
+              calls.attest++
+              return true
+            },
+          },
+        })
+        github.stop()
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(yield* Effect.promise(() => listing(test.dir))).toEqual(["patch.diff", "summary.json"])
+        expect(calls).toEqual({ export: 0, attest: 0 })
+        // No artifact-key and no brain-download request: the settle alone.
+        expect(cloud.requests).toEqual([settle("changes")])
+        expect(saveLines(run.lines)).toEqual([])
+        const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+        expect(bundle.patch).toContain("NOTES.md")
+        expect(bundle.patch).not.toContain("vector-out")
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    60_000,
+  )
+
+  // A directory link has no portable Windows fixture; github.bundle.test.ts selects its link cases the same way.
+  const linkCase = process.platform === "win32" ? it.instance.skip : it.instance
+
+  linkCase(
+    "a vector-out linked out of the worktree is never followed: its target's session.vsa stays, nothing is written or attested through it, and writeBundle refuses the run",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        yield* fresh(test)
+        // What a command the model ran could leave behind: vector-out replaced by a link to a directory outside the
+        // worktree that holds a session.vsa of its own. Nothing in the run touches vector-out before record().
+        const outside = yield* Effect.promise(() => folder("vector-agent-linked-"))
+        yield* Effect.promise(() => fs.writeFile(path.join(outside, "session.vsa"), "outside\n"))
+        yield* Effect.promise(() => fs.symlink(outside, path.join(test.dir, "vector-out"), "dir"))
+        const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+        const proof = attestation(true)
+        const time = fakeClock()
+        const run = yield* phase({
+          env: yield* saveEnv(github.url, time),
+          credentials: yield* proofHolder(),
+          services: cloud.services,
+          clock: time.clock,
+          session: { exportSession: yield* archiveOf(), attest: proof.attest },
+        })
+        github.stop()
+        // Neither removal nor the write went through the link, and the link is still the link.
+        expect(yield* Effect.promise(() => fs.readdir(outside))).toEqual(["session.vsa"])
+        expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "session.vsa"), "utf8"))).toBe("outside\n")
+        expect((yield* Effect.promise(() => fs.lstat(path.join(test.dir, "vector-out")))).isSymbolicLink()).toBe(true)
+        // The write refuses the link; the key was asked for before it, and nothing was attested.
+        expect(proof.calls.length).toBe(0)
+        expect(saveLines(run.lines)).toEqual([SESSION_NOT_SAVED])
+        // writeBundle refuses a vector-out that is not a real directory, so the run ends failed with no bundle.
+        expect(run.result).toEqual({ exitCode: 1 })
+        expect(run.lines.filter((line) => line.startsWith("error: "))).toEqual([
+          "error: Vector could not record the run's changes. vector-out is not a directory.",
+        ])
+        expect(cloud.requests).toEqual([keyRequest, settle("failed")])
+        expect(P6.test(JSON.stringify(run.lines))).toBe(false)
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "without a proof channel, an identity of this run, a session archive or a shareable session, no key is asked",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const proof = yield* proofHolder()
+        const plain = yield* Effect.promise(() => holder("codium"))
+        const exportSession = yield* archiveOf()
+        const rows: [
+          string,
+          { credentials?: typeof plain; env?: Record<string, string | undefined>; session?: Partial<SessionSave> },
+          string[],
+        ][] = [
+          ["no proof channel", { credentials: plain, session: { exportSession } }, []],
+          ["no run id", { env: { VECTOR_RUN_ID: undefined }, session: { exportSession } }, [SESSION_NOT_SAVED]],
+          [
+            "another repository's run id",
+            { env: { VECTOR_RUN_ID: `gh-999-${RUN_ID}-1-99` }, session: { exportSession } },
+            [SESSION_NOT_SAVED],
+          ],
+          [
+            "another attempt's run id",
+            { env: { VECTOR_RUN_ID: `gh-${REPOSITORY_ID}-${RUN_ID}-2-99` }, session: { exportSession } },
+            [SESSION_NOT_SAVED],
+          ],
+          [
+            "another run's run id",
+            { env: { VECTOR_RUN_ID: `gh-${REPOSITORY_ID}-${Number(RUN_ID) + 1}-1-99` }, session: { exportSession } },
+            [SESSION_NOT_SAVED],
+          ],
+          [
+            "no repository id",
+            { env: { GITHUB_REPOSITORY_ID: undefined }, session: { exportSession } },
+            [SESSION_NOT_SAVED],
+          ],
+          ["a failed export", { session: { exportSession: () => Effect.fail(new Error(WORDS)) } }, [SESSION_NOT_SAVED]],
+          [
+            "an owner-only session",
+            { session: { exportSession: () => Effect.succeed({ privacy: "owner-only" as const, messages: [] }) } },
+            [SESSION_NOT_SAVED],
+          ],
+          // The default looks the archive up; this runtime has none.
+          ["no session archive", {}, [SESSION_NOT_SAVED]],
+        ]
+        for (const [name, row, lines] of rows) {
+          yield* fresh(test)
+          const calls = { attest: 0 }
+          const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+          const time = fakeClock()
+          const run = yield* phase({
+            env: yield* saveEnv(github.url, time, row.env),
+            credentials: row.credentials ?? proof,
+            services: cloud.services,
+            clock: time.clock,
+            session: {
+              ...row.session,
+              attest: () => {
+                calls.attest++
+                return true
+              },
+            },
+          })
+          expect({ name, result: run.result }).toMatchObject({ name, result: { exitCode: 0, outcome: "changes" } })
+          expect({ name, lines: saveLines(run.lines) }).toEqual({ name, lines })
+          expect({ name, cloud: cloud.requests }).toEqual({ name, cloud: [settle("changes")] })
+          expect({ name, attest: calls.attest }).toEqual({ name, attest: 0 })
+          expect({ name, files: yield* Effect.promise(() => listing(test.dir)) }).toEqual({
+            name,
+            files: ["patch.diff", "summary.json"],
+          })
+          expect({ name, leaked: P6.test(JSON.stringify(run.lines)) }).toEqual({ name, leaked: false })
+        }
+        github.stop()
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    180_000,
+  )
+
+  it.instance(
+    "the default export is the session archive's: the saved file holds the run's session in the format SessionArchive.import decodes",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const github = fakeGithub({ roles: { alice: "write" } })
+        // The real SessionArchive over this runtime's database, behind a share service whose other methods die: the
+        // save may use only its export. Its event and project services are only acquired, never used, by an export.
+        const bridge = yield* EventV2Bridge.Service
+        const built = yield* Layer.build(
+          SessionArchive.node.implementation as Layer.Layer<
+            SessionArchive.Service,
+            never,
+            Database.Service | EventV2.Service | ProjectV2.Service
+          >,
+        ).pipe(
+          Effect.provideService(EventV2.Service, bridge),
+          Effect.provideService(
+            ProjectV2.Service,
+            ProjectV2.Service.of({
+              directories: () => Effect.die(new Error("An export resolves no project.")),
+              resolve: () => Effect.die(new Error("An export resolves no project.")),
+              commit: () => Effect.die(new Error("An export resolves no project.")),
+            }),
+          ),
+        )
+        const archive = Context.get(built, SessionArchive.Service)
+        const unused = () => Effect.die(new Error("The conversation save uses only the archive's export."))
+        const share = PublicSessionShare.Service.of({
+          ...archive,
+          publish: unused,
+          review: unused,
+          flush: unused,
+          unshare: unused,
+          removeTree: unused,
+          auto: unused,
+          read: unused,
+        })
+        yield* fresh(test)
+        const cloud = cloudRecorder({ artifactKey: () => Response.json(ARTIFACT_KEY) })
+        const proof = attestation(true)
+        const time = fakeClock()
+        const run = yield* phase({
+          env: yield* saveEnv(github.url, time),
+          credentials: yield* proofHolder(),
+          services: cloud.services,
+          clock: time.clock,
+          session: { attest: proof.attest },
+        }).pipe(Effect.provideService(PublicSessionShare.Service, share))
+        github.stop()
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(saveLines(run.lines)).toEqual([SESSION_SAVED])
+        expect(cloud.requests).toEqual([keyRequest, settle("changes")])
+        const bytes = yield* Effect.promise(() => fs.readFile(sessionFile(test.dir)))
+        expect(Buffer.from(proof.calls[0]!).equals(bytes)).toBe(true)
+        const conversation = yield* Effect.promise(() => opened(bytes))
+        expect(conversation).toBeDefined()
+        // The union SessionArchive.import decodes. The agent phase's sessions are v1 rows, so the export is the legacy
+        // archive; the native branch's encoding rests on the archive schema's own round trip.
+        const local = Schema.decodeUnknownSync(Schema.Union([SessionArchive.Native, SessionArchive.Legacy]))(
+          conversation!.session,
+        )
+        expect("engine" in local).toBe(false)
+        expect(String(local.info.id)).toBe(sessionOf(run.lines)!)
+        expect(local.privacy).toBeUndefined()
+        expect(local.messages.length).toBeGreaterThan(0)
+        const json = JSON.stringify(conversation!.session)
+        expect(json).toContain("Wrote the notes.")
+        expect(json).toContain("[redacted]")
+        expect(json).not.toContain(CHANNEL.runToken)
+        expect(guard.outside()).toEqual([])
       }),
     { git: true },
     60_000,

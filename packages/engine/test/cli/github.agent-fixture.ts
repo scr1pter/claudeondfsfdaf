@@ -11,6 +11,7 @@ import path from "node:path"
 import { Effect, Layer } from "effect"
 import type { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import type { Services } from "../../src/cli/cmd/github.cloud"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
@@ -18,6 +19,11 @@ import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 export const OWNER = "octo"
 export const REPO = "widgets"
 export const RUN_ID = "4242"
+/** The repository id GitHub gives the job (GITHUB_REPOSITORY_ID), and the run id mint writes for it (VECTOR_RUN_ID). */
+export const REPOSITORY_ID = "4711"
+export const RID = GithubAgents.runId(REPOSITORY_ID, RUN_ID, "1", "99")
+/** A well-formed ordinary conversation key as artifact-key answers it (V27); not a real one. */
+export const ARTIFACT_KEY = { key: Buffer.alloc(32, 7).toString("base64url"), keyId: "0123456789abcdef" }
 
 // Fixture credentials only; none is a real token.
 export const CHANNEL = {
@@ -212,39 +218,52 @@ export function pullData(input: {
 /**
  * The vectordev.ai side of the cloud client, through its Services seam: every request is recorded with its path, body
  * and authorization, and settle is accepted. A heartbeat is answered `{ok: true, stop: false}`, or with what `heartbeat`
- * returns for its body.
+ * returns for its body. An artifact-key request (V27) is answered by `artifactKey` when given, and `{ok: true}`
+ * otherwise, which the key client reads as unavailable; it is recorded first, so an `artifactKey` that throws is an
+ * outage. Every other request keeps its answer whatever `artifactKey` does. Masked values and notices are kept.
  */
-export function cloudRecorder(options: { heartbeat?: (body: unknown) => unknown } = {}) {
+export function cloudRecorder(
+  options: {
+    heartbeat?: (body: unknown) => unknown
+    artifactKey?: (body: unknown) => Response | Promise<Response>
+  } = {},
+) {
   const requests: { path: string; body: unknown; authorization?: string }[] = []
+  const masks: string[] = []
+  const notices: string[] = []
   const services: Services = {
     oidc: async () => {
       throw new Error("The agent phase never asks for an identity token")
     },
-    mask: () => {},
+    mask: (value) => {
+      masks.push(value)
+    },
     now: () => 0,
     monotonic: () => 0,
     wait: async () => {},
-    notice: () => {},
+    notice: (message) => {
+      notices.push(message)
+    },
     request: async (url, init) => {
       const request = new Request(url, init)
       const body: unknown = await request.json().catch(() => undefined)
-      requests.push({
-        path: new URL(request.url).pathname,
-        body,
-        authorization: request.headers.get("authorization") ?? undefined,
-      })
+      const pathname = new URL(request.url).pathname
+      requests.push({ path: pathname, body, authorization: request.headers.get("authorization") ?? undefined })
+      if (pathname === GithubAgents.ENDPOINT.artifactKey && options.artifactKey) return options.artifactKey(body)
       if (!request.url.endsWith("/heartbeat")) return Response.json({ ok: true })
       return Response.json(options.heartbeat?.(body) ?? { ok: true, stop: false })
     },
   }
-  return { services, requests }
+  return { services, requests, masks, notices }
 }
 
 /**
  * A channel holder of its own, loaded from one channel line; process.env is never read or changed. A Codium holder's
- * run token is authorized, as the account gate's starting heartbeat would, unless `authorized` is false.
+ * run token is authorized, as the account gate's starting heartbeat would, unless `authorized` is false. With
+ * `sessionProof` it is loaded as the hosted launcher starts a Codium engine: this build's tool boundary and the FD3
+ * session proof named in its environment (sandboxEnvironment), so `sessionProof()` is true. No isolation is activated.
  */
-export async function holder(mode: "own-key" | "codium", authorized = true) {
+export async function holder(mode: "own-key" | "codium", authorized = true, options: { sessionProof?: boolean } = {}) {
   const secrets = GithubSecrets.createGithubSecrets()
   const line =
     mode === "codium"
@@ -254,6 +273,12 @@ export async function holder(mode: "own-key" | "codium", authorized = true) {
     GITHUB_ACTIONS: "true",
     VECTOR_MODE: mode,
     VECTOR_SECRET_CHANNEL: "stdin",
+    ...(options.sessionProof
+      ? {
+          [GithubAgents.TOOL_PID_NAMESPACE_ENV]: GithubSecrets.toolBoundary(),
+          [GithubAgents.SESSION_PROOF_ENV]: "fd3",
+        }
+      : {}),
   }
   await secrets.load(
     env,

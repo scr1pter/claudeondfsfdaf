@@ -173,13 +173,13 @@ Remaining:
 
 **Missing: the Actions engine side does none of this yet.**
 1. **Save and restore.**
-   - Nothing calls the codec: `encryptConversation`, `latestConversation` and `decryptConversation` are used only by the desktop.
+   - Nothing called the codec before BT05: `encryptConversation`, `latestConversation` and `decryptConversation` were used only by the desktop. BT05 calls `encryptConversation` for the save; `latestConversation` and `decryptConversation` still wait for BT06.
    - The engine never calls `GithubAgents.ENDPOINT.artifactKey` (`github-agents.ts:38`). `github.cloud.ts` calls only mint, bind, heartbeat and settle (`:244,332,363,382`).
    - Add a key client in `github.cloud.ts` that uses the run token.
-     - BT04 (`brain-transport`) built it: `artifactKey` asks once with the authorized run token for the run's own thread, never on own key or a Brain run, and answers a closed status. Nothing calls it yet; save and restore are BT05 and BT06 (deviations, "2026-11-15 BT04").
+     - BT04 (`brain-transport`) built it: `artifactKey` asks once with the authorized run token for the run's own thread, never on own key or a Brain run, and answers a closed status (deviations, "2026-11-15 BT04"). BT05 calls it for the save; restore is BT06.
    - Restore before the session starts (`github.agent.ts:459-461`): pick the newest artifact with `GITHUB_TOKEN` `actions: read`, decrypt, check `allowConversationRestore`, then import using `cli/cmd/import.ts`. Any failure falls back to the thread.
-   - Save after the share flush and before `writeBundle` (`:559`): export, encrypt, write `vector-out/session.vsa`.
-2. **Runner attestation.** `GithubSessionProof.attestSessionArtifact` (`github.session-proof.ts:35`) has no caller. Call it right after the encrypted bytes are written. The `session-replaced` matrix scenario proves it once the lane is green (§1).
+   - Save after the share flush and before `writeBundle` (`:559`): export, encrypt, write `vector-out/session.vsa`. **Built in BT05** (`brain-transport`): `github.agent.ts` `saveConversation`, Codium only and only with the runner's session proof, for non-Brain runs; a desktop Brain run saves nothing until BT07b (progress and deviations, "2026-11-15 BT05").
+2. **Runner attestation.** `GithubSessionProof.attestSessionArtifact` (`github.session-proof.ts:35`) had no caller. Call it right after the encrypted bytes are written. **Built in BT05**: the save attests the exact written bytes and removes the file when attestation fails. The real FD3 write on this path runs only on a hosted runner; the `session-replaced` matrix scenario proves the runner side once the lane is green (§1), and the Bun caller stays unverified until the Undici baseline fix reaches this branch (deviations, "2026-11-15 BT05" item 13).
 3. **The desktop Brain transport is broken end to end.**
    - The App dispatch sends the input `brain_upload` (`api/_lib/github-app.ts:725`).
    - The v3 workflow declares only `mode, prompt, pr, code, ticket` (`workflow.ts:768-773`). GitHub rejects undeclared `workflow_dispatch` inputs with a 422, so every Brain-start dispatch would fail.

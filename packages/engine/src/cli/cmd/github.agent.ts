@@ -5,11 +5,13 @@
 // reacts, comments and pushes nowhere, runs no network git, reads GitHub only through a client that refuses every write
 // before sending it, and never writes process.env. A Codium run (V18c) also heartbeats from the gate's starting beat to
 // its settle, stops its session at VECTOR_RUN_DEADLINE minus STOP_MARGIN_SECONDS or when the heartbeat says stop, follows
-// 2.9.2 in its retries and its bundle's stop, and logs gateway errors only as their reason lines (P6). An own-key run
-// never heartbeats, settles or waits (INV-K1). Schedules run only the exact default-branch configuration. Node APIs only: the desktop sidecar runs
-// the engine under Node.
+// 2.9.2 in its retries and its bundle's stop, and logs gateway errors only as their reason lines (P6). With the
+// runner's session proof it also saves its conversation for the thread's next run as vector-out/session.vsa, attested
+// to the runner (V27). An own-key run never heartbeats, settles, waits or saves (INV-K1). Schedules run only the exact
+// default-branch configuration. Node APIs only: the desktop sidecar runs the engine under Node.
 
 import fs from "node:fs/promises"
+import path from "node:path"
 import { Octokit } from "@octokit/rest"
 import { APICallError } from "ai"
 import { graphql } from "@octokit/graphql"
@@ -20,6 +22,7 @@ import { GithubAgents } from "@vectordevai/core/github-agents"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import { parseReviewCommand } from "@vectordevai/core/review/command"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
+import { SessionArchive } from "@vectordevai/core/share/archive"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { PublicSession } from "@vectordevai/schema/public-session"
@@ -38,7 +41,7 @@ import { Session } from "@/session/session"
 import type { SessionID } from "../../session/schema"
 import { GITHUB_ACTIONS_BOT } from "./github.auth"
 import { GithubBundle } from "./github.bundle"
-import { TICKET, type Services } from "./github.cloud"
+import { MINTED_RUN_ID, TICKET, artifactKey, type Services } from "./github.cloud"
 import { buildEvidenceBody, parseNumstat, type EvidenceChange } from "./github.evidence"
 import { withGithubCallbacks, withGithubSignals, withRunHeartbeat } from "./github.lifecycle"
 import { githubSystemInstructions, untrustedJson } from "./github.policy"
@@ -46,6 +49,8 @@ import { WRITE_PERMISSIONS, createReviewGitHub } from "./github.review-api"
 import { TASK_MENTIONS, mentionsFrom } from "./github.route"
 import { GithubRunHelpers } from "./github.run-helpers"
 import { GithubSecrets } from "./github.secrets"
+import type { ArtifactIdentity, ArtifactKey } from "./github.session"
+import { GithubSessionProof } from "./github.session-proof"
 import { lookupSchedule, UNKNOWN_SCHEDULE } from "./github.schedule"
 import { sanitizeActionsLog } from "./github.output"
 import { githubFetch } from "./github.shared"
@@ -70,6 +75,17 @@ export const FALLBACK_TITLE = "Changes from Vector"
 // The task line above a request Vector's service dispatched (a ticket run); the request itself follows as labelled JSON.
 export const SERVICE_TASK =
   "Vector's service started this task from the Vector app. Its request follows as JSON data labelled untrusted, because it can quote logs and messages from people without write access. Do the repository work it asks for, within this repository's policy."
+// A Codium run's conversation save (V27): written and attested to the runner, which uploads it after the job.
+export const SESSION_SAVED = "Vector prepared this conversation for follow-ups in this thread."
+export const SESSION_NOT_SAVED =
+  "Vector could not save this conversation for follow-ups; a follow-up reads the thread instead."
+export const SESSION_TOO_LARGE =
+  "This conversation is too large to save for follow-ups; a follow-up reads the thread instead."
+// What the codec can add to a conversation of any content: the manifest (at most 4 KiB, its own read cap), the cipher
+// header (at most 1 KiB) and frame, the zip headers, and deflate's worst case of about 5 bytes per 16 KiB block (6,533
+// bytes in all for 20 MB of random bytes). A conversation within it always fits PATCH_LIMITS.sessionBytes, so no key is
+// asked for one that cannot.
+export const SESSION_HEADROOM = 16_384
 
 export function refusedEvent(name: string) {
   return `Nothing to do: ${name} events do not start agent tasks.`
@@ -90,8 +106,25 @@ export const CANCEL_REPEAT_MS = 1000
 
 export type AgentCredentials = Pick<
   ReturnType<typeof GithubSecrets.createGithubSecrets>,
-  "loaded" | "githubToken" | "runToken" | "redact"
+  "loaded" | "githubToken" | "runToken" | "redact" | "sessionProof"
 >
+
+/** The run's root session as an encoded archive, the format SessionArchive.import reads. */
+export type SessionExport = (
+  sessionID: SessionID,
+) => Effect.Effect<{ readonly [field: string]: unknown; readonly privacy?: "owner-only" }, unknown>
+
+/**
+ * What a Codium run's conversation save uses (V27), each the real one by default: the ordinary conversation key client,
+ * the session archive's export (absent when this process has no archive), the session codec, and the runner's
+ * attestation of the written bytes.
+ */
+export type SessionSave = {
+  artifactKey: typeof artifactKey
+  exportSession?: SessionExport
+  encrypt: (input: { identity: ArtifactIdentity; key: ArtifactKey; session: unknown }) => Promise<Uint8Array>
+  attest: (bytes: Uint8Array) => boolean
+}
 
 export type AgentPhaseInput = {
   /** The step's environment, read and never written; process.env by default. */
@@ -105,6 +138,8 @@ export type AgentPhaseInput = {
   error?: (line: string) => void
   /** Time, the deadline timer and the heartbeat interval; the process's own by default. */
   clock?: Partial<AgentClock>
+  /** What a Codium run's conversation save uses; the real ones by default. */
+  session?: Partial<SessionSave>
 }
 
 export type AgentClock = {
@@ -170,6 +205,20 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
   // never shares (2.13).
   const consent = codium ? undefined : input.share
   const share = consent ? Option.getOrUndefined(yield* Effect.serviceOption(PublicSessionShare.Service)) : undefined
+  // A Codium run's conversation save uses only the archive's export, never publish or flush, so it reaches no sharing
+  // endpoint (2.13). The service is looked up only then; own key never looks it up for this.
+  const archive =
+    codium && !input.session?.exportSession
+      ? Option.getOrUndefined(yield* Effect.serviceOption(PublicSessionShare.Service))
+      : undefined
+  const session: SessionSave = {
+    artifactKey: input.session?.artifactKey ?? artifactKey,
+    exportSession:
+      input.session?.exportSession ??
+      (archive ? (sessionID) => archive.export({ sessionID }).pipe(Effect.map(portableArchive)) : undefined),
+    encrypt: input.session?.encrypt ?? encryptSession,
+    attest: input.session?.attest ?? GithubSessionProof.attestSessionArtifact,
+  }
   const halt = haltSwitch()
   const settled = { outcome: "failed" as GithubAgents.Outcome }
   const phase = withGithubCallbacks((run) =>
@@ -194,6 +243,7 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         codium,
         clock,
         halt,
+        session,
       }),
     ),
   ).pipe(Effect.tap((result) => Effect.sync(() => (settled.outcome = result.outcome ?? "failed"))))
@@ -263,6 +313,7 @@ type Deps = {
   codium: boolean
   clock: AgentClock
   halt: ReturnType<typeof haltSwitch>
+  session: SessionSave
 }
 
 // What a phase that SIGINT or SIGTERM cancelled hands back: nobody reads it, and it writes no bundle (2.13).
@@ -555,6 +606,9 @@ async function record(start: Start, task: Partial<Task>, result: Result, deps: D
       deps.error(`Could not finish updating the public session: ${messageOf(cause)}`)
     })
   }
+  // V27: a Codium run saves its conversation for the next run of its thread before the bundle; own key never does
+  // (INV-K1).
+  if (deps.codium && !deps.signal.aborted) await saveConversation(start, result, deps)
   if (deps.signal.aborted) return CANCELLED
   const written = await GithubBundle.writeBundle({
     cwd: deps.worktree,
@@ -572,6 +626,97 @@ async function record(start: Start, task: Partial<Task>, result: Result, deps: D
   }
   deps.log(`Vector recorded the run: ${written.summary.outcome}.`)
   return { exitCode: 0, outcome: written.summary.outcome, summary: written.summary }
+}
+
+/**
+ * V27 "The file": a Codium run saves its conversation for the next run of its own thread. The run's root session, in
+ * the encoded archive format SessionArchive.import reads and redacted with the run's credentials, is encrypted under
+ * the ordinary conversation key for this run's identity, written once to `<worktree>/vector-out/session.vsa`, and then
+ * attested to the runner, whose finish refuses the whole bundle for a session file it cannot match. On return the file
+ * holds exactly the attested bytes or is absent. Failure is never fatal: it costs only the saved conversation and logs
+ * one fixed line. Nothing is attempted, and nothing is logged, without the runner's proof channel or a session, on a
+ * desktop Brain run, or once a signal ended the run. BT07b owns Brain-run encryption: a desktop Brain run's history may
+ * go only under the Brain key, so until then such a run saves nothing here. It never rejects.
+ */
+async function saveConversation(start: Start, result: Result, deps: Deps) {
+  const dir = path.join(deps.worktree, GithubAgents.BUNDLE_DIR)
+  const file = path.join(dir, GithubAgents.SESSION_FILE)
+  // Only inside a real directory: a linked vector-out is never followed.
+  const clear = () =>
+    fs
+      .lstat(dir)
+      .then((info) => (info.isDirectory() ? fs.rm(file, { force: true, recursive: true }) : undefined))
+      .catch(() => undefined)
+  // A session file the model left would make the runner refuse the whole bundle, so it goes on every Codium run.
+  await clear()
+  const sessionID = result.sessionID
+  // Without the proof channel the runner accepts no session file, so the run never asks for the key.
+  if (deps.env.VECTOR_BRAIN_UPLOAD || !sessionID || !deps.credentials.sessionProof()) return
+  const attempted = await writeConversation(start, sessionID, { dir, file }, deps).catch(() => "failed" as const)
+  // A signal ended the run while the save ran: nothing is kept and nothing is said, whatever the save reached.
+  const outcome = deps.signal.aborted ? "aborted" : attempted
+  if (outcome !== "saved") await clear()
+  if (outcome === "aborted") return
+  deps.log(outcome === "saved" ? SESSION_SAVED : outcome === "too-large" ? SESSION_TOO_LARGE : SESSION_NOT_SAVED)
+}
+
+/**
+ * The save's steps in order. Every check of the run and its conversation comes before the key request, so a run that
+ * cannot save its conversation spends none of its artifact-key requests. Only the write's own refusal of a vector-out
+ * that is not a real directory comes after it, where it guards the write itself. Any throw is the caller's "failed".
+ */
+async function writeConversation(start: Start, sessionID: SessionID, paths: { dir: string; file: string }, deps: Deps) {
+  const identity = conversationIdentity(start, deps.env)
+  if (!identity || !deps.session.exportSession) return "failed"
+  const local = await deps.run(deps.session.exportSession(sessionID))
+  // Owner-only work would reach every later run of the thread.
+  if (local.privacy === "owner-only") return "failed"
+  const text = deps.credentials.redact(JSON.stringify(local))
+  if (Buffer.byteLength(text) > GithubAgents.PATCH_LIMITS.sessionBytes - SESSION_HEADROOM) return "too-large"
+  const conversation = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
+  if (conversation === undefined) return "failed"
+  const answer = await deps.session.artifactKey({
+    env: deps.env,
+    holder: deps.credentials,
+    services: deps.services,
+    signal: deps.signal,
+  })
+  if (deps.signal.aborted) return "aborted"
+  if (answer.status !== "ok") return "failed"
+  const bytes = await deps.session.encrypt({ identity, key: answer.key, session: conversation })
+  if (deps.signal.aborted) return "aborted"
+  // The first point where vector-out may be created; each write is new, exclusive and private, as writeBundle's are.
+  await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 })
+  if (!(await fs.lstat(paths.dir)).isDirectory()) return "failed"
+  await fs.rm(paths.file, { force: true, recursive: true })
+  await fs.writeFile(paths.file, bytes, { flag: "wx", mode: 0o600 })
+  return deps.session.attest(bytes) ? "saved" : "failed"
+}
+
+/**
+ * The conversation's identity, only from what the runner and mint set: the repository id GitHub gives the job, the
+ * route's thread (begin() checked it equals VECTOR_THREAD) and the run id mint wrote to VECTOR_RUN_ID, which must name
+ * this repository, run and attempt. Anything else is no identity, so no key is asked for.
+ */
+function conversationIdentity(start: Start, env: Readonly<Record<string, string | undefined>>) {
+  const repositoryId = env.GITHUB_REPOSITORY_ID ?? ""
+  const rid = env.VECTOR_RUN_ID ?? ""
+  if (!MINTED_RUN_ID.test(rid) || !rid.startsWith(`gh-${repositoryId}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-`))
+    return undefined
+  return { repositoryId, thread: start.route.thread, rid }
+}
+
+// The encoded archive SessionArchive.import decodes; `vector export` writes a native one the same way (export.ts).
+function portableArchive(local: SessionArchive.Local) {
+  return "engine" in local
+    ? Schema.encodeSync(SessionArchive.Native)(local)
+    : Schema.encodeSync(SessionArchive.Legacy)(local)
+}
+
+// The codec loads zip.js, so only a run that saves its conversation loads it.
+async function encryptSession(input: { identity: ArtifactIdentity; key: ArtifactKey; session: unknown }) {
+  const { encryptConversation } = await import("./github.session")
+  return encryptConversation(input)
 }
 
 function bundleRoute(

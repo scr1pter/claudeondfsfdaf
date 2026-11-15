@@ -9,10 +9,12 @@ import { GithubSecrets } from "./github.secrets"
 const SITE = "https://vectordev.ai"
 /** A one-time run ticket as `startCloudRun` writes it into a dispatch's `inputs.ticket` (2.5). */
 export const TICKET = /^vtk_[A-Za-z0-9_-]{43}$(?![\s\S])/
+/** A run id as mint writes it to VECTOR_RUN_ID: `gh-<repositoryId>-<runId>-<runAttempt>-<checkRunId>` (GithubAgents.runId). */
+export const MINTED_RUN_ID = /^gh-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}$(?![\s\S])/
 const Run = z
   .object({
     token: z.string().refine(GithubSecrets.validRunToken),
-    runId: z.string().regex(/^gh-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}-[1-9]\d{0,19}$(?![\s\S])/),
+    runId: z.string().regex(MINTED_RUN_ID),
     deadline: z.number().int().positive().safe(),
     heartbeatSeconds: z.literal(GithubAgents.HEARTBEAT_SECONDS),
     idleSeconds: z.literal(GithubAgents.IDLE_SECONDS),
