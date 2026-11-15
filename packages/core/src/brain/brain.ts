@@ -3,7 +3,7 @@ export * as Brain from "./brain"
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, like, lt, ne, not, notInArray, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 import { Global } from "../global"
@@ -2328,34 +2328,25 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const skills = yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
-          // Review memory is erased in its own savepoint, before the generic deletes. Inconsistent review state rolls
-          // only that part back and stays fail closed, but it never stops the user's erase of ordinary memory.
+          // Review memory is erased in its own savepoint, before the generic deletes. When inconsistent review state
+          // kills the validated erase, that savepoint rolls back and the review memory is purged without validation, so
+          // the user's erase never stops and nothing it was asked to forget stays.
           const reviews =
             scope === "personal"
               ? 0
-              : yield* tx
-                  .transaction((review) => ReviewStore.eraseScope(review, repositories))
-                  .pipe(Effect.catchDefect((defect) => keptReviews("Brain.erase", defect)))
+              : yield* tx.transaction((review) => ReviewStore.eraseScope(review, repositories)).pipe(
+                  Effect.catchDefect((defect) =>
+                    purgedReviews("Brain.erase", defect).pipe(Effect.andThen(ReviewStore.purgeScope(tx, repositories))),
+                  ),
+                )
           yield* tx.delete(BrainEntryTable).where(where).run()
           yield* tx
             .delete(BrainEventTable)
             .where(repositories ? inArray(BrainEventTable.repository_id, repositories) : undefined)
             .run()
-          // Review witnesses are ReviewStore's: a successful review erase already removed them, and when it was rolled
-          // back, deleting them here could turn a corrupt component back into valid authority.
           yield* tx
             .delete(BrainTombstoneTable)
-            .where(
-              and(
-                repositories ? inArray(BrainTombstoneTable.repository_id, repositories) : undefined,
-                not(
-                  or(
-                    eq(BrainTombstoneTable.norm_hash, ReviewStore.MARKER),
-                    like(BrainTombstoneTable.norm_hash, `${ReviewStore.SCOPE_MARKER}%`),
-                  )!,
-                ),
-              ),
-            )
+            .where(repositories ? inArray(BrainTombstoneTable.repository_id, repositories) : undefined)
             .run()
           if (rows.length)
             yield* tx
@@ -2497,11 +2488,18 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     return yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
-          // Review memory is erased first, in its own savepoint. Inconsistent review state rolls only that part back
-          // and stays fail closed; the ordinary and skill mutations below still commit together.
+          // Review memory is erased first, in its own savepoint. When inconsistent review state kills the validated
+          // erase, that savepoint rolls back and the session's review memory is purged without validation; the
+          // ordinary and skill mutations below still commit together.
           const reviews = yield* tx
             .transaction((review) => ReviewStore.eraseSession(review, place.repository, sessionID))
-            .pipe(Effect.catchDefect((defect) => keptReviews("Brain.eraseSession", defect)))
+            .pipe(
+              Effect.catchDefect((defect) =>
+                purgedReviews("Brain.eraseSession", defect).pipe(
+                  Effect.andThen(ReviewStore.purgeSession(tx, place.repository, sessionID)),
+                ),
+              ),
+            )
           const rows = yield* tx
             .select()
             .from(BrainEntryTable)
@@ -3309,10 +3307,6 @@ async function removeFailure(file: string, signature: string) {
   await fs.rename(staged, file)
 }
 
-// A user erase whose review part was rolled back still removes ordinary memory. The review memory stays as it was, and
-// its reads keep refusing it as stale until the state is repaired.
-function keptReviews(operation: string, defect: unknown) {
-  return Effect.logWarning(`${operation} kept review memory whose state is inconsistent`, { defect }).pipe(
-    Effect.as(0),
-  )
+function purgedReviews(operation: string, defect: unknown) {
+  return Effect.logWarning(`${operation} purged review memory whose state is inconsistent`, { defect })
 }
