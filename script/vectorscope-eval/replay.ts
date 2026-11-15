@@ -265,6 +265,17 @@ export const VARIANTS = {
     engine: { pending: "VS-47 runner wiring" },
     desktop: { pending: "VS-47 desktop wiring" },
   },
+  // Addendum B §1.10's ablation candidate (VS-44c), registered with its planner, core plan.ts planIsolatedVerify, and
+  // an ablation candidate only (Q9), never a default. It sets no key yet, and no runner calls the planner before
+  // runner-wiring R3, which admits each call (I-5) on the review model's route (I-3). The class the planner orders by
+  // and the failure fields a blind verifier sees exist only under guardrail "strict", so without it the order falls
+  // back to path and line: R3 or VS-44 wiring may revise this variant to set guardrail "strict" before it flips, as
+  // verify-cert does. Its desktop half is a documented difference until VS-27's desktop guardrail.
+  "verify-isolated": {
+    planned: "the top 3 blocking candidates verified blind, one verify call each, and the rest in the batched pass",
+    engine: { pending: "VS-44c wiring (R3)" },
+    desktop: { pending: "VS-27 desktop guardrail" },
+  },
 } as const satisfies Record<string, VariantEntry>
 
 export type VariantResolution =

@@ -733,24 +733,26 @@ its model in `report.ts --candidate` and `--baseline`. The grammar is
 `VARIANT_NAME` in core `review/eval.ts`; it cannot tell a model id from a
 word, so only the registry keeps model ids out.
 
-| Suffix             | Sets                                                                         | Engine                | Desktop                            |
-| ------------------ | ---------------------------------------------------------------------------- | --------------------- | ---------------------------------- |
-| `shared-verify`    | `verifyPolicy: "shared"`                                                     | built (VS-06)         | built (VS-06)                      |
-| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run` and at the transport              | pending VS-23c        | pending VS-23d                     |
-| `trivial-skip`     | `trivial: "skip"`                                                            | pending VS-24 wiring  | pending VS-24 wiring               |
-| `impact-graph`     | `impact: "graph"`                                                            | pending VS-25b wiring | pending, after VS-10               |
-| `cards-brain`      | `cards: "brain"`, local-only eval                                            | pending VS-26         | pending, after VS-10               |
-| `guardrail-strict` | `guardrail: "strict"`                                                        | pending VS-27c        | pending VS-27c                     |
-| `depth-auto`       | `depth: "auto"`                                                              | pending VS-28 wiring  | pending, after VS-10               |
-| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                         | pending VS-28 wiring  | pending, after VS-10               |
-| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`) | built (VS-29a)        | pending, after VS-10               |
-| `precise`          | `mode: "precise"`                                                            | pending VS-31         | pending VS-31                      |
-| `holdback-secrets` | `holdback: "secrets"`                                                        | pending VS-34 wiring  | pending VS-34 wiring               |
-| `team-guarded`     | `teamMemory: "guarded"`                                                      | pending VS-35 wiring  | pending, documented difference     |
-| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                          | pending VS-42 wiring  | pending VS-42 wiring, after VS-27c |
-| `rule-strict`      | `ruleCheck: "strict"`                                                        | pending VS-43 wiring  | pending VS-43 wiring               |
-| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                    | pending VS-44 wiring  | pending VS-44 wiring, after VS-27c |
-| `explore-slice`    | `explore: "slice"`                                                           | pending VS-49 wiring  | pending, documented difference     |
+| Suffix             | Sets                                                                                  | Engine                      | Desktop                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| `shared-verify`    | `verifyPolicy: "shared"`                                                              | built (VS-06)               | built (VS-06)                                                                 |
+| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run` and at the transport                       | pending VS-23c              | pending VS-23d                                                                |
+| `trivial-skip`     | `trivial: "skip"`                                                                     | pending VS-24 wiring        | pending VS-24 wiring                                                          |
+| `impact-graph`     | `impact: "graph"`                                                                     | pending VS-25b wiring       | pending, after VS-10                                                          |
+| `cards-brain`      | `cards: "brain"`, local-only eval                                                     | pending VS-26               | pending, after VS-10                                                          |
+| `guardrail-strict` | `guardrail: "strict"`                                                                 | pending VS-27c              | pending VS-27c                                                                |
+| `depth-auto`       | `depth: "auto"`                                                                       | pending VS-28 wiring        | pending, after VS-10                                                          |
+| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                                  | pending VS-28 wiring        | pending, after VS-10                                                          |
+| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`)          | built (VS-29a)              | pending, after VS-10                                                          |
+| `precise`          | `mode: "precise"`                                                                     | pending VS-31               | pending VS-31                                                                 |
+| `holdback-secrets` | `holdback: "secrets"`                                                                 | pending VS-34 wiring        | pending VS-34 wiring                                                          |
+| `team-guarded`     | `teamMemory: "guarded"`                                                               | pending VS-35 wiring        | pending, documented difference                                                |
+| `scope-introduced` | `guardrail: "strict"` and `scopeGate: "introduced"`                                   | pending VS-42 wiring        | pending VS-42 wiring, after VS-27c                                            |
+| `rule-strict`      | `ruleCheck: "strict"`                                                                 | pending VS-43 wiring        | pending VS-43 wiring                                                          |
+| `verify-cert`      | `guardrail: "strict"` and `verifyEvidence: "certificate"`                             | pending VS-44 wiring        | pending VS-44 wiring, after VS-27c                                            |
+| `explore-slice`    | `explore: "slice"`                                                                    | pending VS-49 wiring        | pending, documented difference                                                |
+| `receipt-json`     | `receipt: "json"`, built only from recorded execution facts                           | pending VS-47 runner wiring | pending VS-47 desktop wiring                                                  |
+| `verify-isolated`  | no key: the top 3 blocking candidates verified blind, one call each, the rest batched | pending VS-44c wiring (R3)  | pending, documented difference until VS-27's desktop guardrail (after VS-27c) |
 
 - `resolveVariant(name)` gives a built variant's keys, or refuses the name as
   malformed, unknown (prototype names such as `constructor` included) or
@@ -778,13 +780,19 @@ word, so only the registry keeps model ids out.
   set `guardrail: "strict"` for the same reason (their keys act only inside
   the strict guardrail); VS-42 and VS-44 wiring may revise them before they
   flip.
-- The last six rows are addendum A's (§1a, pending Q18), registered once each
-  package's first part landed here, so their names are refused as pending
-  rather than unknown. Addendum names whose package has not begun here
-  (`rereview-focused`, `receipt-json`, `instructions-scoped`, `depth-rules`)
+- The seven rows after `precise` are addendum A's (§1a, pending Q18),
+  registered once each package's first part landed here, so their names are
+  refused as pending rather than unknown. Addendum names whose package has
+  not begun here (`rereview-focused`, `instructions-scoped`, `depth-rules`)
   are registered by that package's first part, and until then read as
   unknown. A desktop half that §1a calls a documented difference stays
   pending: its runner would record `variant.applied: false`.
+- The last row is addendum B's (§1.10, VS-44c), registered with its planner,
+  core `plan.ts` `planIsolatedVerify`. It sets no key, no runner calls the
+  planner before runner-wiring R3, and it is an ablation candidate only (Q9),
+  never a default. The class it orders by and the failure fields a blind
+  verifier sees exist only under `guardrail: "strict"`, so R3 or VS-44 wiring
+  may revise it to set that too before it flips, as `verify-cert` does.
 - There are no aliases: every older name (`engine`, `engine:shared-verify`,
   `desktop`, `desktop:shared-verify`) is a registry name, and an artifact
   written before VS-21a holds VS-06's `{ verifyPolicy }`, which

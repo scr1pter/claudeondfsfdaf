@@ -319,6 +319,8 @@ describe("replay admission", () => {
     for (const [variant, detail] of [
       ["engine:trivial-skip", "registered for VS-24 wiring, which has not landed"],
       ["desktop:cross-family", "registered for VS-29a's desktop half, after VS-10, which has not landed"],
+      ["engine:verify-isolated", "registered for VS-44c wiring (R3), which has not landed"],
+      ["desktop:verify-isolated", "registered for VS-27 desktop guardrail, which has not landed"],
       ["engine:verify", "not a registered variant"],
       ["engine:shared-verify=test/review", "is not a variant name"],
       ["desktop:shared-verify", "admitReplay admits engine replays"],
@@ -449,6 +451,8 @@ describe("the variant registry", () => {
       "engine:verify-cert",
       "engine:explore-slice",
       "engine:receipt-json",
+      // Addendum B §1.10's (VS-44c).
+      "engine:verify-isolated",
     ])
     for (const adapter of ["engine", "desktop"] as const)
       for (const name of variantNames(adapter)) {
@@ -538,9 +542,10 @@ describe("the variant registry", () => {
       "engine:verify-cert": "VS-44 wiring",
       "engine:explore-slice": "VS-49 wiring",
       "engine:receipt-json": "VS-47 runner wiring",
+      "engine:verify-isolated": "VS-44c wiring (R3)",
     })
-    // Addendum A's entries are pending on both runners and set no key yet, and an addendum name whose package has not
-    // begun here is still unknown.
+    // Addendum A's and B's entries are pending on both runners and set no key yet, and an addendum name whose package
+    // has not begun here is still unknown.
     for (const suffix of [
       "holdback-secrets",
       "team-guarded",
@@ -549,12 +554,15 @@ describe("the variant registry", () => {
       "verify-cert",
       "explore-slice",
       "receipt-json",
+      "verify-isolated",
     ] as const) {
       const entry: VariantEntry = VARIANTS[suffix]
       expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)
       expect(resolveVariant(`desktop:${suffix}`)).toMatchObject({ ok: false, reason: "pending" })
     }
     expect(resolveVariant("engine:rereview-focused")).toMatchObject({ ok: false, reason: "unknown" })
+    // VS-44c's desktop half is a documented difference until VS-27's desktop guardrail.
+    expect(pending).toContainEqual({ name: "desktop:verify-isolated", package: "VS-27 desktop guardrail" })
     // The cross-family pair is made by its models, never by a key. Its engine half is built (VS-29a); its desktop half
     // waits for VS-10, since the desktop adapter takes one model and refuses a keyless variant.
     expect(VARIANTS["cross-family"]).toMatchObject({ models: "triage-pair" })

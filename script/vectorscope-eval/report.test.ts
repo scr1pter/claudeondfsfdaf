@@ -706,6 +706,7 @@ describe("report.ts", () => {
     // only single-prompt and the empty control pass as given.
     for (const [flag, value, detail] of [
       ["--candidate", "engine:trivial-skip=vendor/reviewer-large", "registered for VS-24 wiring"],
+      ["--candidate", "engine:verify-isolated=vendor/reviewer-large", "registered for VS-44c wiring (R3)"],
       ["--baseline", "engine:verify=vendor/reviewer-large", "not a registered variant"],
       ["--candidate", "engine:Shared=vendor/reviewer-large", "is not a variant name"],
       ["--candidate", "Engine:shared-verify=vendor/reviewer-large", '"Engine:shared-verify" is not a variant name'],

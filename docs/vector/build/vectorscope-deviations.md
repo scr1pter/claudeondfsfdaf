@@ -16391,3 +16391,386 @@ review are under "Review findings".
   (the VS-37 row's "c" item is now built in source) and
   `vectorscope-continuation.md`, and the correcting entry for the stale
   `:16000` sentence.
+
+## 2026-11-15 · VS-44c Isolated verification planner and pending variant (SF-02)
+
+Addendum B §1.10 (VS-44c), built on `scope-finish` at `a2693bcf` as lane
+package SF-02. It implements the SF-02 plan as corrected by its critique;
+where a critique point was taken in another form or declined, the reason is
+under "Critique points". It is software only: no runner calls the planner,
+and the new variant name is refused everywhere.
+
+- **Scope.** Addendum B §1.10 at `a2693bcf`. The spec cites `VARIANTS` at
+  `replay.ts:161-260`; at the base it is `:163-268`, and the new entry sits at
+  `:274-278`. The spec counts "the 14 other pending variants"; at the base
+  there are 15 pending engine halves, because `receipt-json` (`65aa59e2`)
+  landed after the addendum was written, so `verify-isolated` is the 16th.
+- **Test first.** The planner is a new function, so no case could fail at the
+  base before the edit. Core `test/review/plan.test.ts` ran at `a2693bcf`
+  first (33 pass, 0 fail) as the baseline count.
+- **What landed.**
+  - **Core `review/plan.ts`** (pinned; additive, still pure and
+    browser-safe). Exports: `BlindCandidate` (a `Pick` of `Finding`'s id,
+    path, line, side, severity, failure and evidence),
+    `IsolatedVerifyInput<C>` (`{ candidate, promptTokens, maxSteps, price }`),
+    `PlannedVerifyCall` (`{ kind, candidates, positions, estimate }`) and
+    `planIsolatedVerify(calls, { k?, batched })`. Private: `isolatedOrder`
+    (with its class rank as a local arrow), `EVIDENCE_REFERENCE`,
+    `blindCandidate` and `knownFailure` (added in review). The `./types`
+    import gains `FAILURE_CLASSES` and `FAILURE_MECHANISMS`, and the header
+    names the new use. Apart from those two, nothing outside the
+    inserted block changes, and it does not import `dispatch.ts`, which
+    imports `./plan`.
+  - **Core `review/model-evidence.ts`**: the pin only.
+  - **`script/vectorscope-eval/replay.ts`**: the `verify-isolated` entry after
+    `receipt-json`, with no `keys`, no `models` and no `VARIANT_KEYS` change.
+    Engine half `{ pending: "VS-44c wiring (R3)" }`, desktop half
+    `{ pending: "VS-27 desktop guardrail" }`.
+  - **Tests**: six new core cases in `test/review/plan.test.ts`; new
+    assertions in existing cases of `script/vectorscope-eval/replay.test.ts`,
+    `script/vectorscope-eval/report.test.ts` and engine
+    `test/review/vectorscope-replay.test.ts`.
+  - **`script/vectorscope-eval/README.md`**: the `verify-isolated` row and a
+    bullet for addendum B's row.
+  - **Drive-by documentation fix, outside SF-02's spec.** The README's
+    variants table had no `receipt-json` row, and its bullet still called the
+    last six rows addendum A's and listed `receipt-json` among the unknown
+    names. Both had been stale since `65aa59e2`. The row is added, and the
+    bullet now says the seven rows after `precise` are addendum A's and lists
+    only `rereview-focused`, `instructions-scoped` and `depth-rules` as
+    unknown. The longer cells re-pad the whole table (prettier).
+- **How the planner works.**
+  - It takes the blocking candidates only, sorts them by the isolation order
+    and keeps the first `k` (3 unless set). Each one becomes an `isolated`
+    call holding that candidate alone, priced with
+    `estimateCostUsd({ promptTokens, maxSteps, price })` from its own entry.
+  - Every other entry, in the order given, goes to one `batched` call, priced
+    with `estimateCostUsd` over `batched.promptTokens(rest)`,
+    `batched.maxSteps` and `batched.price`. With nothing left, there is no
+    batched call and the callback is never called.
+  - The isolation order is severity (constant, since only blocking candidates
+    are picked), then the failure class in `FAILURE_CLASSES` order with no
+    known failure last (unclassed, or a class or mechanism the enums do not
+    name, as `decodeFailure` reads it), then path by code unit, then line,
+    then id. `toSorted` is stable, so entries that tie on all of these keep the
+    order given.
+  - `k`: `slice(0, Math.max(0, k))`, so `NaN`, 0, a negative count and
+    `-Infinity` isolate none, `Infinity` isolates every blocking candidate,
+    and 2.9 isolates 2.
+  - Every planned candidate is a fresh `blindCandidate` copy: id, path, line,
+    side, severity, the four `FailureInfo` fields (a fresh object, extra
+    fields dropped, and no failure at all when its class or mechanism is not
+    one the enums name) and the evidence entries that read as `path:line` or
+    `path:start-end`. An empty evidence list is left out.
+  - Only the isolated calls are blind prompts. The batched call stays today's
+    verify pass for the rest: R3 renders it from its own findings through
+    `positions`, title, body and suggestion included, and its `candidates`
+    are a blind record of what it holds (review finding 5).
+- **Decisions.**
+  - (a) _A `batched` option beyond the spec's `{ k = 3 }`._ The spec puts "the
+    batched prompt for the rest" in the per-candidate `promptTokens`. That
+    cannot be a per-candidate number: the batched prompt depends on which
+    candidates were isolated, and `estimateCostUsd` is not additive (each
+    call pays its own S·600 output and R·S(S−1)/2 growth). So the caller
+    passes `batched: { promptTokens(rest), maxSteps, price }`. The callback's
+    argument is the caller's own candidates (`readonly C[]`, the generic
+    `C extends BlindCandidate`), unprojected and in the order given, once,
+    and only when the rest is not empty. R3 can then count exactly the
+    prompt it would send. Today that is `buildVerifyPrompt` over whole
+    findings, body and suggestion included (`run.ts:916-925`), without
+    matching ids back to findings. The blindness rule covers the planned
+    calls, not the caller's own estimator. The k = 0 case proves the parity:
+    with run.ts's `Math.ceil(text.length / 3.5)` over `buildVerifyPrompt`,
+    the one batched estimate is `toBe` today's `estimateCostUsd` over the
+    same count, `maxSteps: 10` and the same price, low and high.
+  - (b) _"Class" is `FailureClass`_ (D16's five classes), not `category`.
+  - (c) _The last tie-break is the id._ Entries sharing an id (the desktop's
+    legacy rule does not merge them; the engine sends one per id) keep the
+    order given.
+  - (d) _The partition is by position_: no dedupe, no drop. Each call also
+    carries `positions`, its candidates' indexes in `calls`, which the spec
+    does not name. R3 needs it to find its own findings for each call,
+    because ids are not unique on the desktop's legacy path.
+  - (e) _No empty batched call._ The triage pass's fixed claims and the judge
+    stay with R3: they are not candidates, and R3 counts them in its own
+    batched prompt through the callback.
+  - (f) _Estimates are `estimateCostUsd`'s legacy low and high_: no VS-40
+    inputs (`cacheReadShare`, `writePrice`, `outputPerStep`) and no tiers,
+    which `estimateCostUsd` never reads. A count that is not a number gives
+    a `NaN` estimate, never 0. A `NaN` is not fail-closed by itself: a check
+    written as `estimate.high > budget` is false for it and admits the call.
+    The planner keeps `estimateCostUsd`'s value (review finding 4), and R3
+    must refuse a non-finite estimate.
+  - (g) _Fields and evidence._ `endLine` and `title` are left out, per VS-44
+    item 1's list (addendum A :691). The evidence filter
+    (`/^\S+:\d+(?:-\d+)?$/`) is new narrowing that VS-44 does not specify. It
+    is defence in depth, not a blindness guarantee: a token with no
+    whitespace (`trust-me:1`) still passes, and a real path with a space is
+    dropped. The guarantee is the field projection. `failure.trigger` and
+    `failure.impact` are the reviewer's own words and reach the verifier by
+    design (VS-44 item 1), so the reviewer-text case puts no sentinel in
+    them.
+  - (h) _The desktop string._ The task's literal reason, "VS-27 desktop
+    guardrail", is kept so it can be matched. It breaks the registry's
+    convention in two ways. A documented-difference desktop half says so in
+    its string (`team-guarded`, `explore-slice`; `replay.ts:224-227`). The
+    VS-44 sibling reads "VS-44 wiring, after VS-27c", since §1a ties these
+    halves to VS-27's desktop guardrail (`:13760`). So `resolveVariant`'s
+    detail reads "registered for VS-27 desktop guardrail, which has not
+    landed", which names no package. The README row says "pending,
+    documented difference until VS-27's desktop guardrail (after VS-27c)".
+    If the lead agrees, the string can become "VS-27 desktop guardrail (a
+    documented difference, after VS-27c)", which changes one test
+    expectation in `replay.test.ts`.
+  - (i) _`k` is not a variant parameter._ VS-21a's `VariantEntry.params`
+    follow-up (addendum A :50) is unbuilt, and addendum B :93 keeps "a
+    candidate cap before verify" an offline projection until it lands. The
+    `planned` text says "top 3" in words only.
+  - (j) _Helpers._ The class rank is a local arrow inside `isolatedOrder`,
+    not a module helper. `isolatedOrder` has one call site but names the
+    isolation order (the Complex Logic rule). `blindCandidate` is used by
+    both kinds of call.
+- **Critique points.** Nine points; all taken, two in another form.
+  1. _The batched callback got blind copies (major)._ Taken. The callback
+     now receives the caller's own candidates (decision (a)). The
+     no-sentinel and seven-key assertions apply to the returned plan only,
+     and the case asserts that the callback's arguments are the input
+     findings by identity. The k = 0 case is a real parity check over
+     `buildVerifyPrompt` (`trust: "untrusted"`, no head files). A mutation
+     that passes blind copies to the callback fails 2 cases.
+  2. _Classes exist only under guardrail strict (major)._ Taken. `decodeReport`
+     reads `failure` only under `guardrail: "strict"`, and no runner asks for
+     it before VS-27c. Wired as is, every candidate is unclassed, so the top
+     3 are the first three blocking candidates by path and line, and the
+     blind verifier sees id, path, line, side, severity and evidence only.
+     The replay.ts comment, the README bullet and the R3 hand-offs below say
+     so: R3 or VS-44 wiring may revise the variant to set
+     `guardrail: "strict"` before it flips, as `verify-cert` does. `planned`
+     stays words with no keys.
+  3. _The desktop string (minor)._ Taken as recommended: the literal is kept
+     and the inconsistency recorded (decision (h)). The README row names the
+     documented difference and VS-27c.
+  4. _Pin order (minor)._ Taken. `plan.ts` was written, then
+     `prettier --write` (unchanged) and `oxlint` ran, and only then did
+     `model-evidence.test.ts` print the digest. `plan.ts` did not change after
+     that: the later lint cleanup touched only the test file, and the
+     mutation run restored `plan.ts` and checked its SHA-256 (`2ef4cfa39b6a…`).
+     The review fixes changed `plan.ts` again; the pin was recomputed after
+     the last of them (the restored file's SHA-256 is `23b38de37cb4…`). The
+     commit phase must rerun `model-evidence.test.ts` after any later
+     `plan.ts` edit or merge, and update the Pin line.
+  5. _Missing local runs (minor)._ Taken, and widened. `outcomes.test.ts`
+     (which scans `plan.ts` for `Math.random` and similar) ran. So did
+     `bun typecheck` in `packages/app`, which consumes `plan.ts` through
+     `ai-review.ts` and the settings page (`tsgo -b`, incremental), so the
+     app is not left to the full TURBO run alone.
+  6. _Excess-property fixtures (minor)._ Taken. The sentinel `failure` (with
+     its extra `note`) and the sentinel fields are variables spread into a
+     `Finding` built by a typed helper. There is no `any`. The only cast is
+     the planned `"meltdown" as string as FailureClass`, as other core tests
+     cast unknown values (`privacy.test.ts:415`, `invocation.test.ts:32`).
+  7. _Helper extraction and the select.ts comment (minor)._ Taken in another
+     form (decision (j)). The comment now reads "path by code unit, as
+     select.ts's posting order compares it (never localeCompare, which
+     diff.ts's mergeFocus uses)": `select.ts:378` compares by code unit, and
+     `diff.ts:755` uses `localeCompare`.
+  8. _Entry sections (minor)._ Taken: this entry has "Test first", "Critique
+     points" and, once the package has a code review, gets "Review
+     findings". The README `receipt-json` fix is listed as a separate
+     drive-by under "What landed".
+  9. _The evidence filter (minor)._ Taken in another form: the filter stays
+     and is described as narrowing only (decision (g)), in the code comment
+     too.
+- **Default and parity proof.**
+  - `rg -n "planIsolatedVerify|BlindCandidate|IsolatedVerifyInput|PlannedVerifyCall" packages script`
+    finds `plan.ts`, `plan.test.ts`, one `replay.ts` comment and one README
+    bullet, and nothing else. `run.ts`, `ai-review.ts` and the desktop are
+    untouched.
+  - `verifyCandidates`, `estimateCostUsd` and every other export are
+    byte-identical. `policyDigest` and `promptsDigest` are unchanged:
+    `model-evidence.test.ts` passes apart from the pin, and `prompt.ts` is
+    untouched.
+  - The registry change only adds a name. `resolveVariant` refuses both
+    halves as pending, so `admitReplay` refuses it before `ledger.admit`
+    (the ledger stays empty), `report.ts --candidate` exits 2, and the engine
+    entry point's `parseReplayArgs` refuses it, so `main` exits 2 before
+    `--work`, `--ledger` or `--out` exists.
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `536d33409aa00033` → `aef0d5c84ed90782`,
+  recomputed after the review fixes (before them it was `472e78531644ac1b`,
+  never committed).
+  `REVIEW_PIPELINE_REVISION` stays 4: no runner reaches the planner, and
+  nothing a review finds or posts changes. The connect-finish lane edits
+  pinned files (`connect/hub.ts`, `adapters/vectorscope.ts`), so the pin is
+  recomputed after every merge of main (lead) and after any merge of
+  `origin/scope-finish` that touches a pinned file.
+- **Replay variant.** `verify-isolated` is registered as pending on both
+  halves. No half flips, so no D3 parity test is owed. The registry now has
+  18 entries and 33 pending halves (`2 × 18 − 3`); `verify-isolated`'s
+  engine half is the 16th pending engine half.
+- **Desktop half.** A documented difference until VS-27's desktop guardrail
+  (decision (h)). `ai-review.ts` is untouched.
+- **Hand-offs to runner-wiring R3 (and VS-44 wiring).**
+  - Admit each planned call (I-5), on the review model's route (I-3).
+  - The blind verify prompt and its output schema (VS-44 wiring). The planner
+    gives the blind fields; it renders no prompt.
+  - Guardrail strict. Without it the class key and the failure fields are
+    empty, and the order falls back to path and line. Set
+    `guardrail: "strict"` on the variant before it flips if the ablation is
+    to test class ordering. Take `failure` only from `decodeReport` under
+    strict; the planner drops a failure whose class or mechanism the enums
+    do not name, as `decodeFailure` does, but trigger and impact are the
+    reviewer's words either way.
+  - The batched call is today's verify prompt (not blind), rendered from
+    R3's own findings through `positions`, and only the isolated calls
+    render from the blind `candidates`. If the ablation is to make the
+    batched pass blind too, render it from `candidates` and pass a counter of
+    that blind prompt as `batched.promptTokens`; the k = 0 parity then no
+    longer holds against today's estimate.
+  - The triage pass's fixed claims and the judge, counted in the batched
+    callback and routed by R3.
+  - Refuse a non-finite estimate as unaffordable, never compare it as given
+    (`estimate.high > budget` admits a `NaN`). R3 owes a test in which a
+    `NaN` entry `promptTokens` and a `NaN` from the batched callback each
+    leave the call unadmitted.
+  - Tiered pricing (`bandCostUsd`, VS-40a) if R3 prices by band.
+  - Map each call back to its findings through `positions`, never by id.
+- **Kill rule (unchanged, Q9's funded ablation).** Drop it if the precision
+  gain is under 3 points or its lower bound is below 0, if verify tokens rise
+  more than 60%, or if class-scoped recall falls more than 5 points.
+- **Tests actually run** (each alone from its package directory, through
+  `vector-serial`, `--timeout 30000`; the eval tests from `packages/script`
+  with `GITHUB_ACTIONS=false`):
+  - At `a2693bcf`, source unedited: core `test/review/plan.test.ts`, 33 pass,
+    0 fail.
+  - After the edits, and again after the review fixes:
+    - core `test/review/plan.test.ts`: 39 pass, 0 fail (33 existing + 6 new;
+      the review fixes add assertions, not cases);
+    - core `test/review/model-evidence.test.ts`: 29 pass, 1 fail with the old
+      pin (the expected digest print), then 30 pass, 0 fail;
+    - core `test/review/dispatch.test.ts` (imports `./plan`): 31 pass, 0 fail;
+    - `script/vectorscope-eval/replay.test.ts`: 49 pass, 0 fail (no new
+      test; assertions added to three existing ones);
+    - `script/vectorscope-eval/report.test.ts`: 44 pass, 0 fail (one row
+      added to the refusal table);
+    - `script/vectorscope-eval/outcomes.test.ts`: 40 pass, 0 fail;
+    - engine `test/review/vectorscope-replay.test.ts`, with fresh
+      `XDG_{DATA,CONFIG,STATE,CACHE}_HOME` under `/tmp/vector-v2/scope/sf02/`:
+      29 pass, 0 fail (assertions added to two existing tests). Not re-run
+      after the review fixes, which touch neither it nor `replay.ts`.
+  - `bun typecheck` in `packages/core`, `packages/engine` and `packages/app`,
+    and `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`: clean,
+    before and after the review fixes. The rejected `side` spread (review
+    finding 2) failed core's typecheck and was reverted.
+  - `prettier --check` is clean on the eight touched source, test and README
+    files (the README was clean at the base too). This log is not
+    prettier-clean at the base (older entries wrap inline code across
+    lines), so only the new entry was checked, through `--stdin-filepath`,
+    and the rest of the file is untouched. `oxlint` on `plan.ts` and
+    `plan.test.ts` reports 0 errors and six warnings. Two are on existing
+    lines of `combineCostKinds` (`plan.ts:426`, `:428`; `:273`, `:275` at the
+    base). The other four are the planned casts of an unknown class or
+    mechanism (`"meltdown" as string as FailureClass` twice,
+    `"telepathy" as string as FailureMechanism` twice).
+  - Mutations of `plan.ts`, each caught by core `plan.test.ts` and each
+    restored (the script compares the restored file's SHA-256):
+    - isolate concerns too (drop the blocking filter): 3 fail;
+    - drop the class key: 2 fail;
+    - rank an unknown class first: 2 fail;
+    - compare paths with `localeCompare`: 1 fail;
+    - drop the id tie-break: 2 fail;
+    - drop `Math.max`: 1 fail;
+    - pass the isolated candidate through unprojected: 1 fail;
+    - pass the batched candidates through unprojected: 1 fail;
+    - pass `failure` through as is: 1 fail;
+    - drop the evidence filter: 1 fail;
+    - batch every call (`slice(0, 0)`): 6 fail;
+    - sum the entries' tokens instead of the callback: 4 fail;
+    - pass blind copies to the callback: 2 fail;
+    - emit an empty batched call: 2 fail.
+  - These mutations ran on the pre-review `plan.ts`. After the review fixes,
+    on the final file (SHA-256 `23b38de37cb4…`, checked after each restore):
+    - keep any failure (drop `knownFailure`'s enum checks): 2 fail;
+    - drop the mechanism check alone: 2 fail;
+    - rank by the raw class again (the pre-review rank): 1 fail;
+    - copy from the raw failure instead of `knownFailure`: 1 fail;
+    - pass the known failure through as is (no fresh object): 1 fail;
+    - rank no known failure first: 2 fail.
+  - Not run locally: the CI-only legs (Windows and macOS of `test.yml`).
+  - Commit gate, on the final tree, each file alone as above: core
+    `plan.test.ts` 39 pass, `model-evidence.test.ts` 30 pass,
+    `dispatch.test.ts` 31 pass; eval `replay.test.ts` 49 pass,
+    `report.test.ts` 44 pass, `outcomes.test.ts` 40 pass; engine
+    `test/review/vectorscope-replay.test.ts` 29 pass (fresh XDG roots under
+    `/tmp/vector-v2/scope/sf02-commit/`); 0 fail in each. `bun typecheck` in
+    core and engine, the eval tsconfig, and the full TURBO typecheck
+    (27 of 27 tasks) are clean.
+  - CI: the commit gate dispatches, on `scope-finish`, the lead's list for
+    this gate: `typecheck.yml`, `scope-directory-identity.yml` (core
+    `src/review` and engine `test/review` changed), `review-memory-fence.yml`,
+    `scope-app-validation.yml` and `vector-at-mention.yml` (core review
+    changed). `review-memory-fence.yml` and `scope-app-validation.yml` are
+    not required by this change (`run.ts`, `model.ts`, `session/llm.ts` and
+    the app are untouched) and run as regression cover only.
+    `review-http-regression.yml` is not needed (no HttpApi or review service
+    change). `test.yml`, which the lane notes call for because core runtime
+    code changed and which runs the top-level eval tests, is not in this
+    gate's list and is left for the lead to dispatch or batch with the next
+    runtime package.
+- **Not claimed.** No paid run, no ablation, and no quality or cost claim:
+  whether isolation beats batching is untested. No default change, no key
+  and no variant flip. Q9 and Q45 stay open; `vectorscope-remaining.md:4-6`
+  authorizes reversible software only.
+- **Review findings.** Seven findings. The blocking one and the first
+  non-blocking one are the same registry count, and the last raises two
+  points. Fixed: the count, the `localeCompare` assertion, the batched-pass
+  documentation and the unchecked failure fields. Declined: the `side`
+  spread. Kept, with the hand-off made explicit: the `NaN` estimate. No
+  change: the evidence filter.
+  1. _The registry count (blocking, and its non-blocking duplicate)._ Fixed.
+     `VARIANTS` has 18 entries, not 16: the entry had reused the
+     pending-engine-half count. The Replay variant bullet now reads "18
+     entries and 33 pending halves (`2 × 18 − 3`)" and keeps the 16th
+     pending engine half.
+  2. _`side` on a candidate without one (non-blocking)._ Declined, code left
+     as is. The finding cites `ModelFinding.side`, which is optional
+     (`types.ts:28`), but `Finding` redeclares it as required
+     (`side: Side`, `types.ts:62`), so `BlindCandidate.side` is required.
+     The desktop sets `side ?? "RIGHT"` before it builds a `Finding`
+     (`ai-review.ts:1726`). The suggested conditional spread fails
+     `bun typecheck` in core (`Side | undefined` is not assignable to
+     `Side`), and a side-less fixture needs a type-violating
+     `side: undefined`. The copy comment now says why `side` is copied as
+     is.
+  3. _The `localeCompare` assertion (non-blocking)._ Fixed. It checked the
+     runtime's collation, not the planner. It is now
+     `expect("B.ts" < "a.ts").toBe(true)`, which is locale-independent, and
+     the "upper" assertion still proves the planner's code-unit order.
+  4. _A `NaN` estimate fails open in a `>` budget check (non-blocking)._ Kept
+     as is: the spec asks for `plan.ts`'s own `estimateCostUsd` per call,
+     and a planner-only `Infinity` would differ from the same count priced
+     by `run.ts` and `eval.ts`. The doc comment, decision (f) and the R3
+     hand-off now say that `estimate.high > budget` admits a `NaN`, and the
+     hand-off names the test R3 owes.
+  5. _Is the batched pass blind? (non-blocking)._ Fixed in the docs. It
+     stays today's verify pass, as the spec says ("sends the rest through
+     today's batched pass") and as the k = 0 parity assumes. One paragraph in
+     the `planIsolatedVerify` doc comment, a bullet under "How the planner
+     works" and an R3 hand-off say so, and say what R3 passes if the batched
+     pass is to go blind.
+  6. _The evidence filter, and unchecked `failure.class` and `mechanism`
+     (non-blocking)._ The evidence filter, which lets `x:N` tokens through,
+     is unchanged: decision (g) already says it is narrowing only, and VS-44
+     item 1 allows the evidence list. The failure fields are fixed. A
+     new private `knownFailure` keeps a failure only when its class and
+     mechanism are ones the enums name, as `schema.ts`'s `decodeFailure`
+     does. Both the order (no known failure ranks last) and the blind copy
+     use it, so a non-strict caller cannot pass an arbitrary class string,
+     and a known class with an unknown mechanism now ranks with the
+     unclassed. The ordering case gains a known-class, unknown-mechanism
+     candidate; the reviewer-text case gains an unknown-class and an
+     unknown-mechanism finding and asserts that their copies have no
+     `failure` and that neither string reaches the plan.
+- **Left to the lane's final package.** Refreshing `vectorscope-remaining.md`
+  (the VS-44 row: item c, the planner and the pending variant, is now built
+  in source) and `vectorscope-continuation.md`, and the correcting entry for
+  the stale `:16000` sentence.

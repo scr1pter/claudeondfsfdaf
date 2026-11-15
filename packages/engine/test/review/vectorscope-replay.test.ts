@@ -100,6 +100,7 @@ describe("the flags", () => {
       { name: "engine:shared-verify", record: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } },
     ])
     expect(parseReplayArgs([...base, "--variant", "engine:privacy-zdr"])).toContain("VS-23c")
+    expect(parseReplayArgs([...base, "--variant", "engine:verify-isolated"])).toContain("VS-44c wiring (R3)")
     expect(parseReplayArgs([...base, "--variant", "desktop"])).toContain("runs on the desktop runner")
     expect(parseReplayArgs([...base, "--variant", "engine:nothing"])).toContain("not a registered variant")
     expect(parseReplayArgs([...base, "--variant", "Engine"])).toContain("is not a variant name")
@@ -235,6 +236,11 @@ describe("the send decision", () => {
       expect(await main([...argv, "--ledger", ledger, "--out", out, `--dry-run=${value}`], io(PROTECTED))).toBe(2)
     expect(err.join("")).toContain("--dry-run takes no value")
     expect(await main(["--help=x"], io(PROTECTED))).toBe(2)
+    // A pending variant (VS-44c's) is refused as a flag too, with every send rule holding.
+    expect(
+      await main([...argv, "--ledger", ledger, "--out", out, "--variant", "engine:verify-isolated"], io(PROTECTED)),
+    ).toBe(2)
+    expect(err.join("")).toContain("VS-44c wiring (R3)")
     for (const made of [work, out, ledger]) expect(existsSync(made)).toBe(false)
   })
 
