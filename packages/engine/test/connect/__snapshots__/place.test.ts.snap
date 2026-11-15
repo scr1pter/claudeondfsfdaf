@@ -1,0 +1,629 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`the member list unset, the list is byte-for-byte what it was: local false 1`] = `
+"[
+  {
+    "id": "vectorscope",
+    "kind": "agent",
+    "title": "VectorScope",
+    "summary": "Reviews your changes on your own review model.",
+    "owner": "vectorscope",
+    "place": "local",
+    "sendsTo": "this-computer",
+    "state": "ready",
+    "reach": "connect",
+    "actions": [
+      {
+        "id": "review",
+        "title": "Review",
+        "effects": [
+          "read"
+        ],
+        "background": false,
+        "result": "review"
+      }
+    ]
+  },
+  {
+    "id": "hosted-review",
+    "kind": "agent",
+    "title": "Hosted review",
+    "summary": "Reviews your changes on your own review model.",
+    "owner": "vectorscope",
+    "place": "local",
+    "sendsTo": "provider:vector-cloud",
+    "state": "ready",
+    "reach": "connect",
+    "actions": [
+      {
+        "id": "review",
+        "title": "Review",
+        "effects": [
+          "read"
+        ],
+        "background": false,
+        "result": "review"
+      }
+    ]
+  },
+  {
+    "id": "computer",
+    "kind": "tool",
+    "title": "Vector Hands",
+    "summary": "The agent uses apps, with your approval.",
+    "owner": "hands",
+    "place": "local",
+    "state": "ready",
+    "reach": "computer"
+  },
+  {
+    "id": "github-agent",
+    "kind": "agent",
+    "title": "@vector on GitHub",
+    "summary": "Answers @vector on pull requests from your own GitHub Actions.",
+    "owner": "vector-at-mention",
+    "place": "your-cloud",
+    "state": "not-installed",
+    "reason": "Not set up in this repository.",
+    "reach": "none"
+  },
+  {
+    "id": "agent:build",
+    "kind": "agent",
+    "title": "build",
+    "summary": "The default agent.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui"
+  },
+  {
+    "id": "agent:explore",
+    "kind": "agent",
+    "title": "explore",
+    "summary": "Explores the code.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "task"
+  },
+  {
+    "id": "research",
+    "kind": "helper",
+    "title": "Research",
+    "summary": "Researches a question on the web and in this repository's brain, and writes a report with its sources. The agent reaches it with its research tool.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "research"
+  },
+  {
+    "id": "codespace",
+    "kind": "helper",
+    "title": "Codespace",
+    "summary": "Inline edits and autocomplete in the desktop editor.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui"
+  },
+  {
+    "id": "swarm",
+    "kind": "runtime",
+    "title": "Swarm runs",
+    "summary": "Desktop swarm runs: a planner splits the work across workers that merge into a staging branch.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui",
+    "activity": {
+      "running": 2
+    }
+  },
+  {
+    "id": "brain",
+    "kind": "helper",
+    "title": "Brain",
+    "summary": "Keeps this repository's requirements, decisions and notes. Its helpers run in the background.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "none"
+  },
+  {
+    "id": "help",
+    "kind": "helper",
+    "title": "Help",
+    "summary": "Answers questions about Vector itself in the app.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui"
+  },
+  {
+    "id": "parallel-workspaces",
+    "kind": "runtime",
+    "title": "Parallel Workspaces",
+    "summary": "Desktop workspaces where agents work side by side on their own branches.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui",
+    "activity": {
+      "running": 1
+    }
+  },
+  {
+    "id": "tasks",
+    "kind": "tool",
+    "title": "Subagents and background tasks",
+    "summary": "The agent hands pieces of work to subagents, in the background or in an isolated worktree.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "task"
+  },
+  {
+    "id": "browser",
+    "kind": "tool",
+    "title": "Browser",
+    "summary": "The agent opens and checks web pages in the desktop app's browser.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "browser"
+  },
+  {
+    "id": "vector-cloud",
+    "kind": "service",
+    "title": "Vector Cloud",
+    "summary": "Deploys and publishes your project on Vector's servers.",
+    "owner": "main",
+    "place": "vector-cloud",
+    "state": "ready",
+    "reach": "vector_cloud"
+  },
+  {
+    "id": "tool:read",
+    "kind": "tool",
+    "title": "read",
+    "summary": "",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "read"
+  },
+  {
+    "id": "skill:release",
+    "kind": "skill",
+    "title": "release",
+    "summary": "Cuts a release.",
+    "owner": "user",
+    "place": "local",
+    "state": "ready",
+    "reach": "skill"
+  },
+  {
+    "id": "workflow:ship",
+    "kind": "workflow",
+    "title": "Ship",
+    "summary": "Ships it.",
+    "owner": "user",
+    "place": "local",
+    "state": "ready",
+    "reach": "workflow"
+  },
+  {
+    "id": "workflow:broken",
+    "kind": "workflow",
+    "title": "Broken",
+    "summary": "",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "This workflow has errors: stage 2 has no agent",
+    "reach": "workflow"
+  },
+  {
+    "id": "mcp:docs",
+    "kind": "mcp",
+    "title": "docs",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "ready",
+    "reach": "mcp:docs"
+  },
+  {
+    "id": "mcp:tracker",
+    "kind": "mcp",
+    "title": "tracker",
+    "summary": "An MCP server you configured that runs on another host. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "your-cloud",
+    "state": "ready",
+    "reach": "mcp:tracker"
+  },
+  {
+    "id": "mcp:off",
+    "kind": "mcp",
+    "title": "off",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "off",
+    "reason": "Turned off in your MCP settings.",
+    "reach": "mcp:off"
+  },
+  {
+    "id": "mcp:login",
+    "kind": "mcp",
+    "title": "login",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "Needs you to sign in: vector mcp auth login",
+    "reach": "mcp:login"
+  },
+  {
+    "id": "mcp:cold",
+    "kind": "mcp",
+    "title": "cold",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "Configured, but it has not connected in this workspace.",
+    "reach": "mcp:cold"
+  },
+  {
+    "id": "mcp:broken",
+    "kind": "mcp",
+    "title": "broken",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "It refused the handshake.",
+    "reach": "mcp:broken"
+  },
+  {
+    "id": "mcp:register",
+    "kind": "mcp",
+    "title": "register",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "It needs a client registration.",
+    "reach": "mcp:register"
+  },
+  {
+    "id": "mcp:legacy",
+    "kind": "mcp",
+    "title": "legacy",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "Configured; connection status is unavailable in this engine.",
+    "reach": "mcp:legacy"
+  }
+]"
+`;
+
+exports[`the member list unset, the list is byte-for-byte what it was: local true 1`] = `
+"[
+  {
+    "id": "vectorscope",
+    "kind": "agent",
+    "title": "VectorScope",
+    "summary": "Reviews your changes on your own review model.",
+    "owner": "vectorscope",
+    "place": "local",
+    "sendsTo": "this-computer",
+    "state": "ready",
+    "reach": "connect",
+    "actions": [
+      {
+        "id": "review",
+        "title": "Review",
+        "effects": [
+          "read"
+        ],
+        "background": false,
+        "result": "review"
+      }
+    ]
+  },
+  {
+    "id": "hosted-review",
+    "kind": "agent",
+    "title": "Hosted review",
+    "summary": "Reviews your changes on your own review model.",
+    "owner": "vectorscope",
+    "place": "local",
+    "sendsTo": "provider:vector-cloud",
+    "state": "off",
+    "reason": "Off in Vector Local: it would send your code to the provider vector-cloud.",
+    "reach": "connect",
+    "actions": [
+      {
+        "id": "review",
+        "title": "Review",
+        "effects": [
+          "read"
+        ],
+        "background": false,
+        "result": "review"
+      }
+    ]
+  },
+  {
+    "id": "computer",
+    "kind": "tool",
+    "title": "Vector Hands",
+    "summary": "The agent uses apps, with your approval.",
+    "owner": "hands",
+    "place": "local",
+    "state": "ready",
+    "reach": "computer"
+  },
+  {
+    "id": "github-agent",
+    "kind": "agent",
+    "title": "@vector on GitHub",
+    "summary": "Answers @vector on pull requests from your own GitHub Actions.",
+    "owner": "vector-at-mention",
+    "place": "your-cloud",
+    "state": "not-installed",
+    "reason": "Not set up in this repository.",
+    "reach": "none"
+  },
+  {
+    "id": "agent:build",
+    "kind": "agent",
+    "title": "build",
+    "summary": "The default agent.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui"
+  },
+  {
+    "id": "agent:explore",
+    "kind": "agent",
+    "title": "explore",
+    "summary": "Explores the code.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "task"
+  },
+  {
+    "id": "research",
+    "kind": "helper",
+    "title": "Research",
+    "summary": "Researches a question on the web and in this repository's brain, and writes a report with its sources. The agent reaches it with its research tool.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "research"
+  },
+  {
+    "id": "codespace",
+    "kind": "helper",
+    "title": "Codespace",
+    "summary": "Inline edits and autocomplete in the desktop editor.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui"
+  },
+  {
+    "id": "swarm",
+    "kind": "runtime",
+    "title": "Swarm runs",
+    "summary": "Desktop swarm runs: a planner splits the work across workers that merge into a staging branch.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui",
+    "activity": {
+      "running": 2
+    }
+  },
+  {
+    "id": "brain",
+    "kind": "helper",
+    "title": "Brain",
+    "summary": "Keeps this repository's requirements, decisions and notes. Its helpers run in the background.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "none"
+  },
+  {
+    "id": "help",
+    "kind": "helper",
+    "title": "Help",
+    "summary": "Answers questions about Vector itself in the app.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui"
+  },
+  {
+    "id": "parallel-workspaces",
+    "kind": "runtime",
+    "title": "Parallel Workspaces",
+    "summary": "Desktop workspaces where agents work side by side on their own branches.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "ui",
+    "activity": {
+      "running": 1
+    }
+  },
+  {
+    "id": "tasks",
+    "kind": "tool",
+    "title": "Subagents and background tasks",
+    "summary": "The agent hands pieces of work to subagents, in the background or in an isolated worktree.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "task"
+  },
+  {
+    "id": "browser",
+    "kind": "tool",
+    "title": "Browser",
+    "summary": "The agent opens and checks web pages in the desktop app's browser.",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "browser"
+  },
+  {
+    "id": "vector-cloud",
+    "kind": "service",
+    "title": "Vector Cloud",
+    "summary": "Deploys and publishes your project on Vector's servers.",
+    "owner": "main",
+    "place": "vector-cloud",
+    "state": "off",
+    "reason": "Off in Vector Local: it runs on Vector's servers.",
+    "reach": "vector_cloud"
+  },
+  {
+    "id": "tool:read",
+    "kind": "tool",
+    "title": "read",
+    "summary": "",
+    "owner": "main",
+    "place": "local",
+    "state": "ready",
+    "reach": "read"
+  },
+  {
+    "id": "skill:release",
+    "kind": "skill",
+    "title": "release",
+    "summary": "Cuts a release.",
+    "owner": "user",
+    "place": "local",
+    "state": "ready",
+    "reach": "skill"
+  },
+  {
+    "id": "workflow:ship",
+    "kind": "workflow",
+    "title": "Ship",
+    "summary": "Ships it.",
+    "owner": "user",
+    "place": "local",
+    "state": "ready",
+    "reach": "workflow"
+  },
+  {
+    "id": "workflow:broken",
+    "kind": "workflow",
+    "title": "Broken",
+    "summary": "",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "This workflow has errors: stage 2 has no agent",
+    "reach": "workflow"
+  },
+  {
+    "id": "mcp:docs",
+    "kind": "mcp",
+    "title": "docs",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "ready",
+    "reach": "mcp:docs"
+  },
+  {
+    "id": "mcp:tracker",
+    "kind": "mcp",
+    "title": "tracker",
+    "summary": "An MCP server you configured that runs on another host. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "your-cloud",
+    "state": "ready",
+    "reach": "mcp:tracker"
+  },
+  {
+    "id": "mcp:off",
+    "kind": "mcp",
+    "title": "off",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "off",
+    "reason": "Turned off in your MCP settings.",
+    "reach": "mcp:off"
+  },
+  {
+    "id": "mcp:login",
+    "kind": "mcp",
+    "title": "login",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "Needs you to sign in: vector mcp auth login",
+    "reach": "mcp:login"
+  },
+  {
+    "id": "mcp:cold",
+    "kind": "mcp",
+    "title": "cold",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "Configured, but it has not connected in this workspace.",
+    "reach": "mcp:cold"
+  },
+  {
+    "id": "mcp:broken",
+    "kind": "mcp",
+    "title": "broken",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "It refused the handshake.",
+    "reach": "mcp:broken"
+  },
+  {
+    "id": "mcp:register",
+    "kind": "mcp",
+    "title": "register",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "It needs a client registration.",
+    "reach": "mcp:register"
+  },
+  {
+    "id": "mcp:legacy",
+    "kind": "mcp",
+    "title": "legacy",
+    "summary": "An MCP server you configured. The agent reaches it through the tools it offers.",
+    "owner": "user",
+    "place": "local",
+    "state": "unavailable",
+    "reason": "Configured; connection status is unavailable in this engine.",
+    "reach": "mcp:legacy"
+  }
+]"
+`;

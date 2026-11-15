@@ -999,8 +999,12 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             )
         }
         // Vector Local governs every member here as in the registry: one that runs in a cloud, or sends code past this
-        // computer and the listed model servers, is off whatever it says of itself.
-        const ready = ConnectMembers.gate(member, (yield* config.localPolicy()).enabled)
+        // computer and the listed model servers, is off whatever it says of itself. It applies at this engine's place,
+        // so in a Vector cloud workspace a member in this engine runs on Vector's servers.
+        const ready = ConnectMembers.gate(
+          ConnectMembers.located(member, flags.cloudWorkspace),
+          (yield* config.localPolicy()).enabled,
+        )
         if (ready.state !== "ready")
           return yield* refusal(
             "unavailable",
@@ -1747,6 +1751,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           ...(input?.tools ? { tools: input.tools } : {}),
           ...(tasks ? { desktop: { workspaces: active("workspace:"), swarm: active("swarm:") } } : {}),
           local,
+          cloudWorkspace: flags.cloudWorkspace,
         })
         return list.map((member) => withActivity(member, state))
       })

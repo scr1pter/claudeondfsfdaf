@@ -10,7 +10,9 @@ import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 // a copy, calls a model or reaches the network. Members that already have a tool are listed with that tool as their
 // way in; only members with no tool take hand-offs through connect (VectorScope, through its adapter). Hands is listed
 // by its own list-only adapter, with its tool as its way in, and the GitHub agent by its own list-only adapter
-// (connect/adapters/github-agent.ts) from this repository's workflow file, with nothing to reach.
+// (connect/adapters/github-agent.ts) from this repository's workflow file, with nothing to reach. In a Vector cloud
+// workspace (CW-24) what runs in this engine runs on Vector's servers, so its members read `vector-cloud` (`located`)
+// before Vector Local applies.
 
 type MemberInput = Connect.Member
 
@@ -58,6 +60,11 @@ export interface Sources {
   readonly desktop?: { readonly workspaces: number; readonly swarm: number }
   /** Vector Local is on. */
   readonly local: boolean
+  /**
+   * The engine runs in a Vector cloud workspace (RuntimeFlags.cloudWorkspace). Only the hub sets it, from the engine's
+   * own flags; never from a request.
+   */
+  readonly cloudWorkspace?: boolean
 }
 
 /** Hidden helper sessions Vector already names (core session/helper.ts), with how each is reached. */
@@ -115,8 +122,9 @@ const decode = Schema.decodeUnknownOption(Connect.Member)
  * The list, in a fixed order: adapters, the agents, the helpers, the desktop's own work, the members reached through
  * a tool, skills, saved workflows and MCP servers. With Vector Local on, a member that is otherwise ready but runs in
  * a cloud, sends code past this computer and the listed model servers, or has a `cloud` action reads "off"; an MCP
- * server keeps MCP's own status, because MCP applies Vector Local to its servers itself. Each id appears once (the
- * first source wins), and a member the schema does not accept is left out.
+ * server keeps MCP's own status, because MCP applies Vector Local to its servers itself. In a cloud workspace each
+ * member in this engine reads `vector-cloud` first, so Vector Local then reads it as running on Vector's servers. Each
+ * id appears once (the first source wins), and a member the schema does not accept is left out.
  */
 export function compose(sources: Sources): Connect.Member[] {
   const candidates: MemberInput[] = [
@@ -135,9 +143,20 @@ export function compose(sources: Sources): Connect.Member[] {
   return candidates.flatMap((candidate) => {
     if (seen.has(candidate.id)) return []
     seen.add(candidate.id)
-    const gated = candidate.kind === "mcp" ? candidate : gate(candidate, sources.local)
+    const here = located(candidate, sources.cloudWorkspace === true)
+    const gated = here.kind === "mcp" ? here : gate(here, sources.local)
     return Option.match(decode(gated), { onNone: () => [], onSome: (member) => [member] })
   })
+}
+
+/**
+ * Where a member runs, for this engine. A member's `local` means "in this engine", which in a Vector cloud workspace is
+ * Vector's servers. A member in the user's own accounts or already on Vector's servers keeps its place, and `sendsTo`
+ * (the model's real destination) is never touched. The hub applies it to the list and before a hand-off is admitted.
+ */
+export function located(member: MemberInput, cloudWorkspace: boolean): MemberInput {
+  if (!cloudWorkspace || member.place !== "local") return member
+  return { ...member, place: "vector-cloud" }
 }
 
 /** Applies Vector Local to a member that is otherwise ready. One with a `cloud` action is off whole. */

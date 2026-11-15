@@ -21,7 +21,11 @@ export interface Adapter {
   /** The member id, such as "vectorscope". */
   readonly id: string
   readonly owner: Connect.Owner
-  /** No model call and no new network destination. It may read the member's own cached availability. */
+  /**
+   * No model call and no new network destination. It may read the member's own cached availability. Its `place` is
+   * relative to this engine: `local` means in this engine, which the hub reports as `vector-cloud` in a Vector cloud
+   * workspace (ConnectMembers.located); an adapter words its own summary for that place.
+   */
   readonly describe: () => Effect.Effect<Connect.Member>
   /**
    * The actions that send your code or a screen to a Vector cloud service, each with that service's name in plain

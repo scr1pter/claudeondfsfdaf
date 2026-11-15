@@ -49,6 +49,8 @@ describe("RuntimeFlags", () => {
       expect(flags.experimentalNativeLlm).toBe(false)
       expect(flags.experimentalWebSockets).toBe(false)
       expect(flags.disableWebSockets).toBe(false)
+      // Only the cloud-workspace supervisor's marker sets it, never the umbrella experimental flag.
+      expect(flags.cloudWorkspace).toBe(false)
       expect(flags.client).toBe("desktop")
     }),
   )
