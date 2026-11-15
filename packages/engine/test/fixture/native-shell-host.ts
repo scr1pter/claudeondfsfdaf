@@ -22,7 +22,13 @@ import {
   boundedFile,
   json,
   OBSERVER_OPERATIONS,
+  PROBE_PROC,
+  ROOT,
   observerStage,
+  probeArguments,
+  probeExit,
+  probeNodeStage,
+  probeStage,
   runError,
   shellCase,
   shellFailure,
@@ -309,6 +315,8 @@ const witness: ShellFailure & { frozen: boolean } = {
   driver: null,
   run: null,
   driverExit: null,
+  probe: null,
+  probeNode: null,
   engine: null,
   engineCase: null,
   control: null,
@@ -323,6 +331,9 @@ const driving: {
   run: ShellStage<"run"> | null
   control: GithubIsolation.FailureCause | null
 } = { stage: "driver-channel", run: null, control: null }
+// The failure-only runtime probe's inputs, set from the verified manifest and spec once the host environment holds,
+// and cleared again as soon as the engine fixture reports ready, so the probe never follows an engine report.
+const probing: { target?: { runtime: string; uid: number; gid: number } } = {}
 
 async function configuration() {
   need(process.platform === "linux" && ProcessIsolation.nativeBuild().enabled)
@@ -391,6 +402,7 @@ async function main() {
       process.env.RUNNER_TEMP === LinuxIsolation.HOST_TEMP &&
       process.env.VECTOR_MODE === manifest.mode,
   )
+  probing.target = { runtime: manifest.runtimePath, uid: spec.uid, gid: spec.gid }
   const runtime = await fs.realpath(process.execPath)
   const hostRuntime = await fs.lstat(runtime)
   need(hostRuntime.isFile() && hostRuntime.uid === 0 && hostRuntime.gid === 0 && !(hostRuntime.mode & 0o022))
@@ -629,6 +641,7 @@ async function main() {
   }
   const handle = async (item: Record<string, unknown>) => {
     if (item.event === "engine-ready") {
+      probing.target = undefined
       at("host-engine-ready")
       exact(item, [
         "v",
@@ -973,25 +986,69 @@ async function main() {
   }
 }
 
-const role = process.argv[2] === "driver" ? "driver" : "host"
-void (role === "driver" ? driver() : main()).catch(() => {
-  process.exitCode = 125
-  if (role === "host") process.stderr.write(shellFailure(witness) ?? "")
-  process.stderr.write("Native Shell host fixture refused\n")
-  // The driver reports its stage on the protocol channel; only Host prints the one closed witness line.
-  if (role !== "driver" || !driving.nonce) return
-  // A protocol pipe the host already closed must not turn the refusal into an uncaught EPIPE and another exit code.
-  process.stdout.on("error", () => {})
-  process.stdout.write(
-    PREFIX +
-      JSON.stringify({
-        v: 1,
-        event: "driver-failure",
-        nonce: driving.nonce,
-        stage: driving.stage,
-        run: driving.run,
-        control: driving.control,
-      }) +
-      "\n",
+/**
+ * Report-only and failure-only. When the production run() resolved a signal exit before the engine fixture reported
+ * anything, start the engine's runtime with `-e 0` under the engine sandbox's empty read-only proc and under its own
+ * PID namespace procfs, then Node under the empty proc. An engine-ready report clears the target and an engine-failure
+ * report sets witness.engine, so the probe never follows an engine report. The argv is fixed, the output is discarded,
+ * each start is bounded at 5 s, no host stage moves, and the engine is never started again.
+ */
+async function runtimeProbe() {
+  const target = probing.target
+  if (
+    !(
+      target &&
+      witness.host === "host-close" &&
+      witness.driverExit !== null &&
+      witness.driverExit > 128 &&
+      witness.engine === null &&
+      witness.driver === null &&
+      witness.case === null
+    )
   )
-})
+    return
+  const exit = (proc: readonly string[], runtime: string) =>
+    Promise.resolve()
+      .then(() =>
+        execute("/usr/bin/sudo", probeArguments(proc, runtime, target.uid, target.gid), {
+          env: ENV,
+          timeout: 5_000,
+          maxBuffer: 65_536,
+        }),
+      )
+      .then(() => probeExit(undefined), probeExit)
+  const empty = await exit(PROBE_PROC.empty, target.runtime)
+  witness.probe = probeStage(empty, await exit(PROBE_PROC.own, target.runtime))
+  witness.probeNode = probeNodeStage(await exit(PROBE_PROC.empty, `${ROOT}/runtime/node`))
+}
+
+const role = process.argv[2] === "driver" ? "driver" : "host"
+void (role === "driver" ? driver() : main())
+  .catch(async () => {
+    process.exitCode = 125
+    if (role === "host") {
+      // The probe cannot reject today; if it ever did, the one FAILURE line must still be written.
+      await runtimeProbe().catch(() => {})
+      process.stderr.write(shellFailure(witness) ?? "")
+    }
+    process.stderr.write("Native Shell host fixture refused\n")
+    // The driver reports its stage on the protocol channel; only Host prints the one closed witness line.
+    if (role !== "driver" || !driving.nonce) return
+    // A protocol pipe the host already closed must not turn the refusal into an uncaught EPIPE and another exit code.
+    process.stdout.on("error", () => {})
+    process.stdout.write(
+      PREFIX +
+        JSON.stringify({
+          v: 1,
+          event: "driver-failure",
+          nonce: driving.nonce,
+          stage: driving.stage,
+          run: driving.run,
+          control: driving.control,
+        }) +
+        "\n",
+    )
+  })
+  // Exit code 125 is set first, so a throw inside the async refusal handler can neither become an unhandled
+  // rejection nor change it.
+  .catch(() => {})

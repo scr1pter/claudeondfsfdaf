@@ -51,6 +51,16 @@ export const RUN_REFUSALS = {
   "run-engine-executable": "The GitHub engine executable is inside a writable agent directory. The run is refused.",
 } as const
 const lower = <T extends string>(value: T) => value.toLowerCase() as Lowercase<T>
+// Closed exit classes of the host's failure-only runtime probe (runtimeProbe in native-shell-host.ts).
+export const PROBE_EXITS = ["zero", "abort", "signal", "other", "error"] as const
+export type ProbeExit = (typeof PROBE_EXITS)[number]
+// `empty` is the production engine sandbox's own proc treatment (ProcessIsolation.engineArguments). `own` is the
+// candidate engine segment, a private PID namespace with its own read-only procfs. Only the probe uses either; it
+// starts a runtime with `-e 0` and never the engine.
+export const PROBE_PROC = Object.freeze({
+  empty: Object.freeze(["--tmpfs", "/proc", "--remount-ro", "/proc"] as const),
+  own: Object.freeze(["--unshare-pid", "--proc", "/proc", "--remount-ro", "/proc"] as const),
+})
 export const SHELL_STAGES = Object.freeze({
   host: [
     "host-configuration",
@@ -90,6 +100,11 @@ export const SHELL_STAGES = Object.freeze({
     ...RUN_SYSCALLS.flatMap((syscall) => RUN_ERRNOS.map((code) => `run-errno-${syscall}-${lower(code)}` as const)),
     "run-other",
   ],
+  // The engine's own runtime under each proc treatment (25), then Node under the empty proc only (5).
+  probe: [
+    ...PROBE_EXITS.flatMap((empty) => PROBE_EXITS.map((own) => `probe-empty-${empty}-own-${own}` as const)),
+    ...PROBE_EXITS.map((exit) => `probe-node-${exit}` as const),
+  ],
 })
 export type ShellStage<K extends keyof typeof SHELL_STAGES> = (typeof SHELL_STAGES)[K][number]
 export interface ShellFailure {
@@ -100,6 +115,8 @@ export interface ShellFailure {
   driver: ShellStage<"driver"> | null
   run: ShellStage<"run"> | null
   driverExit: number | null
+  probe: `probe-empty-${ProbeExit}-own-${ProbeExit}` | null
+  probeNode: `probe-node-${ProbeExit}` | null
   engine: ShellStage<"engine"> | null
   engineCase: string | null
   control: GithubIsolation.FailureCause | null
@@ -122,12 +139,7 @@ export function observerStage(stderr: unknown): ShellStage<"observer"> | null {
 export function runError(error: unknown, isolation: string): ShellStage<"run"> {
   if (error instanceof LinuxIsolation.Unavailable) return "run-unavailable"
   if (!(error instanceof Error)) return "run-other"
-  // Own data properties only: an accessor is never called.
-  const own = (name: string): unknown => {
-    const property = Object.getOwnPropertyDescriptor(error, name)
-    return property && Object.hasOwn(property, "value") ? property.value : undefined
-  }
-  const message = own("message")
+  const message = ownValue(error, "message")
   const refusal = Object.entries(RUN_REFUSALS).find((entry) => entry[1] === message)?.[0]
   if (shellStage("run", refusal)) return refusal
   if (message === isolation) return "run-isolation"
@@ -137,8 +149,8 @@ export function runError(error: unknown, isolation: string): ShellStage<"run"> {
       : undefined
   }`
   if (shellStage("run", operation)) return operation
-  const code = own("code")
-  const syscall = own("syscall")
+  const code = ownValue(error, "code")
+  const syscall = ownValue(error, "syscall")
   const errno = `run-errno-${String(syscall)}-${String(code).toLowerCase()}`
   if (
     RUN_ERRNOS.some((item) => item === code) &&
@@ -147,6 +159,79 @@ export function runError(error: unknown, isolation: string): ShellStage<"run"> {
   )
     return errno
   return "run-other"
+}
+// Own data properties only: an accessor is never called.
+function ownValue(error: Error, name: string): unknown {
+  const property = Object.getOwnPropertyDescriptor(error, name)
+  return property && Object.hasOwn(property, "value") ? property.value : undefined
+}
+/**
+ * sudo's fixed argv for one probe start: the engine sandbox's bwrap groups with one of the two PROBE_PROC treatments,
+ * then run()'s prlimit, setpriv and `env -i` chain, then a copied Root runtime evaluating `0`. policy.test.ts ties
+ * these tokens to ProcessIsolation.engineArguments and to run() in github.sandbox.ts.
+ */
+export function probeArguments(proc: readonly string[], runtime: string, uid: number, gid: number) {
+  need(proc === PROBE_PROC.empty || proc === PROBE_PROC.own)
+  need(runtime === `${ROOT}/runtime/node` || runtime === `${ROOT}/runtime/bun`)
+  need(Number.isSafeInteger(uid) && uid > 0 && Number.isSafeInteger(gid) && gid > 0)
+  return [
+    "-n",
+    "/usr/bin/bwrap",
+    "--die-with-parent",
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    ...proc,
+    "--cap-add",
+    "CAP_SETUID",
+    "--cap-add",
+    "CAP_SETGID",
+    "--cap-add",
+    "CAP_DAC_OVERRIDE",
+    "--chdir",
+    "/",
+    "--",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--",
+    "/usr/bin/setpriv",
+    `--reuid=${uid}`,
+    `--regid=${gid}`,
+    "--clear-groups",
+    "--no-new-privs",
+    "--",
+    "/usr/bin/env",
+    "-i",
+    "PATH=/usr/bin:/bin",
+    runtime,
+    "-e",
+    "0",
+  ]
+}
+/**
+ * Classify one probe start from its execFile outcome: undefined is success. bwrap reports a child's signal n as
+ * 128 + n, so 134 is SIGABRT and 129-192 covers Linux signals 1-64, real-time signals included. A timeout kill, a
+ * signal on sudo itself, a missing code or anything else is `error`.
+ */
+export function probeExit(error: unknown): ProbeExit {
+  if (error === undefined) return "zero"
+  if (!(error instanceof Error)) return "error"
+  const code = ownValue(error, "code")
+  const signal = ownValue(error, "signal")
+  if (ownValue(error, "killed") === true || (signal !== undefined && signal !== null)) return "error"
+  if (typeof code !== "number" || !Number.isInteger(code)) return "error"
+  if (code === 134) return "abort"
+  if (code >= 129 && code <= 192) return "signal"
+  if (code >= 1 && code <= 255) return "other"
+  return "error"
+}
+export function probeStage(empty: ProbeExit, own: ProbeExit) {
+  return `probe-empty-${empty}-own-${own}` as const
+}
+export function probeNodeStage(exit: ProbeExit) {
+  return `probe-node-${exit}` as const
 }
 /**
  * Re-encode only the closed witness fields as one bounded stderr line. If any other field fails its own validation,
@@ -164,6 +249,8 @@ export function shellFailure(value: unknown): string | undefined {
     !nullable(value.driver, (item) => shellStage("driver", item)) ||
     !nullable(value.run, (item) => shellStage("run", item)) ||
     !nullable(value.driverExit, (item) => Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 255) ||
+    !nullable(value.probe, (item) => shellStage("probe", item) && item.startsWith("probe-empty-")) ||
+    !nullable(value.probeNode, (item) => shellStage("probe", item) && item.startsWith("probe-node-")) ||
     !nullable(value.engine, (item) => shellStage("engine", item)) ||
     !nullable(value.engineCase, shellCase) ||
     control === undefined
@@ -180,6 +267,8 @@ export function shellFailure(value: unknown): string | undefined {
       driver: value.driver,
       run: value.run,
       driverExit: value.driverExit,
+      probe: value.probe,
+      probeNode: value.probeNode,
       engine: value.engine,
       engineCase: value.engineCase,
       control,

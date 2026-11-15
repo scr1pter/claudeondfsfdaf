@@ -266,7 +266,8 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
     }
     const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, entry] }
     expect(GithubIsolation.failureMetadata(new Error("private startup log and info", { cause }))).toEqual(cause)
-    // These are the vocabulary's longest labels (up to 86 characters); each crosses the host witness line whole.
+    // These are the vocabulary's longest labels (up to 86 characters); each crosses the host witness line whole, next
+    // to the longest runtime probe labels.
     const line = shellFailure({
       host: "host-close",
       case: null,
@@ -274,12 +275,16 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
       observer: null,
       driver: "driver-run",
       run: "run-adapter",
-      driverExit: null,
+      driverExit: 134,
+      probe: "probe-empty-signal-own-signal",
+      probeNode: "probe-node-signal",
       engine: null,
       engineCase: null,
       control: cause,
     })
-    expect(line && JSON.parse(line.slice(FAILURE_PREFIX.length)).control).toEqual(cause)
+    const parsed = line && JSON.parse(line.slice(FAILURE_PREFIX.length))
+    expect(parsed.control).toEqual(cause)
+    expect([parsed.probe, parsed.probeNode]).toEqual(["probe-empty-signal-own-signal", "probe-node-signal"])
     if (!timeout) {
       for (const exit of [0, 1, 255]) {
         const exited = { ...entry, exit }
@@ -1383,6 +1388,8 @@ test("a control failure projection crosses the host witness channel unchanged an
     driver: "driver-run",
     run: "run-adapter",
     driverExit: null,
+    probe: null,
+    probeNode: null,
     engine: null,
     engineCase: null,
     control: received ?? null,

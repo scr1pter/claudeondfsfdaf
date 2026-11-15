@@ -7,12 +7,18 @@ import {
   FAILURE_PREFIX,
   OBSERVER_OPERATIONS,
   OBSERVER_PREFIX,
+  PROBE_EXITS,
+  PROBE_PROC,
   RUN_ERRNOS,
   RUN_OPERATIONS,
   RUN_REFUSALS,
   RUN_SYSCALLS,
   SHELL_STAGES,
   observerStage,
+  probeArguments,
+  probeExit,
+  probeNodeStage,
+  probeStage,
   runError,
   shellFailure,
   shellStage,
@@ -95,7 +101,7 @@ test("every copied runtime, control tree and spec path stays outside every nativ
     expect(() => LinuxIsolation.assertUnmaskedRuntime(value)).toThrow(LinuxIsolation.Unavailable)
 })
 test("the host witness failure vocabulary is closed, unique, role-prefixed and carries no free text", () => {
-  const roles = ["host", "observer", "driver", "engine", "run"] as const
+  const roles = ["host", "observer", "driver", "engine", "run", "probe"] as const
   expect(Object.keys(SHELL_STAGES)).toEqual([...roles])
   const all = roles.flatMap((role) => [...SHELL_STAGES[role]])
   expect(new Set(all).size).toBe(all.length)
@@ -111,6 +117,12 @@ test("the host witness failure vocabulary is closed, unique, role-prefixed and c
   for (const event of ["engine-ready", "engine-summary", "engine-failure", "driver-exit", "driver-failure"])
     expect(all).not.toContain(event)
   expect(SHELL_STAGES.run).toHaveLength(5 + RUN_OPERATIONS.length + RUN_SYSCALLS.length * RUN_ERRNOS.length + 1)
+  // The engine runtime under both proc treatments (5 x 5), then Node under the empty proc (5).
+  expect(PROBE_EXITS).toEqual(["zero", "abort", "signal", "other", "error"])
+  expect(SHELL_STAGES.probe).toHaveLength(30)
+  expect(SHELL_STAGES.probe.filter((label) => /^probe-empty-[a-z]+-own-[a-z]+$/.test(label))).toHaveLength(25)
+  expect(SHELL_STAGES.probe.filter((label) => /^probe-node-[a-z]+$/.test(label))).toHaveLength(5)
+  expect(all).toHaveLength(134)
   expect(new Set(OBSERVER_OPERATIONS).size).toBe(OBSERVER_OPERATIONS.length)
   expect(FAILURE_PREFIX.endsWith(" ")).toBe(true)
   expect(OBSERVER_PREFIX.endsWith(" ")).toBe(true)
@@ -149,6 +161,8 @@ test("the witness failure line re-encodes only closed fields within its bound", 
     driver: null,
     run: null,
     driverExit: null,
+    probe: null,
+    probeNode: null,
     engine: null,
     engineCase: null,
     control: null,
@@ -156,7 +170,25 @@ test("the witness failure line re-encodes only closed fields within its bound", 
   expect(shellFailure(empty)).toBe(
     FAILURE_PREFIX +
       '{"v":1,"host":"host-controls","case":null,"operation":"controls","observer":"observer-controls-agent",' +
-      '"driver":null,"run":null,"driverExit":null,"engine":null,"engineCase":null,"control":null}\n',
+      '"driver":null,"run":null,"driverExit":null,"probe":null,"probeNode":null,"engine":null,"engineCase":null,' +
+      '"control":null}\n',
+  )
+  // The shape the failure-only runtime probe reports after a launcher signal exit before any engine report.
+  expect(
+    shellFailure({
+      ...empty,
+      host: "host-close",
+      operation: null,
+      observer: null,
+      driverExit: 134,
+      probe: "probe-empty-abort-own-zero",
+      probeNode: "probe-node-zero",
+    }),
+  ).toBe(
+    FAILURE_PREFIX +
+      '{"v":1,"host":"host-close","case":null,"operation":null,"observer":null,"driver":null,"run":null,' +
+      '"driverExit":134,"probe":"probe-empty-abort-own-zero","probeNode":"probe-node-zero","engine":null,' +
+      '"engineCase":null,"control":null}\n',
   )
   const record = {
     v: 1,
@@ -178,6 +210,8 @@ test("the witness failure line re-encodes only closed fields within its bound", 
     driver: "driver-run",
     run: "run-errno-lstat-eacces",
     driverExit: 125,
+    probe: "probe-empty-signal-own-signal",
+    probeNode: "probe-node-signal",
     engine: "engine-round",
     engineCase: "death",
     control: { v: 1, event: "native-control-failure", records: [record] },
@@ -196,6 +230,8 @@ test("the witness failure line re-encodes only closed fields within its bound", 
     "driver",
     "run",
     "driverExit",
+    "probe",
+    "probeNode",
     "engine",
     "engineCase",
     "control",
@@ -222,6 +258,13 @@ test("the witness failure line re-encodes only closed fields within its bound", 
     { driverExit: 1.5 },
     { driverExit: "125" },
     { driverExit: NaN },
+    { probe: "probe-empty-abort" },
+    { probe: "probe-node-zero" },
+    { probe: "probe-empty-crash-own-zero" },
+    { probe: 134 },
+    { probeNode: "probe-empty-abort-own-zero" },
+    { probeNode: "probe-node-crash" },
+    { probeNode: "node-zero" },
     { control: { ...full.control, message: "private" } },
     { control: { ...full.control, records: [] } },
     { control: { ...full.control, records: Array.from({ length: 5 }, () => record) } },
@@ -248,6 +291,9 @@ test("the witness failure line re-encodes only closed fields within its bound", 
   expect(shellFailure({ ...full, control: { ...full.control, records: oversized } })).toBe(minimal)
   for (const value of [undefined, null, "host-close", [full], 1]) expect(shellFailure(value)).toBeUndefined()
   expect(shellFailure(Object.fromEntries(Object.entries(full).filter((entry) => entry[0] !== "host")))).toBeUndefined()
+  // A witness without either probe key is malformed and keeps only its host stage.
+  for (const key of ["probe", "probeNode"])
+    expect(shellFailure(Object.fromEntries(Object.entries(full).filter((entry) => entry[0] !== key)))).toBe(minimal)
   // Four records whose stage and class are the widest admitted tokens still fit the 4 KiB line bound whole.
   const widest = Array.from({ length: 4 }, () => ({ ...record, stage: "a".repeat(128), class: "b".repeat(128) }))
   const wide = shellFailure({ ...full, control: { ...full.control, records: widest } })
@@ -344,4 +390,199 @@ test("every fixture stage assignment and observer label agrees with the closed v
     /need\(\s*!protocolError && pending\.length === 0 && engine && control && witness\.engine === null && witness\.driver === null,?\s*\)/,
   )
   expect(close).toContain('if (manifest.family === "baseline")')
+  // The runtime probe runs only on the observed geometry (a launcher signal exit at close with no other role report),
+  // varies only the proc treatment and the runtime, never calls at(), and is awaited before the one FAILURE line.
+  const probe = slice(host, "async function runtimeProbe() {\n", "\n}\n")
+  expect(probe.replace(/\s+/g, " ")).toContain(
+    'const target = probing.target if ( !( target && witness.host === "host-close" && witness.driverExit !== null && ' +
+      "witness.driverExit > 128 && witness.engine === null && witness.driver === null && witness.case === null ) ) return ",
+  )
+  const count = (text: string, part: string) => text.split(part).length - 1
+  expect(count(probe, "PROBE_PROC.empty")).toBe(2)
+  expect(count(probe, "PROBE_PROC.own")).toBe(1)
+  expect(count(probe, "target.runtime")).toBe(2)
+  expect(count(probe, "`${ROOT}/runtime/node`")).toBe(1)
+  expect(count(probe, 'execute("/usr/bin/sudo", probeArguments(proc, runtime, target.uid, target.gid), {')).toBe(1)
+  expect(probe.replace(/\s+/g, " ")).toContain(
+    "env: ENV, timeout: 5_000, maxBuffer: 65_536, }), ) .then(() => probeExit(undefined), probeExit)",
+  )
+  expect(probe).not.toMatch(/\bat\(/)
+  expect(count(host, "witness.probe =")).toBe(1)
+  expect(count(host, "witness.probeNode =")).toBe(1)
+  expect(host).not.toContain("probeTarget")
+  expect(host).toContain("\nconst probing: { target?: { runtime: string; uid: number; gid: number } } = {}\n")
+  expect(count(host, "probing.target =")).toBe(2)
+  const environment = slice(host, '  at("host-environment")\n', '  at("host-controls")\n')
+  expect(environment).toContain("  probing.target = { runtime: manifest.runtimePath, uid: spec.uid, gid: spec.gid }\n")
+  // Any engine-ready report, admitted or not, clears the target first, so the probe never follows an engine report.
+  expect(host).toContain(
+    '    if (item.event === "engine-ready") {\n      probing.target = undefined\n      at("host-engine-ready")\n',
+  )
+  // Exit 125 comes first and a terminal catch follows the async handler, so nothing in it can change the exit code.
+  const refusal = slice(host, 'void (role === "driver" ? driver() : main())\n', "\n  .catch(() => {})\n")
+  expect(refusal).toStartWith(
+    'void (role === "driver" ? driver() : main())\n  .catch(async () => {\n    process.exitCode = 125\n' +
+      '    if (role === "host") {\n' +
+      "      // The probe cannot reject today; if it ever did, the one FAILURE line must still be written.\n" +
+      '      await runtimeProbe().catch(() => {})\n      process.stderr.write(shellFailure(witness) ?? "")\n    }\n' +
+      '    process.stderr.write("Native Shell host fixture refused\\n")\n',
+  )
+  expect(host).toEndWith("\n  .catch(() => {})\n")
+})
+test("the failure-only runtime probe varies only the engine sandbox's proc treatment", async () => {
+  const contains = (list: readonly string[], part: readonly string[]) =>
+    list.some((_, index) => part.every((item, offset) => list[index + offset] === item))
+  const groups = (proc: readonly string[]) => [
+    "--dev",
+    "/dev",
+    ...proc,
+    "--cap-add",
+    "CAP_SETUID",
+    "--cap-add",
+    "CAP_SETGID",
+    "--cap-add",
+    "CAP_DAC_OVERRIDE",
+    "--chdir",
+  ]
+  // The production engine sandbox mounts exactly the `empty` treatment, between the same fixed bwrap groups.
+  const production = ProcessIsolation.engineArguments("/bin/true", [], {
+    container: "/mnt/vector-agent-sandbox",
+    cwd: "/runner/work/repo",
+  })
+  expect(ProcessIsolation.BINARY).toBe("/usr/bin/bwrap")
+  expect(production.slice(0, 4)).toEqual(["--die-with-parent", "--ro-bind", "/", "/"])
+  expect(contains(production, groups(PROBE_PROC.empty))).toBe(true)
+  expect(contains(production, PROBE_PROC.own)).toBe(false)
+  expect(production).not.toContain("--unshare-pid")
+  expect(production).not.toContain("--proc")
+  // The `own` treatment follows entry.py's command namespaces, which pair --unshare-pid with a private procfs.
+  const read = async (name: string) =>
+    (await Bun.file(path.join(import.meta.dir, name)).text()).replaceAll("\r\n", "\n")
+  const entry = await read("../../../../core/src/process-isolation/linux/entry.py")
+  expect(entry).toContain('"--dev", "/dev", "--proc", "/proc", "--cap-drop", "ALL"')
+  expect(entry).toContain('"--unshare-pid"')
+  // run()'s hosted inner chain and its native launch, which the probe repeats without the proof FD wrapper, the
+  // checkout --chdir, the clean environment and the engine bundle.
+  const sandbox = await read("../../../src/cli/cmd/github.sandbox.ts")
+  expect(sandbox).toContain('  const launcher = hosted ? "/usr/bin/sudo" : binary\n')
+  expect(sandbox).toContain("engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope)")
+  expect(sandbox).toContain(
+    [
+      '        "/usr/bin/prlimit",',
+      '        "--core=0:0",',
+      '        "--",',
+      '        "/usr/bin/setpriv",',
+      "        `--reuid=${state!.uid}`,",
+      "        `--regid=${state!.gid}`,",
+      '        "--clear-groups",',
+      '        ...(!state!.sudo ? ["--no-new-privs"] : []),',
+      '        "--",',
+      '        "/usr/bin/env",',
+      '        "-i",',
+      "",
+    ].join("\n"),
+  )
+  expect(sandbox).toContain('  return [\n    "-n",\n    ...(sudo || !floor\n')
+  const expected = (proc: readonly string[], runtime: string) => [
+    "-n",
+    "/usr/bin/bwrap",
+    "--die-with-parent",
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    ...proc,
+    "--cap-add",
+    "CAP_SETUID",
+    "--cap-add",
+    "CAP_SETGID",
+    "--cap-add",
+    "CAP_DAC_OVERRIDE",
+    "--chdir",
+    "/",
+    "--",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--",
+    "/usr/bin/setpriv",
+    "--reuid=1001",
+    "--regid=1002",
+    "--clear-groups",
+    "--no-new-privs",
+    "--",
+    "/usr/bin/env",
+    "-i",
+    "PATH=/usr/bin:/bin",
+    runtime,
+    "-e",
+    "0",
+  ]
+  expect(PROBE_PROC.empty).toEqual(["--tmpfs", "/proc", "--remount-ro", "/proc"])
+  expect(PROBE_PROC.own).toEqual(["--unshare-pid", "--proc", "/proc", "--remount-ro", "/proc"])
+  for (const runtime of [`${ROOT}/runtime/node`, `${ROOT}/runtime/bun`])
+    for (const proc of [PROBE_PROC.empty, PROBE_PROC.own]) {
+      const argv = probeArguments(proc, runtime, 1001, 1002)
+      expect(argv).toEqual(expected(proc, runtime))
+      expect(contains(argv, groups(proc))).toBe(true)
+    }
+  // The two treatments differ only in the proc segment.
+  const empty = probeArguments(PROBE_PROC.empty, `${ROOT}/runtime/bun`, 1001, 1002)
+  const own = probeArguments(PROBE_PROC.own, `${ROOT}/runtime/bun`, 1001, 1002)
+  expect([...empty.slice(0, 8), ...empty.slice(8 + PROBE_PROC.empty.length)]).toEqual([
+    ...own.slice(0, 8),
+    ...own.slice(8 + PROBE_PROC.own.length),
+  ])
+  for (const [proc, runtime, uid, gid] of [
+    [PROBE_PROC.empty, "/usr/bin/node", 1001, 1002],
+    [PROBE_PROC.empty, `${ROOT}/runtime/deno`, 1001, 1002],
+    [PROBE_PROC.empty, `${CONTROL}/runtime/bun`, 1001, 1002],
+    [PROBE_PROC.empty, `${ROOT}/runtime/bun`, 0, 1002],
+    [PROBE_PROC.empty, `${ROOT}/runtime/bun`, 1001, 1.5],
+    [PROBE_PROC.empty, `${ROOT}/runtime/bun`, -1, 1002],
+    [PROBE_PROC.empty, `${ROOT}/runtime/bun`, 1001, NaN],
+    [[...PROBE_PROC.empty], `${ROOT}/runtime/bun`, 1001, 1002],
+    [["--proc", "/proc"], `${ROOT}/runtime/bun`, 1001, 1002],
+    [[], `${ROOT}/runtime/bun`, 1001, 1002],
+  ] as const)
+    expect(() => probeArguments(proc, runtime, uid, gid)).toThrow()
+  const failure = (fields: Record<string, unknown>) => Object.assign(new Error("Command failed: private"), fields)
+  expect(probeExit(undefined)).toBe("zero")
+  expect(probeExit(failure({ code: 134, killed: false, signal: null }))).toBe("abort")
+  // 128 + n for every Linux signal 1-64, real-time signals (glibc SIGRTMIN 34 to SIGRTMAX 64) included.
+  for (const code of [129, 133, 139, 159, 160, 162, 192])
+    expect(probeExit(failure({ code, killed: false, signal: null }))).toBe("signal")
+  for (const code of [1, 125, 127, 128, 193, 255])
+    expect(probeExit(failure({ code, killed: false, signal: null }))).toBe("other")
+  const accessor = new Error("placeholder")
+  Object.defineProperty(accessor, "code", {
+    get() {
+      throw new Error("accessor called")
+    },
+  })
+  for (const value of [
+    failure({ code: 134, killed: true, signal: null }),
+    failure({ code: null, killed: false, signal: "SIGKILL" }),
+    failure({ code: null, killed: true, signal: "SIGTERM" }),
+    failure({ code: "ENOENT" }),
+    failure({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }),
+    failure({ code: 0 }),
+    failure({ code: 256 }),
+    failure({ code: 134.5 }),
+    failure({}),
+    new Error("Native Shell fixture contract refused"),
+    accessor,
+    { code: 134 },
+    "134",
+    null,
+  ])
+    expect(probeExit(value)).toBe("error")
+  // Both builders return members, in the vocabulary's own order.
+  const built: string[] = [
+    ...PROBE_EXITS.flatMap((empty) => PROBE_EXITS.map((own) => probeStage(empty, own))),
+    ...PROBE_EXITS.map(probeNodeStage),
+  ]
+  expect(built).toEqual([...SHELL_STAGES.probe])
+  expect(probeStage("abort", "zero")).toBe("probe-empty-abort-own-zero")
+  expect(probeNodeStage("abort")).toBe("probe-node-abort")
 })

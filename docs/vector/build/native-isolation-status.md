@@ -353,3 +353,42 @@ The run and the new vocabulary are logged in `native-qualify-notes.md`.
 No qualification follows from this change. Both native build switches and `FLOOR` stay
 false, and native plus `OwnedProcess` stays refused. No production activation is
 authorized by this document.
+
+## Engine proc and the Bun runtime, 15 November 2026
+
+Run 43690568146 (job `132740150684`, head `bd840ff6`, the diagnostic cell) passed
+prepare, seed and byte verification again. The host witness then printed `host-close`
+with `driverExit` 134 and every other field null. The production `run()` resolved with
+exit 134 from its sudo and bubblewrap engine launch, and the engine fixture reported
+nothing. By code reading, bubblewrap reports a child killed by signal n as exit 128 + n,
+so 134 is SIGABRT inside the engine sandbox, before the engine fixture reported. The
+native engine launch uses `ProcessIsolation.engineArguments`, whose `/proc` is an empty
+read-only tmpfs.
+
+Suspected open gate, not a CI result: the Bun runtime may abort at startup under the
+engine sandbox's empty read-only `/proc`. The code shows that the native engine launch
+uses that `/proc`. This document cites only code reading and CI evidence for it.
+
+The CI-only host fixture now runs a failure-only, report-only probe. It runs only on this
+exact geometry, and never after the engine fixture reported. It makes three bounded sudo
+starts of a copied runtime with `-e 0`:
+
+- the engine's runtime under the production empty `/proc`;
+- the same runtime under its own PID namespace and read-only procfs;
+- Node under the empty `/proc`.
+
+The FAILURE line gains two closed fields, `probe` and `probeNode`. The NQ-7 dispatch
+confirms or refutes the cause on the hosted image, and NQ-8 reads it and updates
+"Remaining qualification" from that evidence only.
+
+If the cause is confirmed, the engine sandbox's `/proc` treatment is a mount decision
+outside this lane. It belongs to the lead or the native lane, and to the owner where it
+touches the held-off FLOOR, which uses the same `engineArguments`. Inference only: the
+shipped `vector` executable is Bun-compiled, so a native hosted engine would meet the same
+`/proc`. That is moot while the native build switches are off. Whether the Node cells
+share the gate is what `probeNode` shows.
+
+No production source changes. No mount, mask, assertion, deadline, workflow or matrix
+changes. No qualification follows from this change. Both native build switches and
+`FLOOR` stay false, and native plus `OwnedProcess` stays refused. No production
+activation is authorized by this document.
