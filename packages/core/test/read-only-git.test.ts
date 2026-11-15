@@ -1075,18 +1075,19 @@ local(
         "the reference name is unsupported",
       )
       // No ref holds these, but Git reads each as a short object id or `git describe` output, so code 1 would let a
-      // next candidate replace a commit Git found.
+      // next candidate replace a commit Git found. Since Git 2.49 describe output needs a ref name and a count before
+      // -g, as in x-1-g<hex>; older Git, Ubuntu 24.04's 2.43 among them, also reads x-g<hex>, so the view refuses both.
       const short = head.slice(0, 7)
       const objectNames = [
         short,
         short.toUpperCase(),
         head.slice(0, 39),
         `v1.0-3-g${short}`,
-        `refs/heads/x-g${short.toUpperCase()}`,
+        `refs/heads/x-1-g${short.toUpperCase()}`,
       ]
       for (const name of objectNames)
         expect((await liveGit(f, ["rev-parse", "--verify", "--quiet", `${name}^{commit}`])).stdout.trim()).toBe(head)
-      for (const name of [...objectNames, "deadbeef"])
+      for (const name of [...objectNames, `refs/heads/x-g${short.toUpperCase()}`, "deadbeef"])
         expect(await refusal(named(name))).toBe("the name may be an object id; fetch or pass a commit")
       await liveGit(f, ["symbolic-ref", "refs/heads/symbolic", "refs/heads/loose-branch"])
       await fs.writeFile(path.join(heads, "upper"), head.toUpperCase() + "\n")
@@ -1548,9 +1549,17 @@ local(
     }
     try {
       await view()
-      // Packed, Git records the fully peeled object after every ref to a tag, whatever its namespace.
+      // Packed, Git records the fully peeled object after every ref to a tag, whatever its namespace. Since Git 2.55
+      // pack-refs refuses a branch that names a tag object, so the branch leaves the loose store first and its record
+      // is written as earlier Git packed it, in sorted place before the first record (the default branch).
+      await fs.rm(path.join(f.gitDirectory, "refs", "heads", "at-tag"))
       await liveGit(f, ["pack-refs", "--all"])
-      const packed = await fs.readFile(path.join(f.gitDirectory, "packed-refs"), "utf8")
+      const packedFile = path.join(f.gitDirectory, "packed-refs")
+      const [header, ...records] = (await fs.readFile(packedFile, "utf8")).split(/(?<=\n)/)
+      expect(header).toBe("# pack-refs with: peeled fully-peeled sorted \n")
+      expect(records[0].slice(41) > "refs/heads/at-tag\n").toBe(true)
+      await fs.writeFile(packedFile, [header, `${tag} refs/heads/at-tag\n^${side}\n`, ...records].join(""))
+      const packed = await fs.readFile(packedFile, "utf8")
       for (const name of ["refs/heads/at-tag", "refs/remotes/origin/at-tag", "refs/tags/loose-tag"])
         expect(packed).toContain(`${tag} ${name}\n^${side}\n`)
       expect(packed).toMatch(new RegExp(`^[0-9a-f]{40} refs/tags/nested-tag\n\\^${side}$`, "m"))
