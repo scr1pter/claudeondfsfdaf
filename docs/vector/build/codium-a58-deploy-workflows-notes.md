@@ -126,3 +126,16 @@ and a timeout before CI0. Neither run is green: both stop at "Codium: 119/120 te
 `packages/web/test/model-plan-gateway-hooks.test.ts`, plus the exerciser's four review-memory MISS lines. The ids,
 steps and the failure's cause are in `codium-deviations.md` (the CI0 section's dated line and "Codium finish: Track B
 receipts and P4 closings").
+
+**Status, 15 Nov 2026 (Codium finish H2b).** Closes the "Not done" bullet on the CLI's notice files. The image now
+carries `LICENSE`, `THIRD_PARTY_NOTICES.md` and `DEPENDENCY_NOTICES.md` in `/usr/share/vector/` (root's, files 0644,
+folder 0755), the folder the Vector CLI container uses, next to `/usr/local/bin/vector`. The image workflow's `cli`
+step (`hosted-image.ts cli --output packages/hosted-computer/bin/vector --notices packages/hosted-computer/notices`)
+copies them unchanged from the same verified release archive as the binary, before the binary. It refuses to run
+when the binary or the notices folder already exists, and each copy refuses to write over anything. The CI image job's stand-in step writes placeholder files under the same names, so CI still
+builds without a release; that image is never pushed. `in-image.mjs` checks the folder, the files' owner and modes, and
+that the agent can read them. No notice text was edited and `DEPENDENCY_NOTICES.md` was not regenerated. The legal read
+of these files as shipped stays the owner's (spec 8.2 step 15). The real files in a real image are checked only by the
+owner's vector-hosted-image.yml run. Tests: `packages/cloud` `src/hosted-image.test.ts` and
+`src/workflow-compliance.test.ts`, and `packages/hosted-computer` `test/image.test.ts`, run locally; the Docker job is
+CI. `codium-deviations.md` "Codium finish: H2 image notices (15 Nov 2026)".

@@ -5914,3 +5914,220 @@ is rebuilt. Records also touched: `codium-a54-hosted-image-notes.md`, `codium-a5
 `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/hosted-computer.md` and `.env.example`.
 
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+## Codium finish: H2 image notices (15 Nov 2026)
+
+Package H2b closes the gap in `codium-a58-deploy-workflows-notes.md` "Not done": "The CLI's notice files are not
+copied into the image (A54's Dockerfile takes only `bin/vector`)". The CLI build writes `DEPENDENCY_NOTICES.md`
+(`packages/engine/script/build.ts:181`) and ships `LICENSE`, `THIRD_PARTY_NOTICES.md` and `DEPENDENCY_NOTICES.md`
+beside `bin/` (`:284`, `:293`) in every archive (`:303`, `:307`). Release packaging requires the three to be identical
+across targets (`packages/cloud/src/cli-release-package.ts:93`) and puts them in each archive (`:111`). The image
+took only the binary from that archive. Built on `codium-finish` `0d6bfc53` (H2a; equal to origin/codium-finish; PR
+#33 unmerged: origin/main `58f85edc`, origin/release-finish `cf2373c4`). Scratch under `/tmp/vector-v2/codium/h2b/`.
+Not committed by this build step; CI ids follow in a dated line.
+
+**What landed**
+
+- `packages/hosted-computer/image/Dockerfile`:
+  - `:44-46`: `COPY --chmod=644 notices/LICENSE notices/THIRD_PARTY_NOTICES.md notices/DEPENDENCY_NOTICES.md
+    /usr/share/vector/`, right after the binary's COPY. A missing file fails the build.
+  - The final RUN makes the folder root's with mode 0755 explicitly (`:64` `chown -R 0:0 ... /usr/share/vector`, `:66`
+    `chmod 0755 ... /usr/share/vector`), so the mode does not depend on how BuildKit creates a COPY destination.
+  - The header names `notices/` (`:2`) and adds the guarantee (`:9-10`).
+- `packages/hosted-computer/.gitignore`: `notices`, next to `bin`, so a local `cli` run or the CI stand-in leaves
+  nothing to commit.
+- `packages/cloud/src/hosted-image.ts`:
+  - `unpackImageCli` takes `notices` (`:47-52`). Before anything is written it refuses when the binary or the notices
+    folder already exists, checked with `lstat`, so a dangling link counts too (`:56-72`). Only ENOENT counts as
+    absent; any other `lstat` error stops the run there (R6).
+  - After the existing archive and ELF checks, it copies the three notices from the verified, unpacked archive with
+    mode 0644 (`:104-112`), then the binary (`:113-115`), which is the last write. Every copy passes
+    `COPYFILE_EXCL` (R6).
+  - `fetchImageCli` passes `notices` through (`:123-146`); its answer is unchanged.
+  - `main`'s `cli` needs both `--output` and `--notices` before anything is fetched (`:185-192`, "Pass --output <path>
+    --notices <directory>."). A value that starts with `--` is not taken as a flag's value. The log line and the usage
+    name both flags.
+- `.github/workflows/vector-hosted-image.yml`: the step "Take the Vector CLI from its published release" runs
+  `... cli --output packages/hosted-computer/bin/vector --notices packages/hosted-computer/notices` (`:197`). The
+  header says the job takes the CLI and its three notice files from the release. No new input, env, secret or
+  expression. The workflow was not dispatched.
+- `.github/workflows/vector-hosted-ci.yml`, job `hosted-image`, step "Build the image with a stand-in CLI" (name kept):
+  - it writes three stand-in files under the release's names into `notices/` (`:274-278`) before the same
+    `docker build` (`:279`, unchanged);
+  - the job comment says so (`:245-249`);
+  - still SHA pins, ubuntu-24.04, no secret, no login and no push.
+- `packages/hosted-computer/test/docker/in-image.mjs` (runs only in Docker):
+  - `/usr/share/vector` joins the root-owned, not-writable-by-others `find` (`:35`);
+  - `/usr/share/vector` is a root-owned folder with mode 0755 (`:40-41`);
+  - each notice is a root-owned, non-empty regular file with mode 0644 (`:42-45`);
+  - each notice can be read by the agent, uid 10001, through the existing `probe` (`:95-96`).
+- Records: dated status lines in `codium-a58-deploy-workflows-notes.md` (closing its "Not done" bullet) and
+  `codium-a54-hosted-image-notes.md`, and step 1 of "The image" in `owner-actions/hosted-computer.md`.
+- Not changed: the notice and licence texts, `DEPENDENCY_NOTICES.md` (not regenerated), `script/dependency-notices.ts`,
+  the CLI build and release packaging, `boot.sh` and its base archive, `bake-snapshot.ts`, `microvm-check.ts`, every
+  server file, every setting and every flag.
+
+**Readings**
+
+- **R1, "from the CLI build output".** The image workflow never builds the CLI: it takes it only from the published
+  release archive, checked against the release manifest's size and SHA-256, and requires the release's source commit
+  on protected `main`. That archive is the CLI build's output, packed from `dist/<name>/` beside `bin/`, and packaging
+  keeps the three files identical across targets. So the notices come from the same verified archive as the binary,
+  unchanged (`copyFile`, no text step). The archive check already refused an archive without all three
+  (`hosted-image.ts:88`).
+- **R2, `/usr/share/vector` rather than the task's example `/usr/local/share/vector`.** The Vector CLI container keeps
+  the same three files in `/usr/share/vector/` (`packages/cloud/container/Dockerfile:16`, copied with mode 0644 by
+  `cli-container.ts:73-76`), with the binary at `/usr/local/bin/vector`, as here. One place in both images is easier
+  to describe in the legal read. Moving it is one Dockerfile line plus the matching strings in `in-image.mjs`, the two
+  test regexes and the owner doc; the image test ties the folder to the CLI container's, so a move in one alone fails.
+- **R3, CI stand-ins.** The CI image job has no release, so its stand-in step writes three placeholder files under the
+  release's names. They exist only on CI's runner and in its image, which is never pushed: the job has no login and no
+  push, and the compliance test asserts that. The workflow-compliance case runs the step's own script with `docker`
+  stubbed and checks the names against `cliNotices`.
+- **R4, computers made from earlier images.** A resumed computer restores its whole saved disk (H1b's R4(d)), so the
+  notices reach a computer only when its disk is made from an image built after H2b. No image has been built yet.
+- **R5, the texts.** No notice or licence text was edited, and nothing was regenerated. The real
+  `DEPENDENCY_NOTICES.md` is about 4.3 MB, against the image's 6 GB limit (`IMAGE_MAX_BYTES`).
+- **R6, the existence check and the writes.** The binary's check used `stat`, and a dangling link would have passed
+  it. The check now uses `lstat` on the binary and on the notices folder. It checks the folder, not each notice, because
+  an absent folder holds no notice. So a leftover folder (even an empty one), a file there, or a link there (even a
+  dangling one) refuses the run, and nothing is written into or through it. The refusal names the first path found.
+  Only ENOENT counts as absent; any other error (ENOTDIR, EACCES and so on) stops the run at the check with its own
+  error, before anything is unpacked. Each `copyFile` also passes `COPYFILE_EXCL`, so a file or link that appears
+  after the check is refused by the write itself (EEXIST) rather than overwritten or written through. A link in a
+  parent folder of `notices` or of `bin/vector` (in the workflow, `packages/hosted-computer` from the checkout) is not
+  checked.
+- **R7, the binary is the last write.** If a notice write fails, no binary is left behind for the image build, so a
+  binary at `bin/vector` still means the step finished. The test makes a notice write fail with a notices path under a
+  dangling link: `lstat` finds nothing there (ENOENT), and the folder's `mkdir` then fails (ENOENT) and creates nothing
+  where the link points.
+
+**Critique points taken and rejected**
+
+- Taken (major): the in-image checks run as root, so they now also check the folder (root's, mode 0755), and they
+  read each notice as the agent through `probe`. The Dockerfile sets the folder's owner and mode explicitly in the
+  final RUN, pinned by `image.test.ts`, and does not rely on how `COPY --chmod` creates the folder.
+- Taken (major): the spawn case runs `hosted-image.ts` by absolute path (`path.join(import.meta.dir, ...)`) from an
+  empty temp folder. It checks the exact stderr line and the exit code for each call, and that the folder is still
+  empty afterwards.
+- Taken (major): the compliance case makes its own `mkdtemp` folder, passes it to `shell()` as the cwd (the docker
+  stub logs there), reads the results before its own `rm`, and puts the `docker()` function before the step's
+  `set -euo pipefail`.
+- Taken: the notices are written first and the binary last (R7). The crafted-archive case checks after each failure
+  that neither the binary nor any notice exists; the tampered-archive case checks both once its three failures have
+  run. A sub-case (a notices path under a dangling link) pins the order.
+- Taken: the `.dockerignore` guard tests each pattern against `notices` and against each `notices/<name>` path with
+  `Bun.Glob`, where `*` stops at a slash as Docker's does. `**/*.md` fails it. No ban on `/` or `**` was added.
+- Taken: the plan's duplicate checks are gone. The link from the Dockerfile's COPY sources to `cliNotices` lives in
+  `packages/cloud` (`hosted-image.test.ts`), because `hosted-computer` must not import from `cloud`. `image.test.ts`
+  keeps the destination folder, the cross-check against the CLI container's COPY line, the folder mode, and a check
+  that `in-image.mjs` names the same files. The layer-order case (b) was dropped.
+- Taken: no MODEL-PLANS.md change (no new setting). The Alpine and OCI questions are one neutral line under "For the
+  owner". In the owner doc only step 1 changes, and it gains one sentence on the legal read.
+- Taken: path choice recorded as R2. The Dockerfile header, the in-image checks and the owner doc all name
+  `/usr/share/vector`.
+- Taken: the CI record (a later dated line) will cite run and job ids only, and only what the visible log shows. The
+  in-image lines print only when a check fails.
+- Rejected: none. The `codium-a54-hosted-image-notes.md` dated line stays, because A54's Dockerfile and its Docker
+  checks changed, and the lane keeps that record accurate.
+
+**Review fixes (15 Nov 2026).** Six non-blocking findings from the package review, all in this package's own files:
+
+1. Taken. `hosted-image.ts:56-72`: the existence check counted every `lstat` error as absent. Only ENOENT does now;
+   any other error is rethrown at the check (R6). Regression: the existing-folder case's ENOTDIR step (a notices path
+   under a file) expects `code: "ENOTDIR"` from the check's `lstat` (Bun reports it as `statx` on Linux, so the case
+   matches `/stat/`), not from the folder's later `mkdir`.
+2. Taken. `hosted-image.ts:185-189`: `value(flag)` no longer takes a following `--` flag as the value. Regression: the
+   spawn case adds `--output --notices notices`, which gets the same "Pass --output <path> --notices <directory>." line.
+3. Taken. The spawn case (`hosted-image.test.ts`, an `emptyFolder` resource like `cliReleaseFixture`) and the
+   compliance case (`workflow-compliance.test.ts`, an inline `[Symbol.asyncDispose]` object as `scratchRepository`
+   uses) now clean up with `await using`; both `try`/`finally` blocks are gone.
+4. Taken. The stand-in citation is now `vector-hosted-ci.yml:274-278`, plus `:279` for the unchanged `docker build`.
+5. Taken in the code, without a test. Both `copyFile` calls pass `constants.COPYFILE_EXCL` (`hosted-image.ts:109`,
+   `:114`). A local Bun probe (scratch, not a test) confirmed it refuses an existing file and a dangling link with
+   EEXIST and creates nothing at the link's target. No deterministic assertion was added. Once the check refuses an
+   existing notices folder, the only window is between `mkdir` and each copy inside one call, and the code has no
+   seam to put a file there. Adding a test-only hook to the image step was judged worse than the gap. The mutation
+   table records that dropping `COPYFILE_EXCL` fails no case.
+6. Taken, with one change from the suggestion. The check now covers `input.notices` itself, so a leftover folder or a
+   link there refuses the run. The per-notice paths were dropped from the list rather than kept beside it (the
+   suggestion was `[input.output, input.notices, ...]`). An absent folder holds no notice, so they added nothing. With
+   ENOENT-only handling (finding 1), they would also have turned a file at `notices` into a raw ENOTDIR from
+   `notices/LICENSE` instead of the clear "already exists" refusal. Nothing in the image workflow creates
+   `packages/hosted-computer/notices` before the `cli` step (`bun run build` writes only `dist/`), so a clean checkout
+   still passes. A link in a parent folder is not checked (R6). Regression: the existing-folder case (renamed "a
+   notices folder already there, even empty or a dangling link, refuses the run; a failed notice write leaves no
+   binary") covers a folder with a leftover notice, an empty folder, a dangling link as the folder, and a file as the
+   folder. Its ordering step moved from a file in the folder's place, which the check now refuses first, to a notices
+   path under a dangling link (R7).
+
+After the fixes these mutation rows were re-run and fail as the table says: `stat` for `lstat`, binary path only,
+every `lstat` error absent, binary first, the flag guard dropped, `COPYFILE_EXCL` dropped (fails none), the notice
+copies skipped, and mode 0600. The other rows' code and cases are unchanged and were not re-run. Prettier: the new and
+changed lines are in prettier's form, and `workflow-compliance.test.ts` is clean.
+
+**Ran locally** (through `vector-serial`, one file at a time, `--timeout 30000`; counts at HEAD `0d6bfc53` first)
+
+- `packages/hosted-computer`:
+  - `test/image.test.ts`: 22 pass, 3 skip (21 pass, 3 skip at HEAD; 1 new case; the 3 skips are the Docker describe);
+  - `test/source.test.ts`: 3/0, unchanged;
+  - `node --check test/docker/in-image.mjs`: clean.
+- `packages/cloud`:
+  - `src/hosted-image.test.ts`: 11/0 (8 at HEAD; 3 new cases, 3 extended), again 11/0 after the review fixes;
+  - `src/workflow-compliance.test.ts`: 55/0 (54 at HEAD; 1 new case, 1 exact run updated), again 55/0 after the review
+    fixes;
+  - `src/cli-container.test.ts` 4/0 and `src/cli-release-package.test.ts` 10/0, unchanged (regressions).
+- `bun typecheck` in `packages/hosted-computer` and `packages/cloud`: clean.
+- Prettier: `workflow-compliance.test.ts` was clean at HEAD and is clean now. `hosted-image.ts`, `hosted-image.test.ts`
+  and `image.test.ts` were not clean at HEAD. The lines this package adds are in prettier's form, and the old lines
+  were left as they were.
+- Mutations, each restored afterwards and confirmed with `cmp` against the saved copy. Each fails exactly the named
+  cases:
+
+  | Mutation | Fails |
+  | --- | --- |
+  | drop the notices' COPY | the `image.test.ts` case and the `hosted-image.test.ts` Dockerfile case |
+  | drop the folder's `chmod 0755` | the `image.test.ts` case |
+  | `.dockerignore` `*.md` changed to `**/*.md` | the `image.test.ts` case |
+  | drop one name from `in-image.mjs` | the `image.test.ts` case |
+  | skip writing the notices (the copies; the folder's `mkdir` kept) | the release case and the crafted-archive case |
+  | write the notices with mode 0600 | the release case |
+  | check only the binary's path | the existing-folder case |
+  | check with `stat` instead of `lstat` | the existing-folder case (its dangling-link step) |
+  | count every `lstat` error as absent | the existing-folder case (its ENOTDIR step) |
+  | write the binary first | the existing-folder case (its dangling-parent step) |
+  | make `main` need only `--output` | the spawn case |
+  | take a following flag as a flag's value | the spawn case |
+  | drop `COPYFILE_EXCL` from both copies | none (see "Review fixes", finding 5) |
+  | drop the stand-in loop | the new compliance case |
+  | write two of the three stand-ins | the new compliance case |
+  | drop `--notices` from the image workflow | its exact-run compliance case |
+
+- Before the push, the lead's step runs the full turbo typecheck and the api tree.
+
+**Only in CI**
+
+- The Docker image job ("Hosted services / Cloud computer image (Docker)" in `vector-codium.yml`, and `hosted-image`
+  in `vector-hosted-ci.yml`). It builds with the stand-ins and runs `test/image.test.ts` with `in-image.mjs`, including
+  the new folder, file and agent-read checks.
+- vector-hosted-ci.yml's typecheck matrix and Hosted tests, and typecheck.yml.
+- Dispatches after the lead's commit, one at a time:
+  1. Vector Codium on `codium-finish` with `base: "origin/release-finish"` and no `browser_specs`;
+  2. typecheck.yml;
+  3. vector-hosted-ci.yml, once the Vector Codium run has finished, because the two share a concurrency group.
+
+**Deferred verification.** The real notice files in a real image are checked only by the owner-dispatched
+vector-hosted-image.yml run. Its step "Boot the image and check it from inside" runs the same `test/image.test.ts` and
+`in-image.mjs`, so the folder, mode and agent-read checks also guard that build before anything is pushed. The lane
+never dispatches it.
+
+**For the lead.** None in another lane's files.
+
+**For the owner** (no decision taken here):
+
+- The legal read of these three files as shipped in the image stays the owner's (spec 8.2 step 15, "hosted computer").
+  `owner-actions/hosted-computer.md` ("The image", step 1) says so.
+- That read may also cover whether the image's Alpine packages need notices of their own, and whether the image should
+  carry an OCI licenses label like the CLI container's.
+
+Edits to `api/_lib/model-plan-*.ts`: none.

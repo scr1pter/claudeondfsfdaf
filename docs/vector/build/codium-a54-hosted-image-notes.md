@@ -151,3 +151,12 @@ and per H1b's R4(d) it never acts on a resumed disk, so the server floor is the 
 run locally; the Valkey cases, the Hosted tests job and the Docker job are CI. Setting the floor is an owner step after
 the image is rebuilt (`owner-actions/hosted-computer.md`, "The image floor"). `codium-deviations.md` "Codium finish: H2
 generation floor (15 Nov 2026)".
+
+**Status, 15 Nov 2026 (Codium finish, H2b).** The Dockerfile copies the CLI's three notice files from `notices/` in
+the build context into `/usr/share/vector/` with mode 0644, right after `bin/vector`. Its final RUN makes the folder
+root's with mode 0755. `.gitignore` adds `notices`. The image workflow fills `notices/` from the published release
+(WP A58's `hosted-image.ts cli --notices`), and the CI Docker job fills it with stand-ins. `test/docker/in-image.mjs`
+adds `/usr/share/vector` to the root-owned `find`, and checks the folder's mode, each file's owner and mode, and that
+the agent can read each file. `test/image.test.ts` has 1 new case (22 pass, 3 skip). `boot.sh`, its base archive,
+hostd and the firewall are unchanged. As with every image change, a computer gets the files only when its disk is made
+from a newer image. `codium-deviations.md` "Codium finish: H2 image notices (15 Nov 2026)".

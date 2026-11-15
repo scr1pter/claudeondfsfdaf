@@ -1,16 +1,18 @@
 // The image workflow's steps that need code (contract WP A58, §6.2 `vector-hosted-image.yml`; the image itself is WP
 // A54's packages/hosted-computer). The workflow runs in the protected hosted-production environment:
-// - `cli`: puts the Vector CLI for Linux (musl, x86-64) at packages/hosted-computer/bin/vector, from a release already
-//   published to Vector's download store, by exact version, never a moving tag. The manifest is decoded with the same
-//   rules every installer uses, the archive's size and SHA-256 must match it, the archive may hold only the binary and
-//   its notices, and the binary must be an x86-64 ELF. It writes the release's source commit to GITHUB_OUTPUT, so the
-//   workflow can require it on protected main as well.
+// - `cli`: puts the Vector CLI for Linux (musl, x86-64) at packages/hosted-computer/bin/vector and its three notice
+//   files, as the release ships them, in packages/hosted-computer/notices/, from a release already published to
+//   Vector's download store, by exact version, never a moving tag. The manifest is decoded with the same rules every
+//   installer uses, the archive's size and SHA-256 must match it, the archive may hold only the binary and its notices,
+//   and the binary must be an x86-64 ELF. It writes the release's source commit to GITHUB_OUTPUT, so the workflow can
+//   require it on protected main as well.
 // - `login`: signs Docker in to the hosted team's container registry with the Vercel CLI the budget workflow pins
 //   (`vercel vcr login docker`), the token in the environment only and the CLI's output never echoed.
 // - `tag`: the registry tag for one image generation, from the owner's repository variable, checked.
 // - `digest`: the pushed image's digest reference in that repository, from `docker inspect` (stdin), for the bake.
 
-import { appendFile, chmod, copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises"
+import { constants } from "node:fs"
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { extract, list } from "tar"
@@ -38,13 +40,36 @@ async function body(fetcher: Fetcher, url: string, limit: number) {
   return bytes
 }
 
-/** Checks the release archive against its manifest entry and writes only its `vector` binary to `output`. */
-export async function unpackImageCli(input: { bytes: Uint8Array; asset: CliRelease.Asset; output: string }) {
+/**
+ * Checks the release archive against its manifest entry, then writes its notices, unchanged, into `notices` and its
+ * `vector` binary to `output`, the binary last.
+ */
+export async function unpackImageCli(input: {
+  bytes: Uint8Array
+  asset: CliRelease.Asset
+  output: string
+  notices: string
+}) {
   const { bytes, asset } = input
   if (bytes.byteLength !== asset.size || new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== asset.sha256)
     throw new Error("The CLI archive does not match its release manifest.")
-  if (await stat(input.output).then(() => true, () => false))
-    throw new Error(`${input.output} already exists; start from a clean checkout.`)
+  // lstat, so a dangling link counts too: nothing is written over or through the binary, or into a notices folder (a
+  // link included), that a clean checkout does not have. An absent folder holds no notice, so the folder is checked
+  // rather than each file. Only ENOENT means absent; any other error stops the run here.
+  const found = (
+    await Promise.all(
+      [input.output, input.notices].map((file) =>
+        lstat(file).then(
+          () => file,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return undefined
+            throw error
+          },
+        ),
+      ),
+    )
+  ).find((file) => file !== undefined)
+  if (found) throw new Error(`${found} already exists; start from a clean checkout.`)
   const temporary = await mkdtemp(path.join(os.tmpdir(), "vector-image-cli-"))
   try {
     const archive = path.join(temporary, "verified.tar.gz")
@@ -76,8 +101,17 @@ export async function unpackImageCli(input: { bytes: Uint8Array; asset: CliRelea
     const view = new DataView(header.buffer, header.byteOffset, header.byteLength)
     if (header.length < 64 || view.getUint32(0, false) !== 0x7f454c46 || header[4] !== 2 || header[5] !== 1 || view.getUint16(18, true) !== 62)
       throw new Error("The CLI binary is not a 64-bit x86 Linux program.")
+    // The notices first and the binary last, so a binary at `output` means the step finished. COPYFILE_EXCL makes each
+    // write refuse a file or link that appeared after the check above.
+    await mkdir(input.notices, { recursive: true })
+    await Promise.all(
+      cliNotices.map(async (name) => {
+        await copyFile(path.join(unpacked, name), path.join(input.notices, name), constants.COPYFILE_EXCL)
+        await chmod(path.join(input.notices, name), 0o644)
+      }),
+    )
     await mkdir(path.dirname(input.output), { recursive: true })
-    await copyFile(binary, input.output)
+    await copyFile(binary, input.output, constants.COPYFILE_EXCL)
     await chmod(input.output, 0o755)
     return { sha256: asset.sha256 }
   } finally {
@@ -85,8 +119,14 @@ export async function unpackImageCli(input: { bytes: Uint8Array; asset: CliRelea
   }
 }
 
-/** The published release's x86-64 musl CLI, by exact version, checked; answers the release's source commit. */
-export async function fetchImageCli(input: { origin: string; version: string; output: string; fetcher: Fetcher }) {
+/** The published release's x86-64 musl CLI and its notices, by exact version, checked; answers its source commit. */
+export async function fetchImageCli(input: {
+  origin: string
+  version: string
+  output: string
+  notices: string
+  fetcher: Fetcher
+}) {
   if (!/^https:\/\/[a-z0-9]+\.public\.blob\.vercel-storage\.com$/.test(input.origin))
     throw new Error("Set VECTOR_CLI_BLOB_ORIGIN to Vector's download store.")
   // An exact version only: a channel name ("latest", "beta") moves, and archivePath refuses it.
@@ -101,7 +141,7 @@ export async function fetchImageCli(input: { origin: string; version: string; ou
   if (manifest.version !== input.version) throw new Error("The CLI release manifest names another version.")
   const asset = CliRelease.select(manifest, IMAGE_CLI_TARGET)
   const bytes = await body(input.fetcher, asset.url, asset.size)
-  const unpacked = await unpackImageCli({ bytes, asset, output: input.output })
+  const unpacked = await unpackImageCli({ bytes, asset, output: input.output, notices: input.notices })
   return { version: manifest.version, sourceRevision: manifest.sourceRevision, sha256: unpacked.sha256 }
 }
 
@@ -142,16 +182,24 @@ async function main(argv: readonly string[]) {
   const [command] = argv
   const env = process.env
   if (command === "cli") {
-    const at = argv.indexOf("--output")
-    const output = at >= 0 ? argv[at + 1] : undefined
-    if (!output) throw new Error("Pass --output <path>.")
+    const value = (flag: string) => {
+      const at = argv.indexOf(flag)
+      // A following flag is not a value: `--output --notices x` names no output.
+      return at >= 0 && !argv[at + 1]?.startsWith("--") ? argv[at + 1] : undefined
+    }
+    const output = value("--output")
+    const notices = value("--notices")
+    if (!output || !notices) throw new Error("Pass --output <path> --notices <directory>.")
     const result = await fetchImageCli({
       origin: env.VECTOR_CLI_BLOB_ORIGIN?.trim() ?? "",
       version: env.VECTOR_HOSTED_CLI_VERSION?.trim() ?? "",
       output: path.resolve(output),
+      notices: path.resolve(notices),
       fetcher: (url, init) => fetch(url, init),
     })
-    console.log(`Vector CLI ${result.version} (${IMAGE_CLI_TARGET}, sha256 ${result.sha256}) from source ${result.sourceRevision}.`)
+    console.log(
+      `Vector CLI ${result.version} (${IMAGE_CLI_TARGET}, sha256 ${result.sha256}) from source ${result.sourceRevision}, with its notices in ${notices}.`,
+    )
     if (env.GITHUB_OUTPUT) await appendFile(env.GITHUB_OUTPUT, `source=${result.sourceRevision}\n`)
     return 0
   }
@@ -175,7 +223,7 @@ async function main(argv: readonly string[]) {
     console.log(digest)
     return 0
   }
-  throw new Error("Usage: bun hosted-image.ts cli --output <path> | login | tag | digest")
+  throw new Error("Usage: bun hosted-image.ts cli --output <path> --notices <directory> | login | tag | digest")
 }
 
 if (import.meta.main)

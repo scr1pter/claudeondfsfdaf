@@ -1,11 +1,13 @@
 # The cloud computer's base image (contract WP A54). Built by the image workflow (WP A58) from packages/hosted-computer
-# after `bun run build`, with the Vector CLI for Linux (musl) at bin/vector; pushed to the hosted team's registry; then
-# script/bake-snapshot.ts turns it into the base snapshot every computer starts from. The base is pinned by digest, the
-# same Alpine the Vector CLI container uses.
+# after `bun run build`, with the Vector CLI for Linux (musl) at bin/vector and its three notice files in notices/;
+# pushed to the hosted team's registry; then script/bake-snapshot.ts turns it into the base snapshot every computer
+# starts from. The base is pinned by digest, the same Alpine the Vector CLI container uses.
 #
 # What the image guarantees (test/image.test.ts and its Docker job check each):
 # - the agent runs as uid 10001 with no sudo, no setuid or setgid file anywhere on the system disk, and no access to the
 #   display, the VNC socket, the browser's debugging pipe or a GitHub token;
+# - the CLI's notices, as its release ships them, are in /usr/share/vector: root's, files 0644 in a 0755 folder, so
+#   every user can read them;
 # - boot.sh reinstalls /opt/vector and the browser policy from an archive whose digest is stamped into boot.sh here;
 # - the firewall (image/nftables.conf) allows tcp/443, DNS to the resolver and loopback, and boot fails closed without it;
 # - the VNC server listens on a Unix socket only, and the viewer proxy is the one network listener (port 6080).
@@ -39,6 +41,9 @@ RUN set -eu; \
     rm -f /usr/bin/sudo /usr/bin/doas /bin/su /usr/bin/su
 
 COPY --chmod=755 bin/vector /usr/local/bin/vector
+# The CLI's notices, from the same release archive as bin/vector (vector-hosted-image.yml), in the folder the Vector
+# CLI container keeps them in (packages/cloud/container/Dockerfile). A missing file fails the build.
+COPY --chmod=644 notices/LICENSE notices/THIRD_PARTY_NOTICES.md notices/DEPENDENCY_NOTICES.md /usr/share/vector/
 COPY dist/hostd.mjs dist/viewer-proxy.mjs /usr/lib/vector/stage/opt/vector/
 COPY image/credential-guard.js image/viewer.html image/viewer.js image/nftables.conf image/chromium-policies.json image/boot-lib.sh /usr/lib/vector/stage/opt/vector/
 COPY image/boot.sh /opt/vector/boot.sh
@@ -56,9 +61,9 @@ RUN set -eu; \
     tar --numeric-owner -xpf /usr/lib/vector/base/base.tar -C /; \
     rm -rf "$stage"; \
     echo "$VECTOR_IMAGE_GENERATION" > /usr/lib/vector/GENERATION; \
-    chown -R 0:0 /opt/vector /usr/lib/vector; \
+    chown -R 0:0 /opt/vector /usr/lib/vector /usr/share/vector; \
     chmod 0444 /usr/lib/vector/base/base.tar /usr/lib/vector/GENERATION; \
-    chmod 0755 /opt/vector/boot.sh; \
+    chmod 0755 /opt/vector/boot.sh /usr/share/vector; \
     mkdir -p /data /var/lib/vector; chmod 0755 /data; chmod 0711 /var/lib/vector; \
     find / -xdev -type f -perm /6000 -exec chmod ug-s {} +; \
     for binary in /usr/bin/setpriv /usr/bin/xdotool /usr/bin/ffmpeg /usr/bin/chromium-browser /usr/bin/git /usr/bin/tar \

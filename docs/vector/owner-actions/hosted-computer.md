@@ -241,7 +241,10 @@ What it does: a preflight job with no secret checks the environment's reviewer a
 that the commit is on `main`, and the inputs. The image job waits for your approval, then:
 
 1. `bun run build` in `packages/hosted-computer` (hostd and the viewer proxy, for Node), and the CLI at
-   `packages/hosted-computer/bin/vector`.
+   `packages/hosted-computer/bin/vector`, with its three notice files (`LICENSE`, `THIRD_PARTY_NOTICES.md`,
+   `DEPENDENCY_NOTICES.md`) in `packages/hosted-computer/notices/` from the same release archive. The image keeps them
+   in `/usr/share/vector/`, as the Vector CLI container does. The legal read of these files as shipped in the image is
+   yours (owner step 15, "hosted computer"); nothing here edits their text.
 2. `docker build --platform linux/amd64 --file image/Dockerfile` with both generations, then boots the image in Docker
    and runs `test/image.test.ts` inside it, the same checks CI runs. Nothing is pushed if one fails.
 3. Signs Docker in to the registry with the Vercel CLI (`vercel vcr login docker`, the version the budget workflow

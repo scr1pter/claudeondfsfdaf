@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -15,6 +15,7 @@ import {
   selectUnitTests,
   unitCommand,
 } from "./codium-ci-tests"
+import { cliNotices } from "./cli-release-package"
 
 const root = fileURLToPath(new URL("../../..", import.meta.url))
 const read = (path: string) => Bun.file(`${root}/${path}`).text()
@@ -1294,6 +1295,34 @@ describe("Hosted deploy workflows", () => {
       expect(JSON.stringify(image)).not.toMatch(/docker (?:login|push)/)
     })
 
+    test("the image job builds with a stand-in CLI and stand-in notices under the release's names, and pushes nothing", async () => {
+      const build = step(
+        (await workflow("vector-hosted-ci.yml")).jobs["hosted-image"],
+        "Build the image with a stand-in CLI",
+      )
+      expect(build?.["working-directory"]).toBe("packages/hosted-computer")
+      expect(build?.run).toBeDefined()
+      const directory = await mkdtemp(path.join(tmpdir(), "vector-hosted-image-ci-"))
+      await using scratch = { directory, [Symbol.asyncDispose]: () => rm(directory, { recursive: true, force: true }) }
+      // The step's own script in a scratch package folder, with docker recording its arguments instead of building.
+      const result = await shell(
+        `docker() { printf '%s\\n' "$*" >> docker.log; }\n${build!.run}`,
+        {},
+        scratch.directory,
+      )
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" })
+      expect((await readdir(path.join(scratch.directory, "notices"))).sort()).toEqual([...cliNotices].sort())
+      for (const name of cliNotices)
+        expect({ name, text: await readFile(path.join(scratch.directory, "notices", name), "utf8") }).toEqual({
+          name,
+          text: `Image check stand-in for the Vector CLI release file ${name}.\n`,
+        })
+      expect(existsSync(path.join(scratch.directory, "bin", "vector"))).toBe(true)
+      const calls = (await readFile(path.join(scratch.directory, "docker.log"), "utf8")).trim().split("\n")
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toStartWith("build --platform linux/amd64 --file image/Dockerfile ")
+    })
+
     test("the Codium lane runs the Worker and image jobs through it, and only those", async () => {
       const ci = await workflow("vector-hosted-ci.yml")
       const lane = await workflow("vector-codium.yml")
@@ -1681,7 +1710,7 @@ describe("Hosted deploy workflows", () => {
       ].map((name) => at(job, name))
       expect(order.every((value, index) => value > 0 && (index === 0 || value > order[index - 1]!))).toBe(true)
       expect(step(job, "Take the Vector CLI from its published release")).toMatchObject({
-        run: "bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector",
+        run: "bun packages/cloud/src/hosted-image.ts cli --output packages/hosted-computer/bin/vector --notices packages/hosted-computer/notices",
         env: {
           VECTOR_CLI_BLOB_ORIGIN: "${{ vars.VECTOR_CLI_BLOB_ORIGIN }}",
           VECTOR_HOSTED_CLI_VERSION: "${{ needs.preflight.outputs.cli_version }}",
