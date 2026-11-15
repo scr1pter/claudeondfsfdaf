@@ -31,6 +31,7 @@ import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { NpmTest } from "../fake/npm"
+import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { pollWithTimeout, testEffect } from "../lib/effect"
@@ -133,7 +134,7 @@ const graph = (enabled: boolean) =>
       [Npm.node, NpmTest.noop],
       [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: enabled, experimentalEventSystem: true })],
     ],
-  )
+  ).pipe(Layer.provide(noSweep))
 const it = testEffect(graph(true))
 const off = testEffect(graph(false))
 const reviewInput = (input: Connect.ReviewInput = {}): Connect.DirectoryReviewInput => ({

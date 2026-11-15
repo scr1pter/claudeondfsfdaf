@@ -2015,3 +2015,201 @@ local(
     }
   },
 )
+
+// Stale private snapshots (C5). Every sweep below runs on its own folder, never on the real temporary folder.
+const DAY = 24 * 60 * 60 * 1000
+const SNAPSHOT_NAME = /^vector-readonly-git-[A-Za-z0-9]{6}$/
+const liveMarker = () => `${process.pid} ${Math.floor(performance.timeOrigin)}\n`
+async function sweepRoot() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "vector-sweep-fixture-")))
+  temporary.push(root)
+  return root
+}
+// A folder shaped like open()'s snapshot. mkdir keeps a setgid parent's bit, so the mode is set explicitly, as open() does.
+async function snapshotFolder(root: string, name: string, mode = 0o700) {
+  const folder = path.join(root, name)
+  await fs.mkdir(path.join(folder, "git", "objects"), { recursive: true })
+  await fs.writeFile(path.join(folder, "git", "objects", "pack"), "private\n")
+  await fs.chmod(folder, mode)
+  return folder
+}
+
+local("sweepStale removes only old, dead, private snapshot directories of this user", async () => {
+  const root = await sweepRoot()
+  const outside = path.join(root, "outside")
+  await fs.mkdir(outside)
+  await fs.writeFile(path.join(outside, "keep.txt"), "outside\n")
+  const target = await snapshotFolder(root, "target")
+  // Each matching name, and what a sweep two days from now does with it.
+  const rows = [
+    {
+      name: "vector-readonly-git-Old001",
+      aged: "removed",
+      make: async (folder: string) => {
+        await fs.symlink(outside, path.join(folder, "link"))
+        await fs.mkdir(path.join(folder, "inner"))
+        await fs.symlink(path.join(outside, "keep.txt"), path.join(folder, "inner", "file-link"))
+      },
+    },
+    { name: "vector-readonly-git-Dead01", aged: "removed", marker: "2147483647 1\n" },
+    { name: "vector-readonly-git-Junk01", aged: "removed", marker: "not a marker\n" },
+    {
+      name: "vector-readonly-git-Fresh1",
+      aged: "kept",
+      make: async (folder: string) => {
+        const seconds = (Date.now() + 2 * DAY - 60_000) / 1000
+        await fs.utimes(folder, seconds, seconds)
+      },
+    },
+    { name: "vector-readonly-git-Live01", aged: "kept", marker: liveMarker() },
+    { name: "vector-readonly-git-Mode01", aged: "kept", mode: 0o755 },
+    {
+      name: "vector-readonly-git-Link01",
+      aged: "kept",
+      replace: (entry: string) => fs.symlink(target, entry),
+    },
+    {
+      name: "vector-readonly-git-File01",
+      aged: "kept",
+      replace: async (entry: string) => {
+        await fs.writeFile(entry, "a file\n")
+        await fs.chmod(entry, 0o700)
+      },
+    },
+    {
+      name: "vector-readonly-git-Mark01",
+      aged: "failed",
+      make: (folder: string) =>
+        fs.symlink(path.join(root, "vector-readonly-git-Live01", "owner"), path.join(folder, "owner")),
+    },
+  ] as const
+  for (const row of rows) {
+    const entry = path.join(root, row.name)
+    if ("replace" in row) {
+      await row.replace(entry)
+      continue
+    }
+    await snapshotFolder(root, row.name, "mode" in row ? row.mode : 0o700)
+    if ("marker" in row) await fs.writeFile(path.join(entry, "owner"), row.marker)
+    if ("make" in row) await row.make(entry)
+  }
+  // Real 0700 folders whose names open() never makes.
+  for (const name of [
+    "vector-readonly-git-Short",
+    "vector-readonly-git-Long001",
+    "vector-readonly-git-ab_c12",
+    "prefix-vector-readonly-git-Abc123",
+  ])
+    await snapshotFolder(root, name)
+  const original = (await fs.readdir(root)).sort()
+  expect(original.filter((name) => SNAPSHOT_NAME.test(name)).sort()).toEqual(rows.map((row) => row.name).sort())
+  const all = { removed: 0, kept: rows.length, failed: 0 }
+
+  expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() })).toEqual(all)
+  expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() + 2 * DAY, olderThanMs: 3 * DAY })).toEqual(
+    all,
+  )
+  // A threshold that is not a number, or under the one-hour floor, removes nothing and reads nothing.
+  for (const olderThanMs of [Number.NaN, Number.POSITIVE_INFINITY, 0, -DAY, 60 * 60 * 1000 - 1])
+    expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() + 2 * DAY, olderThanMs })).toEqual({
+      removed: 0,
+      kept: 0,
+      failed: 0,
+    })
+  expect(await ReadOnlyGit.sweepStale({ directory: root, now: Number.NaN })).toEqual({
+    removed: 0,
+    kept: 0,
+    failed: 0,
+  })
+  expect((await fs.readdir(root)).sort()).toEqual(original)
+
+  const count = (aged: string) => rows.filter((row) => row.aged === aged).length
+  expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() + 2 * DAY })).toEqual({
+    removed: count("removed"),
+    kept: count("kept"),
+    failed: count("failed"),
+  })
+  const removed = new Set<string>(rows.filter((row) => row.aged === "removed").map((row) => row.name))
+  expect((await fs.readdir(root)).sort()).toEqual(original.filter((name) => !removed.has(name)))
+  expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe("outside\n")
+  expect(await fs.readFile(path.join(target, "git", "objects", "pack"), "utf8")).toBe("private\n")
+  expect((await fs.lstat(path.join(root, "vector-readonly-git-Link01"))).isSymbolicLink()).toBe(true)
+  expect(await fs.readFile(path.join(root, "vector-readonly-git-Live01", "owner"), "utf8")).toBe(liveMarker())
+})
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() !== 0)(
+  "sweepStale keeps an old snapshot that another user owns",
+  async () => {
+    const root = await sweepRoot()
+    await snapshotFolder(root, "vector-readonly-git-Root01")
+    const foreign = await snapshotFolder(root, "vector-readonly-git-Other1")
+    await fs.chown(foreign, 65534, 65534)
+    expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() + 2 * DAY })).toEqual({
+      removed: 1,
+      kept: 1,
+      failed: 0,
+    })
+    expect(await fs.readdir(root)).toEqual(["vector-readonly-git-Other1"])
+  },
+)
+
+test("sweepStale tolerates a missing folder", async () => {
+  const root = await sweepRoot()
+  expect(await ReadOnlyGit.sweepStale({ directory: path.join(root, "missing"), now: Date.now() + 2 * DAY })).toEqual({
+    removed: 0,
+    kept: 0,
+    failed: 0,
+  })
+})
+
+test.skipIf(process.platform === "linux")("sweepStale leaves everything in place off Linux", async () => {
+  const root = await sweepRoot()
+  await snapshotFolder(root, "vector-readonly-git-Old001")
+  expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() + 2 * DAY })).toEqual({
+    removed: 0,
+    kept: 0,
+    failed: 0,
+  })
+  expect(await fs.readdir(root)).toEqual(["vector-readonly-git-Old001"])
+})
+
+local("open() marks its private snapshot with this process, and a sweep keeps it while the process lives", async () => {
+  const f = await fixture()
+  const snapshots = async () => (await fs.readdir(os.tmpdir())).filter((name) => SNAPSHOT_NAME.test(name))
+  const before = new Set(await snapshots())
+  const repository = await ReadOnlyGit.open(f.input)
+  // Another process may open a snapshot in the same folder meanwhile; only the ones this process marked count.
+  const added = (
+    await Promise.all(
+      (await snapshots())
+        .filter((name) => !before.has(name))
+        .map(async (name) =>
+          (await fs.readFile(path.join(os.tmpdir(), name, "owner"), "utf8").catch(() => undefined)) === liveMarker()
+            ? [name]
+            : [],
+        ),
+    )
+  ).flat()
+  try {
+    expect(added).toHaveLength(1)
+    const marker = path.join(os.tmpdir(), added[0], "owner")
+    const info = await fs.lstat(marker)
+    expect(info.isFile()).toBe(true)
+    expect(info.mode & 0o777).toBe(0o600)
+    const text = await fs.readFile(marker, "utf8")
+    expect(text).toBe(liveMarker())
+    // The same marker in an old snapshot of its own keeps it while this process lives.
+    const root = await sweepRoot()
+    const copy = await snapshotFolder(root, "vector-readonly-git-Copy01")
+    await fs.writeFile(path.join(copy, "owner"), text)
+    expect(await ReadOnlyGit.sweepStale({ directory: root, now: Date.now() + 2 * DAY })).toEqual({
+      removed: 0,
+      kept: 1,
+      failed: 0,
+    })
+    expect(await repository.status()).toEqual({ head: repository.head, dirty: false })
+  } finally {
+    await repository.close()
+  }
+  expect(await fs.lstat(path.join(os.tmpdir(), added[0])).catch(() => undefined)).toBeUndefined()
+})

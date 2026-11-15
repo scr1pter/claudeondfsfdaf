@@ -1,8 +1,10 @@
 import { afterEach, expect } from "bun:test"
+import os from "node:os"
 import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Npm } from "@vectordevai/core/npm"
+import type { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Auth } from "@/auth"
 import { ConnectOwner } from "@/connect/owner"
@@ -22,6 +24,7 @@ import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { connectConsentMember } from "../fixture/connect-consent-member"
+import { noSweep } from "../fixture/connect-sweep"
 
 interface Probe {
   entered: Deferred.Deferred<void>
@@ -94,6 +97,7 @@ const it = testEffect(
     testInstanceStoreLayer,
     TestLLMServer.layer,
   ).pipe(
+    Layer.provide(noSweep),
     Layer.provide(
       ConfigProvider.layer(
         ConfigProvider.fromUnknown({ VECTOR_DISABLE_DEFAULT_PLUGINS: true, VECTOR_DISABLE_MODELS_FETCH: true }),
@@ -102,11 +106,66 @@ const it = testEffect(
   ),
 )
 
+// The owner's stale-snapshot sweep, replaced: each call is recorded and stays pending until it is released.
+const swept: { input: Parameters<typeof ReadOnlyGit.sweepStale>[0]; release: () => void }[] = []
+const fakeSweep: typeof ReadOnlyGit.sweepStale = (input) => {
+  const pending = Promise.withResolvers<{ removed: number; kept: number; failed: number }>()
+  swept.push({ input, release: () => pending.resolve({ removed: 0, kept: 0, failed: 0 }) })
+  return pending.promise
+}
+const sweepGraph = (experimentalConnect: boolean) =>
+  testEffect(
+    AppNodeBuilderV1.build(ConnectOwner.node, [
+      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect })],
+      ...replacements.filter(([node]) => node !== RuntimeFlags.node),
+    ]).pipe(
+      Layer.provide(Layer.succeed(ConnectOwner.Sweep, fakeSweep)),
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ VECTOR_DISABLE_DEFAULT_PLUGINS: true, VECTOR_DISABLE_MODELS_FETCH: true }),
+        ),
+      ),
+    ),
+  )
+const off = sweepGraph(false)
+const on = sweepGraph(true)
+
 afterEach(async () => {
   delete control.current
+  for (const item of swept.splice(0)) item.release()
   await disposeAllInstances()
   await resetDatabase()
 })
+
+off.live(
+  "with Connect off the owner starts no private Git snapshot sweep",
+  () =>
+    Effect.gen(function* () {
+      yield* ConnectOwner.Service
+      yield* Effect.sleep("200 millis")
+      expect(swept).toEqual([])
+    }),
+  30_000,
+)
+
+on.live(
+  "with Connect on the owner sweeps the temporary folder once without waiting for it",
+  () =>
+    Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => Effect.sync(() => swept.forEach((item) => item.release())))
+      // The owner was built while the sweep is still pending, so startup never waits for it.
+      yield* ConnectOwner.Service
+      yield* pollWithTimeout(
+        Effect.sync(() => (swept.length > 0 ? true : undefined)),
+        "The owner never swept the temporary folder.",
+      )
+      yield* Effect.sleep("100 millis")
+      expect(swept.map((item) => item.input.directory)).toEqual([os.tmpdir()])
+      expect(Number.isFinite(swept[0]?.input.now)).toBe(true)
+      expect(swept[0]?.input.olderThanMs).toBeUndefined()
+    }),
+  30_000,
+)
 
 for (const fail of [false, true])
   it.live(

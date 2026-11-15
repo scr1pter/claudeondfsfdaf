@@ -262,6 +262,11 @@ type Command = (
   directory?: string,
 ) => Promise<{ code: number; bytes: Buffer }>
 const retained = new Set<{ temporary?: string; resources: Set<Resource> }>()
+// open()'s private snapshot folders, as mkdtemp names them, and the marker each holds: "<pid> <process start, epoch ms>\n".
+const SNAPSHOT = /^vector-readonly-git-[A-Za-z0-9]{6}$/
+const OWNER = "owner"
+const MARKER = /^([1-9][0-9]{0,9}) [0-9]{1,16}\n$/
+const SWEEP = { age: 24 * 60 * 60 * 1000, floor: 60 * 60 * 1000 }
 async function step<A>(context: Operation | undefined, action: () => Promise<A>) {
   context?.check()
   const value = await action()
@@ -1409,6 +1414,16 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       "temporary metadata would be repository-controlled",
     )
     await step(startup, () => fs.chmod(temporary, 0o700))
+    // While this process lives, a later process's sweepStale leaves this snapshot alone. Best-effort, so a failed write
+    // never refuses a view (VectorScope and task isolation open one with Connect off): without it age alone decides.
+    await step(startup, () =>
+      fs
+        .writeFile(path.join(temporary, OWNER), `${process.pid} ${Math.floor(performance.timeOrigin)}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        })
+        .catch(() => undefined),
+    )
     const rootHandle = await pin(root, startup)
     const gitHandle = await pin(git, startup)
     const commonHandle = await pin(common, startup)
@@ -2043,5 +2058,74 @@ export async function inspect(input: Input) {
     return await repository.status()
   } finally {
     await repository.close()
+  }
+}
+
+/**
+ * Removes private snapshots that a crashed or killed process left in `directory` (open() makes them in os.tmpdir()).
+ * Only a direct child named as open() names its snapshot is considered, and it is removed only when it is a real
+ * directory of this user with mode 0700, older than `olderThanMs` (24 hours by default, never under one hour), and its
+ * marker names no live process. Links are never followed, and an entry that fails is kept and counted.
+ */
+export async function sweepStale(input: {
+  readonly directory: string
+  readonly now: number
+  readonly olderThanMs?: number
+}) {
+  const counts = { removed: 0, kept: 0, failed: 0 }
+  // open() refuses before mkdtemp on every other host, so there is nothing of ours to reclaim there.
+  if (process.platform !== "linux") return counts
+  const age = input.olderThanMs ?? SWEEP.age
+  // A short threshold could take a snapshot another process made a moment ago and has not marked yet.
+  if (!Number.isFinite(age) || age < SWEEP.floor || !Number.isFinite(input.now)) return counts
+  // Not opendir: Bun's reads the whole listing on its first read, as Dirents, so plain names are the smaller copy.
+  const names = await fs.readdir(input.directory).catch(() => [] as string[])
+  // One entry at a time, so a large leftover set never holds many descriptors or removals at once.
+  for (const name of names.filter((item) => SNAPSHOT.test(item)))
+    counts[await sweepEntry(path.join(input.directory, name), input.now - age).catch(() => "failed" as const)]++
+  return counts
+}
+
+async function sweepEntry(entry: string, cutoff: number) {
+  const found = await fs.lstat(entry)
+  if (!found.isDirectory() || found.uid !== process.getuid?.() || (found.mode & 0o7777) !== 0o700)
+    return "kept" as const
+  if (!(Math.max(found.mtimeMs, found.ctimeMs) < cutoff)) return "kept" as const
+  if (await claimed(entry)) return "kept" as const
+  const again = await fs.lstat(entry)
+  if (!again.isDirectory() || again.dev !== found.dev || again.ino !== found.ino) return "kept" as const
+  // The same removal close() uses: links inside are removed, never followed.
+  await fs.rm(entry, { recursive: true, force: true })
+  return "removed" as const
+}
+
+// A snapshot from before the marker has none, so its age alone decides. A malformed marker names no process; a marker
+// that is a link or not a file throws, so the entry is kept as failed.
+async function claimed(entry: string) {
+  const handle = await fs
+    .open(path.join(entry, OWNER), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return
+      throw error
+    })
+  if (!handle) return false
+  try {
+    requireValue((await handle.stat()).isFile(), "the snapshot marker is not a file")
+    const bytes = Buffer.alloc(64)
+    const read = await handle.read(bytes, 0, bytes.byteLength, 0)
+    const pid = MARKER.exec(bytes.subarray(0, read.bytesRead).toString("latin1"))?.[1]
+    return pid !== undefined && Number(pid) <= 2 ** 31 - 1 && alive(Number(pid))
+  } finally {
+    await handle.close()
+  }
+}
+
+// The start time in the marker is evidence only: a reused pid keeps a dead snapshot longer, never removes a live one.
+function alive(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
   }
 }

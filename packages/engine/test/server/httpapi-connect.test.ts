@@ -13,6 +13,7 @@ import { testProviderConfig } from "../lib/test-provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { httpApiLayer } from "./httpapi-layer"
 import { routes, consentHttpApiLayer } from "./httpapi-connect-fixture"
+import { noSweep } from "../fixture/connect-sweep"
 import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
 import { Session } from "@/session/session"
 
@@ -34,7 +35,9 @@ const provider = ConfigProvider.layer(
   }),
 )
 const it = testEffect(Layer.mergeAll(consentHttpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
-const production = testEffect(Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
+const production = testEffect(
+  Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(Layer.provide(noSweep), Layer.provide(provider)),
+)
 const call = <A>(run: () => Promise<A>) => Effect.promise(run)
 
 const fixture = (ask = false, transport: "node" | "web" = "node", conversation = true, actual = false) =>
@@ -54,9 +57,10 @@ const fixture = (ask = false, transport: "node" | "web" = "node", conversation =
       transport === "web"
         ? yield* Effect.acquireRelease(
             Effect.sync(() =>
-              HttpRouter.toWebHandler((actual ? HttpApiApp.createRoutes() : routes).pipe(Layer.provide(provider)), {
-                disableLogger: true,
-              }),
+              HttpRouter.toWebHandler(
+                (actual ? HttpApiApp.createRoutes() : routes).pipe(Layer.provide(noSweep), Layer.provide(provider)),
+                { disableLogger: true },
+              ),
             ),
             (web) => Effect.promise(() => web.dispose()),
           )

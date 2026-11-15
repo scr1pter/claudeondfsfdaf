@@ -1,8 +1,10 @@
 export * as ConnectOwner from "./owner"
 
 import { randomUUID } from "node:crypto"
+import os from "node:os"
 import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
@@ -64,6 +66,11 @@ export interface Interface {
 }
 export class Service extends Context.Service<Service, Interface>()("@vector/ConnectOwner") {}
 
+/** Removes private Git snapshots that dead processes left behind; a test replaces it to see whether the layer swept. */
+export const Sweep = Context.Reference<typeof ReadOnlyGit.sweepStale>("@vector/ConnectOwner.Sweep", {
+  defaultValue: () => ReadOnlyGit.sweepStale,
+})
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -86,6 +93,7 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const hooks = yield* InstanceHooks.Service
     const notify = yield* TaskNotify.Service
+    const sweep = yield* Sweep
     const promptOps = {
       cancel: prompts.cancel,
       resolvePromptParts: prompts.resolvePromptParts,
@@ -701,6 +709,21 @@ const layer = Layer.effect(
         yield* Effect.addFinalizer(() => unsubscribe)
       }),
     )
+    // Crashed or killed processes leave private Git snapshots behind. With Connect on, reclaim the old ones once,
+    // without holding up startup; a failure only logs.
+    if (flags.experimentalConnect)
+      yield* Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) => Effect.tryPromise(() => sweep({ directory: os.tmpdir(), now }))),
+        Effect.tap((counts) =>
+          counts.removed + counts.failed > 0
+            ? Effect.logInfo("swept stale private Git snapshots", counts)
+            : Effect.void,
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("stale private Git snapshot sweep failed", { cause: Cause.pretty(cause) }),
+        ),
+        Effect.forkScoped,
+      )
     const init = () => (flags.experimentalConnect ? InstanceState.get(loops).pipe(Effect.asVoid) : Effect.void)
     yield* hooks.register("connected-tools", init())
     return Service.of({ members, runs, get, cancel, review, directoryReview, register, dismiss, init })
