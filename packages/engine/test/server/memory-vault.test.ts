@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
 import { Flag } from "@vectordevai/core/flag/flag"
+import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { ServerAuth } from "../../src/server/auth"
 import { Server } from "../../src/server/server"
 import { resetDatabase } from "../fixture/db"
@@ -102,6 +103,13 @@ describe("Brain Vault memory routes", () => {
   test("an invited guest gets 403 from the backup and the restore", async () => {
     expect((await call("GET", "/memory/backup", undefined, guest)).status).toBe(403)
     expect((await call("POST", "/memory/restore", { text: "{}", repository: "" }, guest)).status).toBe(403)
+  }, 30_000)
+
+  test("owner credentials carrying the forwarded-guest marker get 403 from the backup and the restore", async () => {
+    const forwarded = { ...owner, [GUEST_REQUEST_HEADER]: "1" }
+    expect((await call("GET", "/memory/backup", undefined, forwarded)).status).toBe(403)
+    expect((await call("POST", "/memory/restore", { text: "{}", repository: "" }, forwarded)).status).toBe(403)
+    expect((await call("GET", "/memory/backup")).status).toBe(200)
   }, 30_000)
 
   test("the backup carries the owner's memory as export JSON, one file per place", async () => {

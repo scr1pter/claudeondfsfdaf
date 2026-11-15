@@ -413,3 +413,17 @@ job ids go in a dated line here in the lane commit that follows the runs. Never 
 phone (B09's paired check, and the owner's listing of alerts, without which no phone receives anything).
 
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+**CI, 15 Nov 2026 (recorded by Codium finish R45a).** On `ab784e44`: Vector Codium run 43689606818 had 18 jobs. 15
+succeeded, 2 were skipped (Hosted services / Hosted tests and the hosted typecheck matrix, which the lane's call skips),
+and Codium tests (job 132737256591) failed only at "Run HttpApi exerciser gates". That step's tail ends with exactly the
+four baseline MISS lines (`DELETE /experimental/review-memory/previews/{previewId}`, `GET /experimental/review-memory`,
+`POST /experimental/review-memory/confirm`, `POST /experimental/review-memory/prepare`) and
+`summary pass=359 fail=0 skip=0 missing=4 extra=0`, with no FAIL line; the job's step list shows "Run the Codium test
+files" and "Check generated client" succeeded. Under the lane rule the run counts as green. Codium browser specs job
+132737256831 succeeded: its 400-line tail shows the three selected specs (`account-settings.spec.ts`,
+`codium-image-routing.spec.ts`, `codium-usage-labels.spec.ts`), 25 tests on one worker with
+`account-settings.spec.ts:586` "Usage notifications require opt-in and do not repeat on refresh" as 20/25, and
+"25 passed (1.3m)". typecheck.yml run 43689609193 and vector-hosted-ci.yml run 43690118133 succeeded. The file-level
+result of `codium-usage-alert.test.ts` inside the Codium tests step is not claimed: that output is above the visible
+tail.

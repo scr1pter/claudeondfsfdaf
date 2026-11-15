@@ -116,3 +116,16 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
 - A57: account deletion does not touch this computer's key (it is local); the vault on Vector is erased by A44's
   provisioner.
 - bun.lock was not touched. Nothing was pushed (the orchestrator pushes).
+- **Status on 15 Nov 2026 (Codium finish R45a).** The main process and the engine routes were reviewed (P7 addendum,
+  `codium-p7-repairs.md`, "A45 desktop vault: main process and engine routes"). Repaired: a key record this launch
+  cannot open now reads as no key, so the recovery code restores, and Delete clears this computer unless the
+  credential store is locked, when the key stays for a later launch (R45-1); only Brain Vault's own errors are shown
+  or kept, and anything else answers fixed copy (R45-2); where backups go cannot change while a backup runs (R45-3);
+  and git that cannot start answers fixed copy (R45-4(a)). For the lead: core's `failed()`
+  keeps git's first stderr line (R45-4(b)), an exported `VECTOR_VAULT_RECOVERY_CODE` reaches agents' shells (R45-18),
+  the shell sandbox neither hides the CLI's `vault/vault.json` (R45-19) nor protects the CLI's copy under `~/.cache`
+  (R45-20). Not confirmed: that B10's skills files fit the engine's 2 MB restore limit (R45-10). The A43 message item
+  above is settled: `eed4bc45` changed it to "Open Settings → Memory → Backup in Vector." The "For A60 and the legal
+  read" item is out of date: since B10 (`3b1ce6d5`) backups also carry `skills` and `insights` sections; that is
+  flagged for the owner's legal read, and no privacy text was changed. Part 2 (R45b, the renderer) remains. Local
+  receipts are in the P7 record; CI is pending.

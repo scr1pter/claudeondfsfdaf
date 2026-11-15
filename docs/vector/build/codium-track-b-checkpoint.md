@@ -29,6 +29,7 @@ Source checkpoint: 2026-11-12, branch `build-codium`, based on Codium `4d544e0c4
 - B08: unchanged here (the brain-transport lane's).
 - B09: A42's `remote-phone.spec.ts:44` and `:102` passed in the same three jobs, first attempt. They are the base for B09's paired desktop/phone check, which stays open with the combined Remote authorization regression.
 - B10: unchanged here.
+- B10, 15 Nov 2026 (Codium finish R45a): the desktop's and the engine's handling of B10's `skills` and `insights` sections and the `minReader` logic were reviewed (`codium-p7-repairs.md`, R45-9 and R45-10). A learned file keeps its section and asks for reader 2, restores whole, and a newer reader's version answers "Update Vector" (desktop `vault-backup.test.ts`, "learned sections keep their section and ask for reader two; they restore whole" and "a version that needs a newer Vector is refused with Update Vector, and nothing is restored"; local receipts only). Not confirmed: a skills file is not shown to fit the engine's 2 MB restore limit (R45-10); recorded for B10. The CI receipt is pending.
 - B11: runtime renderer done (`hosted-result-note.spec.ts:4`, the same three jobs, first attempt). The post-change measurement and its comparison with run 43153942138 / job 130969401195 remain for the lane's final package.
 
 ## Executed receipts

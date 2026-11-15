@@ -3717,5 +3717,105 @@ and the fresh XDG and `TMPDIR` roots were under `/tmp/vector-v2/codium/r36/`.
   10. **Only in CI:** Vector Codium (Codium tests selects the new file and `codium-usage-model.test.ts` by name; the
       browser job runs `packages/app/e2e/regression/account-settings.spec.ts` when it is passed as `browser_specs`) and
       typecheck.yml. Pending: this step left the change uncommitted.
+      CI, 15 Nov 2026 (recorded by Codium finish R45a): on `ab784e44`, Vector Codium run 43689606818 (18 jobs: 15
+      succeeded, 2 skipped, and Codium tests 132737256591 failed only at "Run HttpApi exerciser gates", with the four
+      baseline review-memory MISS lines and no FAIL; green under the lane rule), Codium browser specs job 132737256831
+      (25 passed, `account-settings.spec.ts:586` among them in the visible tail), typecheck.yml run 43689609193 and
+      vector-hosted-ci.yml run 43690118133 succeeded. Details in `codium-p6-repairs.md` (F28 section, CI line).
   11. **For the lead:** none. No other lane's file needed a change; `ask-notifications.ts` was read only.
+- Edits to `api/_lib/model-plan-*.ts`: none.
+
+## P7 review addendum (15 Nov 2026)
+
+Contract readings from the A45 desktop vault review, part 1: the desktop main process and the engine routes (Codium
+finish R45a). The findings, repairs and tests are in `codium-p7-repairs.md` ("A45 desktop vault: main process and
+engine routes"). Read on `codium-finish` `ab784e44`. Scratch and the fresh XDG and `TMPDIR` roots were under
+`/tmp/vector-v2/codium/r45a/`: the task's first line names `/tmp/vector-v2/codium/` as the only scratch root, and R36
+and F28 used it too.
+
+- **A key record that does not open is no key (R45-1).** The desktop's key adapter (`vaultKeys` in `vault-runtime.ts`)
+  answers undefined for a record this launch cannot open (a new credential key, a damaged record) and for a value
+  without the `vs1.` prefix, which no vault record ever had. The record is not deleted on read; the recovery code opens
+  the vault and the next write replaces it. Delete treats the deleted vault as this computer's when the readable record
+  names it or, while no record reads, when `settings.vault` does (the settings name the vault of the key written with
+  them), or when the place held no vault key. Only then does it reset `vault`, `enabled` and `last`. The key is cleared
+  when a readable record names the deleted vault, or when no record reads while the credential store is open, where
+  that record can never open. "No record reads" is not one case. With the store open the record is gone or damaged for
+  good. With the store locked (`vaultSecrets.available()` false) it may open at the next launch, so Delete keeps it.
+  If it does open later, it names a vault that no longer exists, and the next backup puts that vault back at the place
+  with the same key and recovery code (core `attach`), so nothing is lost either way. A backup with no readable key
+  over a store that holds a vault still refuses a second vault (core `VaultBackup.create`). The adapter moved out of
+  `startVault` so the sign-ins test can load it with Electron mocked; `decodeKeyRecord` now takes the opened JSON
+  text.
+- **`VaultError` is the plain-copy boundary (R45-2).** Spec 4.10 asks for plain copy for VAULT errors, and core's
+  `vault/error.ts` says no message carries a key, code, content or amount. The desktop now shows and keeps only a
+  `VaultError`'s text; any other error answers the operation's fixed fallback. The errors the desktop throws on purpose
+  became `VaultError`s (`unavailable`, and `update` for an engine section this build does not know). The plan's own
+  error is fixed copy from `model-plan-status.ts:169`, `:173`. One fixture changed: the "fails after the vault was made"
+  case now throws the `VaultError("unavailable")` core's GitHub store really throws.
+- **A move is refused while an operation runs; the switch is not (R45-3).** `configure` answers busy only when the
+  backend or the repository changes while a backup, restore, forget or delete runs. Turning the nightly backup on or off
+  still saves, because the running backup writes only `vault`, `last` and its own fields over a fresh read.
+- **git's text (R45-4).** The desktop's own spawn-error line is fixed copy now. Core's `failed()` (A43) still appends
+  git's first stderr line, which can name local paths or, through the person's own `insteadOf`, a URL with a
+  credential; A43's "the URL carries no credential" holds only for Vector's URL. Handed to the lead, as the file is
+  outside this package's scope.
+- **Vector Local's "blocked" (R45-15).** `brain-vault` is `local: "blocked"`: with Vector Local on, both backends are
+  refused before any store, sign-in or status read unless the person allows the source; GitHub needs both `git-remote`
+  on github.com and `brain-vault` on api.github.com. Web access None also limits git to local remotes.
+- **B10's sizes (R45-10).** Insights are bounded well under 2 MB. Skills are not shown to be: the export lists every
+  skill row, archived and superseded included, and the desktop sends the file whole. Recorded as not confirmed for B10;
+  nothing was changed here, because splitting or capping learned files is B10's design.
+- **Who can plant a symlink or git config (R45-12, R45-20).** The desktop's bare copy is under `userData`, which the
+  shell sandbox does not let commands write; without the sandbox, nothing protects any of the person's files from
+  their own commands. The CLI's copy is under `~/.cache`, which the sandbox keeps writable by design, so a sandboxed
+  command can plant config or hooks that run at the next `vector vault backup` (For the lead).
+- **Remote's allowlist is pinned (R45-14).** `REMOTE_ROUTES` names no memory route; a test now refuses six memory
+  routes from a paired phone, and the engine test covers the forwarded-guest marker on backup and restore.
+- **Plan and critique.** Taken from the critique: R45-1's Delete condition and its controller case; git's stderr as
+  its own finding (the desktop line repaired, core's `failed()` handed off) instead of "kept"; every later commit on
+  the scoped paths classified, with the broadcast credited to `ebd6cba3`; the symlink and worktree readings; the
+  git-credential test reworked to probe git's own environment through `desktopGit` with planted Vector secrets (so a
+  failure never prints the environment) and without the show-scope check; `decodeKeyRecord` described as changed, the
+  red run described as the refactored adapter with the old read body, and the `vs1.` prefix check with its
+  no-credential-store assertion; the CLI items numbered as findings (R45-18 to R45-20); B10's size marked not
+  confirmed; the redundant restore and timer cases dropped and the Local case reduced to `localRefusal`; the stale A45
+  notes sentence flagged for the owner; prettier through `vector-serial`, the scratch root stated, and the F28 receipt
+  worded with all 18 jobs. Not taken: deleting `VECTOR_VAULT_RECOVERY_CODE` inside `vault restore`, because agents'
+  shells inherit from the long-running `vector` process, not from `vault restore`, so it would not close R45-18.
+  R45-4(a)'s first test drives a git that cannot run (ENOEXEC). Bun throws from `spawn` where Electron's Node emits
+  the child's `error` event, so that test pins what the person sees (either plain text).
+- **Review of the R45a change (15 Nov 2026).** Taken:
+  - Blocking: the first R45-1 condition cleared the key with the credential store locked. Delete now clears a record
+    that does not read only while `deps.keys.secure()`, with a locked-store test.
+  - The settings fallback for "this computer's vault": `record?.vault ?? current.vault`.
+  - A red test for R45-4(a)'s line through an optional test-only `command` on `desktopGit`. Under Bun an absolute path
+    to a mode-0644 file gives the `error` event with EACCES.
+  - The credential test asks `printenv` for the names it checks, never `env`, and unsets `GIT_TERMINAL_PROMPT` first,
+    which the shell had set.
+  - The `VaultError` import moved up with the package imports.
+
+  Not taken as written: the second Delete finding's formula `if (!held || !mine || held.vault === mine)` for both the
+  key and the settings. With the store locked, it clears a record that may still open whenever the place held no vault
+  key, or the settings name no vault. It also clears it when the settings name the deleted vault. That is the loss the
+  blocking finding describes. Its settings rule is used, and the key follows the blocking finding: a record that does
+  not read is kept while the store is locked.
+
+  The F28 CI receipt (`codium-p6-repairs.md`, and item 10 of the F28 section above) is a separate record from R45a's.
+- **For the lead:** R45-4(b) (`packages/core/src/vault/github.ts:115-118`: drop git's stderr line or strip paths and
+  URLs from it); R45-18 (`packages/core/src/child-environment.ts:5-14`: add `VECTOR_VAULT_RECOVERY_CODE` to
+  `PRIVATE_RUNTIME_ENVIRONMENT`); R45-19 (`packages/engine/src/tool/shell/sandbox.ts:83`, `:496-514`: deny
+  `<data>/vault/vault.json`); R45-20 (`packages/engine/src/cli/cmd/vault.ts:168` or the sandbox: move the CLI's copy
+  out of the cache, or deny it); R45-22 (`packages/desktop/src/main/remote-runtime.ts:43-45`, for A41's next review).
+  For the owner's A60 legal read: backups now carry `skills` and `insights` sections (the A45 notes still say memory
+  only); no privacy text changed.
+- **Ran locally**, through `vector-serial`, one file at a time with `--timeout 30000`: desktop `vault-backup.test.ts`
+  (23), `vault-github.test.ts` (11), `vault-secrets.test.ts` (6), `vault-secrets.sign-ins.test.ts` (5) and
+  `remote-routes.test.ts` (16) with `--no-env-file`; engine `test/server/memory-vault.test.ts` (6) and
+  `test/cli/vault.test.ts` (2); core `test/vault/vault.test.ts` (18). Before counts, the red runs and eleven
+  mutations are in the P7 record. `bun typecheck` in desktop, engine and core; `prettier --check`; `git diff --check`.
+- **Only in CI:** the HttpApi exerciser, Vector Codium (Codium tests and the browser job), typecheck.yml and
+  vector-hosted-ci.yml's Hosted tests job. Pending: this step left the change uncommitted.
+- `handlers/memory.ts` and `groups/memory.ts`: unchanged. No setting, flag, route, copy on a public page, price or
+  listing changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged.
 - Edits to `api/_lib/model-plan-*.ts`: none.

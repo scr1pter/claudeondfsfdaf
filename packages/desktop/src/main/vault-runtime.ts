@@ -1,5 +1,6 @@
 import { join } from "node:path"
 import { app, BrowserWindow } from "electron"
+import { VaultError } from "@vectordevai/core/vault/error"
 import { getStore } from "./store"
 import {
   createVaultBackup,
@@ -10,6 +11,7 @@ import {
   type MemoryFile,
   type RestoreCounts,
   type VaultBackupController,
+  type VaultDeps,
   type VaultSettings,
   type VaultStatus,
 } from "./vault-backup"
@@ -26,10 +28,36 @@ import { broadcastRendererStatus } from "./renderer-status"
 
 const STORE = "vector-vault"
 const PURPOSE = "vector-vault-key"
+// What vault-secrets.ts seals in-process starts with this; a vault record was never sealed any other way.
+const SEALED = "vs1."
 const state: { backup?: VaultBackupController } = {}
 
 function broadcast(status: VaultStatus) {
   broadcastRendererStatus(BrowserWindow.getAllWindows(), "vault-changed", status)
+}
+
+/**
+ * This computer's vault key, sealed in-process with the key the OS credential store holds. A record that does not open
+ * (the credential key was made again, the record is damaged, or it was never sealed in-process) reads as no key: the
+ * recovery code opens the vault again and the next write replaces the record. Nothing here asks the credential store.
+ */
+export const vaultKeys: VaultDeps["keys"] = {
+  secure: () => vaultSecrets.available(),
+  read: async () => {
+    const sealed = getStore(STORE).get("key")
+    if (typeof sealed !== "string" || !sealed.startsWith(SEALED) || !vaultSecrets.available()) return undefined
+    const opened = await vaultSecrets.open(sealed, PURPOSE).catch(() => undefined)
+    return opened ? decodeKeyRecord(opened.text) : undefined
+  },
+  write: async (record) => {
+    if (!vaultSecrets.available())
+      throw new VaultError(
+        "unavailable",
+        "Vector cannot keep a vault key safely on this computer. Unlock the operating system's credential store.",
+      )
+    getStore(STORE).set("key", vaultSecrets.seal(JSON.stringify(record), PURPOSE))
+  },
+  clear: async () => getStore(STORE).delete("key"),
 }
 
 /** Starts Brain Vault once the local engine is up. Safe to call once per launch. */
@@ -49,23 +77,7 @@ export function startVault(input: {
       },
       write: (next) => store().set("settings", JSON.parse(JSON.stringify(next)) as unknown),
     },
-    keys: {
-      secure: () => vaultSecrets.available(),
-      read: async () => {
-        const sealed = store().get("key")
-        if (typeof sealed !== "string" || !vaultSecrets.available()) return undefined
-        const opened = await vaultSecrets.open(sealed, PURPOSE)
-        return decodeKeyRecord(JSON.parse(opened.text) as unknown)
-      },
-      write: async (record) => {
-        if (!vaultSecrets.available())
-          throw new Error(
-            "Vector cannot keep a vault key safely on this computer. Unlock the operating system's credential store.",
-          )
-        store().set("key", vaultSecrets.seal(JSON.stringify(record), PURPOSE))
-      },
-      clear: async () => store().delete("key"),
-    },
+    keys: vaultKeys,
     memory: () => readMemory(input.engine.url, authorization),
     restore: (file) => restoreMemory(input.engine.url, authorization, file),
     githubStore: (repo) => githubVaultStore({ repo, cache }),
@@ -100,15 +112,20 @@ async function readMemory(base: string, authorization: string): Promise<MemoryFi
     redirect: "error",
     signal: AbortSignal.timeout(120_000),
   }).catch(() => undefined)
-  if (!response?.ok) throw new Error("Vector's engine could not read its memory for the backup. Try again in a moment.")
+  if (!response?.ok)
+    throw new VaultError(
+      "unavailable",
+      "Vector's engine could not read its memory for the backup. Try again in a moment.",
+    )
   const body = (await response.json().catch(() => undefined)) as { files?: unknown } | undefined
-  if (!Array.isArray(body?.files)) throw new Error("Vector's engine answered the backup with something unexpected.")
+  if (!Array.isArray(body?.files))
+    throw new VaultError("unavailable", "Vector's engine answered the backup with something unexpected.")
   return body.files.flatMap((file: unknown) => {
     if (!file || typeof file !== "object") return []
     const item = file as Record<string, unknown>
     if (typeof item.path !== "string" || typeof item.text !== "string" || typeof item.repository !== "string") return []
     if (item.section !== undefined && !(Vault.SECTIONS as readonly unknown[]).includes(item.section))
-      throw new Error("Update Vector to back up this engine's learned content.")
+      throw new VaultError("update", "Update Vector to back up this engine's learned content.")
     return [
       {
         path: item.path,
@@ -136,7 +153,8 @@ async function restoreMemory(base: string, authorization: string, file: MemoryFi
     signal: AbortSignal.timeout(120_000),
   }).catch(() => undefined)
   if (response?.status === 400) throw new RestoreRefused("Vector's engine could not read a file of this backup.")
-  if (!response?.ok) throw new Error("Vector's engine could not restore this backup. Try again in a moment.")
+  if (!response?.ok)
+    throw new VaultError("unavailable", "Vector's engine could not restore this backup. Try again in a moment.")
   const body = (await response.json().catch(() => undefined)) as
     | Partial<Record<keyof RestoreCounts, unknown>>
     | undefined
