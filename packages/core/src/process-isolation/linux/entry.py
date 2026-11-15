@@ -914,21 +914,32 @@ def keeper_log_stage(data):
 
 
 def keeper_destination_stage(data):
-    # Only fixed ABI destinations are named. No caller path or error prose leaves the private log.
+    # Only fixed ABI destinations are named. After an exact target, only the complete C-locale strerror text
+    # of six fixed errnos maps to a closed cause suffix: bwrap v0.9.0 never calls setlocale and the keeper
+    # starts it under env -i. Any other remainder keeps the unsuffixed target label. No caller path, errno
+    # text or error prose leaves the private log.
     if type(data) is not bytes or len(data) > 65536:
         return "bwrap-destination"
     prefixes = (b"bwrap: Can't mkdir ", b"bwrap: Can't mkdir parents for ")
     targets = (
         ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
         ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+        ("checkout", b"/mnt/vector-agent-sandbox/checkout"), ("scratch", b"/mnt/vector-agent-sandbox/tool-scratch"),
+        ("checkout", b"/var/lib/vector-agent-sandbox/checkout"),
+        ("scratch", b"/var/lib/vector-agent-sandbox/tool-scratch"),
+        ("checkout", b"/home/vector-agent-sandbox/checkout"), ("scratch", b"/home/vector-agent-sandbox/tool-scratch"),
     )
+    causes = {
+        b"Permission denied": "eacces", b"Read-only file system": "erofs", b"No such file or directory": "enoent",
+        b"Not a directory": "enotdir", b"Too many levels of symbolic links": "eloop",
+        b"Operation not permitted": "eperm",
+    }
     for kind, target in targets:
-        if any(data.startswith(prefix + target + b": ") for prefix in prefixes):
-            return "bwrap-destination-" + kind
-    for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox", b"/home/vector-agent-sandbox"):
-        for kind, suffix in (("checkout", b"/checkout"), ("scratch", b"/tool-scratch")):
-            if any(data.startswith(prefix + container + suffix + b": ") for prefix in prefixes):
-                return "bwrap-destination-" + kind
+        for prefix in prefixes:
+            head = prefix + target + b": "
+            if data.startswith(head):
+                cause = causes.get(data[len(head):])
+                return "bwrap-destination-" + kind + ("" if cause is None else "-" + cause)
     return "bwrap-destination"
 
 
@@ -942,7 +953,8 @@ def keeper_log_classification(data):
         return "invalid"
     # Exact fatal labels and formatting from bubblewrap v0.9.0, commit
     # 8e51677abd7e3338e4952370bf7d902e37d8cbb6 (bubblewrap.c and utils.c:warnv).
-    # Only the closed category leaves this parser. Error prose, paths and errno text remain private.
+    # Only the closed category leaves this parser. Error prose, paths and unknown errno text remain private;
+    # keeper_destination_stage maps only six exact errno texts after a fixed target to a closed suffix.
     labels = (
         ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
         ("bwrap-capset", b"bwrap: capset failed: ", False),
@@ -1037,8 +1049,28 @@ def keeper_failure_stage(outcome, log, info):
                     "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
                     "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
                     "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
-                    "bwrap-destination-scratch", "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot",
-                    "bwrap-exec") and
+                    "bwrap-destination-scratch",
+                    "bwrap-destination-root-eacces", "bwrap-destination-root-erofs", "bwrap-destination-root-enoent",
+                    "bwrap-destination-root-enotdir", "bwrap-destination-root-eloop", "bwrap-destination-root-eperm",
+                    "bwrap-destination-home-eacces", "bwrap-destination-home-erofs", "bwrap-destination-home-enoent",
+                    "bwrap-destination-home-enotdir", "bwrap-destination-home-eloop", "bwrap-destination-home-eperm",
+                    "bwrap-destination-tmp-eacces", "bwrap-destination-tmp-erofs", "bwrap-destination-tmp-enoent",
+                    "bwrap-destination-tmp-enotdir", "bwrap-destination-tmp-eloop", "bwrap-destination-tmp-eperm",
+                    "bwrap-destination-var-tmp-eacces", "bwrap-destination-var-tmp-erofs", "bwrap-destination-var-tmp-enoent",
+                    "bwrap-destination-var-tmp-enotdir", "bwrap-destination-var-tmp-eloop", "bwrap-destination-var-tmp-eperm",
+                    "bwrap-destination-run-eacces", "bwrap-destination-run-erofs", "bwrap-destination-run-enoent",
+                    "bwrap-destination-run-enotdir", "bwrap-destination-run-eloop", "bwrap-destination-run-eperm",
+                    "bwrap-destination-host-temp-eacces", "bwrap-destination-host-temp-erofs", "bwrap-destination-host-temp-enoent",
+                    "bwrap-destination-host-temp-enotdir", "bwrap-destination-host-temp-eloop", "bwrap-destination-host-temp-eperm",
+                    "bwrap-destination-dev-eacces", "bwrap-destination-dev-erofs", "bwrap-destination-dev-enoent",
+                    "bwrap-destination-dev-enotdir", "bwrap-destination-dev-eloop", "bwrap-destination-dev-eperm",
+                    "bwrap-destination-proc-eacces", "bwrap-destination-proc-erofs", "bwrap-destination-proc-enoent",
+                    "bwrap-destination-proc-enotdir", "bwrap-destination-proc-eloop", "bwrap-destination-proc-eperm",
+                    "bwrap-destination-checkout-eacces", "bwrap-destination-checkout-erofs", "bwrap-destination-checkout-enoent",
+                    "bwrap-destination-checkout-enotdir", "bwrap-destination-checkout-eloop", "bwrap-destination-checkout-eperm",
+                    "bwrap-destination-scratch-eacces", "bwrap-destination-scratch-erofs", "bwrap-destination-scratch-enoent",
+                    "bwrap-destination-scratch-enotdir", "bwrap-destination-scratch-eloop", "bwrap-destination-scratch-eperm",
+                    "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec") and
             info in ("empty", "child-created", "invalid"))
     return "prepare-keeper-" + outcome + "-log-" + log + "-info-" + info
 

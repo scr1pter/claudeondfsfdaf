@@ -171,8 +171,14 @@ const FAILURE_STAGES = {
         "bwrap-root-tmpfs",
         "bwrap-source",
         "bwrap-destination",
-        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].map(
-          (target) => `bwrap-destination-${target}`,
+        // Fixed ABI targets, alone or with one closed C-locale errno cause. Keep them aligned with entry.py.
+        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].flatMap(
+          (target) => [
+            `bwrap-destination-${target}`,
+            ...["eacces", "erofs", "enoent", "enotdir", "eloop", "eperm"].map(
+              (cause) => `bwrap-destination-${target}-${cause}`,
+            ),
+          ],
         ),
         "bwrap-bind",
         "bwrap-remount",

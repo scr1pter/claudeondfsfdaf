@@ -204,24 +204,30 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
       "bwrap-setgroups",
       "bwrap-mount-propagation",
       "bwrap-root-tmpfs",
-        "bwrap-source",
-        "bwrap-destination",
-        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].map(
-          (target) => `bwrap-destination-${target}`,
-        ),
-        "bwrap-bind",
-        "bwrap-remount",
-        "bwrap-proc",
-        "bwrap-mask-tmpfs",
-        "bwrap-devpts",
-        "bwrap-pivot",
+      "bwrap-source",
+      "bwrap-destination",
+      ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].flatMap(
+        (target) => [
+          `bwrap-destination-${target}`,
+          ...["eacces", "erofs", "enoent", "enotdir", "eloop", "eperm"].map(
+            (cause) => `bwrap-destination-${target}-${cause}`,
+          ),
+        ],
+      ),
+      "bwrap-bind",
+      "bwrap-remount",
+      "bwrap-proc",
+      "bwrap-mask-tmpfs",
+      "bwrap-devpts",
+      "bwrap-pivot",
       "bwrap-exec",
     ].flatMap((log) =>
       ["empty", "child-created", "invalid"].map((info) => `prepare-keeper-${outcome}-log-${log}-info-${info}`),
     ),
   )
-  expect(stages).toHaveLength(222)
-  expect(new Set(stages).size).toBe(222)
+  // 97 log values (37 before the errno causes plus 10 targets x 6 causes) x 2 outcomes x 3 info values.
+  expect(stages).toHaveLength(582)
+  expect(new Set(stages).size).toBe(582)
   for (const stage of stages) {
     const timeout = stage.startsWith("prepare-keeper-timeout-")
     const entry: GithubIsolation.FailureRecord = {
@@ -298,6 +304,72 @@ test("keeper startup log and info vocabulary rejects unknown values and private 
   expect(projected).toEqual([entry])
   expect(JSON.stringify(projected)).not.toContain("/owner/private")
   expect(JSON.stringify(projected)).not.toContain("synthetic-private-token")
+})
+test("keeper destination errno causes decode only as a closed suffix of a fixed target", () => {
+  // The record shape of job 132529480650, with the predicted errno-suffixed destination stage.
+  const entry: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    stage: "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created",
+    class: "CalledProcessError",
+    errno: null,
+    exit: 1,
+  }
+  const control: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "control",
+    stage: "native-prepare",
+    exit: 125,
+  }
+  const transport: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+  }
+  expect(
+    GithubIsolation.decodeFailureRecords(Buffer.concat([failureBytes(entry), failureBytes(control)]), "prepare"),
+  ).toEqual([entry, control])
+  const cause: GithubIsolation.FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [transport, entry, control],
+  }
+  expect(GithubIsolation.failureMetadata(new Error("private keeper stderr", { cause }))).toEqual(cause)
+  for (const target of ["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"])
+    for (const errno of ["eacces", "erofs", "enoent", "enotdir", "eloop", "eperm"])
+      for (const outcome of ["child-exit", "timeout"]) {
+        const stage = `prepare-keeper-${outcome}-log-bwrap-destination-${target}-${errno}-info-child-created`
+        const decoded = { ...entry, stage }
+        expect(GithubIsolation.decodeFailureRecords(failureBytes(decoded), "prepare")).toEqual([decoded])
+      }
+  for (const stage of [
+    "prepare-keeper-child-exit-log-bwrap-destination-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eio-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-EACCES-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-permission-denied-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-Permission denied-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-private-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-eacces-host-temp-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-private-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-/home/runner/work/_temp-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-bind-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-source-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-mask-tmpfs-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created-eacces",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp--info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces\ninfo-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces\u0000-info-child-created",
+  ]) {
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+    const refused: GithubIsolation.FailureCause = {
+      v: 1,
+      event: "native-control-failure",
+      records: [transport, { ...entry, stage }],
+    }
+    expect(GithubIsolation.failureMetadata(new Error("private keeper stderr", { cause: refused }))).toBeUndefined()
+  }
 })
 test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
   const ordinary = failureRecord()

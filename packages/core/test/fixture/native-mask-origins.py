@@ -10,6 +10,7 @@ operations are never imported or executed by this fixture.
 
 import ast
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -109,6 +110,32 @@ def records():
 def calls(function, name):
     return [node for node in ast.walk(FUNCTIONS[function]) if isinstance(node, ast.Call) and
             ast.unparse(node.func) == name]
+
+
+DESTINATION_PREFIXES = (b"bwrap: Can't mkdir ", b"bwrap: Can't mkdir parents for ")
+DESTINATIONS = (
+    ("root", b"/"), ("home", b"/home/vector-agent"), ("tmp", b"/tmp"), ("var-tmp", b"/var/tmp"),
+    ("run", b"/run"), ("host-temp", b"/home/runner/work/_temp"), ("dev", b"/dev"), ("proc", b"/proc"),
+) + tuple((kind, container + suffix)
+          for container in (b"/mnt/vector-agent-sandbox", b"/var/lib/vector-agent-sandbox", b"/home/vector-agent-sandbox")
+          for kind, suffix in (("checkout", b"/checkout"), ("scratch", b"/tool-scratch")))
+DESTINATION_KINDS = ("root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch")
+# The exact C-locale strerror text bubblewrap v0.9.0 prints for each closed cause (utils.c:die_with_error).
+CAUSES = (("eacces", errno.EACCES, b"Permission denied"), ("erofs", errno.EROFS, b"Read-only file system"),
+          ("enoent", errno.ENOENT, b"No such file or directory"), ("enotdir", errno.ENOTDIR, b"Not a directory"),
+          ("eloop", errno.ELOOP, b"Too many levels of symbolic links"),
+          ("eperm", errno.EPERM, b"Operation not permitted"))
+KEEPER_LOGS = (
+    "empty", "no-marker", "invalid", "unstable", "unreadable", "phase-identity", "phase-capabilities",
+    "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
+    "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
+    "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
+    "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
+    "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
+    "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
+    "bwrap-destination-scratch",
+    "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec",
+) + tuple("bwrap-destination-" + kind + "-" + cause for kind in DESTINATION_KINDS for cause, _, _ in CAUSES)
 
 
 class MountTableTests(unittest.TestCase):
@@ -562,6 +589,100 @@ class KeeperDiagnosticTests(unittest.TestCase):
         self.assertEqual(NATIVE["keeper_destination_stage"]("private"), "bwrap-destination")
         self.assertEqual(NATIVE["keeper_destination_stage"](b"x" * 65537), "bwrap-destination")
 
+    def test_destination_errno_causes_are_one_closed_suffix_per_fixed_target(self):
+        classify = NATIVE["keeper_log_classification"]
+        destination = NATIVE["keeper_destination_stage"]
+        for cause, number, text in CAUSES:
+            with self.subTest(cause=cause):
+                # bubblewrap formats strerror without setlocale, so the runner C library's C-locale text is exact.
+                self.assertEqual(os.strerror(number).encode("ascii"), text)
+        words = {word.lower() for _, _, text in CAUSES for word in text.decode("ascii").split() if len(word) > 3}
+        for prefix in DESTINATION_PREFIXES:
+            for kind, target in DESTINATIONS:
+                for cause, _, text in CAUSES:
+                    with self.subTest(prefix=prefix, kind=kind, target=target, cause=cause):
+                        data = prefix + target + b": " + text
+                        label = "bwrap-destination-" + kind + "-" + cause
+                        self.assertEqual(destination(data), label)
+                        self.assertEqual(classify(data + b"\n"), label)
+                        self.assertEqual(classify(b"opaque stderr\xfe\n" + data + b"\n"), label)
+                        self.assertEqual(classify(b"VECTOR_NATIVE_KEEPER_STAGE identity\n" + data + b"\n"), label)
+                        self.assertIsNotNone(re.fullmatch(r"[a-z-]+", label))
+                        self.assertFalse(any(word in label for word in words))
+                        self.assertEqual(NATIVE["keeper_failure_stage"]("child-exit", label, "child-created"),
+                                         "prepare-keeper-child-exit-log-" + label + "-info-child-created")
+        for prefix in DESTINATION_PREFIXES:
+            with self.subTest(prefix=prefix):
+                log = classify(prefix + b"/home/runner/work/_temp: Permission denied\n")
+                self.assertEqual(NATIVE["keeper_failure_stage"]("child-exit", log, "child-created"),
+                                 "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created")
+
+    def test_destination_unknown_or_inexact_errno_tails_keep_the_unsuffixed_target_label(self):
+        classify = NATIVE["keeper_log_classification"]
+        destination = NATIVE["keeper_destination_stage"]
+        tails = (
+            b"", b"Permission denied synthetic-private-token\xff", b"permission denied", b"PERMISSION DENIED",
+            b" Permission denied", b"Permission denied ", b"Permission denied\r", b"Permission denied\0",
+            b"Permission denied: Permission denied", b"Input/output error", b"Device or resource busy",
+            b"File exists", b"Invalid argument", b"No space left on device", b"Keine Berechtigung",
+            b"EACCES", b"eacces", b"Read-only file system /owner/private", b"Not a directory\xff",
+        )
+        for prefix in DESTINATION_PREFIXES:
+            for kind, target in DESTINATIONS:
+                for tail in tails:
+                    with self.subTest(prefix=prefix, kind=kind, target=target, tail=tail):
+                        data = prefix + target + b": " + tail
+                        self.assertEqual(destination(data), "bwrap-destination-" + kind)
+                        self.assertEqual(classify(data + b"\n"), "bwrap-destination-" + kind)
+                self.assertEqual(destination(prefix + target + b": Permission denied\nprivate"),
+                                 "bwrap-destination-" + kind)
+                for data in (prefix + target + b" Permission denied", prefix + target + b":Permission denied",
+                             prefix + target + b"Permission denied"):
+                    with self.subTest(prefix=prefix, kind=kind, target=target, data=data):
+                        self.assertEqual(destination(data), "bwrap-destination")
+                        self.assertEqual(classify(data + b"\n"), "bwrap-destination")
+            for target in (b"/owner/private", b"/home/runner/work/_temp/", b"/home/runner/work", b"/home/runner"):
+                for cause, _, text in CAUSES:
+                    with self.subTest(prefix=prefix, target=target, cause=cause):
+                        data = prefix + target + b": " + text
+                        self.assertEqual(destination(data), "bwrap-destination")
+                        self.assertEqual(classify(data + b"\n"), "bwrap-destination")
+
+    def test_destination_errno_lines_keep_the_complete_unique_bounded_line_contract(self):
+        classify = NATIVE["keeper_log_classification"]
+        destination = NATIVE["keeper_destination_stage"]
+        data = b"bwrap: Can't mkdir parents for /home/runner/work/_temp: Permission denied"
+        results = []
+        for log in (
+            data, data + b"\n" + data + b"\n",
+            data + b"\nbwrap: Can't bind mount /oldroot/private on /newroot/private: Permission denied\n",
+            b"VECTOR_NATIVE_KEEPER_STAGE capabilities\n" + data + b"\n",
+        ):
+            with self.subTest(log=log):
+                results.append(classify(log))
+                self.assertEqual(results[-1], "invalid")
+        for log in (data.replace(b"bwrap:", b"Bwrap:", 1) + b"\n", b"prefix " + data + b"\n"):
+            with self.subTest(log=log):
+                results.append(classify(log))
+                self.assertEqual(results[-1], "no-marker")
+        exact = b"x" * (65536 - len(data) - 2) + b"\n" + data + b"\n"
+        self.assertEqual(len(exact), 65536)
+        results.append(classify(exact))
+        self.assertEqual(results[-1], "bwrap-destination-host-temp-eacces")
+        results.append(classify(b"x" + exact))
+        self.assertEqual(results[-1], "invalid")
+        self.assertEqual(destination(data + b"\0" * (65536 - len(data))), "bwrap-destination-host-temp")
+        self.assertEqual(destination(data + b"\0" * (65537 - len(data))), "bwrap-destination")
+        for value in (data.decode("ascii"), bytearray(data), memoryview(data), None):
+            with self.subTest(value=type(value)):
+                self.assertEqual(destination(value), "bwrap-destination")
+                results.append(classify(value))
+                self.assertEqual(results[-1], "invalid")
+        for log in results:
+            with self.subTest(log=log):
+                self.assertEqual(NATIVE["keeper_failure_stage"]("child-exit", log, "child-created"),
+                                 "prepare-keeper-child-exit-log-" + log + "-info-child-created")
+
     def test_info_progress_accepts_only_bounded_child_creation_with_known_namespace_ids(self):
         progress = NATIVE["keeper_info_progress"]
         self.assertEqual(progress(b""), "empty")
@@ -598,32 +719,33 @@ class KeeperDiagnosticTests(unittest.TestCase):
             self.assertEqual(progress(data), "invalid")
 
     def test_failure_stage_builder_returns_the_exact_closed_product_and_refuses_unknown_values(self):
-        logs = (
-            "empty", "no-marker", "invalid", "unstable", "unreadable", "phase-identity", "phase-capabilities",
-            "phase-environment", "phase-ready-write", "bwrap-initial-caps", "bwrap-capset", "bwrap-userns-denied",
-            "bwrap-clone", "bwrap-uid-map", "bwrap-gid-map", "bwrap-setgroups", "bwrap-mount-propagation",
-            "bwrap-root-tmpfs", "bwrap-source", "bwrap-destination", "bwrap-bind", "bwrap-remount",
-            "bwrap-destination-root", "bwrap-destination-home", "bwrap-destination-tmp",
-            "bwrap-destination-var-tmp", "bwrap-destination-run", "bwrap-destination-host-temp",
-            "bwrap-destination-dev", "bwrap-destination-proc", "bwrap-destination-checkout",
-            "bwrap-destination-scratch",
-            "bwrap-proc", "bwrap-mask-tmpfs", "bwrap-devpts", "bwrap-pivot", "bwrap-exec",
-        )
+        # 37 unsuffixed log values plus 10 destination targets x 6 closed errno causes.
+        self.assertEqual(len(KEEPER_LOGS), 97)
+        self.assertEqual(len(set(KEEPER_LOGS)), 97)
         stages = []
         for outcome in ("child-exit", "timeout"):
-            for log in logs:
+            for log in KEEPER_LOGS:
                 for info in ("empty", "child-created", "invalid"):
                     stage = NATIVE["keeper_failure_stage"](outcome, log, info)
                     self.assertEqual(stage, f"prepare-keeper-{outcome}-log-{log}-info-{info}")
                     stages.append(stage)
-        self.assertEqual(len(stages), 222)
-        self.assertEqual(len(set(stages)), 222)
+        self.assertEqual(len(stages), 582)
+        self.assertEqual(len(set(stages)), 582)
         for values in (
             ("exit", "empty", "empty"), ("child-exit-log-empty", "empty", "empty"),
             ("timeout", "phase-network", "empty"), ("child-exit", "bwrap-private", "empty"),
             ("child-exit", "/owner/private", "empty"), ("child-exit", "empty", "/run/private"),
             ("child-exit", "empty", "ready"), ("timeout", "empty", "invalid\nprivate-value"),
             (None, "empty", "empty"), (b"child-exit", "empty", "empty"), (True, "empty", "empty"),
+            ("child-exit", "bwrap-destination-eacces", "child-created"),
+            ("child-exit", "bwrap-destination-host-temp-eio", "child-created"),
+            ("child-exit", "bwrap-destination-host-temp-EACCES", "child-created"),
+            ("child-exit", "bwrap-destination-host-temp-eacces-eacces", "child-created"),
+            ("child-exit", "bwrap-destination-private-eacces", "child-created"),
+            ("child-exit", "bwrap-bind-eacces", "child-created"),
+            ("child-exit", "bwrap-destination-host-temp-Permission denied", "child-created"),
+            ("child-exit", "bwrap-destination-host-temp-", "child-created"),
+            ("timeout", "bwrap-destination-host-temp-eacces", "child-created-eacces"),
         ):
             with self.subTest(values=values), self.assertRaises(RuntimeError):
                 NATIVE["keeper_failure_stage"](*values)
@@ -641,6 +763,33 @@ class SourceStructureTests(unittest.TestCase):
                     self.assertNotIn(ast.unparse(node.func), forbidden)
                     self.assertFalse(ast.unparse(node.func).startswith(("LIBC.", "os.open", "os.stat", "os.fstat",
                                                                         "os.unshare", "fcntl.", "subprocess.")))
+
+    def test_destination_classifier_returns_only_fixed_labels_from_the_closed_vocabulary(self):
+        stage = FUNCTIONS["keeper_destination_stage"]
+        self.assertEqual([argument.arg for argument in stage.args.args], ["data"])
+        self.assertEqual({ast.dump(node.value) for node in ast.walk(stage) if isinstance(node, ast.Return)},
+                         {ast.dump(ast.parse(expression, mode="eval").body) for expression in (
+                             "'bwrap-destination'",
+                             "'bwrap-destination-' + kind + ('' if cause is None else '-' + cause)",
+                         )})
+        assigned = {node.targets[0].id: node.value for node in ast.walk(stage) if isinstance(node, ast.Assign) and
+                    len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)}
+        self.assertEqual(ast.literal_eval(assigned["prefixes"]), DESTINATION_PREFIXES)
+        self.assertEqual(ast.literal_eval(assigned["targets"]), DESTINATIONS)
+        self.assertEqual(ast.literal_eval(assigned["causes"]), {text: cause for cause, _, text in CAUSES})
+        self.assertEqual(tuple(dict.fromkeys(kind for kind, _ in DESTINATIONS)), DESTINATION_KINDS)
+        builder = FUNCTIONS["keeper_failure_stage"]
+        accepted = [node for node in ast.walk(builder) if isinstance(node, ast.Compare) and
+                    isinstance(node.left, ast.Name) and node.left.id == "log"]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual([type(operator) for operator in accepted[0].ops], [ast.In])
+        logs = ast.literal_eval(accepted[0].comparators[0])
+        self.assertEqual(len(logs), len(set(logs)))
+        self.assertEqual(set(logs), set(KEEPER_LOGS))
+        self.assertEqual({log for log in logs if log.startswith("bwrap-destination")},
+                         {"bwrap-destination", *("bwrap-destination-" + kind for kind in DESTINATION_KINDS),
+                          *("bwrap-destination-" + kind + "-" + cause
+                            for kind in DESTINATION_KINDS for cause, _, _ in CAUSES)})
 
     def test_root_construction_sequence_is_confined_to_prepare(self):
         self.assertEqual([name for name in FUNCTIONS if calls(name, "os.unshare")], ["capture_mount_namespace"])

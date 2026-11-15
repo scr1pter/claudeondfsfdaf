@@ -189,3 +189,41 @@ named read-only Git/pure spawn-refusal selection passes 7 cases with 66 explicit
 Linux-only skips. The six genuine Linux cases, including the restored-mtime
 negative, require fresh hosted qualification and are not local passes. No fixture,
 assertion, native control, evidence pin or model/provider route was weakened here.
+
+## Lane dispatch and destination errno diagnostics, 15 November 2026
+
+The `native-qualify` lane (from `release-finish` `0ee486e3`) adds
+`refs/heads/native-qualify` to the native workflow's manual ref allowlist. It is
+reachable only through `workflow_dispatch`; push triggers, the diagnostic-cell
+selector and its default, the full matrix, pinned actions, permissions, runtime
+provenance, host and cleanup checks are unchanged. The lane's bounded dispatches and
+their results are logged in `native-qualify-notes.md`.
+
+The keeper destination diagnostic now also names a closed cause. After one of the ten
+fixed destination kinds, only the complete C-locale strerror text of six errnos maps to
+a suffix: `eacces`, `erofs`, `enoent`, `enotdir`, `eloop` or `eperm` (for example
+`bwrap-destination-host-temp-eacces`). Bubblewrap v0.9.0 never calls `setlocale` and
+the keeper starts it under `env -i`, so this is the text it prints. Every other errno
+text, any prose, any unknown target and every path still stays private: an unknown
+remainder keeps the unsuffixed target label and an unknown target keeps
+`bwrap-destination`. This supersedes the 37-log/222-stage count of the 14 November
+section: the closed product is now 97 logs and 582 stages, checked consistently in the
+Python source, the Python fixture and the native TypeScript decoder.
+
+Nothing is relaxed in mounts, capabilities, profile, admission, timeout or cleanup.
+Both native build switches and `FLOOR` remain false, and native commands registered with
+`OwnedProcess` remain refused before launch. The authoritative evidence for the Python
+changes is the CI `native-guard-unit.yml` run of the 35-test pure fixture; it and the
+hosted label are CI-only and are logged in `native-qualify-notes.md`. Local evidence:
+both Python sources parse; an AST-only agreement check and the TypeScript decoder agree
+on exactly the 582 stages; the Engine isolation decoder suite passes 31 tests; Core and
+Engine `bun typecheck` pass. A local AST-extracted smoke of the five pure keeper
+diagnostic functions also passed; it is supplementary only, outside the lane's allowed
+local checks, and no substitute for guard-unit.
+
+Ubuntu's `0.9.0-1ubuntu0.3` build rewrites bubblewrap's userns-denied message, so the
+exact upstream `bwrap-userns-denied` label cannot match on the hosted runner; such a
+failure would classify as `no-marker`. That gap fails closed and is left for a later
+package. An `eacces` result would confirm the errno only, not which ancestor of the
+hosted temporary root blocks the keeper. No production activation is authorized by this
+document.
