@@ -7,7 +7,7 @@
 
 They change no predicate, budget, retry or authority, they are not a functional fix or ARM64 qualification, and they establish no root cause. The merged source reports helper `1.0.15` with a new Windows-only source digest, which is not yet observed in CI. No measured macOS input file differs from `0ee486e3`, whose mac-build job `132574657008` passed the enforced `1.0.15` lock; macOS sources and the lock file are unchanged, and lock confirmation at the merged source waits for the lane's final full `test.yml`. `1.0.16` and `1.0.17` in the diagnostic note are historical native-stop-fix labels. The exact `503418a1` x64 Stop pass is preserved at its own source. Fresh exact-source Windows x64/ARM64 native evidence is pending (HF-4). See [the diagnostic scope and remaining gates](./hands-uia-timeout-diagnostic.md) and [HF-1](#hf-1--native-stop-fix-merged-at-helper-1015-15-november-2026). Earlier receipts below retain their exact baseline scope.
 
-The build contract is [hands-build-spec.md](./hands-build-spec.md). Read [hands-deviations.md](./hands-deviations.md) before continuing. Work only on `hands`, implement one work package at a time in the contract's order, and push each package. Do not merge or push to `main`.
+The build contract is [hands-build-spec.md](./hands-build-spec.md). Read [hands-deviations.md](./hands-deviations.md) before continuing; [hands-current-state.md](./hands-current-state.md) is the short summary of what is done and what remains. Hands work now continues in lanes, each on its own branch. The newest entries come from `hands-finish`, which started from `release-finish` (the PR #33 head branch) and already contains `hands`. A lane implements one package at a time and pushes only its own branch. `main` changes only through a pull request that the lead merges with a merge commit; no lane merges into or pushes to `main`. `hands-finish` HEAD includes every change after `a0e5ce8e` (the PR #33 integration up to `0ee486e3`, then HF-1's Windows diagnostics and `test.yml` macos-measure route, and HF-2's tests), none of which run 43560683817 or preview 43560764334 covers. Entries below keep their own branch and source scope.
 
 The historical continuation prompt, superseded by the checkpoint below, is [hands-handoff.md](./hands-handoff.md), in the original five-section briefing format. It recorded the code checkpoint at `49155228` and the then-remaining work packages and validation boundaries. Implementation resumed from that handoff with D5b, committed on `hands` on top of `50ac11c9`.
 
@@ -1790,3 +1790,59 @@ The first engine `bun typecheck` failed on the fixture: `toEqual` rejected a `st
 - **Platform gaps.** There is no macOS lane, and the Windows PTY half is not run because of the PTY suites' gate.
 - **Other lanes.** The shell halves of S6-5 (background and foreground shells) stay with the spawn test lanes; on Windows `ShellJobs.isolationRefusal` refuses before the recheck. The optional second recheck (C1), SPAWN-1/2/3 and S4-3/S4-5 also stay with their lanes.
 - **This record.** The top block of this checkpoint is unchanged; it stays with the lane's follow-up docs package.
+
+## HF-3 — Ledger refresh and current-state summary (15 November 2026)
+
+HF-3 starts at `6716e954` on `hands-finish`, after HF-1 and HF-2, and is docs only. It runs after the HF-1 merge, so no edit conflicts with the merged top blocks. It changes eight files: `hands-handoff.md` (line 3 only), `hands-release-artifacts.md` (its last paragraph), the new [hands-current-state.md](./hands-current-state.md), this record (the intro paragraph and this section), `hands-diagnostics-disposition.md` (a new "Integrated" note), `hands-deviations.md` (its top block and the [HF-3 entry](./hands-deviations.md#hf-3--ledger-refresh-follows-the-hf-1-merge)), `owner-actions/hands-release.md` (one clause on line 55) and `VECTOR-HANDS.md` (one link). No code, test, workflow, `identity.json`, macOS input, lock, web page or legal text changed. At write time `origin/main` was still `58f85edc` (PR #33 not merged), `origin/release-finish` was `cf2373c4`, the newest PR #33 `test.yml` run was `43656696007`, and `test.yml` had no run on `hands-finish`.
+
+**PR #33 computer-helper observations.** These were read on 15 November 2026 from `get_job_logs` tails (1,100 lines) and from job, run and artifact metadata. No artifact was downloaded, so archive sizes are API metadata and no archive hash is claimed. Counts are passed / failed / skipped.
+
+- Run [43631024090](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43631024090), head `f830e3fdf707b722aa190206994337cecec0f01d`, tested merge `303eecb8f0015f92f32a652ffe10214fca5840cb`, windows-build job `132558654772`:
+  - core "30 passed, 1 skipped, 0 failed" at 19:31:34.4503853Z;
+  - isolated "36 passed, 10 skipped, 2 failed" at 19:31:52.6785002Z, with FAILED `privileged: native-check-failed` and `privileged.apps-running-target: native_operation_failed`;
+  - step 18, "Run actual isolated medium-token Windows overlay Stop", logged `{"ok":false,"reason":"native_failure","stage":"stop-root-retired","cause":"core_failure:no_ui_tree"}` with `exitCode` 1 at 19:34:47.3208342Z; the step and the job concluded failure;
+  - reports artifact `14128583221`, 1,387 bytes;
+  - mac-build `132558654813` passed; mac-test `132564190011` and windows-arm64-test `132563098712` were skipped;
+  - the run concluded failure with 16 failed jobs, and `132558654772` is the only computer-helper job among them.
+- Run [43636452606](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43636452606), head `0ee486e3412c29512022d369325a3747b567d090`, tested merge `0975ed15d6ce4da4672c95f0a1ad7f70e648e235`, windows-build job `132574657019`:
+  - core 30/0/1 at 20:30:16.7928971Z;
+  - isolated 36/2/10 at 20:30:34.9683438Z, with the same two FAILED rows;
+  - the Stop step logged `{"ok":true}` with `exitCode` 0 at 20:33:35.8424872Z; the job concluded success;
+  - reports artifact `14130766366`, 1,387 bytes;
+  - mac-build `132574657008` passed; mac-test `132578706717` and windows-arm64-test `132579526582` were skipped;
+  - the run concluded failure with 9 failed jobs, none of them a computer-helper job.
+- Run [43656696007](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43656696007), head `cf2373c46dd90211c44e34165ad8d23a841d922b`, tested merge `3293a952c19e4f46bcf4d990bcd7d66d9a4b850b`, windows-build job `132636926176`:
+  - core 30/0/1 at 00:19:07.0569828Z;
+  - isolated "35 passed, 10 skipped, 3 failed" at 00:19:35.0232270Z, with FAILED `privileged: native-check-failed`, `privileged.capture-color-patch: native_operation_failed` and `privileged.capture-affinity-exclusion: native_operation_failed`; `apps-running-target` is not among the failed or skipped rows;
+  - the Stop step logged `{"ok":true}` with `exitCode` 0 at 00:21:37.1023946Z; the job concluded success;
+  - reports artifact `14138423673`, 1,410 bytes;
+  - mac-build `132636926185` passed; mac-test `132641298922` and windows-arm64-test `132640157890` were skipped;
+  - the run concluded failure with 2 failed jobs, engine Linux shard 3/4 and engine Windows shard 7/12.
+- In all three jobs, step 12, "Run explicitly isolated Windows scenarios", threw "The isolated Windows scenarios failed or were required but skipped." and exited 1, yet concluded success. The step has `continue-on-error: ${{ !inputs['privileged-required'] }}` (`.github/workflows/computer-helper.yml:718`), and its log shows `PRIVILEGED_REQUIRED: false`.
+
+**Native source.** `git diff --stat` over `packages/desktop/native` and `.github/workflows/computer-helper.yml` prints nothing between any two of `a0e5ce8e`, `f830e3fd`, `0ee486e3` and `cf2373c4`. Over `packages/desktop/scripts`, the only difference among them is `computer-workflow.test.ts` (+20/−6), between `a0e5ce8e` and `f830e3fd`; `f830e3fd`, `0ee486e3` and `cf2373c4` are identical there. So the failed rows and the Stop result above differed without a native source change. No cause is established.
+
+**Ancestry.** `eddd80dc` has parents `f37d4a24` and `ead16339`, and its tree `1667bc16` equals the tree of `f37d4a24`. `ead16339`, `origin/hands` `4eb9f52f`, `a0e5ce8e` and `f830e3fd` are all ancestors of `0ee486e3` and of HEAD.
+
+**Plan corrections.** The [HF-3 deviation entry](./hands-deviations.md#hf-3--ledger-refresh-follows-the-hf-1-merge) records the corrections to the lane brief and the review points taken.
+
+**Checks.** Scratch files are under `/tmp/vector-v2/hands/hf3/`.
+
+- `git diff --check` passes. `git diff --name-only HEAD` lists the seven edited files and the new page is the only untracked file. `git diff --stat HEAD -- packages .github` prints nothing. HF-1's invariant 2, the `git diff --stat 0ee486e3` over `macos/`, `identity.json`, `blocklist.json`, the three channel `icon.icns` files and the nine `COMPUTER_HELPER_BUILD_INPUTS`, still prints nothing.
+- Prettier 3.6.2 ran under the serial lock. `--write` formatted the new page and `--check` then passed. On the other seven files the count of Prettier-diff lines equals its count at `6716e954`: `hands-handoff.md` 82, this record 123, the deviations log 20, `hands-diagnostics-disposition.md` 28, and 0 for `hands-release-artifacts.md`, `owner-actions/hands-release.md` and `VECTOR-HANDS.md`.
+- A link checker that uses GitHub heading slugs and skips code fences resolves every relative file link and anchor in the eight files. The replaced handoff anchor `#current-continuation-main-integration-and-native-validation-pending` no longer appears under `docs/` outside this record.
+- The new page is 59 lines.
+- A token check confirms each cited figure on its source line: this record's lines 16, 18, 20, 22, 32, 46, 68, 1684 and 1686, and line 55 of the diagnostic note. The three job-log tails contain every count, failed row, receipt, timestamp and `PRIVILEGED_REQUIRED: false` line listed above.
+- The added lines contain no Terms, Privacy, consent, price or comparative text and no release, signing or device success claim. `packages/web` is unchanged.
+- From `packages/engine`, `bun test --timeout 30000 ./test/compliance/upstream-free.test.ts` ran under the serial lock with a minimal environment (`env -i`, `HOME`, `TMPDIR` and `XDG_*` under the scratch folder) and a scratch copy of the index, given through `GIT_INDEX_FILE`, to which the new page was added with `git update-index --add --info-only`. The real index was not changed. Result: 12 passed / 0 failed, 53 assertions.
+- No package file changed, so there is no package typecheck to run. The full-tree typecheck stays mandatory before the lane pushes.
+
+**Deferred.**
+
+- HF-4: the Windows x64 and ARM64 native rows at `hands-finish`, from a `test.yml` dispatch with `computer_helper=true` and `computer_helper_target=windows`.
+- HF-2's Windows engine-shard `MCP_REQUIRED_ISOLATION_LAUNCH=refused` line, from a separate default-input `test.yml` dispatch on `hands-finish` or the lane PR's `pull_request` run. A `computer_helper` dispatch skips `unit` (`test.yml:550`), `engine-linux` (`:747`) and `engine-windows` (`:799`), so the HF-4 run cannot supply it.
+- Mac lock confirmation at the merged source, from the lane's final full `test.yml`.
+- Packaging re-qualification at the merged source, which depends on the owner's choice of preview ref (`vector-desktop-release.yml:74`).
+- Every owner gate listed in the [current state](./hands-current-state.md#owner-gates).
+
+HF-3 gives no release, signing or device credit.

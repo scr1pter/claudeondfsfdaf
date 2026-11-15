@@ -52,4 +52,4 @@ Complete [Apple Developer ID](./apple-developer-id.md) and Azure Trusted Signing
 
 The Codium gateway must accept images on Hands turns before releasing image-based Codium operation. Until the corresponding deployment is complete, Codium remains in screen-reader mode. A source change is not proof that the gateway is deployed.
 
-Owner approval is required for the final docs/release notes, helper name/icon and any legal change. Then follow the existing release approval and signing workflow. Do not merge `hands` into `main`, tag/release, deploy the gateway/site, publish installers or change credentials merely because source work is complete.
+Owner approval is required for the final docs/release notes, helper name/icon and any legal change. Then follow the existing release approval and signing workflow. Merging the Hands source into `main` is not release approval. Do not tag/release, deploy the gateway/site, publish installers or change credentials merely because source work is complete.
