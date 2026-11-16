@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { ConfigProvider, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { Connect } from "@vectordevai/schema/connect"
+import { Hands } from "@vectordevai/schema/hands"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createVectorClient } from "@vectordevai/sdk/v2"
@@ -29,20 +30,25 @@ const basic = (username: string, password: string) =>
 const owner = { authorization: basic("vector", "fixture-owner") }
 const guest = { authorization: basic("guest", "fixture-guest") }
 const forwarded = { ...owner, [GUEST_REQUEST_HEADER]: "1" }
-const provider = ConfigProvider.layer(
-  ConfigProvider.fromUnknown({
-    VECTOR_SERVER_USERNAME: "vector",
-    VECTOR_SERVER_PASSWORD: "fixture-owner",
-    VECTOR_SERVER_GUEST_USERNAME: "guest",
-    VECTOR_SERVER_GUEST_PASSWORD: "fixture-guest",
-    VECTOR_SERVER_GUEST_SESSIONS: sessionID,
-    VECTOR_EXPERIMENTAL_CONNECT: true,
-    VECTOR_DISABLE_DEFAULT_PLUGINS: true,
-  }),
-)
+const settings = {
+  VECTOR_SERVER_USERNAME: "vector",
+  VECTOR_SERVER_PASSWORD: "fixture-owner",
+  VECTOR_SERVER_GUEST_USERNAME: "guest",
+  VECTOR_SERVER_GUEST_PASSWORD: "fixture-guest",
+  VECTOR_SERVER_GUEST_SESSIONS: sessionID,
+  VECTOR_DISABLE_DEFAULT_PLUGINS: true,
+}
+const provider = ConfigProvider.layer(ConfigProvider.fromUnknown({ ...settings, VECTOR_EXPERIMENTAL_CONNECT: true }))
 const it = testEffect(Layer.mergeAll(consentHttpApiLayer, TestLLMServer.layer).pipe(Layer.provide(provider)))
 const production = testEffect(
   Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(Layer.provide(noSweep), Layer.provide(provider)),
+)
+// The production assembly with VECTOR_EXPERIMENTAL_CONNECT unset, as every build starts until the owner's Q1.
+const dormant = testEffect(
+  Layer.mergeAll(httpApiLayer, TestLLMServer.layer).pipe(
+    Layer.provide(noSweep),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(settings))),
+  ),
 )
 const call = <A>(run: () => Promise<A>) => Effect.promise(run)
 
@@ -111,6 +117,36 @@ production.live("the production assembly does not qualify Windows Git or a proje
         ? "No VectorScope model is set"
         : "Connected VectorScope reviews currently require Linux",
     )
+    // The same assembly lists all three adapters while Connect is on, so the dormant case below is not vacuous.
+    expect(members.map((member) => member.id)).toEqual(
+      expect.arrayContaining(["vectorscope", Hands.ID, "github-agent"]),
+    )
+    expect((yield* call(() => f.client.permission.list())).data).toEqual([])
+    expect(yield* f.llm.inputs).toHaveLength(0)
+  }),
+)
+
+dormant.live("with VECTOR_EXPERIMENTAL_CONNECT unset, connections are off and no connected tool is listed", () =>
+  Effect.gen(function* () {
+    // The node transport serves this harness's Connect-off routes; the web transport builds its own Connect-on ones.
+    const f = yield* fixture(false, "node", false)
+    const capabilities = yield* f.raw("/experimental/capabilities")
+    expect(capabilities.status).toBe(200)
+    expect(yield* call(() => capabilities.json())).toMatchObject({ connections: false })
+    // The session variant names a conversation that does not exist, so the flag is checked before any lookup.
+    for (const route of [
+      "/experimental/connect",
+      `/experimental/connect?sessionID=${f.sessionID}`,
+      "/experimental/connect/runs",
+      "/experimental/connect/runs/cr_fixture",
+    ]) {
+      const response = yield* f.raw(route)
+      expect(response.status).toBe(400)
+      expect(yield* call(() => response.json())).toEqual({
+        code: "disabled",
+        message: "Connected tools are off in this build.",
+      })
+    }
     expect((yield* call(() => f.client.permission.list())).data).toEqual([])
     expect(yield* f.llm.inputs).toHaveLength(0)
   }),

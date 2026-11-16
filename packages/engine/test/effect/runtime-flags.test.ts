@@ -128,6 +128,26 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("experimentalConnect is off when VECTOR_EXPERIMENTAL_CONNECT is unset or false in the environment", () =>
+    Effect.gen(function* () {
+      // The provider the engine's server reads its flags from (server/server.ts).
+      const read = (env: Record<string, string>) =>
+        readFlags.pipe(
+          Effect.provide(
+            RuntimeFlags.Service.layer.pipe(
+              Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+              Layer.orDie,
+            ),
+          ),
+          Effect.map((flags) => flags.experimentalConnect),
+        )
+
+      expect(yield* read({})).toBe(false)
+      expect(yield* read({ VECTOR_EXPERIMENTAL_CONNECT: "false" })).toBe(false)
+      expect(yield* read({ VECTOR_EXPERIMENTAL_CONNECT: "true" })).toBe(true)
+    }),
+  )
+
   it.effect("layer accepts partial test overrides and fills defaults from Config definitions", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(

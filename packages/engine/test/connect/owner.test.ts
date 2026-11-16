@@ -23,6 +23,7 @@ import { Permission } from "@/permission"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRunState } from "@/session/run-state"
+import { SessionID } from "@/session/schema"
 import { disposeAllInstances, provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { NpmTest } from "../fake/npm"
@@ -185,6 +186,29 @@ off.live(
       expect(swept).toEqual([])
     }),
   30_000,
+)
+
+off.live("with Connect off every owner read and action refuses as disabled", () =>
+  Effect.gen(function* () {
+    const owner = yield* ConnectOwner.Service
+    // No such conversation exists: the flag is checked before any session lookup, input check or ledger write.
+    const sessionID = SessionID.make("ses_connect_off")
+    const target = { kind: "uncommitted" } as const
+    for (const refused of [
+      Effect.flip(owner.members()),
+      Effect.flip(owner.runs()),
+      Effect.flip(owner.get("cr_x")),
+      Effect.flip(owner.cancel("cr_x")),
+      Effect.flip(owner.review(sessionID, { target })),
+      Effect.flip(owner.directoryReview({ target, requestKey: randomUUID() })),
+      Effect.flip(owner.register({ sessionID, target, findings: [] })),
+      Effect.flip(owner.dismiss("cr_x", { sessionID, findings: ["f_x"] })),
+    ])
+      expect(yield* refused).toMatchObject({
+        code: "disabled",
+        message: "Connected tools are off in this build.",
+      })
+  }),
 )
 
 on.live(
