@@ -7,6 +7,7 @@ import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import {
+  command,
   copyBundleFile,
   engineLaunch,
   namespaceProbeFailure,
@@ -353,6 +354,45 @@ test.skipIf(process.platform === "win32")(
     expect(line).not.toContain(f.env.CUSTOM_CREDENTIAL)
   },
 )
+
+test.skipIf(process.platform === "win32")(
+  "a refused sandbox command says whether it timed out or exited, without argv or output",
+  async () => {
+    const message = (file: string, args: string[], timeout?: number) =>
+      command(file, args, undefined, timeout).then(
+        () => undefined,
+        (error: Error) => error.message,
+      )
+    expect(await message("/bin/sh", ["-c", "echo private-output; exec sleep 5"], 200)).toBe(
+      "Sandbox operation sh timed out; the run is refused.",
+    )
+    expect(await message("/bin/sh", ["-c", "echo private-output >&2; exit 7"])).toBe(
+      "Sandbox operation sh exited 7; the run is refused.",
+    )
+    expect(await message("/nonexistent/vector-sandbox-tool", ["private-argument"])).toBe(
+      "Sandbox operation vector-sandbox-tool failed; the run is refused.",
+    )
+    expect((await command("/bin/sh", ["-c", "exit 1"], [0, 1])).code).toBe(1)
+  },
+)
+
+test("a fresh agent account never copies /etc/skel and its empty home is created exclusively", async () => {
+  // The hosted copy of /etc/skel (a Rust toolchain on GitHub's images) took the whole 120 s bound in job 133462227639.
+  const source = await Bun.file(path.join(import.meta.dir, "../../src/cli/cmd/github.sandbox.ts")).text()
+  const useradd = source.indexOf('"/usr/sbin/useradd"')
+  const order = [
+    useradd,
+    source.indexOf("state.gid = Number(", useradd),
+    source.indexOf("await writeState(env, state)", useradd),
+    source.indexOf('await sudo(["/usr/bin/mkdir", "-m", "0750", "--", AGENT_HOME])', useradd),
+    source.indexOf('await sudo(["/usr/bin/chown", "-h", `${state.uid}:${state.gid}`, "--", AGENT_HOME])', useradd),
+    source.indexOf("...ProcessIsolation.ENGINE_PRIVATE_DIRECTORIES", useradd),
+  ]
+  expect(order.every((index, position) => index > (order[position - 1] ?? 0))).toBe(true)
+  expect(source.slice(useradd, order[1])).toContain('"--no-create-home"')
+  expect(source).not.toContain('"--create-home"')
+  expect(source).not.toContain('"--skel"')
+})
 
 test("own-key channel captures exactly listed keys without reading any run credential", async () => {
   await using f = await fixture()

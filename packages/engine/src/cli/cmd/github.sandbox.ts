@@ -89,24 +89,27 @@ async function checkout(env: Env) {
   return workspace
 }
 
-async function command(file: string, args: readonly string[], allowed = [0], timeout = 30_000) {
+export async function command(file: string, args: readonly string[], allowed = [0], timeout = 30_000) {
   const result = await execute(file, [...args], {
     env: { PATH: SYSTEM_PATH, LANG: "C", LC_ALL: "C" },
     encoding: "utf8",
     timeout,
     maxBuffer: 65_536,
   }).then(
-    (value) => ({ code: 0, stdout: value.stdout, stderr: value.stderr }),
-    (error: { code?: unknown; stdout?: unknown; stderr?: unknown }) => ({
+    (value) => ({ code: 0, timedOut: false, stdout: value.stdout, stderr: value.stderr }),
+    (error: { code?: unknown; killed?: unknown; stdout?: unknown; stderr?: unknown }) => ({
       code: typeof error.code === "number" ? error.code : -1,
+      // execFile kills the child only on the timeout or on maxBuffer, and the maxBuffer error has a string code.
+      timedOut: error.killed === true && typeof error.code !== "string",
       stdout: typeof error.stdout === "string" ? error.stdout : "",
       stderr: typeof error.stderr === "string" ? error.stderr : "",
     }),
   )
   if (!allowed.includes(result.code)) {
-    // Fixed executable names only: argv/stdout/stderr can contain private paths or credentials.
+    // Fixed executable names and the exit code only: argv/stdout/stderr can contain private paths or credentials.
     const operation = file === "/usr/bin/sudo" ? args[1] : file
-    throw new Error(`Sandbox operation ${path.basename(operation ?? file)} failed or timed out; the run is refused.`)
+    const outcome = result.code >= 0 ? `exited ${result.code}` : result.timedOut ? "timed out" : "failed"
+    throw new Error(`Sandbox operation ${path.basename(operation ?? file)} ${outcome}; the run is refused.`)
   }
   return result
 }
@@ -469,11 +472,13 @@ export async function prepare(env: Env = process.env) {
   await sudo(["/usr/bin/chown", "-h", "0:0", "--", container])
   await sudo(["/usr/bin/chmod", "0755", "--", container])
   await verifyContainer(container, true)
+  // --create-home would copy /etc/skel, which on GitHub's images holds a whole Rust toolchain, nvm and the runner's
+  // dotfiles: that copy alone took up to the full 120 s (job 133462227639). The home is created empty below instead.
   await sudo(
     [
       "/usr/sbin/useradd",
       "--user-group",
-      "--create-home",
+      "--no-create-home",
       "--home-dir",
       AGENT_HOME,
       "--shell",
@@ -488,6 +493,9 @@ export async function prepare(env: Env = process.env) {
   state.gid = Number((await command("/usr/bin/id", ["-g", USER])).stdout.trim())
   State.parse(state)
   await writeState(env, state)
+  // mkdir fails if the home already exists, so an existing directory is never adopted. The mode matches HOME_MODE.
+  await sudo(["/usr/bin/mkdir", "-m", "0750", "--", AGENT_HOME])
+  await sudo(["/usr/bin/chown", "-h", `${state.uid}:${state.gid}`, "--", AGENT_HOME])
   await sudo([
     "/usr/bin/install",
     "-d",
