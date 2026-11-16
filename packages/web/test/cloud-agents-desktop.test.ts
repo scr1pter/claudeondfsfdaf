@@ -18,6 +18,7 @@ const state = {
   wrongAccount: false,
   bindFails: false,
   enabled: true,
+  plans: true,
   eligible: true,
   calls: [] as string[],
   stores: 0,
@@ -42,6 +43,9 @@ const api = createDesktopCloudAgentApi({
   env: {
     get VECTOR_GITHUB_BRAIN_ENABLED() {
       return state.enabled ? "true" : "false"
+    },
+    get MODEL_PLANS_ENABLED() {
+      return state.plans ? "true" : "false"
     },
   },
   fetcher: (async (_url, init) => {
@@ -214,7 +218,7 @@ test("the new attachment route remains off by default and never starts a no-atta
   }
 })
 
-test("with the switch off every Brain route answers 503 before any method, body, credential, limit or store work", async () => {
+test("with either switch off every Brain route answers 503 before any method, body, credential, limit or store work", async () => {
   const token = mintCliToken({ id: account, email: "fixture@example.test" }, Date.now(), "desktop").token
   const routes = {
     prepare: { repositoryId: "123", sha256, bytes: 40, includeBrain: true },
@@ -230,25 +234,32 @@ test("with the switch off every Brain route answers 503 before any method, body,
     { method: "POST", headers: { origin: "https://attacker.invalid" } },
     { method: "POST", headers: { "content-type": "text/plain" } },
   ]
-  Object.assign(state, { enabled: false, stores: 0, fetches: 0, limits: 0, calls: [] })
+  // Brain off with model plans on, then Brain on with model plans off.
+  const switches = [
+    { enabled: false, plans: true },
+    { enabled: true, plans: false },
+  ]
+  Object.assign(state, { stores: 0, fetches: 0, limits: 0, calls: [] })
   try {
-    for (const [route, value] of Object.entries(routes))
-      for (const variant of variants) {
-        const response = await fetch(`${origin}/${route}${variant.query ?? ""}`, {
-          method: variant.method,
-          headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...variant.headers },
-          ...(variant.method === "GET" ? {} : { body: JSON.stringify({ ...value, ...(variant.body ?? {}) }) }),
-        })
-        expect({ route, variant, status: response.status, body: await response.json() }).toEqual({
-          route,
-          variant,
-          status: 503,
-          body: { error: { code: "BRAIN_UPLOAD_UNAVAILABLE", message: expect.any(String) } },
-        })
-        expect(response.headers.get("cache-control")).toBe("no-store")
-        expect(response.headers.get("x-content-type-options")).toBe("nosniff")
-        expect(response.headers.get("referrer-policy")).toBe("no-referrer")
-      }
+    for (const off of switches)
+      for (const [route, value] of Object.entries(routes))
+        for (const variant of variants) {
+          Object.assign(state, off)
+          const response = await fetch(`${origin}/${route}${variant.query ?? ""}`, {
+            method: variant.method,
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...variant.headers },
+            ...(variant.method === "GET" ? {} : { body: JSON.stringify({ ...value, ...(variant.body ?? {}) }) }),
+          })
+          expect({ route, variant, status: response.status, body: await response.json() }).toEqual({
+            route,
+            variant,
+            status: 503,
+            body: { error: { code: "BRAIN_UPLOAD_UNAVAILABLE", message: expect.any(String) } },
+          })
+          expect(response.headers.get("cache-control")).toBe("no-store")
+          expect(response.headers.get("x-content-type-options")).toBe("nosniff")
+          expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+        }
     expect({ stores: state.stores, fetches: state.fetches, limits: state.limits, calls: state.calls }).toEqual({
       stores: 0,
       fetches: 0,
@@ -256,7 +267,7 @@ test("with the switch off every Brain route answers 503 before any method, body,
       calls: [],
     })
   } finally {
-    state.enabled = true
+    Object.assign(state, { enabled: true, plans: true })
   }
   // Positive control: switched on, the same request reaches the desktop revocation read, then stops at eligibility.
   state.eligible = false

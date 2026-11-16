@@ -49,6 +49,7 @@ const binding = {
 }
 const state = {
   enabled: true,
+  plans: true,
   revoked: false,
   foreign: false,
   source: "desktop",
@@ -59,11 +60,15 @@ const state = {
   reads: 0,
   stores: 0,
   fetches: 0,
+  limits: 0,
 }
 const env = {
   VECTOR_RUN_ARTIFACT_SECRET: "owner-artifact-fixture-at-least-32-characters",
   get VECTOR_GITHUB_BRAIN_ENABLED() {
     return state.enabled ? "true" : "false"
+  },
+  get MODEL_PLANS_ENABLED() {
+    return state.plans ? "true" : "false"
   },
 }
 const api = createOwnerArtifactReadApi({
@@ -105,7 +110,9 @@ const api = createOwnerArtifactReadApi({
       return { repositoryId: "123", generation: 1, publicRepository: true }
     },
   },
-  limit: async () => {},
+  limit: async () => {
+    state.limits++
+  },
 })
 const server = createServer((request, response) => void api(request, response))
 let origin = ""
@@ -222,28 +229,36 @@ test("a rebind during slow metadata verification and the closed activation switc
   }
 })
 
-test("with the switch off the owner read answers 503 before any store or fetch", async () => {
-  Object.assign(state, { enabled: false, stores: 0, fetches: 0, reads: 0 })
+test("with either switch off the owner read answers 503 before any store, fetch or limit", async () => {
+  Object.assign(state, { stores: 0, fetches: 0, reads: 0, limits: 0 })
   const token = mintCliToken({ id: account, email: "fixture@example.test" }, at, "desktop").token
+  // Brain off with model plans on, then Brain on with model plans off; the read needs no active model allowance.
+  const switches = [
+    { enabled: false, plans: true },
+    { enabled: true, plans: false },
+  ]
   try {
-    for (const method of ["POST", "GET"]) {
-      const response = await fetch(origin, {
-        method,
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
-      })
-      expect({ method, status: response.status, body: await response.json() }).toEqual({
-        method,
-        status: 503,
-        body: { error: { code: "ARTIFACT_READ_UNAVAILABLE", message: expect.any(String) } },
-      })
-    }
-    expect({ stores: state.stores, fetches: state.fetches, reads: state.reads }).toEqual({
+    for (const off of switches)
+      for (const method of ["POST", "GET", "PUT"]) {
+        Object.assign(state, off)
+        const response = await fetch(origin, {
+          method,
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+        })
+        expect({ method, status: response.status, body: await response.json() }).toEqual({
+          method,
+          status: 503,
+          body: { error: { code: "ARTIFACT_READ_UNAVAILABLE", message: expect.any(String) } },
+        })
+      }
+    expect({ stores: state.stores, fetches: state.fetches, reads: state.reads, limits: state.limits }).toEqual({
       stores: 0,
       fetches: 0,
       reads: 0,
+      limits: 0,
     })
   } finally {
-    state.enabled = true
+    Object.assign(state, { enabled: true, plans: true })
   }
 })

@@ -125,6 +125,7 @@ function journey() {
     const policy = { eligible: true, brain: true }
     const brainEnv = {
       VECTOR_RUN_ARTIFACT_SECRET: ARTIFACT_SECRET,
+      MODEL_PLANS_ENABLED: "true",
       get VECTOR_GITHUB_BRAIN_ENABLED() {
         return policy.brain ? "true" : undefined
       },

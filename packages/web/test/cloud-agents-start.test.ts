@@ -61,6 +61,7 @@ function integrationTests() {
   // the same secret from process.env.
   const brainEnv = {
     VECTOR_GITHUB_BRAIN_ENABLED: "true",
+    MODEL_PLANS_ENABLED: "true",
     VECTOR_RUN_ARTIFACT_SECRET: "cloud-start-artifact-fixture-secret-32-characters",
   }
   const previous = Object.fromEntries(environment.map((key) => [key, process.env[key]]))
