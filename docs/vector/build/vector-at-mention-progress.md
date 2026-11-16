@@ -1814,6 +1814,8 @@ None yet (contract section 4).
   - The authoritative server-side historical visibility field (BT10 item 4).
   - `registerRepoBindingReader` and `registerOpsRunStarter`, and BT11 items 2, 6 and 7.
   - V31: `ship.ts`'s INV-P1 line before `VECTOR_SHIP_DESK`, where the ticket is asked for if the probe ever finds the planted output, the artifact-id download, `!cancelled()`, the cache removal, the capture timeout and `hosted-ops.md`'s residual-risk note (BT12 items 2, 4, 5, 6 and 11).
+  - BT03 item 4 (optional): the owner read could refuse a completed desktop record without `brainSha` instead of issuing an ordinary key no artifact can use.
+  - The capture ticket in the capture step's log header (BT12 item 11's addendum, recorded at the PR finish), with the V31 items above.
   - V24's carries, `VECTOR_AGENT_RESULT` and `VECTOR_APP_BOT_ID` (BT02 item 5).
   - The `WORKFLOW_VERSION` bump question (BT08b item 1) and the BT08a observations (its item 1).
   - BT13's deviation item 2 (the INV-H1 string "Reviews every pull request.", on `origin/main` too) with item 5's app copy guard, which lands with it, before owner step 9 (listing `github-agents`) or any activation; items 3 and 4 (the legacy auto-review text, the 1.3 B and C copy).
@@ -1856,3 +1858,9 @@ None yet (contract section 4).
 - **Not needed:** no generated file conflicted or needed regeneration; `REVIEW_PIPELINE_SOURCES` (main's `76ac36bb67f9ca9d`) still matches, since this branch changes no pinned file.
 - **Checks (local).** Engine: `github.sandbox.test.ts` 23 pass, 2 skip; `github.isolation.test.ts` 36 pass; `github.sandbox-build.test.ts` 4 pass; `github.workflow.test.ts` 42 pass, 3 snapshots; `test/fixture/native-shell-ci/policy.test.ts` 11 pass; `stage-sandbox-probe.ts node` bundles. Core `test/review/model-evidence.test.ts` 30 pass. Root `test/api-module-loading.test.ts` 3 pass. Full turbo typecheck 27/27 (a first run lost the engine task to the memory limit; engine alone and the rerun passed).
 - **Open:** CI after the push, including the seven sandbox jobs that run the probe's `.config` check and the two lane-CI reds, which should now clear; `vector-codium.yml` has no `pull_request` trigger, so it is dispatched on the branch.
+
+### PR finish: review findings (2026-11-16, branch brain-transport)
+
+- **What.** The finish review's findings (deviations, "2026-11-16 brain-transport PR finish"). Item 1 (blocking, two reviewers, both files): the Brain prepare, commit, download and desktop-run gate and the owner artifact-key read checked only `VECTOR_GITHUB_BRAIN_ENABLED`; they now answer their fixed 503 before any method, credential, limit or store work while either it or `MODEL_PLANS_ENABLED` is off (commit `0f27b757`). Item 2: the capture ticket in the capture step's log header, recorded as a residual risk (BT12 item 11's addendum, INV-S5, the owner doc). Item 3: BT03 item 4 added to BT13's open list. No finding rejected.
+- **Checks (local, one file at a time through `vector-serial` from `packages/web`, `GITHUB_ACTIONS=false`, `--timeout 30000`).** `cloud-agents-desktop.test.ts` 6 pass (249 `expect()`); `cloud-agents-owner-artifact.test.ts` 6 pass (109). With `VECTOR_TEST_REDIS_URL` at a disposable loopback `redis-server` (`--save '' --appendonly no`, under `/tmp/vector-v2/bt-finish/redis`, shut down afterwards): `cloud-agents-start.test.ts` 27 pass, `cloud-agents-journey.test.ts` 4 pass, `cloud-agents-runs.test.ts` 22 pass. Mutation: the desktop `off` gate or the owner read reverted to the Brain switch alone fails its new case. Full turbo typecheck 27/27.
+- **Open:** the PR's CI; `vector-codium.yml` and `github-desktop-validation.yml` are dispatched on the branch.
