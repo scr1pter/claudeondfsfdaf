@@ -17,6 +17,7 @@ import { PlaybookClient } from "@/orchestration/playbooks"
 import { HostedFollow } from "@/hosted/follow"
 import { CloudBrain } from "@/brain/run-bundle"
 import { ReviewOwner } from "@/review/owner"
+import { ReviewFixOwner } from "@/review/fix-owner"
 import { ReviewMemoryOwner } from "@/review/memory-owner"
 import { ConnectOwner } from "@/connect/owner"
 import { TaskNotify } from "@/task/notify"
@@ -307,6 +308,7 @@ const app = LayerNode.group([
   TaskManager.node,
   WorkflowOwner.node,
   ReviewOwner.node,
+  ReviewFixOwner.node,
   ReviewMemoryOwner.node,
   ConnectOwner.node,
   TaskNotify.node,

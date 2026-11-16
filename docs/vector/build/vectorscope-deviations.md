@@ -21591,3 +21591,743 @@ This entry is also the lane's progress record for SF-09.
   - Engine `control-plane/workspace.ts`: `:689`, `:705`.
   - Line numbers in the new and changed files are from the working tree
     after this package.
+
+## 2026-11-16 · VS-12d Owner-only fix API and regenerated SDK (SF-10a)
+
+The engine half of VS-12's desktop step (`vectorscope-plan.md` VS-12 row
+`:322`, "Fix proposals and consent" `:214-236`, "Identity, modes, model and
+sessions" `:186-212`: "the desktop becomes an adapter for … presenting
+proposals; it must not import engine runtime into the renderer. Expose typed
+protocol/server operations and regenerate the client"). It was built on
+`scope-finish` at `1b6df982` (SF-09) as lane package SF-10a, from the SF-10a
+plan as corrected by its critique. Where a critique point was taken in another
+form or rejected, the reason is under "Critique points". This entry is also the
+lane's progress record for SF-10a.
+
+- **Status.** Built and tested in the working tree, its review findings fixed
+  (see "Review findings (round one)"), then committed by the lane's commit
+  gate (2026-11-16) as
+  `feat(review): expose consented fix operations to the owner API`. Before
+  the commit the gate re-ran, one file at a time through the lock:
+  `test/server/httpapi-review-fix.test.ts` (14 pass, 1 skip, 0 fail, 349
+  `expect()` calls), `test/server/httpapi-public-openapi.test.ts` (21 pass,
+  0 fail, 233), `packages/server` `src/auth.test.ts` (18 pass, 0 fail, 280)
+  and core `test/review/model-evidence.test.ts` (30 pass, 0 fail, 393); the
+  HttpApi exerciser `--mode effect --include vectorscope.review` (10 pass, 0
+  fail, the same four review-memory routes missing); `bun typecheck` in
+  `packages/schema`, `packages/server`, `packages/core`, `packages/engine`,
+  `packages/client` and `packages/sdk/js`, the eval tsconfig, `bun run
+  check:generated` in `packages/client` (no diff),
+  `./packages/sdk/js/script/build.ts` with fresh XDG roots (the five
+  generated files byte-identical, md5 checked), Prettier `--check` on the
+  fourteen touched code files, and the full TURBO typecheck (27 of 27
+  tasks). The gate dispatched `typecheck.yml`, `scope-directory-identity.yml`,
+  `review-memory-fence.yml`, `scope-app-validation.yml` and
+  `vector-at-mention.yml` on `scope-finish`. `test.yml` and
+  `review-http-regression.yml` (scope local), which this package's Done line
+  names, were not in the gate's dispatch list, so they are left to the lead
+  (see "CI to dispatch with the commit" below).
+
+- **The lead's 2026-11-16 ruling** (quoted in full in the SF-07 entry) names
+  SF-10a. It was applied as follows:
+  - No isolation, `TaskClaims`, owned-path, worktree or executor-logic change.
+    `git diff --stat` touches none of `task/isolation.ts`, `tool/owned-path.ts`
+    or `worktree/index.ts`. `review/fix.ts` changes only by adding `export` to
+    five existing declarations and by its header comment (below).
+  - The adapter uses only `ReviewFix`'s public `reserve`, `preview`, `apply`,
+    `checks`, `commit`, `push`, `cancel` and `state`. The fix checkout stays the
+    additive `fix.json` kind, detached at the conversation branch's exact head
+    and swept by the registry's rules.
+  - Nothing seeds the user's files into a fix checkout: the patch is applied by
+    the executor to the head's own files, and the tests check the user's dirty
+    and untracked files never appear in it and stay unchanged.
+  - No new spawn path (`v2-spawn-review.md`). The adapter's own Git reads
+    (`symbolic-ref`, `rev-parse`, `config --get`, `config --get-regexp`,
+    `rev-list --count`, `log --format=%ae`) go through the engine Git service
+    (`--no-optional-locks`, `core.fsmonitor=false`, `GIT_OPTIONAL_LOCKS=0`); no
+    `cat-file --batch`. Checks and pushes are the executor's: the spawner's
+    scope release stays the one signaller of a check's process group, and the
+    only ways to stop one are `fix.cancel` (its `stops`) and the HTTP request
+    fiber's interruption (a client disconnect), which reaches the same scope.
+    A disconnect during an execute spends that offer and its consent. No
+    hot-spot file changes.
+
+- **Scope.** Five owner-only experimental operations in the existing review
+  HttpApi group, under `/experimental/session/:sessionID/review/fix`:
+  - `GET …/fix` (`review.fix.list`): this engine's open fixes for the
+    conversation, for reconnection.
+  - `POST …/fix` (`review.fix.prepare`): the client sends a patch for the
+    conversation's checked-out branch; the engine places a fix checkout
+    detached at that branch's exact head and returns the executor's preview.
+    Nothing is applied, committed or pushed and no command runs.
+  - `POST …/fix/:fixID/preview` (`review.fix.preview`): one step (apply,
+    checks, commit or push) is offered. The engine builds the exact operation
+    and returns it with a single-use approval offer.
+  - `POST …/fix/:fixID/execute` (`review.fix.execute`): an execute that echoes
+    the offer approves exactly that step (`policy.approve`) and runs it once.
+  - `POST …/fix/:fixID/cancel` (`review.fix.cancel`): stops a running check or
+    push and removes the fix checkout; a commit on its new branch is kept.
+
+  Consent is bound to the actor (the authenticated owner principal), the head,
+  the patch digest, the exact operation (and a commit's identity) and a
+  five-minute expiry. The regenerated legacy SDK exposes them as
+  `client.review.fix.{list,prepare,preview,execute,cancel}`. The app's buttons
+  are SF-10b's.
+
+- **What landed.**
+  - `packages/schema/src/review-fix.ts` (new, 280 lines;
+    `export * as ReviewFixControl`, browser-safe, effect only):
+    - `LIMIT` `:13`, HTTP decode bounds only (core `FIX_LIMITS` stays the
+      authority and re-checks in bytes).
+    - `FixID` `:32`, `OfferID` `:37` (a UUID), `Source` `:44`
+      (`{ kind: "client" }`, see "Decisions"), `File` `:50`, `Prepare` `:58`
+      (strict: no scope, repository, worktree, branch other than the base
+      name, actor, consent or identity can be sent).
+    - `Change` `:69`, `Preview` `:78` (adds `source`, `findingsVerified: false`,
+      the sorted findings and `notes` to the executor's preview).
+    - `Command` `:99`; the `Request` union `:125` of strict `ApplyRequest`,
+      `ChecksRequest` (commands only), `CommitRequest` (nothing) and
+      `PushRequest` (remote and mode only).
+    - The `Operation` union `:150`, `Identity` `:155`, `Offer` `:164`, `Execute`
+      `:178` (strict echo: offerID, head, patchDigest, operationDigest).
+    - `CheckResult` `:187`; the `Result` union `:243` of `Applied`, `Checked`
+      (results, `aborted`, `leftovers`, `passed`), `Committed` and `Pushed`;
+      `Cleanup` `:248`, `State` `:254`, `Summary` `:265`, `List` `:277`.
+  - `packages/engine/src/review/fix-owner.ts` (new, 737 lines; not pinned,
+    `export * as ReviewFixOwner`):
+    - `LIMIT` `:33` (8 open fixes per project in this process, 5-minute
+      offers) and the `ReviewFixOwner.Error` `:35` with the review group's own
+      codes, so the handler's `mapped` applies unchanged.
+    - `make({ clock? })` holds one `createFixConsentPolicy(clock)`, the open
+      fixes (`Held`: conversation, project, folder, actor, proposal, preview;
+      the commit is read from the fix's branch, not held), at most one pending
+      offer per fix (`Pending`: offerID, actor, operation, identity,
+      operationDigest, head, patchDigest, expiresAt) and the fixes being
+      placed per project (`placing`). `Operation` is derived from the
+      executor's `ChecksOperation`, `commitOperation` and `pushOperation`.
+    - `open` `:110` (a project's held and placing fixes), `gate` `:114`: the
+      GLOBAL setting (`ReviewOwner.enabled`), Linux, and
+      `ReviewFix.RunnerContext` (no CI job or GitHub run), for prepare,
+      preview and execute.
+    - `branch` `:128`, `atHead` `:137`, `current` `:149`, `owned` `:163` and the
+      module-level `mine` `:79` (conversation, project and real folder must
+      match, else `not_found`).
+    - `sweep` `:177` (frees the limit's unreachable slots, below) and
+      `commitOf` `:218` (the destination branch's commit, when its one parent
+      is the head).
+    - `prepare` `:233`, `preview` `:336` (`operationDigest` `:356` is sha256
+      of the JSON of `[operation, identity ?? null]`), `operation` `:383`,
+      `authorship` `:461`, `commitIdentity` `:496`, `setting` `:510`,
+      `configured` `:516`, `execute` `:525`, `cancel` `:627`, `list` `:635`.
+    - `node` `:666` (deps `ReviewOwner`, `Session`, `ReviewFix`, `Git`),
+      `refusal` `:673`, `consentRefused` `:678`, the reason map `REASONS`
+      `:682` and `commitMessage` `:725`.
+  - `packages/engine/src/review/fix.ts` (not pinned): `export` added to
+    `ChecksOperation` `:281`, `checksOperation` `:1565`, `commitOperation`
+    `:1634`, `pushOperation` `:1650` and `person` `:1686`, unchanged otherwise.
+    The stale header line "Nothing is wired here: no route, CLI, app, key or
+    permission reaches this module" now names its two trusted adapters (the CLI
+    step and this API).
+  - `packages/engine/src/review/owner.ts` (pinned): `enabled` `:74`, the
+    existing predicate of `start` (`experimental.vectorscope === true` and no
+    `agent.vectorscope.disable`, global settings only) made a method; `start`
+    uses it with the same refusal; `placement` and `enabled` join the returned
+    object `:178`. No behaviour change.
+  - `packages/engine/src/server/routes/instance/httpapi/groups/review.ts`
+    (pinned): `fixRoot` `:35` and the five endpoints `:106-172`, each with
+    `query`, `ReviewApiError` and OpenAPI annotations that say owner-only and
+    experimental, and that the engine does not verify the findings. The
+    existing endpoints and middlewares are unchanged; the static `fix` segment
+    wins over `:runID`, as `target` already does.
+  - `packages/engine/src/server/routes/instance/httpapi/handlers/review.ts`
+    (pinned): `actor` `:24` (owner, then a principal the authorization
+    middleware set and of kind `owner`, as `memory-authority.ts:62-68`; the
+    actor is `http-owner:<sha256(username)>`) and the five handlers `:71-100`.
+  - `server.ts` `:311`: `ReviewFixOwner.node` after `ReviewOwner.node`.
+  - `groups/experimental.ts` `:144` and `handlers/experimental.ts` `:371`:
+    `vectorscopeLocalFixes`, an optional boolean that is `true` (the routes
+    exist).
+  - `packages/server/src/auth.ts` `:180` (pinned): the local review rule
+    becomes `/^\/experimental\/session\/[^/]+\/review(?:\/|$)/`, as
+    `workspace-routing.ts:482` already treats every route under `/review`.
+  - `packages/core/src/review/model-evidence.ts`: the pin (below); its test's
+    rationale comment names the adapter and the schema as left out.
+  - Tests: `test/server/httpapi-review-fix.test.ts` (new, 15 cases),
+    `test/server/httpapi-public-openapi.test.ts` (+1), `src/auth.test.ts` (+1),
+    `test/server/httpapi-exercise/review-scenarios.ts` (+5 scenarios).
+  - Generated (by `./packages/sdk/js/script/build.ts`, never by hand):
+    `packages/sdk/openapi.json`, `packages/sdk/js/src/gen/{sdk,types}.gen.ts`
+    and `packages/sdk/js/src/v2/gen/{sdk,types}.gen.ts`. All five are additive
+    only (2,336 added lines, 0 removed).
+
+- **Order of each operation.**
+  - prepare: gate; `placement(…, true)`; the checked-out branch (`placement`
+    if none); the branch must name the sent head (`stale`, "… no longer at the
+    commit this fix was made for. Nothing was placed."); `sweep`: every held
+    fix the executor no longer holds is forgotten, and, only when the
+    project is at the limit, this project's fixes whose conversation was
+    deleted (`Session.get` is `NotFoundError`) or archived are cancelled with
+    `fix.cancel` and forgotten (a kept checkout is logged and left to the boot
+    sweep; a commit's branch is kept, as cancel keeps it); then, in one
+    uninterruptible step, the project's 8-fix limit (`conflict`, "At most 8
+    fixes are open in a project at once. Cancel one first.") and a slot;
+    `reserve`, uninterruptible on purpose (below); the proposal (engine-set
+    scope, `destinationBranch` `vector/fix-<8 hex>` as SF-09); `fix.preview`
+    interruptibly; every non-success exit, an interrupt included, cancels the
+    placement; only a success is held.
+  - preview: gate; `owned`; the preparer's actor (`permissions`); the state the
+    step waits for (`conflict`: apply needs `preview`; checks `applied` or
+    `committed`; commit `applied`; push `committed`); the exact operation; the
+    branch must still name the head (`stale`); a new offer replaces any earlier
+    one for the fix.
+  - execute: gate and `owned` (a refusal here leaves the offer unspent); then,
+    with no yield between them, the offer is looked up, its offerID compared
+    and the offer deleted, so every execute that gets it spends it and of two
+    concurrent executes exactly one gets it; the actor (`permissions`); the
+    expiry (`stale`); the echo of head, patchDigest and operationDigest
+    (`stale`); `policy.approve` with the remaining lifetime, through
+    `Effect.tryPromise` (a rejection is `unavailable`, never a 500); the step, with
+    `Effect.ensuring(Effect.sync(() => policy.revoke(consent)))` (after a
+    success revoke answers "used", ignored on purpose); the result mapped to
+    `ReviewFixControl.Result`.
+  - cancel: `owned` without the gate (as `stop`); the pending offer is dropped;
+    `fix.cancel`; the fix is forgotten when its checkout is removed.
+  - list: `placement`, then this conversation's fixes with the executor's
+    state; a fix the executor forgot (a failed step removed its checkout) is
+    dropped; a `committed` or `pushed` fix's `commit` is read from its branch
+    (`commitOf`).
+  - push preview: the commit to push is `commitOf` (the destination branch's
+    commit, when its one parent is the head), not a value the commit request
+    recorded in memory, so a commit step whose request was interrupted after
+    the executor made the branch still has a commit to push; with none,
+    `conflict`. The executor checks again that the branch names its own
+    commit before it pushes.
+  - Refusals map by reason (`REASONS` `:682`): unavailable, sandbox,
+    dependencies, context, clock → `unavailable`; proposal, operation, path,
+    symlink, binary, limit, patch, scope, preimage, postimage, remote →
+    `invalid`; head, digest, expiry → `stale`; actor, capacity, unknown,
+    revoked, used, mismatch → `permissions`; state, worktree, destination, push
+    → `conflict`. The executor's message passes through.
+
+- **Decisions.**
+  - _Proposal source: the owner's client, flagged unverified (critique major 3;
+    no lead ruling was available inside the package, so it was built so that
+    either answer stays possible)._ A retained HTTP review run reviews only
+    `working-tree` or `staged` text (schema `review-run.ts:10-13`), which is
+    absent from the head commit the fix checkout is detached at, and the ruling
+    forbids seeding uncommitted files, so no engine-held review can feed a fix
+    today. The client therefore sends the patch, its files with digests and
+    the finding references, and the engine sets everything that carries
+    authority (repository and checkout from the placement, the source branch
+    read from the conversation's checkout, the destination, the actor, the
+    commit message and identity, the check bounds, the commit to push). The
+    request carries a required `source: { kind: "client" }`; the preview
+    echoes it with `findingsVerified: false` and a note ("The engine did not
+    verify the findings this fix names …"); the route description says so; the
+    commit message never calls the findings verified ("Finding references, as
+    the owner's client named them"). This departs from SF-09's source rule
+    (CLI fixes only from this run's verified, committable findings): over HTTP
+    the engine cannot see the desktop runner's outcome. The required `source`
+    discriminant is what keeps the other answer possible: a later package can
+    add a review-bound kind and the lead can then refuse `client` without
+    changing the request's shape. Hand-off to the lead below.
+  - _Actor._ `http-owner:<sha256(username)>`, the review memory precedent
+    (`memory-authority.ts:71`). When no server password is set, the
+    authorization middleware still sets the owner principal
+    (`server/src/middleware/authorization.ts:84`), so the actor is the default
+    owner username's hash. A preview or execute by another actor than the one
+    that prepared the fix is refused.
+  - _Approve at execute, single-use offers._ `policy.approve` runs only when an
+    execute echoes the offer that was shown, so the approval is for exactly the
+    displayed operation; the executor then spends it with `consume`. Offers live
+    5 minutes (`LIMIT.approvalMs`, below `FIX_LIMITS.consentMs`); one offer per
+    fix; 8 fixes per project in this process. A wrong offerID does not spend the standing offer
+    (so a guessed ID cannot cancel it); any later refusal does.
+  - _Commit message and identity (critique major 1, taken)._ The message holds
+    a count, the reviewed commit, the proposal digest and, when every
+    reference is a plain ID within the byte limit, the finding references. The
+    identity is the owner's Git `user.name`/`user.email` in the conversation's
+    repository with SF-09's per-field Vector fallback, checked by the executor's
+    own `ReviewFix.person`. It is read at preview, shown in the offer, frozen
+    into the pending offer and its `operationDigest`, and the execute passes
+    only that identity.
+  - _Check output_ is returned as the executor gives it (at most 80 KiB per
+    command) and described in the schema as untrusted data from the project's
+    own code. The checks offer's notes say a check can read the home folder and
+    that output is shown, never kept, and count other authors' commits between
+    the base and the head (`rev-list --count` for the total, `log -n 1000
+    --format=%ae` for authors, "At least N" past 1,000). The base is the
+    client's, so it is counted only when `git merge-base --is-ancestor` says it
+    is an earlier commit of the head; otherwise (the head itself included),
+    or when the range cannot be read, a note says the authors were not
+    counted and that a check runs all the code at the head. No note names the
+    commit identity or the push remote, which the offer shows in `identity`
+    and `operation` (a note is at most 512 characters).
+  - _Push remotes (critique minor, taken in its first form)._ An https remote
+    must be a `remote.<name>.url` or `pushurl` this repository already has; a
+    `file:///` remote is any absolute path the executor accepts. Notes: "its
+    hooks do not run, but its own Git configuration is read" for a local
+    repository; "Git pushes with your own credentials for this address. Vector
+    makes no GitHub call" for https; "No pull request is opened by this step"
+    for `draft-pr`.
+  - _Capability (critique minor, taken)._ `vectorscopeLocalFixes: true` means
+    the routes exist, as `vectorscopeRuns` does. The setting, the platform and
+    a CI job are refused per call (`disabled`, `unavailable`). The app parses
+    it in SF-10b.
+  - _auth.ts (critique minor, taken)._ Every route under `/review` is
+    owner-only at the gate, as at the routing middleware, so a future route
+    there cannot be open to guests. Lookalikes (`/reviewx`, `/reviews/…`,
+    `/review-fix`) are not claimed.
+  - _Client regeneration gives no diff._ `ClientApi` is the protocol's
+    `makeDefaultApi` (`packages/client/src/contract.ts:14-17`) and the review
+    group is an engine instance API (`api.ts:83`), so `bun run generate` in
+    `packages/client` changes nothing and `check:generated` passes. The legacy
+    SDK, which the app's `localReviewTransport` uses
+    (`packages/app/src/features/vectorscope/local-review.ts:2`), is what
+    changes, so `./packages/sdk/js/script/build.ts` was run (precedent
+    `d3364469`).
+  - _No regeneration drift at HEAD._ Before any edit, `build.ts` at `1b6df982`
+    with fresh XDG roots left `git status` clean (`bun dev generate` was
+    byte-identical to `packages/sdk/openapi.json`), so the regenerated files
+    carry only this package's routes and the capability. The lead's single
+    final regeneration (v2-handoff item 6) stays the lead's.
+  - _Scratch._ `/tmp/vector-v2/scope/sf10a/` (the lane's `scope/` folder, as
+    SF-06 to SF-09 used).
+
+- **Default and parity proof.**
+  - Every new route is refused (`disabled`) unless the owner's GLOBAL
+    `experimental.vectorscope` is on and `agent.vectorscope.disable` is not; a
+    repository's `vector.json` cannot turn it on (test case 5). Linux only.
+    Never in a CI job or a GitHub run (`ReviewFix.RunnerContext`).
+  - Owner authority is enforced three times: the auth gate (`auth.ts:180`),
+    workspace routing (`workspace-routing.ts:482-510`, 403 for non-owners,
+    `not_found` with no bootstrap for a missing conversation) and the handler
+    (`RequestOwner.owner` and the principal check).
+  - The existing review endpoints behave as before:
+    `test/server/httpapi-review.test.ts` is unedited, and its result is
+    identical with HEAD's route, handler, owner, server, experimental and auth
+    files swapped back in (see "Tests run").
+  - No `RunInput`, review permission, key, flag default or default change.
+    `ReviewFix` is built at server start but idle until a fix is prepared. No
+    model call (every case asserts zero LLM calls).
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `116e459324fd182d` -> `b49b61aed2d6b707`
+  (`owner.ts`, `groups/review.ts`, `handlers/review.ts` and `auth.ts` are
+  pinned). `REVIEW_PIPELINE_REVISION` stays 4: the routes run after a review
+  and change nothing it finds or posts. `REVIEW_PIPELINE_FILES` is unchanged;
+  `fix-owner.ts` and `review-fix.ts` are left out for the reason the test's
+  rationale comment now gives. Recompute after any merge of main or of the
+  connect-finish lane.
+- **Replay variant.** None: there is no key, so `script/vectorscope-eval/replay.ts`
+  VARIANTS is untouched.
+- **Desktop half: a documented difference.** The app's apply, checks, commit
+  and push actions, and its parsing of `vectorscopeLocalFixes`, are SF-10b's.
+
+- **Tests run** (all through `/home/user/.tools/vector-serial`, one file at a
+  time, `--timeout 30000`, from the package directory, on this Linux host):
+  - `packages/engine/test/server/httpapi-review-fix.test.ts` (new): 12 pass,
+    1 skip (the off-Linux case), 0 fail, 305 `expect()` calls at the build;
+    after review round one, 14 pass, 1 skip, 0 fail, 349 `expect()` calls, and
+    the same with `CI=true` in the environment. The cases (14 and 15, and the
+    round-one parts of 8 and 9, are new):
+    1. The wire bounds equal `FIX_LIMITS` on the shared keys;
+       `LIMIT.approvalMs < FIX_LIMITS.consentMs`.
+    2. No credentials, and a wrong password: 401 on all five routes; nothing
+       placed; `vectorscopeLocalFixes: true`.
+    3. Guests and forwarded guests: 403 on all five routes, on a conversation
+       the guest may use.
+    4. A guest's and a forwarded guest's execute of the owner's real offer are
+       403 and do not spend it; the owner's execute then applies.
+    5. Experimental off with the repository's own flag on, and
+       `agent.vectorscope.disable`: prepare `disabled`, nothing placed. After a
+       prepare and an offer, turning it off refuses preview and execute
+       (`disabled`); turned on again, that same offer executes (the refusal
+       did not spend it); turned off, list still shows the fix as `applied`
+       and cancel removes it.
+    6. Authority cannot be sent: prepare with any of scope, repository,
+       worktree, sourceBranch, destinationBranch, actor, consent, policy,
+       identity or version, or `source: { kind: "review" }`, is a 400 decode
+       error and places nothing; a preimage that is not the head's is `invalid`
+       after the placement and leaves no checkout; the preview says the
+       findings are unverified; preview with a commit message, a commit
+       identity, a push commit, a checks network or timeout, or an apply actor
+       is a 400; execute with an actor, an operation or a consent is a 400; none
+       of those spent the offer.
+    7. Stale heads: prepare at the base is `stale` with the prepare message and
+       places nothing; after the user commits on the branch, the offered apply
+       is `stale` ("The reviewed branch moved since the review. Nothing was
+       changed."), the fix checkout still holds the head's file, no
+       `refs/heads/vector/*` exists and the user's commit is kept; preview again
+       is `stale`. On a fresh fix, each wrong echo (head, patchDigest,
+       operationDigest) is `stale` and spends its offer: the right echo after it
+       is `permissions`.
+    8. Separate single-use steps: commit and push before apply are `conflict`;
+       the apply offer says "Commands: none"; apply leaves the user's
+       `src/a.ts`, dirty `src/b.ts`, untracked file, status and index as they
+       were, writes the postimage in the fix checkout and creates no branch;
+       the spent offer is `permissions`; two concurrent executes of one offer
+       give exactly one 200 and one `permissions`; a second commit offer makes
+       the first `permissions`; the commit offer shows the message (head,
+       digest, `- finding-1`, never "verified") and the identity
+       `Test <test@vector.test>`; after the repository's `user.email` is
+       changed, the commit is still authored and committed by that identity,
+       on `vector/fix-<8 hex>` with the head as parent, and the user's branch,
+       status and the bare remote are unchanged; an https remote the
+       repository does not have is `invalid` (no connection is made); the
+       `file:///` push offer says its hooks do not run, and the bare remote
+       then holds exactly that branch at that commit; cancel removes the fix
+       checkout, keeps the branch, and a later preview is `not_found`. Round
+       one: after the commit, list shows its `commit` (read from the branch);
+       a push offer for a `file:///` remote of over 600 characters is a 200
+       whose operation names it and whose notes do not.
+    9. Checks: before apply `conflict`; `sh -c true`, `bun test --bail` and
+       cwd `../x` are `invalid`; `bun test` is offered as exactly
+       `{ network: "off", timeoutMs: FIX_LIMITS.commandMs, outputBytes:
+       FIX_LIMITS.outputBytes }` with notes for the network, the home folder and
+       "1 of the 1 commits between the base and the head are by other authors";
+       its execute reaches the executor, which refuses before running anything
+       ("dependencies unavailable": the fixture declares a dependency and a fix
+       checkout has none), the offer is spent and the fix stays `applied`.
+       Round one: a fix whose base is its head gets the "not an earlier commit
+       of the head, so Vector did not count" note and no authors count.
+    10. Service level, through `ReviewFixOwner.make({ clock })` inside
+        `instances.provide`: with `ReviewFix.RunnerContext` returning a reason,
+        prepare is `unavailable` and places nothing; preview and execute by
+        another actor are `permissions`; an offer executed once its lifetime
+        has passed is `stale` ("expired"), the fix stays `preview` and its file
+        unchanged.
+    11. A missing conversation: `not_found` on all five routes from another
+        directory, and no instance is bootstrapped.
+    12. Another main conversation in the same folder: its list is empty, and it
+        cannot preview, execute or cancel the first one's fix (`not_found`);
+        the offer is then still the owner's to execute.
+    13. Off Linux (skipped here; the Windows and macOS legs of `test.yml` run
+        it): prepare is `unavailable` ("Linux only") and nothing is placed.
+    14. (Round one.) The commit message: references `finding-2` and
+        `see/finding#1` (not a plain ID) give exactly the count, reviewed
+        commit and proposal lines, no list and no client text; 128 plain IDs
+        of 64 characters (over `messageBytes`) give the same with 128. The
+        commit offer with a 250-character `user.name` and a 252-character
+        `user.email` (near `ReviewFix.person`'s 256 bytes a field; together
+        they did not fit one 512-character note) is a 200 that shows them in `identity`
+        and in no note.
+    15. (Round one, service level, `ReviewFixOwner.make()` inside
+        `instances.provide` with a developer `RunnerContext`.) Two other
+        conversations and the conversation fill the project's 8 fixes; the
+        ninth prepare is `conflict` with the exact message and places
+        nothing. A fix cancelled under the adapter (`fix.cancel`, so the
+        executor forgets it) frees its slot. At the limit, a deleted
+        conversation's fix and then an archived one's are cancelled (the
+        executor no longer knows them and their checkouts are gone) and the
+        prepare succeeds; with every fix reachable the next is `conflict` and
+        list shows 8.
+  - `packages/engine/test/server/httpapi-public-openapi.test.ts`: 21 pass, 0
+    fail, 233 `expect()` calls (the new case: the five fix operations, each
+    with 401 and 403 in the instance spec and 403 in the public one, and the
+    optional `vectorscopeLocalFixes`).
+  - `packages/server/src/auth.test.ts`: 18 pass, 0 fail, 280 `expect()` calls
+    (17 tests at HEAD; the new case).
+  - Regressions, unedited files:
+    - `test/server/httpapi-review.test.ts`: 5 pass, 1 skip, 4 fail, 120
+      `expect()` calls. With HEAD's seven route, handler, owner, server,
+      experimental and auth files swapped in (and restored, md5 checked): 5
+      pass, 1 skip, 4 fail, 123 calls. The same four cases fail on the same
+      assertions both times (a review run `failed`/`not-reviewed` instead of
+      `completed`/`incomplete`): this host has no unprivileged Git verifier
+      (the SF-07 and SF-09 entries describe it). The three-call difference is
+      the 30-second polling case, which polls a varying number of times before
+      timing out. CI's runners have the verifier.
+    - `test/server/httpapi-experimental.test.ts`: 9 pass, 0 fail, 42.
+    - `test/server/server-package-auth.test.ts`: 5 pass, 0 fail, 15.
+    - `test/review/fix.test.ts`: 30 pass, 3 skip, 0 fail, 553 (as SF-09).
+    - `test/cli/review-fix.test.ts`: 17 pass, 1 skip, 0 fail, 169 (as SF-09).
+    - `packages/sdk/js` `test/v1-schema.test.ts` (1 pass, 2) and
+      `test/wire-compat.test.ts` (10 pass, 24).
+  - `packages/core/test/review/model-evidence.test.ts`: it failed first and
+    printed the digest; after the pin, 30 pass, 0 fail, 393 `expect()` calls.
+  - The HttpApi exerciser (`bun run script/httpapi-exercise.ts`): `--mode
+    coverage` lists the five new routes as PASS; `--mode auth --include
+    vectorscope.review` and `--mode effect --include vectorscope.review` give 10
+    pass, 0 fail each. All three report the four `/experimental/review-memory`
+    routes as missing scenarios. That is not this package's: `scope-finish`
+    branched before release-finish's `0f6fce89` ("exercise the owner
+    review-memory routes in the HttpApi gates"), so `test.yml`'s
+    `bun run test:httpapi` step (`--fail-on-missing`) fails on `scope-finish`
+    at `1b6df982` too, and is fixed by the lead's merge of main.
+  - `packages/client`: `bun run check:generated` passes with no diff.
+  - `./packages/sdk/js/script/build.ts` with fresh XDG roots: before any edit,
+    no change; after the package, only the five generated files above.
+  - `bun typecheck` passes in `packages/schema`, `packages/server`,
+    `packages/core`, `packages/engine`, `packages/client` and `packages/sdk/js`;
+    so does `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, and the full TURBO typecheck
+    (`TURBO_CACHE_DIR=/home/user/wt/sf/.turbo/cache`, `--concurrency=2`): 27 of
+    27 tasks.
+  - Prettier `--check` passes on the touched code files except
+    `groups/experimental.ts` and `handlers/experimental.ts`, which were not
+    Prettier-clean at HEAD either; only their two added lines changed.
+  - Mutations (`/tmp/vector-v2/scope/sf10a/mutate.py`: each edits one file, runs
+    the named case, restores the file and checks its md5). Each failed its
+    case:
+    - M1: `auth.ts` claims only the old review routes (fails the new auth
+      case).
+    - M2: execute does not delete the offer (case 8).
+    - M3: the head echo is not compared (case 7).
+    - M4: the actor is not compared at execute (case 10).
+    - M5: preview does not check the state (case 8).
+    - M6: prepare does not check the head (case 7, by its distinct message:
+      the executor's own refusal reads "moved since the review").
+    - M7: a fix is not bound to its conversation (case 12).
+    - M8: no CI or GitHub run gate (case 10).
+    - M9: the commit identity is read again at execute (case 8).
+    - M10: a prepare refused after its placement keeps the checkout (case 6).
+
+    A harness check: with `CI=true` and the test's
+    `ReviewFix.RunnerContext` override removed, case 4 fails with the gate's
+    "never places, commits or pushes a fix in a CI job" refusal, so the
+    override is what lets the cases run on CI.
+
+    Masked, not covered: the handler's own owner and principal check
+    (workspace routing and the auth gate return 403 first), and the adapter's
+    own expiry check (core `approve` refuses a lifetime of 0 or less as
+    `expiry`, which maps to the same `stale`).
+
+- **CI to dispatch with the commit** (on `scope-finish`):
+  - `typecheck.yml`.
+  - `test.yml`: the engine shards run the new file, the Windows and macOS legs
+    its off-Linux case, and the Linux leg `check:generated` and
+    `test:httpapi`. Expect `test:httpapi` to fail on the review-memory
+    scenarios until main is merged (above); the five fix scenarios pass.
+  - `review-http-regression.yml` with `scope: local` (the review HttpApi group
+    and handler changed). It runs only `httpapi-review.test.ts`.
+  - `scope-directory-identity.yml` (engine `src/review/**`; it also runs
+    `packages/server` `src/auth.test.ts`).
+  - `vector-at-mention.yml` (core `review/model-evidence.ts`).
+  - Not needed: `review-memory-fence.yml` (no `run.ts`, `model.ts` or
+    `session/llm.ts`) and `scope-app-validation.yml` (no app change).
+
+- **Critique points** (the plan critique, before the build).
+  - _Commit identity not bound to the approval (major): taken_ (case 8, M9).
+  - _No refusal in CI or a GitHub run (major): taken as SF-09 parity_, for
+    prepare, preview and execute, before anything is reserved or an offer is
+    taken (case 10, M8). The HTTP test provides `ReviewFix.RunnerContext` as
+    `() => undefined` through the served layer, as `fix.test.ts:1277` does for
+    an effect.
+  - _Unbound proposals (major): taken in its first branch, pending the lead's
+    ruling_ (see "Decisions"): the required `source` discriminant, the
+    `findingsVerified: false` flag and note, the route description, a commit
+    message that never says verified, and this departure recorded.
+  - _auth.ts fails open (minor): taken_ (the `(?:\/|$)` rule, the new case,
+    M1).
+  - _Entry placement (minor): taken_; this entry is appended after the SF-09
+    entry's citations.
+  - _Execute ordering (minor): taken_: the offer's lookup, comparison and
+    deletion run with no yield between them; a gate or placement refusal leaves
+    it unspent (case 5).
+  - _Prepare race and leaks (minor): taken_: the limit and the slot are one
+    uninterruptible step, and `Effect.onExit` cancels the placement on every
+    non-success exit, interruption included (M10 covers a refusal; no test
+    drives a client disconnect).
+  - _`revoke` is synchronous (minor): taken_ (`Effect.sync`, its "used" result
+    ignored on purpose).
+  - _Principal kind (minor): taken_, with the principal-key check as well.
+  - _`context` mapped to invalid (minor): taken_; it maps to `unavailable`,
+    with sandbox and dependencies (and `clock`, which is the computer's, not
+    the request's).
+  - _No checks execute through HTTP (minor): taken in this form_: case 9
+    executes a checks offer, reaching `fix.checks`, which refuses before
+    spending the consent (dependencies); the offer is spent and the fix stays
+    applied. The `Checked` result's encoding is not exercised through HTTP: a
+    run needs the sandbox, which `fix.test.ts` covers only under
+    `VECTOR_FIX_SANDBOX_CI`. `Checked` is mapped field by field to the schema,
+    and the type checker checks the mapping.
+  - _Capability semantics (minor): taken_ (`true`; the public OpenAPI case
+    asserts the optional boolean).
+  - _Authors capped at 1,000 (minor): taken_ ("At least N").
+  - _Bounds test (minor): taken_ (shared keys only, plus the approval and fix
+    limits).
+  - _Generated SDK conflicts (minor): taken_ (hand-off below; they are kept for
+    their own `chore(sdk)` commit).
+  - _Free-text push remote (minor): taken in its first form_ (configured https
+    remotes only).
+
+- **Not claimed.**
+  - No paid run, model call or quality claim.
+  - No proof that a fix's findings exist or were verified: the engine cannot
+    see the desktop runner's outcome, and findings are references only
+    (`fix-proposal.ts:49`).
+  - No proof that a person approved a step over HTTP; owner authority is the
+    credential. Core's `createFixConsentPolicy` supplies no proof of human
+    approval (`fix-proposal.ts:124-126`); the CLI step gets it by requiring an
+    interactive terminal (`review.fix.ts` `fixRefusal`). This API accepts any
+    caller with owner authority, which, when the server runs without a
+    password, is any local process, so prepare, preview and execute (checks
+    and push included) can be scripted end to end with no person in the loop.
+    SF-10b must show each offer and require a user gesture before execute.
+  - No durable consent: a restart forgets every open fix and offer, and the
+    boot sweep removes their checkouts.
+  - No check run, `Checked` result over HTTP, or https push in any test.
+  - No bound on how long an execute's HTTP request takes for long checks (up to
+    16 commands of 120 s each in one request); a client that gives up
+    interrupts the request, which stops the checks and spends the offer.
+  - No cross-process protection: SF-07's hazard stands, and the fix checkout
+    appears in `Worktree.list` (`worktree/index.ts:414`), now reachable from the
+    app; a removal there fails closed.
+  - No default, key, flag-default or permission change. Linux only.
+
+- **Hand-offs.**
+  - The lead:
+    - rule on proposals from the client (`source: "client"`) over HTTP: keep
+      them, flagged as now, or bind fixes to an engine-held review of the
+      branch (a new `source` kind) and refuse `client`. This is a policy
+      choice that departs from SF-09's CLI rule, so the scope-finish PR
+      description must name it as a lead decision rather than merge it
+      silently. `findingsVerified` stays `Schema.Literal(false)` until a
+      review-bound `source` kind exists;
+    - human approval over HTTP: owner authority is the only credential, and
+      without a server password any local process has it (see "Not
+      claimed"); whether the engine should require more than the desktop's
+      gesture (SF-10b) is the lead's;
+    - SF-07's `.fix` `TaskClaims` rule and hiding fix checkouts from
+      `Worktree.list`, both reachable from the app now;
+    - the commit identity rule, which the CLI step and this API each apply;
+      the CLI's own `person` copy could now use the exported `ReviewFix.person`;
+    - merge conflicts in the five generated SDK files are resolved by running
+      `./packages/sdk/js/script/build.ts` on the merged tree, never by hand
+      (other lanes and the item-6 regeneration produce the same files);
+    - `test.yml`'s `test:httpapi` failure on the review-memory scenarios is
+      fixed by merging main into `scope-finish`.
+  - SF-10b: use `client.review.fix.*` and gate on `vectorscopeLocalFixes`;
+    show each offer and require a user gesture before its execute (the API
+    cannot tell a person from a script); render the preview's notes, each
+    offer's operation (the push remote is there, not in a note) and notes and
+    the commit identity exactly; escape check output (untrusted); show
+    `Checked.leftovers` as "a check left files in the fix checkout"; use list
+    to reconnect; build proposals only from the desktop runner's verified,
+    committable findings (moving SF-09's `fixCandidates`, `planEdits` and
+    `gitPatch` into core needs their `Buffer` and `isUtf8` calls made
+    browser-safe).
+  - SF-42: `vectorscope-remaining.md:47`, `vectorscope-continuation.md`, and the
+    correcting entry for the stale `vectorscope-deviations.md:16000` sentence.
+    SF-10a edits neither `remaining.md` nor `continuation.md`.
+
+- **Review findings (round one)** (the SF-10a review of the working tree, in
+  the review's order; all ten were non-blocking, and every one was taken in
+  full or in part; the one point left is recorded with its reason).
+  1. _The 8-fix capacity counted unreachable fixes (`fix-owner.ts:184`):
+     taken, with a per-project limit._ `sweep` (before the uninterruptible
+     count) forgets every held fix the executor no longer holds and, at the
+     limit, cancels this project's fixes whose conversation was deleted or
+     archived. The finding's eviction alone would not have been enough: a
+     cancel works only from the fix's own project's context (`removeFix`
+     resolves the placement under the current project and, finding no record
+     there, reports `removed: true` without touching the real one), so a
+     prepare could never free another project's stale slots. The limit is
+     therefore counted per project (`open`, `placing` by project): another
+     project's unreachable fixes no longer block this one, and this
+     project's are evicted at its own next prepare. A conversation in the
+     middle of a revert is not evicted (a revert is finished, not
+     abandoned). Case 15 covers the
+     `conflict` refusal, the forgotten fix and both evictions (MA-MC).
+  2. _The pushed commit was recorded only after `fix.commit` returned
+     (`:500`): taken, from durable state._ `Held.commit` and the tap are
+     gone. Push preview and list read the commit from the fix's destination
+     branch (`commitOf`: `rev-list --parents -n 1`, counted only when its one
+     parent is the head); the executor still checks the branch names its own
+     commit before a push. The finding's other option, `Effect.onExit`, was
+     not taken: an interrupt that arrives while the executor's uninterruptible
+     write runs is delivered when it returns, so the exit is an interrupt even
+     though the commit was made. Case 8's push and its new list assertion
+     run through `commitOf`; no test interrupts a commit request.
+  3. _No test of the limit or the commit-message fallback (test `:585`):
+     taken_ (cases 14 and 15). A finding reference with a space or newline
+     cannot reach the fallback: core's `prepareFixProposal` refuses any
+     reference with a control character or space (`principal`,
+     `fix-proposal.ts:488-490`), so case 14 uses `see/finding#1`, which core
+     accepts and `FINDING_ID` does not, and the byte-limit path with 128
+     plain IDs.
+  4. _`fix.reserve` ran uninterruptibly (`:187`): taken as documentation._
+     The finding's premise does not hold: `reserve` does no `git worktree
+     add`. It makes local reads (`rev-parse`, `config`, `ls-tree -r -l` of
+     the head, `statfs`) and writes the fix's `preparing` record
+     (`isolation.ts` `reserveFix`); the checkout is made by `startFix` inside
+     `fix.preview`, which already runs restored and is removed on every exit
+     but a success. Restoring `reserve` would let an interrupt land after the
+     record is written but before the adapter learns its fixID, leaving a
+     record only the boot sweep could remove, so it stays uninterruptible and
+     a comment at the call says why. The engine Git service has no timeout,
+     so the comment does not claim one.
+  5. _Style (`:283`, `:270`): taken in part._ `pending` uses `satisfies
+     Pending`; `Operation` is derived from the executor's
+     `ReviewFix.ChecksOperation` and the success types of
+     `ReviewFix.commitOperation` and `ReviewFix.pushOperation`, so the two
+     cannot drift. Kept: `Held` and `Pending` (they type the adapter's own two
+     maps, which no executor or schema type describes), and `const held =
+     found.held` in preview, which is not single-use: it is read seven times,
+     and with destructuring ruled out by AGENTS.md the alternative is seven
+     `found.held` reads.
+  6. _The client-sourced proposal is a lead decision (entry `:21790`):
+     taken._ The lead hand-off now says the PR description must name it, and
+     `findingsVerified` stays `Schema.Literal(false)` until a review-bound
+     `source` kind exists.
+  7. _Offer notes could exceed 512 characters (`:367`, `:347`): taken._ No
+     note names the push remote (up to 2,048 characters) or the commit
+     identity (up to 256 bytes each); the offer already shows them in
+     `operation.remote` and `identity`. The longest note left is the
+     checks note on uncounted authors (178 characters). Cases 8 and 14 send
+     a 600-character remote and a 250- and 252-character identity, each a
+     200 (with the old adapter, both were the 500 the reviewer saw).
+  8. _The 'other authors' warning trusted the client's base (`:378`):
+     taken._ `authorship` counts only when the base is an earlier commit of
+     the head (`merge-base --is-ancestor`, and the base is not the head);
+     otherwise, or when `rev-list` or `log` cannot read the range, a note says
+     the authors were not counted and that a check runs all the code at the
+     head, whoever wrote it. Case 9 covers base == head (MD). An unknown base
+     cannot reach the checks offer: the executor's preview already refuses a
+     base that is not a commit of the repository (`fix.ts` `checkHead`).
+  9. _No 'Not claimed' line on human approval (entry `:21995`): taken_ (Not
+     claimed, and the lead and SF-10b hand-offs).
+  10. _`Effect.promise(policy.approve)` turned a rejection into a 500
+      (`:456`): taken._ It is `Effect.tryPromise`, and a rejection is
+      `unavailable` ("The approval could not be checked. Nothing was changed;
+      preview the step again."). No test drives it: `approve` returns typed
+      refusals and nothing in the adapter can make it reject without a mock.
+  - Tests and checks after round one (`/home/user/.tools/vector-serial`, one
+    file at a time, `--timeout 30000`, from the package directory): see "Tests
+    run" for the fix file. With the build's adapter swapped back in (and
+    restored, md5 checked) the new file has 10 pass, 1 skip, 4 fail: cases 8
+    and 14 on the note's 512-character encode (a 500), case 9 on the missing
+    note and case 15 on the per-process message. Mutations
+    (`/tmp/vector-v2/scope/sf10a-r1/mutate.py`, each restored and md5
+    checked), each failing its case: MA, `sweep` does not forget fixes the
+    executor dropped (case 15); MB, a deleted conversation is not evicted
+    (case 15); MC, an archived one is not evicted (case 15); MD, base == head
+    is counted as a range (case 9). Each ran its one case with `-t`: 0 pass,
+    1 fail.
+  - Re-run after round one: `bun typecheck` in `packages/engine` and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` pass;
+    `packages/core/test/review/model-evidence.test.ts` 30 pass, 0 fail, 393
+    `expect()` calls (the pin is unchanged); `bun run
+    script/httpapi-exercise.ts --mode effect --include vectorscope.review`
+    10 pass, 0 fail (the same four review-memory routes missing, as above);
+    Prettier `--check` passes on `fix-owner.ts` and the test. The full TURBO
+    typecheck is left to the lane's commit gate, before the push.
+  - Not changed by round one: the pin (`fix-owner.ts` and the test are not
+    pinned), the schema, the routes and the generated SDK (no wire shape
+    changed; only refusal messages and notes), so nothing was regenerated.
+
+- **Citations at `1b6df982`.**
+  - Engine `review/fix.ts`: `RunnerContext` `:194`, `reserve` `:606`, `preview`
+    `:622`, `apply` `:655`, `checks` `:1004`, `commit` `:1139`, `push` `:1309`,
+    `cancel` `:1493`, `state` `:1512`.
+  - Core `review/fix-proposal.ts`: `FIX_LIMITS` `:8`, `findings` `:49`,
+    `createFixConsentPolicy` `:128`, `revoke` `:172`.
+  - Engine `review/memory-authority.ts`: `:62-71`.
+  - Engine `server/routes/instance/httpapi/middleware/workspace-routing.ts`:
+    `:482-510`.
+  - `packages/server/src/request-owner.ts`: `owner` `:46`;
+    `packages/server/src/middleware/authorization.ts`: `:84`.
+  - Engine `server/routes/instance/httpapi/api.ts`: `:83`;
+    `packages/client/src/contract.ts`: `:14-17`.
+  - Line numbers in the new and changed files are from the working tree after
+    this package.

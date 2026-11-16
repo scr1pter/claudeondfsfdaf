@@ -32,7 +32,9 @@ import { assertWritable } from "@/tool/owned-path"
 import { Sandbox } from "@/tool/shell/sandbox"
 
 // VS-12 (SF-07, SF-08): the consented local fix executor, proposal -> preview -> apply -> checks, commit -> push.
-// Nothing is wired here: no route, CLI, app, key or permission reaches this module, and it calls no model.
+// Its trusted adapters are the CLI's apply step (cli/cmd/review.fix.ts, SF-09) and the owner fix API
+// (review/fix-owner.ts, SF-10a); each calls `policy.approve` only after showing the exact step. No key or permission
+// reaches this module, and it calls no model.
 //
 // Consent is the core contract's (review/fix-proposal.ts). A trusted adapter shows the Preview (and, for each later
 // step, the exact operation), authenticates the actor and calls `policy.approve`; each step spends its own handle with
@@ -276,7 +278,7 @@ type Entry = {
 }
 type Held = { path: string; bytes?: Uint8Array }
 type Command = { argv: readonly string[]; cwd: string }
-type ChecksOperation = {
+export type ChecksOperation = {
   kind: "checks"
   commands: readonly Command[]
   network: "off"
@@ -1560,7 +1562,7 @@ const PREFIXES = CHECK_COMMANDS.map((command) => command.split(" "))
  * flag, so VS-30's coverage commands are refused while its runtime key stays unapplied) in the checkout's root or a
  * folder under it, the network off, and time and output within FIX_LIMITS.
  */
-const checksOperation = (input: unknown) =>
+export const checksOperation = (input: unknown) =>
   operationCopy(input).pipe(
     Effect.flatMap((copy) => {
       const refused = Effect.fail(
@@ -1629,7 +1631,7 @@ const operationDigest = (operation: ChecksOperation) =>
     ),
   )}`
 
-const commitOperation = (input: unknown) =>
+export const commitOperation = (input: unknown) =>
   operationCopy(input).pipe(
     Effect.flatMap((copy) =>
       exact(copy, ["kind", "message"]) &&
@@ -1645,7 +1647,7 @@ const commitOperation = (input: unknown) =>
   )
 
 /** A push of exactly the fix's commit, to an https remote or a repository on this computer named by absolute path. */
-const pushOperation = (input: unknown, sha: string) =>
+export const pushOperation = (input: unknown, sha: string) =>
   operationCopy(input).pipe(
     Effect.flatMap((copy) => {
       if (
@@ -1681,7 +1683,7 @@ function exact(input: unknown, keys: readonly string[]): input is Record<string,
 }
 
 /** A plain name and email address, as Git writes them into a commit: no angle bracket, line break or NUL. */
-function person(input: unknown): input is Identity {
+export function person(input: unknown): input is Identity {
   const plain = (value: unknown): value is string =>
     typeof value === "string" &&
     value.length > 0 &&
