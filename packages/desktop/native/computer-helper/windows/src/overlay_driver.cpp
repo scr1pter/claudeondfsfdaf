@@ -528,6 +528,15 @@ std::optional<OverlayDriverStage> overlay_driver_guardian_stage(InputGuardianPha
     case InputGuardianPhase::reply_negative_own_up_only: return OverlayDriverStage::guardian_observe_reply_negative_own_up_only;
     case InputGuardianPhase::reply_negative_own_tag_unflagged: return OverlayDriverStage::guardian_observe_reply_negative_own_tag_unflagged;
     case InputGuardianPhase::reply_negative_low32_tag_candidate: return OverlayDriverStage::guardian_observe_reply_negative_low32_tag_candidate;
+    case InputGuardianPhase::reply_negative_up_not_released: return OverlayDriverStage::guardian_observe_reply_negative_up_not_released;
+    case InputGuardianPhase::reply_negative_up_release_blocked: return OverlayDriverStage::guardian_observe_reply_negative_up_release_blocked;
+    case InputGuardianPhase::reply_negative_up_release_blocked_callbacks: return OverlayDriverStage::guardian_observe_reply_negative_up_release_blocked_callbacks;
+    case InputGuardianPhase::reply_negative_up_release_refused: return OverlayDriverStage::guardian_observe_reply_negative_up_release_refused;
+    case InputGuardianPhase::reply_negative_up_release_slow: return OverlayDriverStage::guardian_observe_reply_negative_up_release_slow;
+    case InputGuardianPhase::reply_negative_up_release_slow_callbacks: return OverlayDriverStage::guardian_observe_reply_negative_up_release_slow_callbacks;
+    case InputGuardianPhase::reply_negative_up_pump_stalled: return OverlayDriverStage::guardian_observe_reply_negative_up_pump_stalled;
+    case InputGuardianPhase::reply_negative_up_callbacks_without_up: return OverlayDriverStage::guardian_observe_reply_negative_up_callbacks_without_up;
+    case InputGuardianPhase::reply_negative_up_no_callback: return OverlayDriverStage::guardian_observe_reply_negative_up_no_callback;
     default: return {};
   }
 }

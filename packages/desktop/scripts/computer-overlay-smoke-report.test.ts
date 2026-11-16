@@ -509,10 +509,21 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
   expect(enumerators?.split(",").map((name) => name.trim().replaceAll("_", "-"))).toEqual([
     ...COMPUTER_SMOKE_DRIVER_STAGES,
   ])
-  expect(COMPUTER_SMOKE_DRIVER_STAGES.slice(-3)).toEqual([
+  expect(COMPUTER_SMOKE_DRIVER_STAGES).toHaveLength(181)
+  // The UP release diagnostics append after the earlier tail, which keeps its wire values.
+  expect(COMPUTER_SMOKE_DRIVER_STAGES.slice(-12)).toEqual([
     "probe-mode",
     "probe-move",
     "guardian-observe-reply-negative-low32-tag-candidate",
+    "guardian-observe-reply-negative-up-not-released",
+    "guardian-observe-reply-negative-up-release-blocked",
+    "guardian-observe-reply-negative-up-release-blocked-callbacks",
+    "guardian-observe-reply-negative-up-release-refused",
+    "guardian-observe-reply-negative-up-release-slow",
+    "guardian-observe-reply-negative-up-release-slow-callbacks",
+    "guardian-observe-reply-negative-up-pump-stalled",
+    "guardian-observe-reply-negative-up-callbacks-without-up",
+    "guardian-observe-reply-negative-up-no-callback",
   ])
   expect(COMPUTER_SMOKE_DRIVER_NATIVE_CODES).toEqual([...Computer.ComputerErrorCode.literals, "unknown"])
   const uia = await readFile(path.join(native, "uia_native.h"), "utf8")

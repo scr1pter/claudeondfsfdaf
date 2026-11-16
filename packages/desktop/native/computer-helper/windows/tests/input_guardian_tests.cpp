@@ -1,5 +1,6 @@
 #include "input_guardian.h"
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <stdexcept>
 #include <thread>
@@ -502,6 +503,134 @@ size_t run_input_guardian_tests() {
               "guardian.narrow-marker-exact-injected-up-alone-completes-retired-debt");
       }
     }
+  });
+  test([] {
+    using D=InputGuardianReceiptDiagnostic;
+    check(input_guardian_release_slow_ms==16 && input_guardian_pump_stall_ms==40,"guardian.up-diagnostic-thresholds-are-one-tick-and-the-observe-budget");
+    InputGuardianReleaseEvidence evidence;
+    check(input_guardian_release_diagnostic(evidence,9,100)==D::up_not_released,"guardian.up-diagnostic-names-a-release-that-never-started");
+    evidence={true,false,false,100,0,7,0};
+    check(input_guardian_release_diagnostic(evidence,7,100)==D::up_release_blocked &&
+          input_guardian_release_diagnostic(evidence,8,0)==D::up_release_blocked_callbacks,"guardian.up-diagnostic-names-a-sendinput-still-running-at-the-reply");
+    evidence={true,true,false,100,101,7,7};
+    check(input_guardian_release_diagnostic(evidence,9,100)==D::up_release_refused,"guardian.up-diagnostic-names-a-refused-sendinput");
+    evidence={true,true,true,100,116,7,7};
+    check(input_guardian_release_diagnostic(evidence,7,100)==D::up_release_slow,"guardian.up-diagnostic-names-a-sendinput-longer-than-one-tick");
+    evidence.callbacks_at_return=8;
+    check(input_guardian_release_diagnostic(evidence,8,0)==D::up_release_slow_callbacks,"guardian.up-diagnostic-says-whether-callbacks-ran-during-a-slow-sendinput");
+    evidence={true,true,true,100,115,7,7};
+    check(input_guardian_release_diagnostic(evidence,7,40)==D::up_pump_stalled && input_guardian_release_diagnostic(evidence,8,40)==D::up_pump_stalled,
+          "guardian.up-diagnostic-names-a-hook-thread-without-a-pump-iteration-for-the-whole-budget");
+    check(input_guardian_release_diagnostic(evidence,8,39)==D::up_callbacks_without_up,"guardian.up-diagnostic-names-callbacks-that-were-not-the-own-up");
+    check(input_guardian_release_diagnostic(evidence,7,39)==D::up_no_callback,"guardian.up-diagnostic-names-a-hook-that-saw-nothing-after-a-fast-release");
+    evidence.returned_ms=99;
+    check(input_guardian_release_diagnostic(evidence,7,0)==D::up_no_callback,"guardian.up-diagnostic-clock-underflow-is-never-slow");
+  });
+  test([] {
+    using D=InputGuardianReceiptDiagnostic;
+    InputGuardianLedger ledger(own_tag); const auto ticket=reserve(ledger,mouse(),true), ordinary=reserve(ledger,mouse(1)), early=reserve(ledger,mouse(2),true);
+    // The DOWN's own MOVE sets DOWN-era evidence; the UP diagnostic must not inherit it.
+    ledger.observe_move(own_tag,true);
+    check(ledger.observe(event(ticket.release,true)) && ledger.observe(event(ordinary.release,true)),"guardian.up-diagnostic-fixture-downs");
+    check(ledger.release_diagnostic(ticket,0,0)==D::up_not_released,"guardian.up-diagnostic-ignores-down-era-own-move");
+    check(ledger.release_diagnostic(ordinary,0,0)==D::none,"guardian.up-diagnostic-stays-opted-in");
+    ledger.release_started(early,100,1);
+    check(ledger.release_diagnostic(early,1,0)==D::none,"guardian.up-diagnostic-needs-an-observed-down");
+    check(ledger.observe(event(early.release,true)) && ledger.release_diagnostic(early,1,0)==D::up_not_released,"guardian.release-before-down-is-not-evidence");
+    ledger.release_started(ordinary,100,3); ledger.release_started(ticket,100,3);
+    check(ledger.release_diagnostic(ticket,3,0)==D::up_release_blocked && ledger.release_diagnostic(ticket,4,0)==D::up_release_blocked_callbacks &&
+          ledger.release_diagnostic(ordinary,3,0)==D::none,"guardian.release-start-is-recorded-only-for-the-opted-in-ticket");
+    ledger.release_returned(ticket,true,101,3);
+    check(ledger.release_diagnostic(ticket,3,0)==D::up_no_callback && ledger.release_diagnostic(ticket,4,0)==D::up_callbacks_without_up &&
+          ledger.release_diagnostic(ticket,3,40)==D::up_pump_stalled,"guardian.release-return-closes-the-sendinput-window");
+    ledger.release_started(ticket,200,9);
+    check(ledger.release_diagnostic(ticket,9,0)==D::up_release_blocked,"guardian.a-retry-restarts-the-release-window");
+    ledger.release_returned(ticket,false,201,9);
+    check(ledger.release_diagnostic(ticket,9,0)==D::up_release_refused,"guardian.the-latest-attempt-decides-the-release-window");
+    auto altered=ticket; ++altered.id;
+    check(ledger.release_diagnostic(altered,9,0)==D::none,"guardian.up-diagnostic-requires-exact-ticket-lineage");
+    check(ledger.pending() && ledger.released_count()==0 && !ledger.observed(ticket,false) && ledger.releases()==std::vector{early,ordinary,ticket},
+          "guardian.release-evidence-never-creates-a-receipt-or-changes-order");
+    ledger.retire(ticket);
+    check(ledger.observe(event(ticket.release,false)) && ledger.observed(ticket,false) && ledger.release_diagnostic(ticket,9,0)==D::none,
+          "guardian.recorded-up-has-no-up-diagnostic");
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); std::atomic<int> releases{0};
+    std::promise<void> entered,proceed; auto entering=entered.get_future(); auto proceeding=proceed.get_future().share();
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease& release) {
+      check(release==mouse(),"guardian.release-uses-the-observed-descriptor");
+      if (releases.fetch_add(1)==0) { entered.set_value(); proceeding.wait(); }
+      return true;
+    });
+    const auto ticket=reserve(ledger,mouse()), unposted=reserve(ledger,mouse(1));
+    // A current DOWN time keeps the unretired entry inside the ten-second held limit.
+    check(ledger.observe(event(ticket.release,true,GetTickCount64())),"guardian.releaser-fixture-down");
+    check(releaser.drain(5,true)==0 && releases.load()==0,"guardian.unretired-down-waits-for-retirement-or-the-held-limit");
+    ledger.retire(ticket);
+    auto first=std::async(std::launch::async,[&] { return releaser.drain(50,true); });
+    entering.wait();
+    check(releaser.drain(50,true)==0 && releaser.drain(50)==0 && releases.load()==1,"guardian.concurrent-drain-returns-at-once-without-a-second-release");
+    proceed.set_value(); (void)first.get();
+    check(releaser.drain(20,true)==0 && releaser.drain(5)==0 && releases.load()==1,"guardian.in-flight-up-is-never-sent-twice");
+    check(ledger.observe(event(ticket.release,false)) && !ledger.pending() && releaser.drain(5)==0 && releases.load()==1,
+          "guardian.recorded-up-ends-the-release-and-a-reservation-alone-is-never-released");
+    check(ledger.observed(unposted,false)==false && ledger.releases().empty(),"guardian.releaser-never-invents-a-receipt");
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); std::atomic<int> releases{0};
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease&) { releases.fetch_add(1); return false; });
+    const auto ticket=reserve(ledger,scan()); check(ledger.observe(event(ticket.release,true)),"guardian.refused-fixture-down"); ledger.retire(ticket);
+    (void)releaser.drain(1,true); (void)releaser.drain(1,true);
+    check(releases.load()>=2 && ledger.pending(),"guardian.refused-release-is-retried-and-never-marked-in-flight");
+  });
+  test([] {
+    // The release must leave the ledger and wake locks free: the hook that records the UP runs on
+    // another thread while SendInput is still in progress.
+    InputGuardianLedger ledger(own_tag); std::atomic<uint64_t> callbacks{5}; InputGuardianReleaser* self=nullptr;
+    std::thread hook; bool serviced=false;
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease& release) {
+      std::promise<bool> done; auto recorded=done.get_future();
+      hook=std::thread([&,release,promise=std::move(done)]() mutable {
+        callbacks.fetch_add(1);
+        const auto observed=ledger.observe(event(release,false)); self->notify(); self->wait(self->generation(),0);
+        promise.set_value(observed && !ledger.pending());
+      });
+      serviced=recorded.wait_for(std::chrono::seconds(5))==std::future_status::ready && recorded.get();
+      return true;
+    },[&](InputReleaseKind kind) { check(kind==InputReleaseKind::mouse_button,"guardian.release-counts-callbacks-of-its-own-kind"); return callbacks.load(); });
+    self=&releaser;
+    const auto ticket=reserve(ledger,mouse(),true); check(ledger.observe(event(ticket.release,true)),"guardian.unlocked-fixture-down"); ledger.retire(ticket);
+    (void)releaser.drain(20,true); if (hook.joinable()) hook.join();
+    check(serviced && !ledger.pending() && ledger.observed(ticket,false) && ledger.released_count()==1,
+          "guardian.release-runs-with-no-ledger-or-wake-lock-held");
+  });
+  test([] {
+    using D=InputGuardianReceiptDiagnostic;
+    InputGuardianLedger ledger(own_tag); std::atomic<uint64_t> callbacks{0}; std::atomic<bool> slow{true};
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease&) {
+      if (slow.load()) { callbacks.fetch_add(1); std::this_thread::sleep_for(std::chrono::milliseconds(25)); }
+      return true;
+    },[&](InputReleaseKind) { return callbacks.load(); });
+    const auto first=reserve(ledger,mouse(),true); check(ledger.observe(event(first.release,true)),"guardian.timed-fixture-down"); ledger.retire(first);
+    (void)releaser.drain(1,true);
+    check(ledger.release_diagnostic(first,callbacks.load(),0)==D::up_release_slow_callbacks,"guardian.releaser-times-sendinput-and-counts-callbacks-during-it");
+    slow.store(false);
+    const auto second=reserve(ledger,mouse(1),true); check(ledger.observe(event(second.release,true)),"guardian.timed-fixture-second-down"); ledger.retire(second);
+    (void)releaser.drain(1,true);
+    check(ledger.release_diagnostic(second,callbacks.load(),0)==D::up_no_callback &&
+          ledger.release_diagnostic(second,callbacks.load()+1,0)==D::up_callbacks_without_up,"guardian.releaser-fast-release-leaves-only-callback-evidence");
+    check(ledger.pending() && ledger.released_count()==0,"guardian.timed-releases-still-need-their-own-ups");
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); InputGuardianReleaser releaser(ledger,[](const InputRelease&) { return true; });
+    const auto seen=releaser.generation(); releaser.notify();
+    const auto started=std::chrono::steady_clock::now(); releaser.wait(seen,10'000);
+    check(std::chrono::steady_clock::now()-started<std::chrono::seconds(5),"guardian.wake-before-wait-is-not-lost");
+    const auto current=releaser.generation();
+    std::thread waker([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); releaser.notify(); });
+    const auto waiting=std::chrono::steady_clock::now(); releaser.wait(current,10'000); waker.join();
+    check(std::chrono::steady_clock::now()-waiting<std::chrono::seconds(5) && releaser.generation()!=current,"guardian.notify-wakes-a-waiter-before-its-timeout");
   });
   return groups;
 }

@@ -71,6 +71,11 @@ size_t run_overlay_driver_tests() {
     require(static_cast<size_t>(OverlayDriverStage::probe_mode) == 169 && static_cast<size_t>(OverlayDriverStage::probe_move) == 170 &&
       overlay_driver_stage_name(OverlayDriverStage::probe_mode) == L"probe-mode" && overlay_driver_stage_name(OverlayDriverStage::probe_move) == L"probe-move",
       "overlay-driver.probe-stages-append-without-changing-existing-169-values");
+    require(static_cast<size_t>(OverlayDriverStage::guardian_observe_reply_negative_low32_tag_candidate) == 171 &&
+      static_cast<size_t>(OverlayDriverStage::guardian_observe_reply_negative_up_not_released) == 172 &&
+      static_cast<size_t>(OverlayDriverStage::guardian_observe_reply_negative_up_no_callback) == 180 &&
+      overlay_driver_stage_name(OverlayDriverStage::guardian_observe_reply_negative_up_no_callback) == L"guardian-observe-reply-negative-up-no-callback",
+      "overlay-driver.up-release-stages-append-without-changing-existing-172-values");
   });
   test([] {
     for (const auto phase : {InputGuardianPhase::none, InputGuardianPhase::confirmed, static_cast<InputGuardianPhase>(255)})
@@ -83,7 +88,16 @@ size_t run_overlay_driver_tests() {
         InputGuardianPhase::reply_negative_full_budget, InputGuardianPhase::reply_negative_no_callback_pump_stalled,
         InputGuardianPhase::reply_negative_no_callback_pump_progressed, InputGuardianPhase::reply_negative_own_move_only,
         InputGuardianPhase::reply_negative_own_down_refused, InputGuardianPhase::reply_negative_own_up_only,
-        InputGuardianPhase::reply_negative_own_tag_unflagged}) {
+        InputGuardianPhase::reply_negative_own_tag_unflagged, InputGuardianPhase::reply_negative_low32_tag_candidate,
+        InputGuardianPhase::reply_negative_up_not_released,
+        InputGuardianPhase::reply_negative_up_release_blocked,
+        InputGuardianPhase::reply_negative_up_release_blocked_callbacks,
+        InputGuardianPhase::reply_negative_up_release_refused,
+        InputGuardianPhase::reply_negative_up_release_slow,
+        InputGuardianPhase::reply_negative_up_release_slow_callbacks,
+        InputGuardianPhase::reply_negative_up_pump_stalled,
+        InputGuardianPhase::reply_negative_up_callbacks_without_up,
+        InputGuardianPhase::reply_negative_up_no_callback}) {
       const auto stage = overlay_driver_guardian_stage(phase);
       require(stage && stages.insert(*stage).second && overlay_driver_stage(overlay_driver_stage_name(*stage)),
         "overlay-driver.guardian-failure-buckets-are-unique-closed-stages");
@@ -94,7 +108,16 @@ size_t run_overlay_driver_tests() {
     for (const auto phase : {InputGuardianPhase::lock_expired, InputGuardianPhase::budget_expired, InputGuardianPhase::inactive,
         InputGuardianPhase::write_refused, InputGuardianPhase::read_refused, InputGuardianPhase::reply_invalid,
         InputGuardianPhase::setup_failed, InputGuardianPhase::reply_negative_zero_budget,
-        InputGuardianPhase::reply_negative_short_budget, InputGuardianPhase::reply_negative_full_budget}) {
+        InputGuardianPhase::reply_negative_short_budget, InputGuardianPhase::reply_negative_full_budget,
+        InputGuardianPhase::reply_negative_up_not_released,
+        InputGuardianPhase::reply_negative_up_release_blocked,
+        InputGuardianPhase::reply_negative_up_release_blocked_callbacks,
+        InputGuardianPhase::reply_negative_up_release_refused,
+        InputGuardianPhase::reply_negative_up_release_slow,
+        InputGuardianPhase::reply_negative_up_release_slow_callbacks,
+        InputGuardianPhase::reply_negative_up_pump_stalled,
+        InputGuardianPhase::reply_negative_up_callbacks_without_up,
+        InputGuardianPhase::reply_negative_up_no_callback}) {
       const auto stage = overlay_driver_guardian_stage(phase); require(stage.has_value(), "overlay-driver.failed-up-phase-has-a-closed-stage");
       const auto result = overlay_driver_caught(OverlayDriverMode::stop, *stage, std::make_exception_ptr(DriverFailure{L"cleanup_failed"}));
       const auto wire = result.wire();
