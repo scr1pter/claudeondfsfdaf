@@ -7178,14 +7178,26 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   isolation saves > Stop returns while Git is still saving, and a same-ID resume waits for the saved result"
   (`packages/engine/test/tool/task.test.ts`) failed with `TaskIsolation.Error` code `registry`, "Isolation data cannot
   be a symbolic or hard link." Not caused by this lane: its diff touches no task, worktree or isolation code, no Git or
-  temp-dir helper and not `test.yml`; shard 4/4 ran the same 164 files in the same order in main's run 43839344467 (job
-  133204672318) and #33's head run 43829091585 (job 133172046619), where the same test passed. Root cause, a real race
-  in `guarded()` (`packages/engine/src/task/isolation.ts`): every save renames a fresh file over `record.json`, and the
-  test polls `isolation.find` (no per-task lock) while the forked save writes. An `lstat` that resolved the old file
-  just before the rename reports it with `nlink` 0, and `nlink !== 1` read that as a hard link. A Python probe on this
-  machine (rename over a file in a loop while another thread lstats it) saw `nlink` 0 on 4504 of 6.7 million calls. The
-  guard now refuses `nlink > 1`, so a second name is still refused. New test in `test/task/isolation.test.ts`, "a
-  record replaced while it is read is not taken for a hard link, and a real hard link still is": four readers call
-  `find` while 3000 renames replace the record, then a second name for the record must still fail with `registry`. It
-  failed before the fix with the same error on several reads and passes after. Ran locally through `vector-serial`,
-  one file at a time: `test/task/isolation.test.ts` 91/0, `test/tool/task.test.ts` 161/0; engine `bun typecheck`.
+  temp-dir helper and not `test.yml`; shard 4/4 ran the same 164 files in the same order in the runs for main
+  (43839344467, job 133204672318) and #33's head (43829091585, job 133172046619), where the same test passed. Root
+  cause, a real race in `guarded()` (`packages/engine/src/task/isolation.ts`): every save renames a fresh file over
+  `record.json`, and the test polls `isolation.find` (no per-task lock) while the forked save writes. An `lstat` that
+  resolved the old file just before the rename reports it with `nlink` 0, and `nlink !== 1` read that as a hard link. A
+  Python probe on this machine (rename over a file in a loop while another thread lstats it) saw `nlink` 0 on 4504 of
+  6.7 million calls. The guard now refuses `nlink > 1`, so a second name is still refused. New test in
+  `test/task/isolation.test.ts`, "a record replaced while it is read is not taken for a hard link, and a real hard link
+  still is": four readers call `find` while 3000 renames replace the record, then a second name for the record must
+  still fail with `registry`. It failed before the fix with the same error on several reads and passes after. Ran
+  locally through `vector-serial`, one file at a time: `test/task/isolation.test.ts` 91/0, `test/tool/task.test.ts`
+  161/0; engine `bun typecheck`.
+- **16 Nov 2026, one uncaptured failure of the new isolation race test.** The review of the entry above ran
+  `test/task/isolation.test.ts` 43 times with the fix in place (8 full-file runs, 35 runs of the new test alone). The
+  first full-file run ended 90 pass, 1 fail, 1 error: the new test's `toEqual([])` received a `find` failure whose
+  kept output ended in `at readRecord (...`. Only the tail was kept, so the error message is lost, and the other 42
+  runs passed. Before the push, the full file ran 20 more times in a loop (through `vector-serial`,
+  `--timeout 30000`, complete logs kept), and all 20 ended 91 pass, 0 fail, with no error, in 190 to 231 s each. So 1
+  failure in 28 full-file runs, cause unknown. It may be another `readRecord` failure under the renames or something
+  left by an earlier test in the same process (the unexplained error). The guard cannot be the cause: on ext4 a rename
+  over the record takes the old file from 1 name to 0 and never gives either file a second one, and the guard now
+  refuses only `nlink > 1`. If CI shows this test red, its log has the full `Cause.pretty` text and needs a root cause.
+  The assertion stays as it is.
