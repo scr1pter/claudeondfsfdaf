@@ -4,7 +4,14 @@ import { chmodSync } from "node:fs"
 import type { createDockerRuntime } from "./docker.js"
 import { publishWorkspaceChanges, WorkspacePublishError } from "./github.js"
 import { MessageIdentities } from "./message-identities.js"
-import { parseCommand, record, workspaceId, WorkspaceError, type EngineCommand } from "./protocol.js"
+import {
+  parseCommand,
+  record,
+  workspaceId,
+  WorkspaceError,
+  type CloudWorkspace,
+  type EngineCommand,
+} from "./protocol.js"
 import { verifyWorkspaceRequest } from "./signing.js"
 import { publicWorkspace, StoreError, WorkspaceStore, type WorkspaceRecord } from "./store.js"
 
@@ -30,6 +37,19 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
   const maxRunMs = options.maxRunMs ?? 2 * 60 * 60 * 1000
   const maxCalls = options.maxModelCalls ?? 50
   const maximum = options.model.maxOutputTokens ?? 4096
+  // The account sees its two limits only as whole percentages, rounded down and capped at 100; the call count, the
+  // running start and the limits stay here. The store sets the running start to max(updatedAt, its clock), so it can be
+  // ahead of now(); that reads 0, inside the range the gateway's parser accepts, rather than a negative share.
+  const withUsage = (workspace: WorkspaceRecord): CloudWorkspace => ({
+    ...publicWorkspace(workspace),
+    usage: {
+      model: Math.min(100, Math.floor((100 * workspace.modelCalls) / maxCalls)),
+      time:
+        workspace.state === "running" && workspace.runningSince !== null
+          ? Math.min(100, Math.max(0, Math.floor((100 * (now() - workspace.runningSince)) / maxRunMs)))
+          : 0,
+    },
+  })
   const upstream = new URL(options.model.origin)
   const relay = new URL(options.relayOrigin)
   if (
@@ -387,7 +407,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
     if (isClosed.get(owner))
       throw new WorkspaceError("ACCOUNT_CLOSED", "This account's cloud workspaces are closed.", 403)
     if (request.method === "GET" && path === "/workspaces")
-      return response({ enabled: true, workspaces: options.store.list(owner).map(publicWorkspace) })
+      return response({ enabled: true, workspaces: options.store.list(owner).map(withUsage) })
     if (request.method !== "POST")
       throw new WorkspaceError("METHOD_NOT_ALLOWED", "Use a supported workspace operation.", 405)
     let body: unknown
@@ -401,7 +421,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
       if (input.action !== "create") throw new Error("Invalid creation.")
       const created = options.store.create(owner, { ...input, enginePassword: randomBytes(32).toString("hex") })
       if (created.created) provision(created.workspace, input)
-      return response({ workspace: publicWorkspace(created.workspace) }, created.created ? 202 : 200)
+      return response({ workspace: withUsage(created.workspace) }, created.created ? 202 : 200)
     }
     const match = /^\/workspaces\/([^/]+)\/(start|stop|delete|engine|changes|publish)$/.exec(path)
     if (!match || !workspaceId(match[1]))
@@ -426,7 +446,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
         const previous = publication.get(workspace.id)
         if (input.action === "changes")
           return response({
-            workspace: publicWorkspace(paused),
+            workspace: withUsage(paused),
             changes: { digest: snapshot.digest, diff: snapshot.diff, files: snapshot.changes.map((file) => file.path) },
             ...(previous ? { pullRequest: JSON.parse(previous.receipt) as unknown } : {}),
           })
@@ -443,7 +463,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
               "This workspace already published a different change. Open its existing pull request to continue.",
               409,
             )
-          return response({ workspace: publicWorkspace(paused), pullRequest: JSON.parse(previous.receipt) as unknown })
+          return response({ workspace: withUsage(paused), pullRequest: JSON.parse(previous.receipt) as unknown })
         }
         const controller = new AbortController()
         publishers.set(workspace.id, controller)
@@ -463,9 +483,9 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
         nonceDB
           .query("INSERT INTO publication(workspace,digest,receipt) VALUES (?,?,?)")
           .run(workspace.id, snapshot.digest, JSON.stringify(receipt))
-        return response({ workspace: publicWorkspace(paused), pullRequest: receipt })
+        return response({ workspace: withUsage(paused), pullRequest: receipt })
       }
-      if (input.action === "stop") return response({ workspace: publicWorkspace(await stop(workspace)) })
+      if (input.action === "stop") return response({ workspace: withUsage(await stop(workspace)) })
       if (input.action === "delete") {
         if (workspace.state === "running" || workspace.state === "creating")
           throw new WorkspaceError("WORKSPACE_RUNNING", "Stop this workspace before deleting its files and chats.", 409)
@@ -475,7 +495,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
         eraseReceipts(workspace.id)
         return response({ deleted: true })
       }
-      if (workspace.state === "running") return response({ workspace: publicWorkspace(workspace) })
+      if (workspace.state === "running") return response({ workspace: withUsage(workspace) })
       if (workspace.state !== "stopped" || !workspace.runtimeId)
         throw new WorkspaceError(
           "WORKSPACE_NOT_READY",
@@ -484,7 +504,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions) {
         )
       const starting = transition(workspace, "creating")
       provision(starting)
-      return response({ workspace: publicWorkspace(starting) }, 202)
+      return response({ workspace: withUsage(starting) }, 202)
     })
   }
 

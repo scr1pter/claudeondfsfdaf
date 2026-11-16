@@ -7,6 +7,8 @@ export type CloudWorkspace = {
   createdAt: number
   updatedAt: number
   revision: number
+  /** Whole percentages (0-100) of the model allowance and of the current run's time; older hosts omit it. */
+  usage?: { model: number; time: number }
 }
 
 export type CloudSession = { id: string; title: string; updatedAt: number }
@@ -183,7 +185,15 @@ export function readCloudWorkspace(value: unknown): CloudWorkspace {
     !["creating", "running", "stopped", "error"].includes(String(value.state)) ||
     !number(value.createdAt) ||
     !number(value.updatedAt) ||
-    !number(value.revision)
+    !number(value.revision) ||
+    // Repeats parsePublicWorkspace's `usage` rule (packages/cloud-workspaces/src/protocol.ts), which client code
+    // cannot import; change both together, or a usage the gateway passes makes this throw for every workspace.
+    (value.usage !== undefined &&
+      (!record(value.usage) ||
+        Object.keys(value.usage).some((key) => key !== "model" && key !== "time") ||
+        ![value.usage.model, value.usage.time].every(
+          (part) => typeof part === "number" && Number.isSafeInteger(part) && part >= 0 && part <= 100,
+        )))
   )
     throw new Error("Vector could not read a cloud workspace.")
   return {
@@ -195,6 +205,7 @@ export function readCloudWorkspace(value: unknown): CloudWorkspace {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     revision: value.revision,
+    ...(record(value.usage) ? { usage: { model: value.usage.model as number, time: value.usage.time as number } } : {}),
   }
 }
 
