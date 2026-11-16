@@ -29,6 +29,24 @@ capability with these requirements:
 VE-07's injected `safeWorktree` port must advertise `unattended-v1` and return the
 exact requested branch/base. There is no fallback to the existing endpoint.
 
+*Status 2026-11-16 (EV-12):* the engine service is built, with no route:
+`Worktree.createUnattended({directory, base, branch, jid})` in
+packages/engine/src/worktree/index.ts. It takes the loaded project's own checkout
+only, requires `refs/vector-everywhere/<jid>` (the runner's fetch ref) to name
+`base` and `base` to be a commit present here, refuses executable repository
+configuration with the runner's allowlist, reserves the folder with an exclusive
+mkdir and the branch with git's ref lock, creates and populates the checkout
+with the runner's hardened git and a minimal environment, and registers it as a
+project sandbox. It loads no instance and runs no start script, caller command,
+hook, filter or install. Owner-only exposure, the guest refusal, the
+`everywhere.projects` allowlist and the workspace-trust check (refuse unless the
+loaded project is trusted) belong to EV-13's handler, which runs the allowlist
+and trust checks before an instance is loaded for the folder (or accepts only
+an already loaded instance) and also advertises `unattended-v1`; "delivered" is
+written there. The runner has no `safeWorktree`
+and settles `held` until EV-21. See vector-everywhere-deviations.md,
+"2026-11-16, EV-12".
+
 ## R-M2: session-scoped offline shell
 
 The runner denies `bash` and `unsandboxed_shell` until a separate engine

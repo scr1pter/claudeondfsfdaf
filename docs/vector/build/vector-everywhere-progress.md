@@ -2252,3 +2252,79 @@ Re-run at the gate, each through /home/user/.tools/vector-serial, one file at a 
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
 
 origin/release-finish had moved to `67ec3a60` (fourteen commits past the `0f034957` in HEAD: engine, core, api, web and root test fixes, a desktop packet-capture script, vector-at-mention.yml and docs/vector/local-packet-capture.md). None touches a file this package changes. It is merged after this commit with a merge commit, before the push, as the lane rule says; the merge, the push and the CI run ids go in the next lane docs commit. vector-codium.yml is still not dispatched before PR #33 is on main.
+
+## EV-12: safe unattended worktree service (2026-11-16)
+
+Package EV-12 (vector-everywhere-main-requests.md, "Safe unattended worktree creation"; E5, E7): the engine's `Worktree.createUnattended`, with no route. Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-12". Built in the working tree, then committed at the lane's commit gate ("Commit gate" below).
+
+**Base.** `git fetch origin release-finish main everywhere-finish scope-finish`: HEAD `d31d418f` equals origin/everywhere-finish and already holds origin/release-finish `67ec3a60` (merge `e846cef3`), so nothing was merged. main was not merged (the lane rule: the lead merges main once PR #33 is on it). No review-fixes or brain-transport precondition applies. origin/scope-finish `1f5d62ad` and the other lanes' tips (review-fixes `1433d105`, codium-finish `c8696605`, connect-finish `34cf53cd`, hands-finish `ef9f809d`, brain-transport `569d1643`, workspaces-finish `e37ec1b5`, native-qualify `47db73cd`) change none of this package's files since their merge bases.
+
+**Files:**
+
+- packages/core/src/everywhere/git.ts (new, 89 lines): `EverywhereGit`; `safeRepositoryConfig`, `GIT_HARDENING`, `runnerGitEnvironment` moved from desktop; new `fetchRef(jid)`.
+- packages/desktop/src/main/everywhere-git.ts (+4/-39): imports and re-exports the moved names; `fetch()` uses `fetchRef`.
+- packages/engine/src/worktree/index.ts (+195/-1, 953 lines): imports (:22-25), `UnattendedInput`/`Unattended` (:55-69), `UNATTENDED_FLAGS`/`UNATTENDED_TIMEOUT`/`UNATTENDED_OUTPUT_BYTES` (:123-142), `Interface.createUnattended` (:171-178), the implementation (:431-565), `Service.of` (:933-943, wrapped by prettier).
+- packages/engine/test/everywhere/worktree.test.ts (new, 537 lines), eight tests:
+  - U1 "creates the job's branch at the exact base and registers its sandbox, running no hook, start script or other program" (:179): a positive control first (plain `git branch` in the repository fires the committed `.husky/reference-transaction` hook); then the result equals `{realpath(<data>/everywhere-worktree/<project>/<jid>), branch, base}`, `a.txt` is the base's, HEAD is the base on the job's branch, no hook or start-script marker, `.git/config`'s sha256 unchanged, the sandbox registered, no instance loaded, no Ready or Failed event; every command marked as createUnattended's is git with the hardening prefix, `protocol.allow=never` and all six `protocol.<name>.allow=never` pins, `extendEnv: false` and exactly the runner's environment keys plus `GIT_NO_LAZY_FETCH`, the marked set includes `worktree add` and `reset`, and no other command ran in the new folder; a Jira-shaped branch (`vector/ve-ABC-12-<8>`) is accepted.
+  - U2 "refuses an existing branch, folder or link, and a folder reserved after the check, before creating anything" (:252): the project's job folder a link out of the data folder (nothing written to the target); an existing branch (no folder made); an empty folder (no branch made); a link at the job's path (its target untouched); a folder made by "another process" between the absence check and the exclusive mkdir (the recorder makes it when createUnattended's `show-ref` runs: refused, the folder stays empty, no `worktree` command ran); a second jid with the same last twelve characters after the first job's create (refused, no folder).
+  - U3 "refuses a base that is unknown, moved, not a commit or not this job's fetched commit" (:331): no fetch ref; the fetch ref at another commit; a base this repository lacks; a fetch ref (a loose ref file) naming a commit it lacks; an annotated tag as base and fetch ref; then a 12-hex abbreviation, uppercase hex, `HEAD`, `--orphan`, a trailing newline and an empty base. Each leaves no branch and no folder.
+  - U4 "refuses malformed ids, branches that are not the job's, and a directory other than the loaded checkout" (:375): `vector/subagent/x`, another job's `vector/ve-<12>`, `main`, `vector/ve-../x`, `vej_short`, a relative path, a subfolder, another repository, a `core.worktree` redirect, and an unattended worktree loaded as its own project folder seeding another.
+  - U5 "refuses executable repository configuration in either scope before creating anything" (:415): a local `filter.mark.smudge` with `*.txt filter=mark` committed (positive control: plain `git cat-file --filters` runs it; createUnattended refuses and the filter never runs), a local `include.path`, and `url.<x>.insteadOf` in config.worktree with `extensions.worktreeConfig`.
+  - U6 "two concurrent creates of one reservation give exactly one success" (:459): one success, one CreateFailedError whose message is the reservation refusal (so the loser never reached `worktree add`), `.git/worktrees` holding only the jid's entry, the folder listed once by `git worktree list`, the branch once.
+  - U7 "refuses a project that is not Git" (:489).
+  - U8 "keeps the reservation when git fails after it, so the job id is never reused" (:500; review round one): the recorder writes the job's branch as a loose ref when createUnattended's `worktree add` starts, so that command fails after the mkdir; the message is the "reservation is kept" one, the folder stays empty and is not a sandbox; with the branch deleted again, a second create with the same input is refused as reserved, runs no `worktree` command, and leaves no branch.
+- Lane docs: vector-everywhere-deviations.md (the EV-12 entry), this receipt, vector-everywhere-main-requests.md (status line), vector-everywhere-handoff.md (an annotation on the "Current gates" safe-worktree bullet, an EV-12 bullet, a "Left open" item), vector-everywhere-spec.md (dated notes on §3.5 step 4 and §6.4).
+- No generated file, route, workflow, flag, env var, dependency or lockfile changed.
+
+**Checks**, each through the lane's `vector-serial` lock, one file at a time from the owning package, engine tests with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev12/tmp` (so the preload's XDG roots, the fixture repositories and the markers live there):
+
+| Check | Before | After |
+| --- | --- | --- |
+| packages/engine test/everywhere/worktree.test.ts | (new) | 7 pass, 0 fail, 218 expects; then three runs in a row after the mutations, the same each time (8.9 s, 9.0 s, 9.9 s), and once more after the last comment-only edits |
+| packages/engine test/worktree/create-for-task.test.ts | | 5 pass, 0 fail, 38 expects |
+| packages/engine test/project/worktree.test.ts | | 14 pass, 0 fail, 34 expects |
+| packages/engine test/project/worktree-remove.test.ts | | 2 pass, 2 skip (Windows-only cases), 0 fail, 9 expects |
+| packages/engine test/compliance/egress-inventory.test.ts (reads worktree/index.ts; no lane workflow runs it) | | 5 pass, 0 fail, 12 expects |
+| packages/desktop src/main/everywhere-git.test.ts, `--no-env-file` | 8 pass, 0 fail, 88 expects (HEAD's everywhere-git.ts swapped in, then the change restored and its sha256 checked) | 8 pass, 0 fail, 88 expects |
+| packages/desktop src/main/everywhere-runner.test.ts, `--no-env-file` | 49 pass, 355 expects (EV-03's receipt) | 49 pass, 0 fail, 355 expects |
+| `bun typecheck` in packages/core, packages/engine (includes the test file) and packages/desktop (`tsgo -b`) | | exit 0 each |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | | 27 of 27 tasks successful, exit 0 |
+| `bun prettier --check` on core everywhere/git.ts, engine worktree/index.ts and the test file | index.ts conforming at HEAD | all three conforming |
+| desktop everywhere-git.ts and prettier | non-conforming at HEAD (hand-packed lines) | still non-conforming, not reformatted; prettier's output of HEAD's file and of the changed file differ by exactly the four added lines, so the hunk adds no violation |
+| Lines over 120 columns added | | none in code except the two allowlist regex strings moved verbatim from desktop (core git.ts :24, :31) and one test name (:180) |
+| `git diff` scan for personal paths and email addresses | | none |
+
+**Mutations** (/tmp/vector-v2/everywhere/ev12-mut/: mutations.py, run.py, results.txt, one log per mutation). Each was applied to packages/engine/src/worktree/index.ts alone, test/everywhere/worktree.test.ts was run alone, and the file was restored from index.post.ts with its sha256 checked against post.sha after every run. The table is in the deviations entry. A first run against an earlier build (absence check after `show-ref`) found M5 surviving (first-run/); the order was fixed and every mutation was re-run against the final file.
+
+**Review round one (2026-11-16; ten non-blocking findings, none blocking).** Code: `UNATTENDED_FLAGS` also pins `protocol.{git,http,https,ssh}.allow=never` (index.ts :123-138); the interface comment says the caller must not load an instance for a folder outside the allowlist (:176); core everywhere/git.ts's header says Node-only instead of "pure and runtime-neutral" (:11-12). Tests: U1 asserts all six per-protocol pins; U6 asserts the loser's message is the reservation refusal and that `.git/worktrees` holds one entry; new U8 (fail closed after the reservation). Docs: deviations (b), (e), (f), (h), (m), "Left open", "Coordination" and the mutations paragraph and table; the handoff's EV-12 bullet and "Left open" item (now joined to the list, with the instance-resolution sentence); main-requests.md's status line. Not changed in code: the move to core (b) waits for the lead; trust and the allowlist stay EV-13's, with a request to the lead to add them to EV-13's scope ((h) says why a trust predicate was not added).
+
+| Check (after the review fixes) | Result |
+| --- | --- |
+| packages/engine test/everywhere/worktree.test.ts | 8 pass, 0 fail, 295 expects (10.7 s before the mutation run, 8.2 s after it) |
+| packages/engine test/worktree/create-for-task.test.ts | 5 pass, 0 fail, 38 expects |
+| packages/engine test/project/worktree.test.ts | 14 pass, 0 fail, 34 expects |
+| packages/engine test/project/worktree-remove.test.ts | 2 pass, 2 skip (Windows-only), 0 fail, 9 expects |
+| packages/engine test/compliance/egress-inventory.test.ts | 5 pass, 0 fail, 12 expects |
+| packages/desktop src/main/everywhere-git.test.ts, `--no-env-file` | 8 pass, 0 fail, 88 expects |
+| `bun typecheck` in packages/core, packages/engine and packages/desktop | exit 0 each |
+| `bun prettier --check` on core everywhere/git.ts, engine worktree/index.ts and the test file | all three conforming |
+| Lines over 120 columns added | none beyond those listed above (index.ts :212, 121 columns, is HEAD's own line) |
+| Mutations, third run (/tmp/vector-v2/everywhere/ev12-mut/round3/, 24 mutations against the final index.ts and test file, restore hash checked after each) | 17 red, 7 survive (M11, M12, M16-M19 and M21, as before, each by design or argued); M22 and M23 are new and red; table in the deviations entry. A round2/ run stopped at M18 for a comment rewrap agrees on M1-M17 except M11b's U6 case, which depends on the interleaving under that mutation |
+
+The full turbo typecheck was not re-run for these fixes (it runs before the push).
+
+**Not done here (the task said not to commit):** the lead's yes to deviation (b) (the move to core everywhere/git.ts) or the recorded fallback; the commit (`feat(engine): create unattended worktrees from an exact base with git hardened`, staging the four code files and the five lane documents by path, the body naming all four code files (packages/core/src/everywhere/git.ts, packages/desktop/src/main/everywhere-git.ts, packages/engine/src/worktree/index.ts, packages/engine/test/everywhere/worktree.test.ts) and the lane documents and saying no generated file, route, flag or dependency changed), the full typecheck before the push, the push, and the workflow_dispatch runs of vector-everywhere.yml and typecheck.yml on everywhere-finish. Their run ids go in the next lane-docs commit. Never vector-codium.yml before PR #33 is on main and merged here.
+
+**Commit gate (2026-11-16).** `git fetch origin release-finish main everywhere-finish scope-finish`: HEAD was still `d31d418f` = origin/everywhere-finish, holding origin/release-finish `67ec3a60`; origin/scope-finish `1f5d62ad` still changes none of this package's files since its merge base. origin/main is now `b362fdf6` (PR #33's merge); it is not merged here (the lead merges main into this branch). Its merge base with HEAD is now `67ec3a60`, so vector-codium.yml's changed-since-main picker selects 28 test files, not hundreds. The working tree held only this package's nine paths. Re-run at the gate, each through `vector-serial`, one file at a time from the owning package (engine with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev12/tmp`):
+
+| Check | Result |
+| --- | --- |
+| packages/engine test/everywhere/worktree.test.ts | 8 pass, 0 fail, 295 expects (9.7 s) |
+| packages/engine test/worktree/create-for-task.test.ts | 5 pass, 0 fail, 38 expects |
+| packages/engine test/compliance/egress-inventory.test.ts | 5 pass, 0 fail, 12 expects |
+| packages/desktop src/main/everywhere-git.test.ts, `--no-env-file` | 8 pass, 0 fail, 88 expects |
+| packages/desktop src/main/everywhere-runner.test.ts, `--no-env-file` | 49 pass, 0 fail, 355 expects |
+| `bun typecheck` in packages/core, packages/engine and packages/desktop | exit 0 each |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+Committed as `feat(engine): add a safe unattended worktree creator` (the four code files and the five lane documents, staged by path), with deviation (b)'s move to core as built. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit.

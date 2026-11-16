@@ -2,33 +2,13 @@ import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
-import os from "node:os"
+import { GIT_HARDENING, fetchRef, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
 import { heldBack } from "@vectordevai/core/everywhere/publish"
 import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN, isRepositoryName } from "@vectordevai/schema/everywhere"
 import { parseGithubRemote } from "./github-api"
 
-/**
- * Local keys git and common tools write that never run a command, rewrite a URL, filter content or name a helper.
- * Git for Windows writes core.symlinks, gh writes remote.<n>.gh-resolved and branch.<b>.gh-merge-base, VS Code writes
- * branch.<b>.vscode-merge-base, and partial clones write the promisor keys. Everything else stays refused, including
- * submodule.<n>.update, filter.*, include*, url.*, http.*, credential.*, core.editor/pager/askpass and gpg.*.
- */
-const SAFE_CONFIG = new RegExp("^(?:" + [
-  "core\\.(?:repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree|hookspath|fsmonitor|sshcommand|longpaths|symlinks|autocrlf)",
-  "extensions\\.(?:worktreeconfig|objectformat|partialclone)",
-  "user\\.(?:name|email)",
-  "(?:commit|tag)\\.gpgsign",
-  "pull\\.rebase",
-  "maintenance\\.(?:auto|strategy|[a-z-]+\\.(?:enabled|schedule))",
-  "remote\\.[a-z0-9_.-]+\\.(?:url|pushurl|fetch|tagopt|prune|gh-resolved|promisor|partialclonefilter)",
-  "branch\\.[a-z0-9_./-]+\\.(?:remote|merge|pushremote|rebase|vscode-merge-base|gh-merge-base|github-pr-owner-number)",
-  "submodule\\.[a-z0-9_./-]+\\.(?:url|active)",
-].join("|") + ")$", "i")
-
-/** Repository config cannot introduce a filter, include, URL rewrite, proxy, command, or credential helper. */
-export function safeRepositoryConfig(text: string) {
-  return text.split("\0").filter(Boolean).every((item) => SAFE_CONFIG.test(item.split("\n", 1)[0]!))
-}
+// The allowlist, flags and environment are shared with the engine's unattended checkout (EV-12).
+export { GIT_HARDENING, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
 
 /** Why a declared project folder can or cannot take a job. The reason is local only: the job declines `not-mapped`. */
 export type RepositoryMapping = "mapped" | "unsafe-config" | "other-repository" | "unavailable"
@@ -51,21 +31,6 @@ function mapsRepository(config: string, repository: string) {
     const remote = parseGithubRemote(url)
     return remote !== undefined && `${remote.owner}/${remote.name}`.toLowerCase() === repository.toLowerCase()
   }))
-}
-
-export const GIT_HARDENING = [
-  "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "-c", "core.sshCommand=",
-  "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=never", "-c", "commit.gpgSign=false",
-  "-c", "tag.gpgSign=false", "-c", "credential.helper=", "-c", "core.pager=cat",
-] as const
-
-export function runnerGitEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    PATH: source.PATH, HOME: source.HOME, USERPROFILE: source.USERPROFILE, SYSTEMROOT: source.SYSTEMROOT,
-    TMPDIR: source.TMPDIR, TEMP: source.TEMP, SSH_AUTH_SOCK: source.SSH_AUTH_SOCK,
-    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0",
-    GIT_LFS_SKIP_SMUDGE: "1", GIT_PAGER: "cat", GIT_OPTIONAL_LOCKS: "0",
-  }
 }
 
 export type GitExec = (input: { readonly directory: string; readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv; readonly signal?: AbortSignal }) => Promise<string>
@@ -162,7 +127,7 @@ export function createEverywhereGit(input: {
     },
     async fetch(snapshot: GitSnapshot, base: string, jid: string) {
       if (!JOB_ID_PATTERN.test(jid) || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/.test(base) || base.includes("..") || !await unchanged(snapshot, input.directory)) throw new Error("Everywhere git authority changed")
-      const ref = `refs/vector-everywhere/${jid}`
+      const ref = fetchRef(jid)
       await run(["fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", snapshot.pushUrl, `refs/heads/${base}:${ref}`], input.directory, true)
       const from = (await run(["rev-parse", ref])).trim()
       if (!HEAD_SHA_PATTERN.test(from)) throw new Error("Invalid Everywhere fetched base")

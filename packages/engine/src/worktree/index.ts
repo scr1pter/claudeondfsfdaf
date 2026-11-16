@@ -19,6 +19,10 @@ import { AppProcess } from "@vectordevai/core/process"
 import { InstanceState } from "@/effect/instance-state"
 import { FileLock } from "@/tool/file-lock"
 import { WorktreeEvent } from "@vectordevai/schema/worktree-event"
+import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN } from "@vectordevai/schema/everywhere"
+import { GIT_HARDENING, fetchRef, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
+import { UntrustedGit } from "@vectordevai/core/untrusted-git"
+import { lstatSync } from "node:fs"
 import os from "node:os"
 
 export const Event = WorktreeEvent
@@ -47,6 +51,22 @@ export const ResetInput = Schema.Struct({
   directory: Schema.String,
 }).annotate({ identifier: "WorktreeResetInput" })
 export type ResetInput = Schema.Schema.Type<typeof ResetInput>
+
+/** A Vector everywhere job's checkout: the loaded project's own folder, the job's fetched base, its branch and id. */
+export const UnattendedInput = Schema.Struct({
+  directory: Schema.String,
+  base: Schema.String.check(Schema.isPattern(HEAD_SHA_PATTERN)),
+  branch: Schema.String.check(Schema.isPattern(BRANCH_PATTERN)),
+  jid: Schema.String.check(Schema.isPattern(JOB_ID_PATTERN)),
+}).annotate({ identifier: "WorktreeUnattendedInput" })
+export type UnattendedInput = Schema.Schema.Type<typeof UnattendedInput>
+
+export const Unattended = Schema.Struct({
+  directory: Schema.String,
+  branch: Schema.String,
+  base: Schema.String,
+}).annotate({ identifier: "WorktreeUnattended" })
+export type Unattended = Schema.Schema.Type<typeof Unattended>
 
 export class NotGitError extends Schema.TaggedErrorClass<NotGitError>()("WorktreeNotGitError", {
   message: Schema.String,
@@ -100,6 +120,26 @@ function slugify(input: string) {
     .replace(/-+$/, "")
 }
 
+// The runner's hardening (core everywhere/git.ts) plus what creating a checkout needs: no transport at all (so no lazy
+// fetch of a partial clone's missing objects), no automatic gc or maintenance, no submodule recursion, and long paths
+// on Windows. A protocol.<name>.allow beats protocol.allow, so each protocol is pinned too (as core untrusted-git.ts
+// does; GIT_HARDENING pins ext and file): no transport even if the repository-config allowlist ever accepts protocol.*.
+const UNATTENDED_FLAGS = [
+  ...GIT_HARDENING,
+  ...[
+    "core.useBuiltinFSMonitor=false",
+    "protocol.allow=never",
+    ...["git", "http", "https", "ssh"].map((name) => `protocol.${name}.allow=never`),
+    "gc.auto=0",
+    "maintenance.auto=false",
+    "submodule.recurse=false",
+    ...(process.platform === "win32" ? ["core.longpaths=true"] : []),
+  ].flatMap((setting) => ["-c", setting]),
+]
+// As the runner's git (desktop everywhere-git.ts): a stuck git must not hold the repository's worktree lock.
+const UNATTENDED_TIMEOUT = "60 seconds"
+const UNATTENDED_OUTPUT_BYTES = 8 * 1024 * 1024
+
 function failedRemoves(...chunks: string[]) {
   return chunks.filter(Boolean).flatMap((chunk) =>
     chunk
@@ -128,6 +168,14 @@ export interface Interface {
     info: Info,
     options: { from: string; env?: Record<string, string | undefined> },
   ) => Effect.Effect<Info, Error>
+  /**
+   * Vector everywhere's unattended checkout (docs/vector/build/vector-everywhere-main-requests.md): the job's own
+   * branch and folder at the exact base the runner fetched, made with git hardened as the runner's is, then registered
+   * as a project sandbox. It never loads an instance, runs a start script, a caller's command or an install, or
+   * inherits workspace trust. Owner-only exposure, the `everywhere.projects` allowlist and the trust check are the
+   * caller's (EV-13), which must not load an instance for a folder outside the allowlist.
+   */
+  readonly createUnattended: (input: UnattendedInput) => Effect.Effect<Unattended, NotGitError | CreateFailedError>
   readonly list: () => Effect.Effect<(Omit<Info, "branch"> & { branch?: string })[], Error>
   readonly remove: (input: RemoveInput) => Effect.Effect<boolean, Error>
   /** Isolation removal may delete only the reserved branch its registry validated. */
@@ -378,6 +426,142 @@ const layer: Layer.Layer<
       )
       const normalized = pathSvc.normalize(real)
       return process.platform === "win32" ? normalized.toLowerCase() : normalized
+    })
+
+    // Vector everywhere's git: the runner's hardening, an environment that inherits nothing from this process (no
+    // GIT_DIR, GIT_CONFIG_* or GIT_SSH*, no system or global config), and on Windows never a git.exe in a repository.
+    // Nothing here connects and every protocol is off, so neither the Local refusal nor gitEnvironment applies. Failing
+    // to start, a timeout and cut-off output answer -1, which is never one of git's own exit codes.
+    const unattendedGit = Effect.fnUntraced(
+      function* (args: string[], cwd: string) {
+        const program = UntrustedGit.program()
+        if (!program) return { code: -1, text: "" }
+        const result = yield* appProcess.run(
+          ChildProcess.make(program, [...UNATTENDED_FLAGS, ...args], {
+            cwd,
+            extendEnv: false,
+            stdin: "ignore",
+            env: { ...runnerGitEnvironment(), GIT_NO_LAZY_FETCH: "1" },
+          }),
+          { timeout: UNATTENDED_TIMEOUT, maxOutputBytes: UNATTENDED_OUTPUT_BYTES, maxErrorBytes: 64 * 1024 },
+        )
+        if (result.stdoutTruncated) return { code: -1, text: "" }
+        return { code: result.exitCode, text: result.stdout.toString("utf8") }
+      },
+      Effect.catch(() => Effect.succeed({ code: -1, text: "" })),
+    )
+    const unattendedPrints = (args: string[], cwd: string, value: string) =>
+      unattendedGit(args, cwd).pipe(Effect.map((result) => result.code === 0 && result.text.trim() === value))
+    const absent = (target: string) =>
+      Effect.try({
+        try: () => lstatSync(target, { throwIfNoEntry: false }) === undefined,
+        catch: (error) => error,
+      }).pipe(Effect.orElseSucceed(() => false))
+
+    // Both scopes the repository gives git, includes unresolved, read as the runner reads them (desktop
+    // everywhere-git.ts `configuration`). System and global config are off and the environment adds none, so with the
+    // command line this is all the configuration git sees: no filter, hook, helper or include can come from elsewhere.
+    const unattendedConfig = Effect.fnUntraced(function* (cwd: string) {
+      const local = yield* unattendedGit(["config", "--null", "--list", "--local", "--no-includes"], cwd)
+      const located = yield* unattendedGit(["rev-parse", "--git-path", "config.worktree"], cwd)
+      if (local.code !== 0 || located.code !== 0 || !safeRepositoryConfig(local.text)) return false
+      const file = pathSvc.resolve(cwd, located.text.trim())
+      if (yield* absent(file)) return true
+      const worktree = yield* unattendedGit(["config", "--null", "--list", "--file", file, "--no-includes"], cwd)
+      return worktree.code === 0 && safeRepositoryConfig(worktree.text)
+    })
+
+    const createUnattended: Interface["createUnattended"] = Effect.fn("Worktree.createUnattended")(function* (input) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for Git repositories" })
+      // The branch is the job's own: one of core everywhere/publish.ts branchFor's two forms for this jid.
+      if (
+        !Schema.is(UnattendedInput)(input) ||
+        !pathSvc.isAbsolute(input.directory) ||
+        (input.branch !== `vector/ve-${input.jid.slice(-12)}` && !input.branch.endsWith(`-${input.jid.slice(-8)}`))
+      )
+        return yield* new CreateFailedError({ message: "Invalid unattended worktree request." })
+      const own = new CreateFailedError({
+        message: "An unattended worktree starts only from the loaded project's own checkout.",
+      })
+      const checkout = yield* canonical(input.directory)
+      // A checkout Vector made (a task, a worktree or another job's) never seeds one.
+      if (
+        checkout !== (yield* canonical(ctx.directory)) ||
+        checkout !== (yield* canonical(ctx.worktree)) ||
+        FSUtil.contains(yield* canonical(Global.Path.data), checkout)
+      )
+        return yield* own
+      const common = yield* unattendedGit(["rev-parse", "--git-common-dir"], ctx.worktree)
+      if (common.code !== 0)
+        return yield* new CreateFailedError({ message: "The unattended worktree could not be created." })
+      const root = pathSvc.join(Global.Path.data, "everywhere-worktree", ctx.project.id)
+      const directory = pathSvc.join(root, input.jid)
+      const reserved = new CreateFailedError({ message: "This job's branch or folder is already reserved." })
+      const failed = new CreateFailedError({
+        message: "The unattended worktree could not be created. Its reservation is kept, so this job id is not reused.",
+      })
+      // The lock orders this with every other worktree change in this process. Across processes the exclusive mkdir
+      // reserves the folder and git's ref lock the branch.
+      return yield* FileLock.forTree(pathSvc.resolve(ctx.worktree, common.text.trim()))(
+        Effect.gen(function* () {
+          // The authoritative check: git's own worktree add and reset follow with nothing else awaited in between.
+          if (!(yield* unattendedConfig(ctx.worktree)))
+            return yield* new CreateFailedError({
+              message: "The repository's git configuration can run programs. No unattended worktree was created.",
+            })
+          // core.worktree, which the allowlist keeps, could point git at another folder.
+          const toplevel = yield* unattendedGit(["rev-parse", "--show-toplevel"], ctx.worktree)
+          if (toplevel.code !== 0 || (yield* canonical(toplevel.text.trim())) !== checkout) return yield* own
+          // The ref the runner fetched this job's base into must name the base, and the base must be a commit here.
+          const fetched = yield* unattendedPrints(
+            ["rev-parse", "--verify", "--quiet", "--end-of-options", fetchRef(input.jid)],
+            ctx.worktree,
+            input.base,
+          )
+          const commit = yield* unattendedPrints(
+            ["rev-parse", "--verify", "--quiet", "--end-of-options", `${input.base}^{commit}`],
+            ctx.worktree,
+            input.base,
+          )
+          if (!fetched || !commit)
+            return yield* new CreateFailedError({ message: "The base is not this job's fetched commit." })
+          // Nothing at the folder's path (not even a link), and the path stays inside the data folder.
+          if (!(yield* absent(directory)) || !FSUtil.writableInside(Global.Path.data, directory)) return yield* reserved
+          const branch = yield* unattendedGit(
+            ["show-ref", "--verify", "--quiet", `refs/heads/${input.branch}`],
+            ctx.worktree,
+          )
+          if (branch.code !== 1) return yield* reserved
+          // Another process may have taken the folder since the check: only an exclusive mkdir decides.
+          const made = yield* fs.makeDirectory(root, { recursive: true }).pipe(
+            Effect.andThen(fs.makeDirectory(directory)),
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          )
+          if (!made) return yield* reserved
+          // From here on nothing is given back: a jid is used once, so a failed reservation is never retried.
+          // --no-track keeps .git/config, which the runner hashes, unwritten.
+          const created = yield* unattendedGit(
+            ["worktree", "add", "--no-checkout", "--no-track", "-b", input.branch, "--", directory, input.base],
+            ctx.worktree,
+          )
+          if (created.code !== 0) return yield* failed
+          const populated = yield* unattendedGit(["reset", "--hard", "--quiet", "--no-recurse-submodules"], directory)
+          if (
+            populated.code !== 0 ||
+            !(yield* unattendedPrints(["rev-parse", "--verify", "HEAD"], directory, input.base)) ||
+            !(yield* unattendedPrints(["symbolic-ref", "HEAD"], directory, `refs/heads/${input.branch}`))
+          )
+            return yield* failed
+          // The real path in its native case: canonical() lowercases on Windows, which the runner's own toplevel
+          // comparison would not match.
+          const placed = yield* Effect.try({ try: () => FSUtil.realpath(directory), catch: () => failed })
+          yield* project.addSandbox(ctx.project.id, placed).pipe(Effect.catchDefect(() => Effect.fail(failed)))
+          return { directory: placed, branch: input.branch, base: input.base }
+        }),
+      )
     })
 
     function parseWorktreeList(text: string) {
@@ -746,7 +930,17 @@ const layer: Layer.Layer<
       return true
     })
 
-    return Service.of({ makeWorktreeInfo, createFromInfo, create, createForTask, list, remove, removeForTask, reset })
+    return Service.of({
+      makeWorktreeInfo,
+      createFromInfo,
+      create,
+      createForTask,
+      createUnattended,
+      list,
+      remove,
+      removeForTask,
+      reset,
+    })
   }),
 )
 
