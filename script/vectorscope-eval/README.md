@@ -1002,6 +1002,25 @@ calls it, for `ci.ts` with `PIPELINE=replay` (VS-21c).
   its zero outside measured nothing), any connection outside, no pass for a
   case with reviewed files, and its variant record's `variantProblems`.
   `cap.over` is never a problem.
+- **Narrative invariance (VS-22d item 2).**
+  `packages/engine/test/review/narrative-invariance.test.ts` is the "Now"
+  recording test, the zero-spend I-2 check over what a record holds today. On
+  one synthetic checkout it projects a neutral, non-empty `pr.body`, five
+  framings of it (prior approval, false coverage, misleading hardening, an
+  agent-authored claim that tries to reopen and close its block, open a
+  trusted one and set invocation fields, and evidence dilution) and the neutral body again as a control. Each
+  framing must give the neutral run's scope (policy digest included), models,
+  passes, `maxSteps`, statuses and phases, and review and security wire bodies
+  that are byte for byte the same outside the one `<untrusted_pr_body>` block;
+  verify's bodies are the same whole. A second case does the same for an
+  untrusted case under the GitHub job's isolation with three framings. A run
+  that crosses midnight is run again, since the system prompt carries the
+  day. The depth plan and lenses (VS-28 wiring), the privacy decision
+  (VS-23b/c) and the runtime decision (VS-30) get the same comparison with
+  their wiring packages; the paid comparison of findings and verdicts across
+  framings is Later (L8, Q9). The 10 to 20 reversed-security-fix dataset
+  cases are not part of it: item 2's dataset half stays with the benchmark
+  agent and the owner.
 
 - **Cost by pass and token kind (VS-21e).** `report.ts --cost-split` and the
   entry point's `--cost-split` split each pass's `estimateCostUsd` bands by
@@ -1778,9 +1797,12 @@ cd script/vectorscope-eval && bun test ci.test.ts
 
 `research/` holds the scripts behind round two's own measurements (the
 ApacheJIT models, the Tier 1 grep, parse and slice timings, and the AACR-Bench
-band analysis), limited to inputs that are D8-clean today (VS-21d). They are
-Python, Node and shell, not TypeScript, so this folder's tsconfig, `test.yml`
-and the eval workflow never load them. Their numbers are internal diagnostics
-(D12) and their outputs are never committed (I-13). Inputs, pins, the finding
-each script backs and the scripts that stay gated are in
+band analysis), limited to inputs that are D8-clean today (VS-21d). Most are
+Python, Node and shell, which this folder's tsconfig, `test.yml` and the eval
+workflow never load. The one TypeScript file, VS-48a's
+`research/instructions.ts`, is outside the eval tsconfig's non-recursive
+`include` too: core's `test/review/instruction-count-script.test.ts` imports
+it, so core's typecheck and unit job cover it. Their numbers are internal
+diagnostics (D12) and their outputs are never committed (I-13). Inputs, pins,
+the finding each script backs and the scripts that stay gated are in
 [`research/README.md`](research/README.md).
