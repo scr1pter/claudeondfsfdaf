@@ -28,6 +28,7 @@ import {
 import { createJob, readJob, readJobBody } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { ERASE_PARTS } from "../../../api/_lib/codium-erase"
+import { TOMBSTONE_KEEP_MS } from "../../../api/_lib/codium-tombstone"
 import { type Store } from "../../../api/_lib/everywhere/store"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { FakeStore, useKv, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
@@ -286,11 +287,24 @@ describe("erasing an account", () => {
     ).toEqual({ ok: false, code: "link-invalid" })
     expect(erasedJobs.accounts).toEqual([A.toLowerCase()])
     expect(new Set(erasedJobs.installations)).toEqual(new Set([LINEAR, SLACK]))
-    // Only the minimal permanent deletion marker remains; it prevents delayed writers from recreating data.
+    // Only the minimal deletion marker remains; it stops delayed writers and expires with Codium's tombstone.
     expect([...fake.data.keys()].filter((key) => key.includes(A.toLowerCase()))).toEqual([everywhereKeys.accountClosed(A)])
     expect(fake.read(everywhereKeys.accountClosed(A))).toEqual({ kind: "string", value: "closed" })
-    expect(fake.pttl(everywhereKeys.accountClosed(A))).toBe(-1)
+    expect(fake.pttl(everywhereKeys.accountClosed(A))).toBe(TOMBSTONE_KEEP_MS)
     expect(await readAudit(store, A)).toEqual([])
+  })
+
+  test("the closed marker of an account that never used Everywhere is not kept past the tombstone", async () => {
+    const never = randomUUID()
+    await eraseEverywhereAccount(eraseCtx(), never)
+    expect([...fake.data.keys()].filter((key) => key.includes(never))).toEqual([everywhereKeys.accountClosed(never)])
+    // A later pass (the follow-up check) rewrites it, so it outlives every pass by the tombstone's retention.
+    fake.clock.advance(TOMBSTONE_KEEP_MS - 1)
+    await eraseEverywhereAccount(eraseCtx(), never)
+    expect(fake.pttl(everywhereKeys.accountClosed(never))).toBe(TOMBSTONE_KEEP_MS)
+    fake.clock.advance(TOMBSTONE_KEEP_MS)
+    expect(fake.read(everywhereKeys.accountClosed(never))).toBeUndefined()
+    expect([...fake.data.keys()].filter((key) => key.includes(never))).toEqual([])
   })
 
   test("other accounts keep their own records, and their logs say why a link went", async () => {
@@ -335,7 +349,7 @@ describe("erasing an account", () => {
     expect(await findLink(store, JIRA, JIRA_USER)).toBeUndefined()
     expect([...fake.data.keys()].filter((key) => key.includes(A.toLowerCase()))).toEqual([everywhereKeys.accountClosed(A)])
     expect(fake.read(everywhereKeys.accountClosed(A))).toEqual({ kind: "string", value: "closed" })
-    expect(fake.pttl(everywhereKeys.accountClosed(A))).toBe(-1)
+    expect(fake.pttl(everywhereKeys.accountClosed(A))).toBe(TOMBSTONE_KEEP_MS)
     // The default part has no active-account adapter: it cannot append to an unverified teammate's audit.
     expect(await readAudit(store, B)).toEqual(auditBefore)
     // Actual job cancellation still uses the deletion's clock and erases bodies without that adapter.

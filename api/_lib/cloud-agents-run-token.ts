@@ -3,13 +3,8 @@ import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, generationKey } from "./cloud-agents-binding.js"
 import { cloudAgentRevokedBefore, type RunSource } from "./cloud-agents-entitlement.js"
-import {
-  liveKey,
-  runRecordKey,
-  METER_EPOCH_PATTERN,
-  type LedgerPurpose,
-  type LedgerSource,
-} from "./cloud-agents-ledger.js"
+import { METER_EPOCH_PATTERN } from "./cloud-agents-epoch.js"
+import { liveKey, runRecordKey, type LedgerPurpose, type LedgerSource } from "./cloud-agents-ledger.js"
 import { ApiError, type ApiRequest } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 import { signRunTokenPayload } from "./cloud-agents-run-crypto.js"
@@ -54,9 +49,7 @@ const Claims = Schema.Struct({
   gen: Schema.Number.check(Schema.makeFilter((value: number) => Number.isSafeInteger(value) && value >= 1)),
   src: Schema.Literals(["github-comment", "github-dispatch", "github-schedule"]),
   pur: Schema.Literals(["task", "review", "scheduled"]),
-  // Read at decode time, not here: importing the ledger first reaches this module (entitlement -> ... ->
-  // model-plan-caller) while the ledger's consts are still uninitialized.
-  epoch: Schema.String.check(Schema.makeFilter((value: string) => METER_EPOCH_PATTERN.test(value))),
+  epoch: Schema.String.check(Schema.isPattern(METER_EPOCH_PATTERN)),
   dl: Time,
   exp: Time,
   iat: Time,

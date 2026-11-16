@@ -3,6 +3,8 @@ import DocsPage from "../../layouts/DocsPage.astro"
 import { Hands } from "@vectordevai/schema/hands"
 import { handsReleasePreview } from "../../data/vector-releases"
 
+// Unreleased draft: Astro routes only src/pages, so this page is not built, linked or listed in the sitemap.
+// When Hands ships, move it back to src/pages/docs/ and add its docs-nav.ts entry in the same change.
 export const prerender = true
 ---
 

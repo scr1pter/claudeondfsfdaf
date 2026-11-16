@@ -669,6 +669,17 @@ describe("writeBundle", () => {
       make: (dir: string) => put(dir, { ...many("tracked", half + 1, "changed"), ...many("many", half, "new") }),
     },
     {
+      name: "files, deletions counted",
+      refused: "files" as const,
+      files: GithubAgents.PATCH_LIMITS.files + 1,
+      base: many("tracked", half + 1, "base"),
+      end: undefined,
+      make: async (dir: string) => {
+        await fs.rm(path.join(dir, "tracked"), { recursive: true })
+        await put(dir, many("many", half, "new"))
+      },
+    },
+    {
       name: "fileBytes",
       refused: "fileBytes" as const,
       files: 1,
@@ -702,6 +713,10 @@ describe("writeBundle", () => {
       comment: "Done",
     })
     expect(out.summary?.stop).toBe(row.end?.stop)
+    if (row.refused !== "files") return
+    // Refused before the add, so git wrote no object for the new paths.
+    const blob = (await sh(repo.dir, ["hash-object", "many/0.txt"])).trim()
+    expect((await $`git cat-file -e ${blob}`.cwd(repo.dir).nothrow().quiet()).exitCode).not.toBe(0)
   })
 
   test("a repository config setting diff.noprefix or an external diff still yields an applicable patch", async () => {

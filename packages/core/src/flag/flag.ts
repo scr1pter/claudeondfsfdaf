@@ -60,8 +60,9 @@ export const Flag = {
   get VECTOR_EXPERIMENTAL_REFERENCES() {
     return enabledByExperimental("VECTOR_EXPERIMENTAL_REFERENCES")
   },
+  // Connect is unqualified, so it needs its own opt-in: the umbrella VECTOR_EXPERIMENTAL does not turn it on.
   get VECTOR_EXPERIMENTAL_CONNECT() {
-    return enabledByExperimental("VECTOR_EXPERIMENTAL_CONNECT")
+    return truthy("VECTOR_EXPERIMENTAL_CONNECT")
   },
   get VECTOR_TUI_CONFIG() {
     return process.env.VECTOR_TUI_CONFIG

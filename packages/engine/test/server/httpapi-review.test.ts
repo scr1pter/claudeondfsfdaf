@@ -2,8 +2,7 @@ import { $ } from "bun"
 import { afterEach, describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { clearTimeout, setTimeout } from "node:timers"
-import { Cause, ConfigProvider, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { ConfigProvider, Effect, Layer, Option, Schema } from "effect"
 import { inArray } from "drizzle-orm"
 import { HttpServer } from "effect/unstable/http"
 import { createVectorClient } from "@vectordevai/sdk/v2"
@@ -13,7 +12,6 @@ import { decodeLocalRun } from "@vectordevai/core/review/local-result"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Database } from "@vectordevai/core/database/database"
-import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { foreignReview } from "../../../core/test/fixture/review-deletion"
@@ -22,7 +20,6 @@ import { ReviewLocalRun } from "@/review/local-run"
 import { Config } from "@/config/config"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { InstanceState } from "@/effect/instance-state"
-import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceHooks } from "@/project/instance-hooks"
 import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
@@ -163,183 +160,12 @@ function data<S extends Schema.Top>(response: Response, schema: S) {
   expect(response.status).toBe(200)
   return call(() => response.json()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)))
 }
-type Diagnostic = {
-  passive: boolean
-  case: "discovery" | "read-asks"
-  phase: "fixture" | "post" | "get-run" | "get-list" | "idle"
-  runID?: string
-  runStatus: ReviewRun.Status | "unavailable"
-  reviewOrdinal: number
-  completedReviews: number
-  modelRequests: number | "unavailable"
-  backgroundRunning: number | "unavailable"
-  stores: Map<string, BackgroundJobStore.Interface>
-  storeObserved: boolean
-  jobStatus:
-    | "unavailable"
-    | "missing"
-    | "running"
-    | "completed"
-    | "error"
-    | "cancelled"
-    | "interrupted"
-    | "other"
-    | "query-timeout"
-    | "query-failed"
-  sample?: Effect.Effect<void>
-  calls?: Effect.Effect<number>
-}
-const diagnostic = (kind: Diagnostic["case"]): Diagnostic | undefined => {
-  const mode = process.env.VECTOR_REVIEW_HTTP_DIAGNOSTICS
-  if (mode !== "1" && mode !== "passive") return
-  return {
-    passive: mode === "passive",
-    case: kind,
-    phase: "fixture",
-    runStatus: "unavailable",
-    reviewOrdinal: 0,
-    completedReviews: 0,
-    modelRequests: "unavailable",
-    backgroundRunning: "unavailable",
-    jobStatus: "unavailable",
-    stores: new Map(),
-    storeObserved: false,
-  }
-}
-const captureDiagnostic = (state: Diagnostic | undefined, f: Effect.Success<ReturnType<typeof fixture>>) =>
-  Effect.gen(function* () {
-    if (!state) return
-    state.calls = f.llm.calls
-    if (state.passive) {
-      state.phase = "idle"
-      return
-    }
-    state.sample = Effect.gen(function* () {
-      state.modelRequests = yield* f.llm.calls
-      const store = state.stores.get(f.directory)
-      state.storeObserved = store !== undefined
-      if (!store) return
-      const rows = yield* store.forParent(parentID)
-      state.backgroundRunning = rows.filter((job) => job.status === "running").length
-      if (!state.runID) return
-      const job = rows.find((job) => job.id === state.runID)
-      state.jobStatus = !job
-        ? "missing"
-        : ["running", "completed", "error", "cancelled", "interrupted"].includes(job.status)
-          ? job.status
-          : "other"
-    })
-    state.phase = "idle"
-  })
-const reportPassiveDiagnostic = (state: Diagnostic, trigger: "watchdog" | "failure") =>
-  console.error(
-    "review-http-diagnostic",
-    JSON.stringify({
-      mode: "passive",
-      case: state.case,
-      trigger,
-      phase: state.phase,
-      runStatus: state.runStatus,
-      runKnown: state.runID !== undefined,
-      reviewOrdinal: state.reviewOrdinal,
-      completedReviews: state.completedReviews,
-      // The captured test server implements this as Effect.sync(() => hits.length).
-      modelRequests: state.calls ? Effect.runSync(state.calls) : "unavailable",
-      backgroundRunning: "unavailable",
-      storeObserved: false,
-      jobStatus: "unavailable",
-    }),
-  )
-const reportDiagnostic = (state: Diagnostic, trigger: "watchdog" | "failure") =>
-  Effect.gen(function* () {
-    const phase = state.phase
-    yield* (state.sample ?? Effect.void).pipe(
-      Effect.timeoutOrElse({
-        duration: "250 millis",
-        orElse: () =>
-          Effect.sync(() => {
-            state.jobStatus = "query-timeout"
-          }),
-      }),
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.interrupt
-          : Effect.sync(() => {
-              state.jobStatus = "query-failed"
-            }),
-      ),
-    )
-    yield* Effect.sync(() =>
-      console.error(
-        "review-http-diagnostic",
-        JSON.stringify({
-          case: state.case,
-          trigger,
-          phase,
-          runStatus: state.runStatus,
-          runKnown: state.runID !== undefined,
-          modelRequests: state.modelRequests,
-          backgroundRunning: state.backgroundRunning,
-          storeObserved: state.storeObserved,
-          jobStatus: state.jobStatus,
-        }),
-      ),
-    )
-  })
-const diagnosed =
-  (state: Diagnostic | undefined) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) => {
-    if (!state) return effect
-    if (state.passive)
-      return Effect.acquireUseRelease(
-        Effect.sync(() => setTimeout(() => reportPassiveDiagnostic(state, "watchdog"), 25_000).unref()),
-        () =>
-          effect.pipe(
-            Effect.onExit((exit) =>
-              Exit.isFailure(exit) ? Effect.sync(() => reportPassiveDiagnostic(state, "failure")) : Effect.void,
-            ),
-          ),
-        (timer) => Effect.sync(() => clearTimeout(timer)),
-      )
-    return Effect.gen(function* () {
-      const hooks = yield* Effect.serviceOption(InstanceHooks.Service)
-      if (Option.isSome(hooks))
-        yield* hooks.value.register(
-          `review-http-diagnostic-${state.case}`,
-          Effect.gen(function* () {
-            const instance = yield* InstanceRef
-            const store = yield* Effect.serviceOption(BackgroundJobStore.Service)
-            if (instance && Option.isSome(store)) state.stores.set(instance.directory, store.value)
-          }),
-        )
-      const watchdog = yield* Effect.sleep("25 seconds").pipe(
-        Effect.andThen(reportDiagnostic(state, "watchdog")),
-        Effect.forkScoped,
-      )
-      return yield* effect.pipe(
-        Effect.onExit((exit) => (Exit.isFailure(exit) ? reportDiagnostic(state, "failure") : Effect.void)),
-        Effect.ensuring(Fiber.interrupt(watchdog)),
-      )
-    })
-  }
-
-function finished(f: Effect.Success<ReturnType<typeof fixture>>, runID: string, state?: Diagnostic) {
-  const read = f.raw("GET", `${root}/${runID}`).pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))
+function finished(f: Effect.Success<ReturnType<typeof fixture>>, runID: string) {
   return pollWithTimeout(
-    (state
-      ? Effect.suspend(() => {
-          state.phase = "get-run"
-          return read.pipe(
-            Effect.tap((value) =>
-              Effect.sync(() => {
-                state.runStatus = value.status
-                state.phase = "idle"
-              }),
-            ),
-          )
-        })
-      : read
-    ).pipe(Effect.map((state) => (state.status === "running" ? undefined : state))),
+    f.raw("GET", `${root}/${runID}`).pipe(
+      Effect.flatMap((response) => data(response, ReviewRun.Info)),
+      Effect.map((state) => (state.status === "running" ? undefined : state)),
+    ),
     "Local review did not settle",
     "15 seconds",
   )
@@ -541,14 +367,11 @@ describe("owner local review HTTP boundary", () => {
 
   linuxLive(
     "local execution and bounded cross-client discovery need no GitHub connection and never leak result JSON in summaries",
-    () => {
-      const state = diagnostic("discovery")
-      return Effect.gen(function* () {
+    () =>
+      Effect.gen(function* () {
         const f = yield* fixture()
-        yield* captureDiagnostic(state, f)
         const ids: string[] = []
         for (let n = 0; n < 3; n++) {
-          if (state?.passive) state.reviewOrdinal = n + 1
           const request = { ...f.request, requestID: `request_http_page_${n}` }
           yield* f.llm.push(
             reply()
@@ -568,41 +391,26 @@ describe("owner local review HTTP boundary", () => {
               )
               .usage({ input: 120, output: 30 }),
           )
-          if (state) {
-            state.phase = "post"
-            state.runID = undefined
-            state.runStatus = "unavailable"
-            state.jobStatus = "unavailable"
-          }
           const started = yield* f
             .raw("POST", root, owner, request)
             .pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))
-          if (state) {
-            state.runID = started.runID
-            state.runStatus = started.status
-            state.phase = "idle"
-          }
           ids.push(started.runID)
-          const complete = yield* finished(f, started.runID, state)
-          if (state?.passive && complete.status === "completed") state.completedReviews = n + 1
+          const complete = yield* finished(f, started.runID)
           expect(complete.status).toBe("completed")
           const decoded = yield* call(() => decodeLocalRun(complete, { parentID, request, runID: started.runID }))
           expect(decoded?.result?.outcome?.selection.inline).toHaveLength(1)
           expect(decoded?.result?.outcome?.cost?.input).toBe(120)
           expect(decoded?.verdict.verdict).toBe("blocking")
           expect(complete.artifact?.json).toContain("PRIVATE_RESULT_BODY_MARKER")
-          if (state) state.phase = "post"
           expect(
             (yield* f
               .raw("POST", root, owner, request)
               .pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))).runID,
           ).toBe(started.runID)
-          if (state) state.phase = "idle"
         }
         const pages: string[] = []
         let cursor: string | undefined
         do {
-          if (state) state.phase = "get-list"
           const response = yield* f.raw("GET", `${root}?limit=1${cursor ? `&cursor=${cursor}` : ""}`)
           expect(response.status).toBe(200)
           const text = yield* call(() => response.text())
@@ -615,15 +423,11 @@ describe("owner local review HTTP boundary", () => {
           expect(parsed.value.runs[0]!.hasResult).toBe(true)
           pages.push(parsed.value.runs[0]!.runID)
           cursor = parsed.value.next
-          if (state) state.phase = "idle"
         } while (cursor)
         expect(new Set(pages)).toEqual(new Set(ids))
         expect(yield* f.llm.inputs).toHaveLength(3)
-        if (state) state.phase = "get-list"
         expect((yield* f.raw("GET", `${root}?limit=51`)).status).toBe(400)
-        if (state) state.phase = "idle"
-      }).pipe(diagnosed(state))
-    },
+      }),
     // Three real reviews each retain finished()'s independent 15-second bound.
     // Leave room for all three and the discovery/idempotency HTTP checks.
     60_000,
@@ -631,38 +435,21 @@ describe("owner local review HTTP boundary", () => {
 
   linuxLive(
     "the server derives inherited read asks and excludes protected payloads and tools",
-    () => {
-      const state = diagnostic("read-asks")
-      return Effect.gen(function* () {
+    () =>
+      Effect.gen(function* () {
         const f = yield* fixture()
-        yield* captureDiagnostic(state, f)
-        if (state) state.phase = "fixture"
         yield* call(() =>
           f.sdk.session.update({
             sessionID: parentID,
             permission: [{ permission: "read", pattern: "private.ts", action: "ask" }],
           }),
         )
-        if (state) state.phase = "idle"
         yield* f.llm.push(reply().tool("read", { filePath: "private.ts" }))
         yield* f.llm.push(reply().tool("StructuredOutput", report()))
-        if (state) {
-          if (state.passive) state.reviewOrdinal = 1
-          state.phase = "post"
-          state.runID = undefined
-          state.runStatus = "unavailable"
-          state.jobStatus = "unavailable"
-        }
         const started = yield* f
           .raw("POST", root, owner, f.request)
           .pipe(Effect.flatMap((response) => data(response, ReviewRun.Info)))
-        if (state) {
-          state.runID = started.runID
-          state.runStatus = started.status
-          state.phase = "idle"
-        }
-        const complete = yield* finished(f, started.runID, state)
-        if (state?.passive && complete.status === "completed") state.completedReviews = 1
+        const complete = yield* finished(f, started.runID)
         const decoded = yield* call(() =>
           decodeLocalRun(complete, { parentID, request: f.request, runID: started.runID }),
         )
@@ -670,8 +457,7 @@ describe("owner local review HTTP boundary", () => {
         expect(decoded?.result?.outcome?.unreviewed).toContain("private.ts")
         expect(JSON.stringify(yield* f.llm.inputs)).not.toContain("WITHHELD_HTTP_CONTENT")
         expect(yield* f.llm.inputs).toHaveLength(2)
-      }).pipe(diagnosed(state))
-    },
+      }),
     30_000,
   )
 

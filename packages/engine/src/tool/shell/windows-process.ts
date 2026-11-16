@@ -3,6 +3,7 @@ import { access, stat } from "node:fs/promises"
 import path from "node:path"
 import { ChildProcess } from "effect/unstable/process"
 import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { WindowsHolder } from "./windows-holder"
 
 export type Result = { exitCode: number; terminated: true }
@@ -150,6 +151,9 @@ export class StatusReader {
 
 /** Only this live registration owns the native holder. No operation accepts a recovered numeric PID. */
 export async function start(command: ChildProcess.StandardCommand, callbacks: Callbacks): Promise<Handle> {
+  // Defense in depth: the holder spawns PowerShell directly, never through ProcessIsolation.launch, so it refuses here
+  // too when isolation is required. ShellJobs refuses earlier with the user-facing message, before any job row.
+  if (ProcessIsolation.required()) throw new WindowsProcessError(ProcessIsolation.REFUSAL, true)
   if (process.platform !== "win32")
     throw new WindowsProcessError("Windows background containment is unavailable on this platform", true)
   if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)

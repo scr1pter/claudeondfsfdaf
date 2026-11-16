@@ -709,6 +709,9 @@ describe("checks before anything is asked", () => {
       yield* Effect.promise(() =>
         fs.symlink(path.join(repository, "pkg"), alias, process.platform === "win32" ? "junction" : "dir"),
       )
+      // Absolute rules match lexically. Hosted Windows spells os.tmpdir() in 8.3 form (RUNNER~1), which names no
+      // review origin here because the requested root sits outside the repository, so the sibling deny is canonical.
+      const canonical = yield* Effect.promise(() => fs.realpath(repository))
       for (const action of ["ask", "deny"] as const) {
         for (const relativeAsk of [false, true]) {
           const { hub, requester } = yield* setup([
@@ -716,7 +719,7 @@ describe("checks before anything is asked", () => {
             ...(relativeAsk ? [{ permission: "read", pattern: "pkg/.env", action: "ask" as const }] : []),
             { permission: "read", pattern: path.join(alias, ".env"), action },
             { permission: "read", pattern: path.join(alias, ".env"), action: "allow" },
-            { permission: "read", pattern: path.join(repository, "pkg2/.env"), action: "deny" },
+            { permission: "read", pattern: path.join(canonical, "pkg2/.env"), action: "deny" },
           ])
           const checks: boolean[] = []
           script.handle = (_request, context) =>
@@ -1192,7 +1195,7 @@ describe("checks before anything is asked", () => {
     }),
   )
 
-  it.effect("VECTOR_EXPERIMENTAL_CONNECT is off unless it or VECTOR_EXPERIMENTAL turns it on", () =>
+  it.effect("VECTOR_EXPERIMENTAL_CONNECT is off unless it is turned on explicitly", () =>
     Effect.gen(function* () {
       const read = (input: Record<string, unknown>) =>
         RuntimeFlags.Service.useSync((flags) => flags.experimentalConnect).pipe(
@@ -1204,8 +1207,10 @@ describe("checks before anything is asked", () => {
         )
       expect(yield* read({})).toBe(false)
       expect(yield* read({ VECTOR_EXPERIMENTAL_CONNECT: "true" })).toBe(true)
-      expect(yield* read({ VECTOR_EXPERIMENTAL: "true" })).toBe(true)
+      // The umbrella flag must not switch on unqualified Connect for users who set it for other experiments.
+      expect(yield* read({ VECTOR_EXPERIMENTAL: "true" })).toBe(false)
       expect(yield* read({ VECTOR_EXPERIMENTAL: "true", VECTOR_EXPERIMENTAL_CONNECT: "false" })).toBe(false)
+      expect(yield* read({ VECTOR_EXPERIMENTAL: "true", VECTOR_EXPERIMENTAL_CONNECT: "true" })).toBe(true)
     }),
   )
 

@@ -242,7 +242,10 @@ export namespace Flock {
           return { acquired: false }
         }
       } finally {
-        await removeDir(breakerPath)
+        // Tolerant on purpose: by now lockDir may be freshly recreated and ours. Throwing would leave it empty, with no
+        // heartbeat or meta, so every contender would wait a full staleMs on a lock nobody owns. A breaker left behind
+        // goes stale by itself, and the stale-breaker path above reports one it cannot delete.
+        await removeDir(breakerPath).catch(() => undefined)
       }
     }
 

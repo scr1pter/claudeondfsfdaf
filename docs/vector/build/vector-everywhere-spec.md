@@ -876,7 +876,7 @@ Re-read at the start of VE-10 to VE-13. Unverified at writing: Slack's real revi
 - Linear: linear.app/developers/agents, /agent-interaction, /agent-signals, /agent-best-practices, /webhooks, /rate-limiting, /integration-directory.
 - Atlassian: developer.atlassian.com/platform/forge/remote-agents-in-jira/, /platform/forge/manifest-reference/modules/rovo-agent-connector/, /platform/forge/events-reference/jira/, /platform/marketplace/security-requirements/, /platform/marketplace/security-bugfix-policy/, /platform/marketplace/listing-forge-apps, /cloud/jira/platform/rate-limiting; the Connect end-of-support announcement (extended to 2027-01-31).
 - GitHub: docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks, /en/apps/github-marketplace/github-marketplace-overview/about-marketplace-badges, /en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api; github.blog changelog 2025-12-03 (assigning issues to GitHub's agent through the API).
-- Repository: origin/vector-at-mention:docs/vector/build/vector-at-mention-spec.md (sections 1, 2.5, 2.11, 2.14, 4); origin/codium:docs/vector/build/codium-build-spec.md (4.17, 4.18, B08), codium-a39-remote-relay-notes.md, docs/vector/owner-actions/remote.md; /Users/aik010/.cache/vector-connect/docs/vector/build/connected-workspace-spec.md (sections 5 to 7).
+- Repository: origin/vector-at-mention:docs/vector/build/vector-at-mention-spec.md (sections 1, 2.5, 2.11, 2.14, 4); origin/codium:docs/vector/build/codium-build-spec.md (4.17, 4.18, B08), codium-a39-remote-relay-notes.md, docs/vector/owner-actions/remote.md; docs/vector/build/connected-workspace-spec.md (sections 5 to 7).
 
 ## Review notes
 

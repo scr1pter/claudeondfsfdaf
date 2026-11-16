@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import { and, eq, sql } from "drizzle-orm"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import { BrainRevocation } from "../../src/brain/revocation"
@@ -13,9 +13,8 @@ import {
   BrainReviewMemoryStateTable,
   BrainReviewMemoryScopeStateTable,
   BrainReviewMemoryTable,
+  BrainReviewMemorySourceTable,
   BrainTombstoneTable,
-  BrainEventTable,
-  BrainStateTable,
   BrainEntryTable,
   BrainEvidenceTable,
   BrainUseTable,
@@ -127,7 +126,7 @@ const genericEntry = (setup: Setup, text: string, origin: "agent" | "user" = "ag
   })
 
 describe("review memory erase compatibility and suspended writers, actual SQLite", () => {
-  test("session erase validates review epochs and witnesses before any generic entry, evidence, use or audit mutation", async () => {
+  test("session erase purges the session's review memory from inconsistent review state and still forgets ordinary memory", async () => {
     for (const mode of ["epoch", "witness"] as const) {
       await using tmp = await tmpdir()
       await open(tmp.path, ":memory:", (setup) =>
@@ -156,22 +155,30 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
           const snapshot = () =>
             Effect.gen(function* () {
               return {
-                entries: yield* setup.db.select().from(BrainEntryTable),
-                evidence: yield* setup.db.select().from(BrainEvidenceTable),
-                uses: yield* setup.db.select().from(BrainUseTable),
-                audit: yield* setup.db.select().from(BrainEventTable),
-                tombstones: yield* setup.db.select().from(BrainTombstoneTable),
-                state: yield* setup.db.select().from(BrainStateTable),
                 reviews: yield* setup.db.select().from(BrainReviewMemoryTable),
                 reviewState: yield* setup.db.select().from(BrainReviewMemoryStateTable),
                 reviewScopes: yield* setup.db.select().from(BrainReviewMemoryScopeStateTable),
+                reviewSources: yield* setup.db.select().from(BrainReviewMemorySourceTable),
+                witnesses: (yield* setup.db.select().from(BrainTombstoneTable)).filter(
+                  (row) => row.norm_hash === ReviewStore.MARKER || row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+                ),
               }
             })
           const before = yield* snapshot()
-          expect(before.entries).toHaveLength(3)
+          expect(yield* setup.db.select().from(BrainEntryTable)).toHaveLength(3)
           expect(before.reviews).toHaveLength(1)
-          expect(Exit.isFailure(yield* Effect.exit(setup.brain.eraseSession(setup.place, source.reviewID)))).toBe(true)
-          expect(yield* snapshot()).toEqual(before)
+          // Inconsistent review state must not block the user's erase or keep what it was asked to forget: the
+          // session's review record and both source witnesses go with its ordinary memory. The epochs, scopes and
+          // markers are not repaired, so review reads keep refusing as stale.
+          expect(yield* setup.brain.eraseSession(setup.place, source.reviewID)).toBe(2)
+          expect(yield* snapshot()).toEqual({ ...before, reviews: [] })
+          expect(yield* setup.db.select().from(BrainEntryTable)).toEqual([])
+          expect((yield* setup.db.select().from(BrainEntryTable)).some((row) => row.id === ordinary.id)).toBe(false)
+          expect((yield* setup.db.select().from(BrainEvidenceTable)).some((row) => row.entry_id === ordinary.id)).toBe(
+            false,
+          )
+          expect((yield* setup.db.select().from(BrainUseTable)).some((row) => row.entry_id === ordinary.id)).toBe(false)
+          expect(yield* setup.memory.inspect(setup.place)).toEqual({ ok: false, reason: "stale" })
         }),
       )
     }
@@ -202,7 +209,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
     )
   })
 
-  test("invalid individual epoch components, missing components and malformed witnesses cannot mutate or cancel into valid authority", async () => {
+  test("invalid individual epoch components, missing components and malformed witnesses are purged by an erase, never cancelled into valid authority", async () => {
     for (const mode of [
       "negative-global",
       "negative-local",
@@ -273,9 +280,11 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
                   .from(BrainReviewMemoryStateTable)
                   .orderBy(BrainReviewMemoryStateTable.repository_id),
                 records: yield* setup.db.select().from(BrainReviewMemoryTable),
-                markers: yield* setup.db.select().from(BrainTombstoneTable),
-                revocation: yield* setup.db.select().from(BrainStateTable),
-                audit: yield* setup.db.select().from(BrainEventTable),
+                scopes: yield* setup.db.select().from(BrainReviewMemoryScopeStateTable),
+                sources: yield* setup.db.select().from(BrainReviewMemorySourceTable),
+                markers: (yield* setup.db.select().from(BrainTombstoneTable)).filter(
+                  (row) => row.norm_hash === ReviewStore.MARKER || row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+                ),
               }
             })
           const corrupted = yield* snapshot()
@@ -294,9 +303,35 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
             ok: false,
             reason: "stale",
           })
-          expect(Exit.isFailure(yield* Effect.exit(setup.brain.erase(setup.place, "repository")))).toBe(true)
-          expect(Exit.isFailure(yield* Effect.exit(setup.brain.erase(setup.place, "all")))).toBe(true)
-          expect(yield* snapshot()).toEqual(corrupted)
+          // The user's erase still completes, and nothing it was asked to forget stays: the review record, scope,
+          // source and markers go with the ordinary memory. The repository's epoch is rewritten disabled and past every
+          // generation it showed, so no captured generation is current again; a corrupt global epoch is left alone.
+          const ordinary = yield* genericEntry(setup, "Prefer early returns before optional lookups.")
+          const learned = (yield* setup.db.select().from(BrainEntryTable)).length
+          expect(learned).toBeGreaterThan(0)
+          expect(yield* setup.brain.erase(setup.place, "repository")).toBe(learned + 1)
+          expect(yield* setup.db.select().from(BrainEntryTable)).toEqual([])
+          const purged = yield* snapshot()
+          expect(purged).toMatchObject({ records: [], scopes: [], sources: [], markers: [] })
+          expect(purged.state.filter((row) => row.repository === ReviewStore.GLOBAL)).toEqual(
+            corrupted.state.filter((row) => row.repository === ReviewStore.GLOBAL),
+          )
+          const epoch = purged.state.find((row) => row.repository === setup.place.repository)
+          expect(epoch?.enabled).toBe(0)
+          expect(epoch?.generation).toBeGreaterThan(apparentGeneration)
+          expect(yield* setup.memory.current(setup.place, { source, generation: apparentGeneration })).not.toEqual({
+            ok: true,
+            value: true,
+          })
+          yield* genericEntry(setup, "Keep the parsing boundary narrow.")
+          expect(yield* setup.brain.erase(setup.place, "all")).toBe(1)
+          expect(yield* setup.db.select().from(BrainEntryTable)).toEqual([])
+          expect(yield* snapshot()).toMatchObject({ records: [], scopes: [], sources: [], markers: [] })
+          // The all-memory erase rewrites the global epoch too, so review memory starts again disabled and empty at a
+          // generation past every one the corrupt state showed.
+          const fresh = value(yield* setup.memory.inspect(setup.place))
+          expect(fresh).toMatchObject({ enabled: false, entries: [] })
+          expect(fresh.generation).toBeGreaterThan(apparentGeneration)
         }),
       )
     }
