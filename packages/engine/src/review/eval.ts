@@ -35,7 +35,7 @@ import { createHash } from "node:crypto"
 import path from "path"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
 import {
-  parseReviewConfig,
+  mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
@@ -140,8 +140,9 @@ export interface ReplayInput {
   // The eval's own settings, applied over the base's review.json: its limits, and settings a test fixes. Its
   // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
-  // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
-  // mergeReviewConfig once a runner enforces it (VS-23b). Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
+  // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from the sources
+  // mergeReviewConfig tags: the base's review.json may raise privacy (VS-23b, whose admission enforces it in
+  // Review.run), and no eval attestation exists before VS-23c's variant. Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
   // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence,
   // VS-28's depth and lenses, and VS-30's runtime, which is also trusted-only). The type says so, and step 0b refuses
   // any of them from an untyped caller.
@@ -615,7 +616,14 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   // base's own "verify" still wins, and without one the policy's default applies.
   const variant = input.variant
   const policy = variant?.keys.verifyPolicy
-  const parsed = parseReviewConfig({ json, env: policy ? { REVIEW_VERIFY_POLICY: policy } : {}, trigger })
+  // On the "local" surface, as the CLI reads it (VS-23b): a sourced key is read only from its sources, so the base's
+  // review.json may raise privacy and nothing here attests a route. With none named it is what parseReviewConfig read.
+  const parsed = mergeReviewConfig({
+    surface: "local",
+    json: { at: "base", text: json },
+    env: policy ? { REVIEW_VERIFY_POLICY: policy } : {},
+    trigger,
+  })
   // Keys config.ts parses and no runner applies yet (UNAPPLIED_REVIEW_KEYS) are dropped, so a base review.json that sets
   // one is replayed, and recorded, without it. Its "not applied" warning stays in the artifact's warnings.
   const applied: ReviewConfig = { ...parsed.config }
@@ -1214,8 +1222,9 @@ function variantProblem(input: ReplayInput) {
   const misplaced = VARIANT_KEYS.engine.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
-  // Nothing enforces the route rules in a replay yet, so its artifact may not record a route setting. A sourced key that
-  // no runner applies yet (VS-30's runtime) gets the unwired message below, which names what applies it.
+  // A replay's route settings come from the case's own review.json alone (VS-23b), so its artifact never records one the
+  // eval set. A sourced key that no runner applies yet (VS-30's runtime) gets the unwired message below, which names
+  // what applies it.
   const sourced = SOURCED_REVIEW_KEYS.filter(
     (key) => input.config && Object.hasOwn(input.config, key) && !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
   )

@@ -1,19 +1,20 @@
 // Zero data retention route rules (VectorScope upgrade contract, VS-23a, and addendum A's VS-33): which routes a review
 // may send code on while `privacy` is "zdr", and which requests it may send there. Pure and browser-safe.
 //
-// Nothing calls this yet. VS-23b's admission (model resolution and Review.run) will call decideRoute for every model a
-// review may use, and VS-23c's transport backstop will call it again at the top of resolveSDK and apply zdrRequestBody
-// to the final body of a request on an "openrouter-attested" route. zdrBodyRefusal is the only body check that route
-// needs: it covers the Anthropic Messages fields OpenRouter's `/api/v1/messages` takes as well. Every other allowed
-// route sends its body unchanged: `provider` is OpenRouter's field, which a direct provider or a model server does not
-// read. On those routes the transport, which alone can tell a request's format, checks an Anthropic or Google request
-// with zdrFeatureRefusal, passing an Anthropic request's path.
+// VS-23b's admission (engine review/route.ts, from model resolution and Review.run) calls decideRoute for every model a
+// review may use, before each pass's session and at every provider attempt. VS-23c's transport backstop is to call it
+// again at the top of resolveSDK and apply zdrRequestBody to the final body of a request on an "openrouter-attested"
+// route; the body, path and feature checks below have no caller until then. zdrBodyRefusal is the only body check that
+// route needs: it covers the Anthropic Messages fields OpenRouter's `/api/v1/messages` takes as well. Every other
+// allowed route sends its body unchanged: `provider` is OpenRouter's field, which a direct provider or a model server
+// does not read. On those routes the transport, which alone can tell a request's format, checks an Anthropic or Google
+// request with zdrFeatureRefusal, passing an Anthropic request's path.
 //
-// VS-33's Now part is here and has no caller either: the refusals from "server-tool" on, attestation objects in
-// `zdrAttested` (readZdrAttestation), and the `attestations` an allowed decision lists. Admission must act on those.
-// Until a verifier exists (Q20) it refuses a route while any listed attestation sets `verify: "api"`, and it refuses
-// an OpenAI one with `verify: "api"` unless Q20 approves an admin credential. Only that admission's Vertex metadata call
-// can give "durable-cache", so nothing here does.
+// VS-33's Now part is here: the refusals from "server-tool" on, attestation objects in `zdrAttested`
+// (readZdrAttestation), and the `attestations` an allowed decision lists, which admission acts on. Until a verifier
+// exists (Q20) it refuses a route while any listed attestation sets `verify: "api"` ("attestation-unverified"), an
+// OpenAI one included; Q20 may later approve an admin credential for it. Only a Vertex metadata call, which waits for
+// Q20 with the other `verify: "api"` checks, can give "durable-cache", so nothing gives it yet.
 //
 // VS-33b (addendum B §1.1) has no caller either. zdrPathRefusal refuses a Batch or stored-file path on an OpenRouter or
 // OpenAI-compatible route as "batch" (the Anthropic format keeps anthropicPathRefusal), and zdrBodyRefusal refuses
@@ -40,7 +41,7 @@ import type { ReviewConfig, ZdrAttestation, ZdrAttestedEntry } from "./types"
 
 export type ReviewPrivacy = NonNullable<ReviewConfig["privacy"]>
 
-// Why a route or a request is refused: contract §1.2's thirteen, then VS-33's six.
+// Why a route or a request is refused: contract §1.2's thirteen, then VS-33's six, then VS-23b admission's one.
 // - decideRoute gives the route refusals and "extended-cache-unattested";
 // - zdrBodyRefusal gives "server-tool" and "provider-options" for a body sent to OpenRouter,
 //   "anthropic-non-zdr-feature" for an Anthropic Messages feature in one, and "batch" for OpenRouter's batch body;
@@ -49,7 +50,10 @@ export type ReviewPrivacy = NonNullable<ReviewConfig["privacy"]>
 // - zdrPathRefusal gives "batch" for a Batch or stored-file path on an OpenRouter or OpenAI-compatible route;
 // - the transport backstop (VS-23c) also refuses a Batch request, through zdrPathRefusal, and a request whose session
 //   cannot be told ("unattributed-request");
-// - VS-23b's admission gives "durable-cache" for a Vertex project whose cache config may keep prompts.
+// - VS-23b's admission (engine review/route.ts) gives "attestation-unverified" for a route decideRoute allows whose
+//   decision lists an attestation with `verify: "api"`, which nothing can check yet (Q20), an OpenAI one included;
+// - "durable-cache", for a Vertex project whose cache config may keep prompts, needs the metadata call Q20 decides, so
+//   nothing gives it yet.
 export const ROUTE_REFUSALS = [
   "free-model",
   "router-or-preset",
@@ -70,6 +74,7 @@ export const ROUTE_REFUSALS = [
   "grounding-tool",
   "durable-cache",
   "anthropic-non-zdr-feature",
+  "attestation-unverified",
 ] as const
 export type RouteRefusal = (typeof ROUTE_REFUSALS)[number]
 

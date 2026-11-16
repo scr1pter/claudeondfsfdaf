@@ -62,9 +62,10 @@ import { testProviderConfig } from "../lib/test-provider"
 // misleading hardening, an agent-authored claim, evidence dilution) are projected over one real checkout against the
 // canned model (test/fixture/projection.ts). Each framing must give the same scope (policy digest included), models,
 // passes and steps as the neutral body, and wire bodies that differ only inside the wrapped <untrusted_pr_body> block.
-// The depth plan, lenses, the privacy decision and the runtime decision get the same comparison with their wiring
-// packages (VS-28, VS-23b/c, VS-30), since no projection produces them yet; the paid comparison that findings and the
-// verdict do not change between framings is Later (L8, Q9). Nothing here reaches a model provider or GitHub.
+// The depth plan, lenses and the runtime decision get the same comparison with their wiring packages (VS-28, VS-30),
+// since no projection produces them yet; the privacy decision has it from VS-23b on (the last case below), and VS-23c
+// extends it to the transport. The paid comparison that findings and the verdict do not change between framings is
+// Later (L8, Q9). Nothing here reaches a model provider or GitHub.
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -185,6 +186,8 @@ const MODEL = {
   costKind: "priced" as const,
   price: PRICE,
 }
+// A Covered Model on the same server, which the route rules refuse under privacy "zdr" (VS-23b).
+const FABLE = { ...MODEL, modelID: ModelV2.ID.make("claude-fable-5") }
 
 const LIST_BASE = "export function last(items: number[]) {\n  return items[items.length - 1]\n}\n"
 const LIST_HEAD = "export function last(items: number[]) {\n  const index = items.length\n  return items[index]\n}\n"
@@ -247,20 +250,35 @@ const commit = (cwd: string, message: string, files: Record<string, string>) =>
 // The instance's own directory becomes the case's checkout (eval.test.ts's checkout, trimmed): a base commit and a
 // change that rewrites last() and drops token()'s verify() call, with the fake provider's config kept out of both. An
 // untrusted case is left at its base, as CI leaves a fork.
-const checkout = (input: { untrusted?: boolean; price?: typeof PRICE }) =>
+// With `review`, the base commit also holds it as .vector/review.json, and the server also serves FABLE's model.
+const checkout = (input: { untrusted?: boolean; price?: typeof PRICE; review?: string }) =>
   Effect.gen(function* () {
     const directory = (yield* TestInstance).directory
     const llm = yield* TestLLMServer
     yield* Effect.promise(() => Bun.write(path.join(directory, ".git/info/exclude"), "vector.json\n"))
-    const base = yield* commit(directory, "base", { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE })
+    const base = yield* commit(directory, "base", {
+      "src/list.ts": LIST_BASE,
+      "src/auth/session.ts": AUTH_BASE,
+      ...(input.review ? { ".vector/review.json": input.review } : {}),
+    })
     const head = yield* commit(directory, "change", { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD })
     if (input.untrusted) yield* git(directory, "checkout", "-q", "--detach", base)
     const provider = testProviderConfig(llm.url)
     if (input.price) provider.provider.lmstudio.models["test-model"].cost = input.price
+    const models = input.review
+      ? {
+          ...provider.provider.lmstudio.models,
+          [FABLE.modelID]: { ...provider.provider.lmstudio.models["test-model"], id: FABLE.modelID, name: "Fable" },
+        }
+      : provider.provider.lmstudio.models
     yield* Effect.promise(() =>
       Bun.write(
         path.join(directory, "vector.json"),
-        JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...provider }),
+        JSON.stringify({
+          $schema: "https://vectordev.ai/config.json",
+          ...provider,
+          provider: { lmstudio: { ...provider.provider.lmstudio, models } },
+        }),
       ),
     )
     yield* Effect.promise(() => trustWorkspace(directory))
@@ -332,6 +350,34 @@ describe("narrative invariance (VS-22d)", () => {
       ),
     GIT,
     90_000,
+  )
+
+  // VS-23b's I-2 check (addendum B §1.4 item 2): the route decision is the review's settings' and the model's, never
+  // the pull request's. Under privacy "zdr" from the base's review.json, every framing is admitted on the server on
+  // this computer exactly as the neutral body is, and every framing is refused for a Covered Model on the same server
+  // before any pass's session, with the same passes, steps and no request.
+  it.instance(
+    'under privacy "zdr" five framings make the same route decision, admitted on this computer and refused for a Covered Model',
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({ price: PRICE, review: JSON.stringify({ privacy: "zdr" }) })
+        checkInvariance(yield* projectOnOneDay(checked, FRAMINGS, "trusted"))
+
+        const refused = yield* projectOnOneDay(checked, FRAMINGS, "trusted", FABLE)
+        expect(planOf(refused.control)).toEqual(planOf(refused.neutral))
+        expect(planOf(refused.neutral).passes.map((pass) => [pass.pass, pass.status, pass.requests])).toEqual([
+          ["review", "stopped", 0],
+          ["security", "stopped", 0],
+        ])
+        expect(refused.neutral.egress.outside).toBe(0)
+        for (const [framing, record] of refused.framed)
+          expect({ name: framing.name, plan: planOf(record) }).toEqual({
+            name: framing.name,
+            plan: planOf(refused.neutral),
+          })
+      }),
+    GIT,
+    180_000,
   )
 })
 
@@ -406,25 +452,30 @@ function checkInvariance(run: Run) {
 // The neutral body, every framing in turn, and the neutral body again as the control, all on one calendar day. The
 // system prompt carries the day the session started (session/system.ts), which no pull request text controls, so a
 // run that crosses midnight is run again; one run takes far less than a day, so the second cannot cross another.
-const projectOnOneDay = (checked: Checked, framings: readonly Framing[], trust: ReplayCase["trust"]) =>
+const projectOnOneDay = (
+  checked: Checked,
+  framings: readonly Framing[],
+  trust: ReplayCase["trust"],
+  model: typeof MODEL = MODEL,
+) =>
   Effect.gen(function* () {
-    const first = yield* projectAll(checked, framings, trust)
+    const first = yield* projectAll(checked, framings, trust, model)
     if (first.sameDay) return first
-    return yield* projectAll(checked, framings, trust)
+    return yield* projectAll(checked, framings, trust, model)
   })
 
-const projectAll = (checked: Checked, framings: readonly Framing[], trust: ReplayCase["trust"]) =>
+const projectAll = (checked: Checked, framings: readonly Framing[], trust: ReplayCase["trust"], model: typeof MODEL) =>
   Effect.gen(function* () {
     const day = new Date().toDateString()
-    const neutral = yield* projectBody(checked, NEUTRAL, trust)
+    const neutral = yield* projectBody(checked, NEUTRAL, trust, model)
     const framed = yield* Effect.forEach(framings, (framing) =>
-      projectBody(checked, framing.body, trust).pipe(Effect.map((record) => [framing, record] as const)),
+      projectBody(checked, framing.body, trust, model).pipe(Effect.map((record) => [framing, record] as const)),
     )
-    const control = yield* projectBody(checked, NEUTRAL, trust)
+    const control = yield* projectBody(checked, NEUTRAL, trust, model)
     return { neutral, framed, control, sameDay: new Date().toDateString() === day }
   })
 
-const projectBody = (checked: Checked, body: string, trust: ReplayCase["trust"]) =>
+const projectBody = (checked: Checked, body: string, trust: ReplayCase["trust"], model: typeof MODEL) =>
   Effect.gen(function* () {
     yield* checked.llm.reset
     yield* checked.llm.respond(projectionReplies({ files: checked.anchors }))
@@ -439,7 +490,7 @@ const projectBody = (checked: Checked, body: string, trust: ReplayCase["trust"])
         baseRef: "main",
         pr: { number: 7, title: TITLE, body, author: "alice" },
       },
-      model: MODEL,
+      model,
       config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
       server: checked.llm.url,
       received: received(checked.llm),

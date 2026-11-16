@@ -1231,7 +1231,9 @@ How it works:
     tokens per review, wall time end to end and per pass (each with its mean,
     median and p90; a desktop pass from its first call's start to its last
     call's end), cache reads and writes, the zero-token rate, early stops by
-    reason and route refusals (VS-23's `privacy` stops, 0 until it lands)
+    reason and route refusals (VS-23's `privacy` stops: from VS-23b only where
+    a case's base review.json sets `privacy: "zdr"`, since the
+    `engine:privacy-zdr` variant waits for VS-23c)
   - the estimate error, `|projected low - settled| / settled`, for each run
     joined with a projection record of the same variant, case and model id
     after its provider; a projection over its dollar cap is counted apart and

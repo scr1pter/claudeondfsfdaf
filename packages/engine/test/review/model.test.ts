@@ -8,6 +8,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { Auth } from "@/auth"
 import { Provider } from "@/provider/provider"
 import { ReviewModel } from "../../src/review/model"
+import { ReviewRoutes } from "../../src/review/route"
 import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
 
@@ -62,6 +63,13 @@ const MODELS = [
     freeModel: { source: "openrouter" as const, dataPolicy: "may-train" as const },
   },
   model("openrouter/openrouter/free"),
+  // VS-23b: a provider the catalog ships at its own URL, attested by provider ID in the privacy cases, and one the
+  // catalog does not list.
+  {
+    ...model("zdrco/coder", { input: 1, output: 2 }),
+    api: { id: "coder", url: "https://zdr.invalid/v1", npm: "@ai-sdk/openai-compatible" },
+  },
+  model("myrouter/coder", { input: 1, output: 2 }),
 ]
 
 interface Setup {
@@ -75,6 +83,14 @@ interface Setup {
   projectVectorscope?: { model?: string; variant?: string }
   globalModel?: string
   projectModel?: string
+  /** Provider options by provider ID, as getProvider gives them (VS-23b reads the base URL there). */
+  options?: Record<string, Record<string, unknown>>
+  /** Every model getModel was asked for. */
+  asked?: string[]
+  /** The model catalog in place of the one below ({} for one that did not load). */
+  catalog?: Record<string, ModelCatalog.Provider>
+  /** Providers the configuration in effect defines, by provider ID (VS-23b). */
+  providers?: Record<string, object>
 }
 
 const services = (setup: Setup) =>
@@ -105,7 +121,17 @@ const services = (setup: Setup) =>
         Effect.succeed(
           model.providerID === "ollama" ? { origin: "http://127.0.0.1:11434", hosted: true, local: true } : undefined,
         ),
+      getProvider: (providerID) =>
+        Effect.succeed({
+          id: providerID,
+          name: providerID,
+          source: "config" as const,
+          env: [],
+          options: setup.options?.[providerID] ?? {},
+          models: {},
+        }),
       getModel: (providerID, modelID) => {
+        setup.asked?.push(`${providerID}/${modelID}`)
         const found = MODELS.find((item) => item.providerID === providerID && item.id === modelID)
         return found ? Effect.succeed(found) : Effect.fail(new Provider.ModelNotFoundError({ providerID, modelID }))
       },
@@ -123,6 +149,7 @@ const services = (setup: Setup) =>
       get: () =>
         Effect.succeed({
           ...(setup.projectModel ? { model: setup.projectModel } : {}),
+          ...(setup.providers ? { provider: setup.providers } : {}),
           agent: {
             ...(setup.agent ? { review: setup.agent } : {}),
             ...(setup.projectVectorscope ? { vectorscope: setup.projectVectorscope } : {}),
@@ -137,18 +164,29 @@ const services = (setup: Setup) =>
     // The catalog lists acme and anthropic, whose key is not set in these tests; "retired" is in no catalog.
     Layer.mock(ModelCatalog.Service, {
       get: () =>
-        Effect.succeed({
-          acme: { id: "acme", name: "Acme", env: ["ACME_API_KEY"], models: {} },
-          anthropic: {
-            id: "anthropic",
-            name: "Anthropic",
-            env: ["ANTHROPIC_API_KEY"],
-            models: {
-              "claude-sonnet-4-5": { id: "claude-sonnet-4-5" },
-              "claude-2": { id: "claude-2", status: "deprecated" },
-            },
-          },
-        } as unknown as Record<string, ModelCatalog.Provider>),
+        Effect.succeed(
+          setup.catalog ??
+            ({
+              acme: { id: "acme", name: "Acme", env: ["ACME_API_KEY"], models: {} },
+              anthropic: {
+                id: "anthropic",
+                name: "Anthropic",
+                env: ["ANTHROPIC_API_KEY"],
+                models: {
+                  "claude-sonnet-4-5": { id: "claude-sonnet-4-5" },
+                  "claude-2": { id: "claude-2", status: "deprecated" },
+                },
+              },
+              // Shipped at its own URL; its model entry names no URL of its own, so the provider's applies (VS-23b).
+              zdrco: {
+                id: "zdrco",
+                name: "ZDR Co",
+                env: [],
+                api: "https://zdr.invalid/v1",
+                models: { coder: { id: "coder" } },
+              },
+            } as unknown as Record<string, ModelCatalog.Provider>),
+        ),
     }),
     Layer.mock(Auth.Service, {
       get: (providerID) =>
@@ -580,6 +618,189 @@ describe("model evidence (VS-07)", () => {
       expect(notes(fallback.subject)).toEqual([
         '`vector/acme/coder:free` has no VectorScope evaluation on record, so how well it reviews is unmeasured. Being free is not evidence of review quality. No review model is set, so Vector used an available free model not labelled "May train on your prompts".',
       ])
+    }),
+  )
+})
+
+// VS-23b (SF-11): model resolution under privacy "zdr". The route rules (core privacy.ts) decide; the trusted
+// attestations a review would read from the global config (SF-15) are passed straight in `route` here.
+describe("privacy zdr (VS-23b)", () => {
+  const zdr = (attested: ReviewRoutes.Policy["attested"] = []): ReviewRoutes.Policy => ({ privacy: "zdr", attested })
+  const refusalOf = (input: ReviewModel.ResolveInput, setup: Setup = {}) =>
+    resolve(input, setup).pipe(
+      Effect.flip,
+      Effect.map((error) => ({ model: error.model, refusal: error.refusal })),
+    )
+
+  it.effect("an unattended review never falls back to a free model, and says so", () =>
+    Effect.gen(function* () {
+      const error = yield* resolve(
+        { trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" }, route: zdr() },
+        { free: true },
+      ).pipe(Effect.flip)
+      expect(error.message).toBe(
+        'No review model is set. Set MODEL or REVIEW_AUTO_MODEL in the workflow, or model in .vector/review.json, and provide that provider\'s key. Under privacy "zdr" Vector never falls back to a free model.',
+      )
+      expect(error.refusal).toBeUndefined()
+      // Without "zdr" the same review takes the free model, as before.
+      expect(
+        (yield* resolve({ trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" } }, { free: true })).costKind,
+      ).toBe("free")
+    }),
+  )
+
+  it.effect("a free model, a Codium model or a Covered Model is refused without being looked up, listed or not", () =>
+    Effect.gen(function* () {
+      const asked: string[] = []
+      const setup = { free: true, asked }
+      expect(
+        yield* refusalOf({ trigger: "auto", env: { MODEL: "vector/acme/coder:free" }, route: zdr() }, setup),
+      ).toEqual({ model: "vector/acme/coder:free", refusal: "free-model" })
+      // Not listed: refused as free, not as a model the workflow cannot load.
+      expect(
+        yield* refusalOf({ trigger: "auto", env: { MODEL: "vector/acme/missing:free" }, route: zdr() }, setup),
+      ).toEqual({ model: "vector/acme/missing:free", refusal: "free-model" })
+      // review.json's triageModel or judgeModel (`exact`) is held to the same rules.
+      expect(
+        yield* refusalOf({ trigger: "local", exact: "openrouter/acme/coder:free", route: zdr(["openrouter"]) }, setup),
+      ).toEqual({ model: "openrouter/acme/coder:free", refusal: "free-model" })
+      expect(yield* refusalOf({ trigger: "local", flag: "vector-plan/vector-flash", route: zdr() }, setup)).toEqual({
+        model: "vector-plan/vector-flash",
+        refusal: "codium-unaccepted",
+      })
+      expect(yield* refusalOf({ trigger: "local", flag: "vector-plan/unlisted", route: zdr() }, setup)).toEqual({
+        model: "vector-plan/unlisted",
+        refusal: "codium-unaccepted",
+      })
+      expect(
+        yield* refusalOf({ trigger: "local", flag: "anthropic/claude-fable-5", route: zdr(["anthropic"]) }, setup),
+      ).toEqual({ model: "anthropic/claude-fable-5", refusal: "retention-required-model" })
+      expect(asked).toEqual([])
+      const error = yield* resolve({ trigger: "local", flag: "vector-plan/vector-flash", route: zdr() }).pipe(
+        Effect.flip,
+      )
+      expect(error.message).toBe(
+        'vector-plan/vector-flash has no zero data retention route Vector may use while privacy is "zdr" (codium-unaccepted).',
+      )
+    }),
+  )
+
+  it.effect("a provider nothing attests is refused; its URL attested, or a server on this computer, is allowed", () =>
+    Effect.gen(function* () {
+      // anthropic/sonnet here goes to https://models.invalid/v1, which no default of the provider's covers.
+      expect(yield* refusalOf({ trigger: "local", flag: "anthropic/sonnet", route: zdr() })).toEqual({
+        model: "anthropic/sonnet",
+        refusal: "unattested-provider",
+      })
+      expect(yield* refusalOf({ trigger: "local", flag: "anthropic/sonnet", route: zdr(["anthropic"]) })).toEqual({
+        model: "anthropic/sonnet",
+        refusal: "unattested-provider",
+      })
+      // Allowed through the owner's attestation of the host, as a trusted global config would give it (SF-15): the
+      // model resolves exactly as it does under "standard".
+      const standard = yield* resolve({ trigger: "local", flag: "acme/flag" })
+      expect(yield* resolve({ trigger: "local", flag: "acme/flag", route: zdr(["models.invalid"]) })).toEqual(standard)
+      // A server on this computer needs no attestation. The catalog does not list ollama and the configuration defines
+      // it, so it is a provider defined in configuration, shipped nowhere.
+      const ollama = { options: { ollama: { baseURL: "http://127.0.0.1:11434/v1" } }, providers: { ollama: {} } }
+      expect(yield* resolve({ trigger: "local", flag: "ollama/qwen", route: zdr() }, ollama)).toEqual({
+        ...(yield* resolve({ trigger: "local", flag: "ollama/qwen" }, ollama)),
+        catalogOrigins: [],
+      })
+      // Without the configuration's word, where it is shipped is unknown, and on this computer it is allowed all the same.
+      const plugin = { options: ollama.options }
+      expect(yield* resolve({ trigger: "local", flag: "ollama/qwen", route: zdr() }, plugin)).toEqual(
+        yield* resolve({ trigger: "local", flag: "ollama/qwen" }, plugin),
+      )
+    }),
+  )
+
+  it.effect("the catalog's shipped URL is what a provider attestation covers, and the resolved model carries it", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve({ trigger: "local", flag: "zdrco/coder", route: zdr(["zdrco"]) })
+      expect(resolved).toMatchObject({
+        providerID: "zdrco",
+        modelID: "coder",
+        catalogOrigins: ["https://zdr.invalid/v1"],
+      })
+      // A base URL moved off the shipped one needs its own host attested.
+      const moved = { options: { zdrco: { baseURL: "https://proxy.invalid/v1" } } }
+      expect(yield* refusalOf({ trigger: "local", flag: "zdrco/coder", route: zdr(["zdrco"]) }, moved)).toEqual({
+        model: "zdrco/coder",
+        refusal: "unattested-provider",
+      })
+      // A direct provider moved to OpenRouter holds no OpenRouter account, attested or not.
+      const router = { options: { acme: { baseURL: "https://openrouter.ai/api/v1" } } }
+      expect(yield* refusalOf({ trigger: "local", flag: "acme/flag", route: zdr(["acme"]) }, router)).toEqual({
+        model: "acme/flag",
+        refusal: "unattested-openrouter",
+      })
+      // A provider the catalog does not list holds an OpenRouter account only when the configuration defines it.
+      const mine = { options: { myrouter: { baseURL: "https://openrouter.ai/api/v1" } } }
+      expect(
+        yield* resolve(
+          { trigger: "local", flag: "myrouter/coder", route: zdr(["myrouter"]) },
+          { ...mine, providers: { myrouter: {} } },
+        ),
+      ).toMatchObject({ providerID: "myrouter", modelID: "coder", catalogOrigins: [] })
+      expect(yield* refusalOf({ trigger: "local", flag: "myrouter/coder", route: zdr(["myrouter"]) }, mine)).toEqual({
+        model: "myrouter/coder",
+        refusal: "unattested-openrouter",
+      })
+      // An attestation that asks Vector to check the account is refused until a verifier exists (Q20).
+      expect(
+        yield* refusalOf({
+          trigger: "local",
+          flag: "zdrco/coder",
+          route: zdr([{ id: "zdrco", operator: "zdrco", verify: "api" }]),
+        }),
+      ).toEqual({ model: "zdrco/coder", refusal: "attestation-unverified" })
+    }),
+  )
+
+  it.effect("a catalog that did not load says nothing of where a provider is shipped, configured or not", () =>
+    Effect.gen(function* () {
+      // ModelCatalog.get gives {} with no copy on disk and no snapshot, a failed or disabled fetch, or offline. A direct
+      // provider whose base URL was moved to OpenRouter then holds no OpenRouter account, its ID attested or not.
+      const router = { catalog: {}, options: { acme: { baseURL: "https://openrouter.ai/api/v1" } } }
+      expect(yield* refusalOf({ trigger: "local", flag: "acme/flag", route: zdr(["acme"]) }, router)).toEqual({
+        model: "acme/flag",
+        refusal: "unattested-openrouter",
+      })
+      expect(
+        yield* refusalOf(
+          { trigger: "local", flag: "acme/flag", route: zdr(["acme"]) },
+          { ...router, providers: { acme: {} } },
+        ),
+      ).toEqual({ model: "acme/flag", refusal: "unattested-openrouter" })
+      // Nor does a provider attestation cover the URL a catalog would have shipped, which the provider still names.
+      expect(
+        yield* refusalOf({ trigger: "local", flag: "zdrco/coder", route: zdr(["zdrco"]) }, { catalog: {} }),
+      ).toEqual({ model: "zdrco/coder", refusal: "unattested-provider" })
+      // A server on this computer is allowed all the same, and the resolved model carries no shipped origin.
+      const ollama = { catalog: {}, options: { ollama: { baseURL: "http://127.0.0.1:11434/v1" } } }
+      const resolved = yield* resolve({ trigger: "local", flag: "ollama/qwen", route: zdr() }, ollama)
+      expect(resolved).toEqual(yield* resolve({ trigger: "local", flag: "ollama/qwen" }, ollama))
+      expect(Object.hasOwn(resolved, "catalogOrigins")).toBe(false)
+    }),
+  )
+
+  it.effect('a "standard" route resolves exactly as no route', () =>
+    Effect.gen(function* () {
+      const standard = { privacy: "standard", attested: [] } as const
+      const inputs: [ReviewModel.ResolveInput, Setup][] = [
+        [{ trigger: "auto", env: { REVIEW_AUTO_MODEL: "acme/auto", MODEL: "acme/env" } }, {}],
+        [{ trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" } }, { free: true }],
+        [{ trigger: "command", config: "acme/json", env: { MODEL: "acme/env" } }, {}],
+        [{ trigger: "local", flag: "acme/flag" }, {}],
+        [{ trigger: "local" }, { agent: { model: "acme/agent", variant: "high" } }],
+        [{ trigger: "local" }, { defaultModel: "acme/default" }],
+        [{ trigger: "local", exact: "openrouter/acme/coder:free" }, {}],
+        [{ trigger: "local", flag: "vector-plan/vector-flash" }, {}],
+        [{ trigger: "local", flag: "ollama/qwen" }, {}],
+      ]
+      for (const [input, setup] of inputs)
+        expect(yield* resolve({ ...input, route: standard }, setup)).toEqual(yield* resolve(input, setup))
     }),
   )
 })

@@ -22887,3 +22887,542 @@ is also the lane's progress record for SF-10b.
     read that drops a BOM `:127-157`.
   - Core `review/permission.ts`: `CHECK_COMMANDS` `:32`;
     `review/fix-proposal.ts`: `FIX_LIMITS` `:8`, `prepareFixProposal` `:92`.
+
+## 2026-11-16 · VS-23b ZDR admission and model resolution in Review.run (SF-11)
+
+The admission half of VS-23 (`vectorscope-upgrade.md` VS-23b `:422-428`, and §1
+"Where the route check sits" `:119`), with addendum A's VS-33 duty that
+admission act on the attestation objects an allowed decision lists
+(`vectorscope-upgrade-addendum-a.md` VS-33, built as VS-33b; core `types.ts`
+`ZdrAttestation`). It was built on `scope-finish` at `4ca3ce5f` as lane package
+SF-11, from the SF-11 plan as corrected by its critique. Where a critique point
+was taken in another form or rejected, the reason is under "Critique points".
+This entry is also the lane's progress record for SF-11.
+
+- **Status.** Built, reviewed once (review round one below), and committed on
+  `scope-finish` by the commit gate on 2026-11-16 in the commit that carries
+  this entry. A commit cannot name its own SHA, so the SHA and each dispatched
+  workflow's run ID and result go in a later entry.
+  - The gate re-ran every new or changed test file one at a time through the
+    lock, with the counts under "Tests run" (`run.test.ts` again 70 pass, 1
+    skip, and the same 4 sandbox-only failures), plus
+    `test/cli/review.render.test.ts` (11, 0, 28).
+  - `bun typecheck` passes in `packages/core` and `packages/engine`, and `bun
+    tsgo -p ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`
+    passes. The full TURBO typecheck (`--concurrency=2`) passes, 27 of 27
+    tasks. Prettier `--check` is clean on the 24 touched files.
+  - The gate dispatches `typecheck.yml`, `scope-directory-identity.yml`,
+    `review-memory-fence.yml`, `scope-app-validation.yml` and
+    `vector-at-mention.yml` on `scope-finish` after the push. `test.yml` and
+    `review-http-regression.yml` (scope local), listed under "CI to dispatch",
+    are not in the gate's list and are left to the lead.
+  - The lane's Done line needs `review-memory-fence.yml` green (`run.ts`,
+    `model.ts`).
+
+- **Scope.**
+  - New engine `review/route.ts` (`ReviewRoutes`): what admission reads from
+    the provider for the route rules (core `privacy.ts` `decideRoute`), and the
+    registry of the sessions Review.run creates, by session ID, with each one's
+    policy and the model its pass was decided for.
+  - Engine `review/model.ts`: under `privacy: "zdr"`, each model resolved (the
+    review model, and through `exact` the triage and judge models) must have a
+    route the rules allow, and the CI free fallback is skipped.
+  - Engine `review/run.ts`: the route check before any session, in `ask()`
+    before each pass's session, and in the `SessionAdmission` policy's `admit`
+    before the step and budget logic, never inside `reserve()`.
+  - The local surfaces switch from `parseReviewConfig` to `mergeReviewConfig({
+    surface: "local", ... })`: `vector review` (CLI `review.ts`), which the
+    local review service, the owner API and local-run all reach through
+    `executeLocalReview`, and the eval's replay entry (`review/eval.ts`).
+  - The CLI shows a refused review as not reviewed and fails it (exit code 2).
+  - Core: one new refusal value, `"attestation-unverified"`, and comment
+    corrections.
+  - `privacy` is raise-only, and nothing changes while it is unset or
+    `"standard"`. No key is enabled and no default changes.
+
+- **What landed** (line numbers in the working tree).
+  - Engine `review/route.ts` (new, 250 lines, `export * as ReviewRoutes`):
+    - `Policy` `:30` and `policyOf` `:35`: `privacy ?? "standard"`,
+      `zdrAttested ?? []`.
+    - `Subject` `:42`: the model's IDs, cost kind and `catalogOrigins` (where the
+      catalog ships its provider: its URL, `[]` for a provider defined in
+      configuration, absent for unknown).
+    - `modelRefusal` `:68`: the refusals the model alone decides (Codium, free,
+      a router or preset, `:online`, a Covered Model), from its IDs and cost
+      kind only, before any lookup.
+    - `decide` `:84`: under "standard" it returns `standard` and asks nothing.
+      Otherwise it runs `modelRefusal` first, then `getModel` (unless given),
+      `getProvider` for the options, and `line`. It then runs `decideRoute` on
+      `routeModel`, and refuses an allowed decision that lists an attestation
+      with `verify: "api"` as `"attestation-unverified"`. It returns the
+      decision with the model's key.
+    - `routeModel` `:121`: the `RouteModel` for privacy.ts:
+      - `destinations`: a plugin's `preconnect`, plus the `baseURL` option,
+        else the model's URL, else the SDK's own origin. A URL with an unfilled
+        `${VARIABLE}` becomes text that reads as no URL, so it is
+        "unknown-destination".
+      - `defaultOrigins` (helper `:228`, one early return per case):
+        `catalogOrigins` when it names a URL, else the SDK's origin, else `[]`
+        for a provider defined in configuration, else `UNKNOWN_ORIGIN` `:222`
+        (an `.invalid` origin no request goes to and no OpenRouter's).
+      - `price`: unless unpriced.
+      - `freeModel`: cost kind "free" or a catalog free model.
+      - `forwards`: the provider's own `fetch`, `forwards: true`, an Ollama
+        cloud model name, or a server on this computer whose line is not
+        `local`.
+    - `shippedOrigins` `:167` (review round one): `catalogOrigins` from the
+      catalog and whether the configuration in effect defines the provider.
+      - Listed: the model entry's `provider.api`, else the provider's `api`,
+        else undefined (unknown, so the SDK's origin or `UNKNOWN_ORIGIN`).
+      - `[]` ("defined in configuration") only on a positive signal: the
+        catalog loaded (not `{}`), does not list the provider, and the
+        configuration's `provider` map names it.
+      - Otherwise undefined: an empty catalog (no disk copy or snapshot, a
+        failed or disabled fetch, offline; core `model-catalog.ts:236-258`),
+        or a provider only a plugin defines.
+    - The registry: `register` `:183`, `release` `:187`, `registered` `:191`,
+      and `attempt` `:201`.
+      - `attempt` admits under "standard", or when the attempt's model has the
+        decided key and the decision allowed it.
+      - It is "unknown-destination" for an unregistered or undecided session,
+        or a switched model (provider, ID, `api.id`, `api.npm` or `api.url`,
+        `keyOf` `:242`).
+      - Otherwise it gives the decision's refusal.
+    - `SDK_ORIGINS` `:214` is a copy of provider.ts's private table (`:133-137`);
+      VS-23c's backstop re-checks with provider.ts's own `requestOrigins`.
+  - Engine `review/model.ts`:
+    - `ReviewModelError` gains optional `model` and `refusal`
+      (`Schema.Literals(ROUTE_REFUSALS)`) `:40-46`. That is the typed refusal
+      (see "Critique points", item 9).
+    - `ResolvedModel.catalogOrigins` `:34-37` is set only under "zdr".
+    - `ResolveInput.route` `:59-62`.
+    - `route` `:78`. No free fallback under "zdr" `:105-107`, and the CI
+      "No review model is set" message says so `:132`.
+    - `modelRefusal` runs right after the name is parsed and before `getModel`
+      `:143-152`, so a free, Codium or Covered model is refused without a
+      lookup, listed or not.
+    - After `getModel`: `ReviewRoutes.shippedOrigins` over the catalog and the
+      configuration's `provider` map `:185-193` (the precedence is
+      `(model's provider.api) ?? provider api`), then `decide` `:194-201`,
+      before `contextRefusal`. The result carries `catalogOrigins` `:252`.
+  - Engine `review/run.ts`:
+    - `type Stop` gains `"privacy"` `:172-173`.
+    - The up-front check `:302-338`: under "zdr" only, `modelRefusal` over
+      `input.model`, `input.triage`, `input.judge` and review.json's
+      `judgeModel`, before `chooseModels` (whose Codium listing and judge
+      lookup it skips on a refusal), then `decide` for each distinct chosen
+      model. The first refusal, typed `refusedUpFront` `:333-338`, seeds
+      `state.refused` `:377`.
+    - `ask()` `:626-635`: after the `pass` observation and before `reserve` and
+      `sessions.create`, the pass's model is decided again. Once anything is
+      refused no pass starts: it observes `admitted: false, stop: "privacy"` and
+      returns stopped/privacy with no session.
+    - Registration `:672-677`: every session, right after `sessionIDs.push`,
+      with the policy and, under "zdr", the decided key and decision.
+    - `admit` `:687-697`: before the step and budget logic, under "zdr", it
+      checks `state.refused ?? ReviewRoutes.attempt(...)`. A refusal sets
+      `state.refused`, stops and denies the track, and observes
+      `admitted: false, stop: "privacy"`.
+    - The finalizer guard `:836-837`: no finalizer after a privacy stop or once
+      anything was refused.
+    - The outcome:
+      - no finding is listed and nothing is assessed: `listed` `:1107-1112`,
+        and `prior`, `dropped`, `modelRisk`, `sensitiveChanged` and
+        `changedLines` emptied `:1131-1145`, so the selection is the empty one
+        the CLI gives a model refused at resolution (risk `low`, no
+        `stillOpen`, `fixed` or `dismissed`);
+      - the report is empty;
+      - `partial: "privacy"` `:1150`;
+      - every file is unreviewed;
+      - the notes are `notePrivacyRefused` with the attempts sent before the
+        refusal (Σ attempts + finalizer attempts) `:1256-1263`, plus the
+        incomplete-cost note.
+    - `release` of every session in an `ensuring` of its own `:1281-1283`, so
+      it runs whatever the other finalizer steps do.
+  - Engine CLI `cli/cmd/review.ts`:
+    - `mergeReviewConfig({ surface: "local", json: { at, text }, env, trigger:
+      "local" })` `:290-298`. `at` is "base" for `--pr` and the service's pinned
+      settings, else "working-tree".
+    - `notReviewed` `:348-372`: it prints `reviewForOutput(outcome)` or
+      `renderLocalReview` and returns exit code 2 with
+      `Vector did not review this change: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.`
+      It writes no local state.
+    - The three `resolveModel` calls carry `route` only under "zdr"
+      `:472-513`. A `ReviewModelError` with `refusal` becomes the zero-attempt
+      outcome inline `:515-548`, before `--checks`, requirements, context or
+      any model call. That outcome has an empty report and selection,
+      `partial: "privacy"`, every reviewed and withheld file unreviewed, no
+      specialists or sessions, and `notePrivacyRefused(attempts 0)`.
+    - `reviewed.partial === "privacy"` takes the same branch `:675`, before the
+      all-reviewers-failed check, so no `--apply` and no `--post`.
+  - Engine `cli/cmd/review.render.ts`: the header line is "Not reviewed" alone,
+    with no risk, for a privacy stop `:82-85`; `partialLine()` gives the
+    privacy stop, never "Partial review" `:165-173`.
+  - Engine `review/eval.ts`:
+    - replay reads the base's review.json through
+      `mergeReviewConfig({ surface: "local", json: { at: "base", ... } })`
+      `:619-626`;
+    - the `ReplayInput.config` and `variantProblem` comments are updated.
+  - Core:
+    - `privacy.ts`: `"attestation-unverified"` is appended to `ROUTE_REFUSALS`
+      `:77`. The header and the vocabulary comment are rewritten `:4-17`,
+      `:42-57`: decideRoute is now called, and the `:51` claim that admission
+      gives "durable-cache" is corrected (that waits for Q20's metadata call).
+    - `format.ts`: the `PRIVACY_REFUSAL` text `:555` and the
+      `notePrivacyRefused` comment.
+    - `receipt.ts`: the value joins VS-47's `Refusals` `:60`.
+    - `types.ts`, `config.ts` and `model-evidence.ts` (`EvidenceScope.route`):
+      comments only, naming the callers and that VS-23c, not VS-23b, sets the
+      route.
+    - The pin (below).
+
+- **The config switch.**
+  - Moved to `mergeReviewConfig` on "local", with no `global`: the CLI, the
+    local service, the owner API and local-run (all through
+    `executeLocalReview`), and the eval's replay.
+  - Still on `parseReviewConfig`, which ignores `privacy`:
+    - the desktop (`ai-review.ts`; VS-23d, SF-15);
+    - the GitHub job (`github.review.ts:295`; SF-37);
+    - connect's consent preview (`adapters/vectorscope.ts:276`; the connect
+      lane). Under "zdr" that preview still shows the model a review then
+      refuses.
+  - The service raises privacy through `environment()`, which passes
+    `REVIEW_PRIVACY`.
+
+- **Default and parity proof (I-1).**
+  - Core `config.test.ts` "VS-23b: the local surfaces' calls are
+    parseReviewConfig while no sourced key is named": 13 texts × 4
+    environments × 4 triggers × 2 `at` give identical config and warnings. The
+    texts cover none, blank, `{}`, plain, retired, unknown and unapplied keys,
+    invalid JSON, an array, null and a BOM. The environments cover none, the
+    usual `REVIEW_*`, `REVIEW_VERIFY_POLICY` with others, and `MODEL` with
+    `REVIEW_AUTO_MODEL`.
+  - CLI `review-privacy.test.ts`: `RunInput.config` and the `Warning:` lines
+    equal `parseReviewConfig`'s for branch and `--uncommitted` reviews. Unset or
+    "standard", no resolution input carries `route`.
+  - `model.test.ts`: a "standard" route resolves exactly as no route across
+    nine order, free, exact, Codium and local inputs.
+  - `run.test.ts` D3: unset, "standard" and "zdr" on this computer send
+    byte-identical bodies and return identical outcomes (without `durationMs`
+    and `sessions`) in the ok, retry, finalizer and verify scenarios.
+  - Every existing case of `eval.test.ts`, the CLI and service suites still
+    passes (counts below).
+  - **User-visible differences that are not a default change.** Each is a
+    sourced key named in review.json or the environment, or an unreadable
+    review.json that mentions privacy (core test "VS-23b: on the local
+    surfaces a sourced key is read…"):
+    - `"privacy": "standard"` in review.json loses its "unknown key" warning;
+    - `zdrAttested` and `runtime` in review.json now warn that they are read
+      only from the global config, instead of "unknown key";
+    - `REVIEW_PRIVACY=zdr` or `"privacy": "zdr"` raises privacy;
+    - a review.json that cannot be read and mentions "privacy" reads as "zdr".
+
+- **Fail-closed until SF-15.**
+  - There is no `zdrAttested` source until SF-15 puts `review.*` in the global
+    config: on "local" the working tree and the base are never trusted. So a
+    local "zdr" review today allows only a server on this computer that passes
+    nothing on, and refuses every other route.
+  - After SF-15, a provider-ID attestation still covers nothing it cannot be
+    shown to cover: with the catalog unavailable (`{}`) a provider's shipped
+    origin is unknown, and a provider the catalog does not list counts as
+    defined in configuration only when the configuration names it
+    (`shippedOrigins`).
+  - Positive admission through injected trusted settings is shown in
+    `route.test.ts` (attested provider, host, OpenRouter account and text or
+    object attestations) and `model.test.ts` (`route.attested`
+    `["models.invalid"]` resolves exactly as standard; `zdrco` attested by
+    provider ID at its shipped URL).
+  - It is shown on loopback in `run.test.ts`, `eval.test.ts` and
+    `narrative-invariance.test.ts`.
+
+- **A refusal mid-review.** When a pass ran on an allowed route before another
+  was refused, the outcome lists no finding and the report is empty: nothing
+  that finished stands behind them (I-7). The note says how many requests had
+  already been sent. The CLI then shows "Not reviewed" with no findings
+  (`run.test.ts`, the verify case: `report.findings` [] and nothing listed).
+  A refused outcome keeps no bookkeeping of earlier findings either (no
+  `stillOpen`, `fixed` or `dismissed`) and assesses no risk, so Review.run's
+  refusal and the CLI's refusal at resolution select the same empty selection
+  (`run.test.ts` asserts it with an open blocking prior finding passed in).
+
+- **The CLI writes no state for a refused review.** It leaves the
+  `.git/vector/review/<branch>.json` state exactly as it was, as the existing
+  all-reviewers-failed path does, so the next run reviews the change again
+  (tested by bytes, then a re-run that reviews the refused head). A refusal at
+  resolution spent nothing. A mid-run refusal's spend is not recorded locally
+  either, as with the existing failure path. That is a known limit, not new.
+
+- **The new refusal value `"attestation-unverified"`.** Admission's
+  `verify: "api"` duty (types.ts `ZdrAttestation`, privacy.ts header) needed a
+  reason no existing value names, so this extends the contract's §1.2/VS-33
+  vocabulary by one, recorded here as a deviation. It is Q20-neutral: it
+  refuses any listed `verify: "api"` attestation, OpenAI's included, and a
+  later verifier (Q20) can replace the refusal without a vocabulary change. It
+  carries a `PRIVACY_REFUSAL` text and is in VS-47's receipt `Refusals`.
+
+- **Critique points.**
+  1. Precedence and fail-open shipped origin: taken.
+     - The precedence is fixed. `zdrco`'s catalog entry has a model entry
+       without its own URL, so `model.test.ts` covers the fix.
+     - Review.run fails closed: with `catalogOrigins` absent and no SDK
+       origin, `defaultOrigins` is `UNKNOWN_ORIGIN`, so a provider attestation
+       covers no host and holds no OpenRouter account.
+     - `route.test.ts` and `model.test.ts` cover the moved-to-OpenRouter case
+       with an attested provider ID: refused with the shipped origin unknown
+       or elsewhere, and allowed only for a provider defined in configuration
+       (privacy.ts's documented case).
+     - `catalogOrigins` is tri-state: absent is unknown, `[]` is defined in
+       configuration. Review round one tightened `[]` to a positive signal
+       (finding 1 below).
+  2. The model-only pass before any lookup: taken.
+     - In model.ts it runs right after the name is parsed. `model.test.ts`
+       refuses unlisted `vector/acme/missing:free` and `vector-plan/unlisted`
+       with no `getModel` call.
+     - In run.ts it runs over the input models and review.json's
+       `judgeModel` before `chooseModels`. On a refusal `chooseModels` is
+       skipped, so the Codium listing is never read.
+     - `decide` itself starts with `modelRefusal`.
+  3. The `ask()` and `admit` paths are exercised in Review.run: taken. Three
+     cases change the live provider model or options mid-review, as a
+     configuration change or a switch of model would:
+     - the retry refused at `admit`: one request sent, no finalize phase,
+       attempts 1;
+     - the finalizer refused at its `admit`: the finalizer never reaches the
+       server;
+     - the verify pass refused in `ask()` before its session: no verify session
+       or request, nothing listed, attempts 1.
+     - Each asserts the observed attempt sequence and that nothing is admitted
+       after the refusal.
+  4. Narrative invariance: taken. `narrative-invariance.test.ts` adds a case:
+     - under "zdr" from the base's review.json, five framings are admitted on
+       this computer with `checkInvariance` unchanged;
+     - for a Covered Model on the same server every framing is refused before
+       any pass's session, with identical plans (review and security stopped,
+       0 requests).
+  5. `receipt.ts` and the `:51` bullet: taken (both above).
+     `test/review/receipt.test.ts` builds a receipt for every refusal.
+  6. Parity covers less than it appears to: taken. The matrix is defined as
+     "no sourced key named, and no unreadable text that mentions privacy". The
+     differences have their own test and are listed above.
+  7. Mid-review display: taken (findings cleared, above).
+  8. `reviewForOutput`: taken.
+  9. Connect's type gap: taken in another form. The plan added a new
+     `ReviewRoutes.Refused` error and widened `LocalReviewDeps.resolveModel`.
+     That broke `test/connect/vectorscope.test.ts:1320` at typecheck, and
+     connect's `as` cast would have hidden it. Instead the refusal rides on
+     `ReviewModelError` as optional `model` and `refusal`. So:
+     - no caller's error type changes;
+     - connect's cast stays accurate;
+     - the connect lane's files and tests need no edit;
+     - a caller that ignores `refusal` still sees a clear model error.
+  10. More suites: taken. `script/vectorscope-eval/replay.test.ts` and
+      `report.test.ts` were run from `packages/script`.
+      `review-http-regression.yml` (scope local) is in the dispatch list,
+      since `executeLocalReview` changes behaviour under "zdr".
+  11. Style: taken. The zero-attempt outcome is inline in the CLI's refused
+      branch, not in the pinned route.ts. The GitHub-shaped test calls
+      `resolveReviewModel` (trigger "auto", no route, a provider listing a
+      non-training free model) and passes its result to Review.run under
+      "zdr".
+  12. State write: taken as "match the existing failure path" (above).
+
+- **Pin.**
+  - `REVIEW_PIPELINE_SOURCES` `b49b61aed2d6b707` -> `86ab977f0b9734c6`
+    (`db2c8342524f3e63` before review round one, never committed).
+  - Engine `review/route.ts` joins `REVIEW_PIPELINE_FILES` (core
+    `test/review/model-evidence.test.ts`), with a rationale: it decides which
+    models a review may send code to, and under "zdr" whether it runs at all.
+  - `REVIEW_PIPELINE_REVISION` stays 4. With privacy unset nothing a review
+    finds or posts changes (D3 above), and a bump is owner-gated.
+  - Recompute after every merge of main: connect-finish edits `hub.ts` and
+    `adapters/vectorscope.ts`, which are pinned.
+
+- **Replay variant.** Unchanged: `engine:privacy-zdr` keeps engine
+  `{ pending: "VS-23c" }` and desktop `{ pending: "VS-23d" }` in
+  `script/vectorscope-eval/replay.ts` VARIANTS. A case's base review.json can
+  now raise privacy, and its replay is held to admission on loopback. The
+  README's route-refusal line (`:1234`) says so.
+
+- **Desktop half.** A documented difference, left pending. `ai-review.ts`
+  calls neither Review.run nor `resolveReviewModel` and still reads
+  `parseReviewConfig`; VS-23d (SF-15) owns it.
+
+- **What admission cannot see** (VS-23c, SF-12a):
+  - provider options or a model changed between attempts in a way the key
+    does not name (the key covers provider, ID, `api.id`, `api.npm`,
+    `api.url`; options are re-read before each pass);
+  - URLs computed at send time: a `${VARIABLE}`, Vertex's and Bedrock's from
+    project and region, and Azure's template. All of these are refused here as
+    "unknown-destination";
+  - the request body and its features, a `Request` body, the native runtime,
+    compaction and other helper requests (a helper on another model is refused
+    at `admit` by its key);
+  - a model's per-model `options` that a custom loader reads;
+  - whether a server on your network forwards (Check models' record is not
+    exposed): an attested host is the owner's statement;
+  - `EvidenceScope.route`, which is not set.
+
+- **Hand-offs.**
+  - SF-12a (VS-23c) must land before SF-15. Any allowed non-loopback route
+    needs the transport's body, path and feature checks first.
+  - SF-15 passes `global` to both merge calls (CLI `:290`, eval `:621`) and
+    switches the desktop.
+  - SF-37 switches the GitHub job to `mergeReviewConfig({ surface: "github" })`
+    and passes `route` to its `resolveReviewModel` calls. Under "zdr" it must
+    also resolve review.json's `judgeModel` itself, through
+    `resolveReviewModel` with `route`, and pass it as `judge`, as the CLI does.
+    The GitHub job passes no `judge` today, so Review.run's own `resolveName`
+    looks it up, and that judge carries no `catalogOrigins`: under "zdr" a
+    provider-ID attestation never covers it at its catalog-shipped URL, while
+    the same model resolved by the CLI is allowed. That fails closed, but it is
+    an inconsistent refusal once SF-15 supplies attestations (review round
+    one, finding 9). The eval passes no `judge` either; its replays run on
+    this computer, where no attestation is needed.
+  - The connect lane:
+    - `plan()` and the consent preview should read `mergeReviewConfig` and pass
+      the route policy;
+    - its `resolveModel` wrapper should treat a `ReviewModelError` with
+      `refusal` as a privacy refusal rather than "unavailable";
+    - `adapters/vectorscope.ts` is pinned, so the pin moves with it.
+  - VS-29b: `alternateModel` does not exist yet. When it does, it goes through
+    `resolveReviewModel` with `route`, and Review.run's up-front check names
+    it.
+
+- **Tests run** (one file at a time through the lock; HEAD baseline at
+  `4ca3ce5f` -> after).
+  - Core (`packages/core`), each at HEAD and then after:
+    - `test/review/privacy.test.ts`: 56 pass, 0 fail, 810 expects -> 56, 0,
+      810 (the vocabulary list gains the value);
+    - `test/review/format.test.ts`: 60, 0, 303 -> 60, 0, 308;
+    - `test/review/config.test.ts`: 73, 0, 535 -> 75, 0, 966;
+    - `test/review/receipt.test.ts`: 10, 0, 92 -> 10, 0, 112;
+    - `test/review/model-evidence.test.ts`: 30, 0, 393 -> 30, 0, 393 (the pin;
+      it failed once with the new digest before the pin was set);
+    - `test/review/verdict.test.ts`: 45, 0, 9103 -> 45, 0, 9103.
+  - Engine (`packages/engine`), new or changed (after review round one):
+    - `test/review/route.test.ts` (new): 20 pass, 0 fail, 71;
+    - `test/review/model.test.ts`: 21, 0, 90 -> 27, 0, 126;
+    - `test/review/run.test.ts`: 60 pass, 1 skip, 4 fail, 555 -> 70, 1, 4, 637.
+      The same 4 fail at HEAD, all with "Read-only Git inspection is
+      unavailable: this host has no supported unprivileged Git verifier" or
+      the exit code 2 that follows from it (the Linux private-Git cases, which
+      run in CI): "the durable local runner preserves actual provider output…",
+      "deletion without instance context joins the actual provider…" (a 30 s
+      timeout), "nested service placement roots relative denials…" and "a
+      resolver-time symlink retarget…". None sets privacy;
+    - `test/review/eval.test.ts`: 41, 0, 508 -> 44, 0, 520;
+    - `test/review/narrative-invariance.test.ts`: 2, 0, 180 -> 3, 0, 293;
+    - `test/cli/review-privacy.test.ts` (new): 6, 0, 88;
+    - `test/cli/review.render.test.ts`: 11, 0, 28 -> 11, 0, 28.
+  - Engine regressions, after only (each passed except as noted):
+    - `test/cli/review.test.ts`: 26, 0, 182 (no "987" flake this run);
+    - `test/cli/review-fix.test.ts`: 17 pass, 1 skip, 0 fail, 169;
+    - `test/review/vectorscope-replay.test.ts`: 29, 0, 352;
+    - `test/review/panel.test.ts`: 9, 0, 55;
+    - `test/connect/review-service.test.ts`: 3, 0, 15.
+  - Engine regressions that fail in this sandbox, each run again at HEAD
+    (working-tree changes reversed, then reapplied with every file's
+    checksum unchanged). They are identical, test for test:
+    - `test/review/service.test.ts`: 4 pass, 1 skip, 9 fail, 44;
+    - `test/review/local-run.test.ts`: 1, 1, 11, 33;
+    - `test/review/local-admission.test.ts`: 2, 1, 2, 35;
+    - `test/connect/vectorscope.test.ts`: 7, 1, 19, 113.
+    - Each failure is the missing unprivileged Git verifier or follows from it
+      ("The repository's physical review-memory scope could not be verified",
+      "This review's Git reads cannot be inspected safely").
+  - Eval scripts (`packages/script`, as `test.yml` runs them):
+    - `../../script/vectorscope-eval/replay.test.ts`: 49, 0, 653;
+    - `../../script/vectorscope-eval/report.test.ts`: 44, 0, 312.
+  - Typecheck: `bun typecheck` in `packages/core` and `packages/engine` (test
+    files included), and the eval tsconfig, all clean. Prettier `--check` is
+    clean on the 24 touched files. `vectorscope-deviations.md` is not
+    Prettier-clean at HEAD and was not reformatted.
+
+- **CI to dispatch** (commit gate; it records each run's ID and result here):
+  - `typecheck.yml`;
+  - `test.yml` (runtime code changed);
+  - `scope-directory-identity.yml` (core and engine `src/review/**`, and engine
+    `test/review/**`);
+  - `review-memory-fence.yml` (`run.ts`, `model.ts`);
+  - `vector-at-mention.yml` (core `review/**`);
+  - `review-http-regression.yml` with scope local.
+  - Not needed: `scope-app-validation.yml` (no app change); the commit gate
+    dispatches it anyway as part of the lane's standard set.
+  - Deferred, CI only: the Windows and macOS legs of `test.yml`, the HTTP
+    shard, and the private-Git cases below.
+
+- **Review round one** (nine code findings and one on this entry, all taken
+  except where a reason is given):
+  1. Blocking: an unavailable catalog read as "defined in configuration".
+     `ModelCatalog.get()` gives `{}` with no disk copy or snapshot, a failed or
+     disabled fetch, or offline, and every provider then had `catalogOrigins`
+     `[]`. So a direct provider whose base URL was moved to OpenRouter, its ID
+     attested, was decided "openrouter-attested". Taken in its stronger form:
+     `ReviewRoutes.shippedOrigins` `[]` needs the catalog loaded and the
+     configuration's `provider` map naming the provider; an empty catalog or a
+     plugin-only provider is unknown (`UNKNOWN_ORIGIN`).
+     - `model.test.ts` "a catalog that did not load…": catalog `{}`, `acme`
+       moved to OpenRouter and `zdrAttested: ["acme"]` is refused as
+       `unattested-openrouter`, configured or not. `zdrco` attested by ID is
+       `unattested-provider` without the catalog. Loopback is still allowed,
+       with no `catalogOrigins`.
+     - `model.test.ts`: the unlisted `myrouter` on OpenRouter is
+       `openrouter-attested` only when the configuration defines it; the
+       ollama case now names it in the configuration.
+     - `route.test.ts` "ReviewRoutes.shippedOrigins": 3 cases, every branch.
+     - Mutation: making `[]` the answer for an empty catalog again fails the
+       new `model.test.ts` case (restored; checksum unchanged).
+     - Fail-closed narrowing, recorded: a provider only a plugin defines,
+       unlisted, no longer holds an OpenRouter account by its ID.
+  2. A refused review's header said `Risk: Low · Not reviewed`: taken. The
+     header is "Not reviewed" alone, and `counts()` is unchanged from HEAD.
+     Both refused outcomes are now built the same way: Review.run's refused
+     selection drops `prior` and assesses nothing (`:1131-1145`), equal to the
+     CLI's literal; `run.test.ts` asserts it with an open blocking prior.
+     `review-privacy.test.ts` asserts the header line and no "Risk:".
+  3. No Review.run case for a refused panel judge: taken. `run.test.ts` "a
+     refused panel judge stops the review before any session…" runs
+     `zdr({ panel: true, judgeModel: "lmstudio/claude-fable-5" })` and
+     `judge` passed in on the loopback model: no session, no request,
+     `partial: "privacy"`, and the note names the judge with 0 attempts. The
+     test provider lists no such model, so had `chooseModels` looked the judge
+     up first it would have found none and the review would have run.
+  4. The `as` widening and an unused `named` under "standard": taken
+     (`refusedUpFront` is a typed const; the list is built inside the "zdr"
+     branch).
+  5. Nested ternaries for the tri-state rule: taken (`defaultOrigins` and
+     `shippedOrigins`, one early return per case).
+  6. Hand-rebound `model`, `triage`, `judge` in the CLI: taken in part.
+     `triage` and `judge` are read as `resolved.triage` and `resolved.judge`
+     at their one use; `model` keeps its name, since HEAD already bound it and
+     its eight uses would otherwise all change.
+  7. This entry's Status: taken (the bullet says the commit gate fills in the
+     commit, the TURBO typecheck and the run IDs, and that the Done line needs
+     `review-memory-fence.yml` green).
+  8. `release` chained after `unsubscribe` and `Scope.close`: taken; it is in
+     an `ensuring` of its own `:1281-1283`.
+  9. Review.run's own judge (`resolveName`) and Codium role models carry no
+     `catalogOrigins`: recorded, not changed. Codium role models arise only
+     for a Codium review model, which "zdr" refuses up front, so only the
+     `resolveName` judge reaches `decide`, and it fails closed. Giving
+     `decide` the catalog would add `ModelCatalog.Service` and
+     `Config.Service` to Review.run's requirements, which every caller and the
+     run.test fixtures provide by hand. The hand-off is under SF-37 above.
+  10. No replay-level parity for the `mergeReviewConfig` switch: taken.
+      `eval.test.ts` "a base review.json that names no sourced key…" replays
+      `verify`, `maxSteps`, `minConfidence`, `trivial` and an unknown key
+      under the shared verify policy's `REVIEW_VERIFY_POLICY`. The artifact's
+      warnings equal `parseReviewConfig`'s, and its value equals
+      `parseReviewConfig`'s config after the UNAPPLIED drop, under the
+      replay's cap, limits and variant keys.
+
+- **Not claimed.**
+  - No paid run, no model call off this computer, and no quality claim.
+  - No default change, and no key enabled.
+  - No attestation supplied, and no model approved.
+  - No claim that I-3 holds on every transport, and no transport
+    certification: admission alone is not VS-23's Done line, which needs
+    VS-23c.
+  - No `cat-file --batch`.
+  - No change to provider.ts, session/llm.ts, the spawn hot spots, the
+    connect files, the app or replay.ts VARIANTS.

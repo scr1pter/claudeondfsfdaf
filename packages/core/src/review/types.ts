@@ -339,8 +339,9 @@ export interface ReviewOutcome {
   since?: string
   mode: "full" | "incremental" | "carry"
   forcePushed?: boolean
-  // "privacy" and "budget-estimate" are VS-23's and VS-24's zero-attempt stops, which no runner makes before VS-23b
-  // and VS-24 wiring.
+  // "privacy" and "budget-estimate" are VS-23's and VS-24's stops. Review.run and `vector review` make "privacy" when
+  // the route rules refuse a model or an attempt (VS-23b), with every file unreviewed; no runner makes
+  // "budget-estimate" before VS-24 wiring.
   partial?: "budget" | "steps" | "timeout" | "model-error" | "privacy" | "budget-estimate"
   unreviewed: string[]
   specialists: {
@@ -377,8 +378,8 @@ export interface ReviewPass {
 // it covers. `region` pins an OpenRouter account to eu.openrouter.ai or us.openrouter.ai and attests nothing else.
 // `extendedCache` accepts OpenAI's 24-hour extended prompt caching (gpt-5.5 and later). `verify: "api"` asks admission
 // to check the account itself; absent means "attest". Nothing checks it yet: until a verifier exists (Q20), VS-23b's
-// admission must refuse a route whose decision lists an attestation with `verify: "api"`, and must refuse an OpenAI
-// one unless Q20 approves an admin credential.
+// admission (engine review/route.ts) refuses a route whose decision lists an attestation with `verify: "api"` as
+// "attestation-unverified", an OpenAI one included, which Q20 may later allow with an admin credential.
 export interface ZdrAttestation {
   id: string
   operator: string
@@ -466,7 +467,9 @@ export interface ReviewConfig {
   lenses?: "off" | "high"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
-  // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
+  // config and its digest stay as they were. Only mergeReviewConfig reads it: `vector review`, the local review service
+  // and the eval's replay call that from VS-23b, whose admission enforces it in model resolution and Review.run. The
+  // desktop (VS-23d) and the GitHub job (SF-37) still read parseReviewConfig, which ignores it.
   privacy?: "standard" | "zdr"
   // The routes the owner attests are zero data retention (Q2): provider IDs, `openrouter` for an OpenRouter account,
   // and model server hosts. A text entry is the legacy form and keeps its meaning; an attestation object (VS-33) adds

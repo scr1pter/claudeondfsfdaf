@@ -23,11 +23,13 @@ import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
+  notePrivacyRefused,
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
   noteVerifySkipped,
   noteVerifyUnfinished,
 } from "@vectordevai/core/review/format"
+import { reviewVerdict } from "@vectordevai/core/review/verdict"
 import {
   DEFAULT_REVIEW_CONFIG,
   type ModelFinding,
@@ -84,6 +86,8 @@ import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { resolveReviewModel, type ResolveInput } from "../../src/review/model"
+import { ReviewRoutes } from "../../src/review/route"
+import { TestConfig } from "../fixture/config"
 
 // Review.run against the fake LLM. Requests are matched by the prompt they answer, since the review and security
 // sessions run in parallel.
@@ -3221,3 +3225,499 @@ describe("the projection hook (VS-21b)", () => {
     TIMEOUT,
   )
 })
+
+// VS-23b (SF-11): the route rules (core privacy.ts) at Review.run's admission. A loopback server is the only route a
+// "zdr" review may use without an attestation, and no attestation source exists before SF-15, so the refused cases name
+// models or providers off this computer, and the allowed ones run on the fake server.
+describe("VS-23b route admission", () => {
+  type Attempt = Extract<Review.Observation, { type: "attempt" }>
+  const zdr = (overrides: Partial<ReviewConfig> = {}) => config({ privacy: "zdr", ...overrides })
+  const fable = { providerID: ref.providerID, modelID: ModelV2.ID.make("claude-fable-5"), context: 100_000 } as const
+  const attemptsOf = (observed: Review.Observation[]) =>
+    observed.filter((event): event is Attempt => event.type === "attempt")
+  const verdict = (outcome: ReviewOutcome) => reviewVerdict({ kind: "outcome", outcome })
+  // What a refused review selects, in Review.run as in the CLI's refusal at resolution: nothing listed, no earlier
+  // finding's bookkeeping, and no risk assessed.
+  const unselected = {
+    inline: [],
+    outsideDiff: [],
+    elsewhere: [],
+    nits: [],
+    overflow: [],
+    stillOpen: [],
+    fixed: [],
+    dismissed: [],
+    reappeared: [],
+    raised: [],
+    dropped: [],
+    risk: "low" as const,
+  }
+  const open = {
+    id: "abcdef012345",
+    where: "inline" as const,
+    path: "src/list.ts",
+    line: 3,
+    side: "RIGHT" as const,
+    severity: "blocking" as const,
+    category: "security" as const,
+    title: "Token is never verified",
+    sha: "1111111",
+    status: "open" as const,
+    commentId: 9,
+  }
+
+  // The live model and provider the session's requests are built from, so a case can change the route mid-review as a
+  // configuration change or a switch of model would. Restored when the case ends.
+  const live = Effect.gen(function* () {
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(ref.providerID, ref.modelID).pipe(Effect.orDie)
+    const info = yield* provider.getProvider(ref.providerID)
+    const url = model.api.url
+    const baseURL = info.options.baseURL
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        model.api.url = url
+        info.options.baseURL = baseURL
+      }),
+    )
+    return { model, info }
+  })
+
+  it.instance(
+    "a refused review model sends nothing, is neither retried nor finalized, and leaves every file unreviewed",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const observed: Review.Observation[] = []
+        const outcome = yield* Review.run(
+          input(directory, {
+            model: { ...fable, costKind: "priced" },
+            config: zdr({ security: "always", verify: "blocking" }),
+            prior: [open],
+            observe: (event) => observed.push(event),
+          }),
+        )
+        expect(yield* modelRequests(llm)).toEqual([])
+        // An earlier blocking finding is neither listed as still open nor assessed: nothing was reviewed.
+        expect(outcome.selection).toEqual(unselected)
+        const attempts = attemptsOf(observed)
+        expect(attempts.map((attempt) => attempt.pass).toSorted()).toEqual(["review", "security"])
+        expect(attempts.every((attempt) => !attempt.admitted && attempt.stop === "privacy")).toBe(true)
+        expect(attempts.every((attempt) => attempt.phase === "turn" && attempt.sessionID === undefined)).toBe(true)
+        expect(outcome.sessions).toEqual([])
+        expect(outcome.partial).toBe("privacy")
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+        expect(outcome.specialists.toSorted((a, b) => a.name.localeCompare(b.name))).toEqual([
+          { name: "review", status: "stopped", steps: 0, detail: "privacy" },
+          { name: "security", status: "stopped", steps: 0, detail: "privacy" },
+        ])
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "lmstudio/claude-fable-5", refusal: "retention-required-model", attempts: 0 }),
+        ])
+        expect(verdict(outcome)).toEqual({ verdict: "not-reviewed", causes: ["privacy"], notes: [] })
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a refused model of a triage pair stops the review before its cheaper first pass",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const observed: Review.Observation[] = []
+        const outcome = yield* Review.run(
+          input(directory, {
+            model: { ...fable, costKind: "priced" },
+            triage: { ...ref, context: 100_000, costKind: "priced" },
+            config: zdr({ verify: "blocking" }),
+            observe: (event) => observed.push(event),
+          }),
+        )
+        expect(yield* modelRequests(llm)).toEqual([])
+        expect(attemptsOf(observed).map((attempt) => [attempt.pass, attempt.admitted, attempt.stop])).toEqual([
+          ["review", false, "privacy"],
+        ])
+        expect(outcome.partial).toBe("privacy")
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "lmstudio/claude-fable-5", refusal: "retention-required-model", attempts: 0 }),
+        ])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a refused panel judge stops the review before any session, named in review.json or passed by the caller",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const refused = notePrivacyRefused({
+          model: "lmstudio/claude-fable-5",
+          refusal: "retention-required-model",
+          attempts: 0,
+        })
+        // review.json's judgeModel is refused by its name before chooseModels would look it up: the test provider
+        // lists no such model, so a lookup would find none and the review would run without a judge.
+        const named = yield* Review.run(
+          input(directory, { config: zdr({ panel: true, judgeModel: "lmstudio/claude-fable-5" }) }),
+        )
+        const passed = yield* Review.run(
+          input(directory, { judge: { ...fable, costKind: "priced" }, config: zdr({ panel: true }) }),
+        )
+        for (const outcome of [named, passed]) {
+          expect(outcome.sessions).toEqual([])
+          expect(outcome.partial).toBe("privacy")
+          expect(outcome.unreviewed).toEqual(["src/list.ts"])
+          expect(outcome.specialists).toEqual([{ name: "review", status: "stopped", steps: 0, detail: "privacy" }])
+          expect(outcome.notes).toEqual([refused])
+        }
+        expect(yield* modelRequests(llm)).toEqual([])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the free model a GitHub-shaped review falls back to is refused inside Review.run",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        // What resolveReviewModel resolves for an automatic run with no model set and a free model Vector offers.
+        const free = {
+          id: ModelV2.ID.make("acme/coder:free"),
+          providerID: ProviderV2.ID.make("vector"),
+          api: { id: "acme/coder:free", url: "", npm: "@ai-sdk/openai-compatible" },
+          name: "Acme Coder (free)",
+          capabilities: {
+            temperature: true,
+            reasoning: false,
+            attachment: false,
+            toolcall: true,
+            input: { text: true, audio: false, image: false, video: false, pdf: false },
+            output: { text: true, audio: false, image: false, video: false, pdf: false },
+            interleaved: false,
+          },
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: { context: 128_000, output: 8_000 },
+          status: "active",
+          options: {},
+          headers: {},
+          release_date: "2025-01-01",
+        } satisfies Provider.Model
+        const fallback = yield* resolveReviewModel({ trigger: "auto", env: { VECTOR_CLI_TOKEN: "test-only" } }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(Provider.Service, {
+                list: () =>
+                  Effect.succeed({
+                    [free.providerID]: {
+                      id: free.providerID,
+                      name: "Vector",
+                      env: [],
+                      source: "api" as const,
+                      options: {},
+                      models: { [free.id]: free },
+                    },
+                  }),
+                getModel: () => Effect.succeed(free),
+                line: () => Effect.succeed(undefined),
+              }),
+              TestConfig.layer({ get: () => Effect.succeed({}), getGlobal: () => Effect.succeed({}) }),
+              Layer.mock(ModelCatalog.Service, { get: () => Effect.succeed({}) }),
+              Layer.mock(Auth.Service, { get: () => Effect.succeed(undefined) }),
+            ),
+          ),
+        )
+        expect(fallback).toMatchObject({ providerID: "vector", modelID: "acme/coder:free", costKind: "free" })
+        const outcome = yield* Review.run(
+          input(directory, { trigger: "auto", trust: "untrusted", model: fallback, config: zdr() }),
+        )
+        expect(yield* modelRequests(llm)).toEqual([])
+        expect(outcome.sessions).toEqual([])
+        expect(outcome.partial).toBe("privacy")
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "vector/acme/coder:free", refusal: "free-model", attempts: 0 }),
+        ])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a provider in vector.json whose base URL nothing attests is refused before its session",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const llm = yield* TestLLMServer
+        const files = yield* FSUtil.Service
+        const provider = testProviderConfig(llm.url)
+        const remote = {
+          ...provider.provider.lmstudio,
+          name: "Remote",
+          id: "remote",
+          options: { apiKey: "test-key", baseURL: "https://remote.example.invalid/v1" },
+        }
+        yield* files.writeWithDirs(
+          path.join(test.directory, "vector.json"),
+          JSON.stringify({
+            $schema: "https://vectordev.ai/config.json",
+            ...provider,
+            provider: { ...provider.provider, remote },
+          }),
+        )
+        yield* files.writeWithDirs(path.join(test.directory, "src/list.ts"), LIST_SOURCE)
+        yield* Effect.promise(() => trustWorkspace(test.directory))
+        const outcome = yield* Review.run(
+          input(test.directory, {
+            model: {
+              providerID: ProviderV2.ID.make("remote"),
+              modelID: ref.modelID,
+              context: 100_000,
+              costKind: "priced",
+            },
+            config: zdr(),
+          }),
+        )
+        expect(yield* modelRequests(llm)).toEqual([])
+        expect(outcome.sessions).toEqual([])
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "remote/test-model", refusal: "unattested-provider", attempts: 0 }),
+        ])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a server on this computer is admitted under zdr, retries and finalizer included, and each session is registered",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const observed: Review.Observation[] = []
+        const seen: (ReviewRoutes.Registered | undefined)[] = []
+        const run = (overrides: Partial<Review.RunInput>) =>
+          Review.run(
+            input(directory, {
+              observe: (event) => {
+                observed.push(event)
+                if (event.type === "attempt" && event.admitted && event.sessionID)
+                  seen.push(ReviewRoutes.registered(event.sessionID))
+              },
+              ...overrides,
+            }),
+          )
+
+        // A failed attempt and its retry.
+        yield* llm.pushMatch(REVIEW, httpError(503, { error: "temporary failure" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const retried = yield* run({ config: zdr({ maxSteps: 2 }) })
+        expect(retried.specialists).toEqual([{ name: "review", status: "ok", steps: 1 }])
+        expect(retried.partial).toBeUndefined()
+        expect(retried.notes).toEqual([])
+        expect(attemptsOf(observed).map((attempt) => [attempt.phase, attempt.admitted])).toEqual([
+          ["turn", true],
+          ["turn", true],
+        ])
+        expect((yield* llm.hits).filter(REVIEW)).toHaveLength(2)
+
+        // An answer in prose, then the finalizer.
+        observed.length = 0
+        yield* llm.pushMatch(REVIEW, reply().text("I looked around.").stop())
+        yield* llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()))
+        const finalized = yield* run({ config: zdr() })
+        expect(finalized.specialists[0]).toMatchObject({ name: "review", status: "ok" })
+        expect(attemptsOf(observed).map((attempt) => [attempt.phase, attempt.admitted])).toEqual([
+          ["turn", true],
+          ["finalize", true],
+        ])
+
+        // Every admitted attempt was in a session registered under the review's policy, decided as loopback; the
+        // registry is empty again once each review ends.
+        expect(seen).toHaveLength(4)
+        for (const entry of seen)
+          expect(entry).toMatchObject({
+            policy: { privacy: "zdr", attested: [] },
+            decision: { allowed: true, kind: "loopback" },
+          })
+        for (const id of [...retried.sessions, ...finalized.sessions])
+          expect(ReviewRoutes.registered(id)).toBeUndefined()
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a model that changes after its first attempt is refused at the retry, and the pass is not finalized",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const { model } = yield* live
+        const observed: Review.Observation[] = []
+        yield* llm.pushMatch(REVIEW, httpError(503, { error: "temporary failure" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const outcome = yield* Review.run(
+          input(directory, {
+            config: zdr({ maxSteps: 2 }),
+            observe: (event) => {
+              observed.push(event)
+              // The first attempt is admitted; the session's model then names another URL, as a switch would.
+              if (event.type === "attempt" && event.admitted) model.api.url = "https://moved.example.invalid/v1"
+            },
+          }),
+        )
+        expect((yield* llm.hits).filter(REVIEW)).toHaveLength(1)
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
+        const attempts = attemptsOf(observed)
+        expect(attempts.map((attempt) => [attempt.phase, attempt.admitted, attempt.stop])).toEqual([
+          ["turn", true, undefined],
+          ["turn", false, "privacy"],
+        ])
+        expect(outcome.specialists).toEqual([{ name: "review", status: "stopped", steps: 0, detail: "privacy" }])
+        expect(outcome.partial).toBe("privacy")
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "lmstudio/test-model", refusal: "unknown-destination", attempts: 1 }),
+        ])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a model that changes before the finalizer is refused at the finalizer's attempt",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const { model } = yield* live
+        const observed: Review.Observation[] = []
+        yield* llm.pushMatch(REVIEW, reply().text("I looked around.").stop())
+        yield* llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()))
+        const outcome = yield* Review.run(
+          input(directory, {
+            config: zdr(),
+            observe: (event) => {
+              observed.push(event)
+              if (event.type === "attempt" && event.admitted) model.api.url = "https://moved.example.invalid/v1"
+            },
+          }),
+        )
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
+        expect(attemptsOf(observed).map((attempt) => [attempt.phase, attempt.admitted, attempt.stop])).toEqual([
+          ["turn", true, undefined],
+          ["finalize", false, "privacy"],
+        ])
+        expect(outcome.specialists).toEqual([{ name: "review", status: "stopped", steps: 1, detail: "privacy" }])
+        expect(outcome.partial).toBe("privacy")
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "lmstudio/test-model", refusal: "unknown-destination", attempts: 1 }),
+        ])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a route refused before the verify pass stops it before its session, and the review lists no finding",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const { info } = yield* live
+        const observed: Review.Observation[] = []
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const outcome = yield* Review.run(
+          input(directory, {
+            config: zdr({ verify: "blocking" }),
+            observe: (event) => observed.push(event),
+            // Once the review pass is done, the provider's base URL moves off this computer.
+            onProgress: (event) => {
+              if (event.type === "specialist" && event.name === "review" && event.status === "ok")
+                info.options.baseURL = "https://moved.example.invalid/v1"
+            },
+          }),
+        )
+        expect((yield* llm.hits).filter(VERIFY)).toHaveLength(0)
+        expect(outcome.sessions).toHaveLength(1)
+        expect(
+          attemptsOf(observed).map((attempt) => [attempt.pass, attempt.phase, attempt.admitted, attempt.stop]),
+        ).toEqual([
+          ["review", "turn", true, undefined],
+          ["verify", "turn", false, "privacy"],
+        ])
+        expect(outcome.specialists).toEqual([
+          { name: "review", status: "ok", steps: 1 },
+          { name: "verify", status: "stopped", steps: 0, detail: "privacy" },
+        ])
+        expect(outcome.partial).toBe("privacy")
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+        // The review pass's finding was never verified, and nothing finished stands behind it.
+        expect(outcome.report.findings).toEqual([])
+        expect(listedCount(outcome)).toBe(0)
+        expect(outcome.notes).toEqual([
+          notePrivacyRefused({ model: "lmstudio/test-model", refusal: "unattested-provider", attempts: 1 }),
+        ])
+        expect(verdict(outcome).verdict).toBe("not-reviewed")
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "D3: unset, standard and zdr on this computer send the same requests and return the same outcome",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        // Each scenario's replies, made fresh for every run.
+        const scenarios: { name: string; config: Partial<ReviewConfig>; push: () => Effect.Effect<void> }[] = [
+          { name: "ok", config: {}, push: () => llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report())) },
+          {
+            name: "retry",
+            config: { maxSteps: 2 },
+            push: () =>
+              llm
+                .pushMatch(REVIEW, httpError(503, { error: "temporary failure" }))
+                .pipe(Effect.andThen(llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report())))),
+          },
+          {
+            name: "finalizer",
+            config: {},
+            push: () =>
+              llm
+                .pushMatch(REVIEW, reply().text("I looked around.").stop())
+                .pipe(Effect.andThen(llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report())))),
+          },
+          {
+            name: "verify",
+            config: { verify: "blocking" },
+            push: () =>
+              llm
+                .pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+                .pipe(Effect.andThen(llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] })))),
+          },
+        ]
+        for (const scenario of scenarios) {
+          const runs = yield* Effect.forEach([undefined, "standard", "zdr"] as const, (privacy) =>
+            Effect.gen(function* () {
+              yield* llm.reset
+              yield* scenario.push()
+              const outcome = yield* Review.run(
+                input(directory, {
+                  model: priced,
+                  config: config({ ...scenario.config, ...(privacy ? { privacy } : {}) }),
+                }),
+              )
+              const { durationMs: _duration, sessions: _sessions, ...rest } = outcome
+              return { bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)), outcome: rest }
+            }),
+          )
+          expect({ name: scenario.name, run: runs[1] }).toEqual({ name: scenario.name, run: runs[0] })
+          expect({ name: scenario.name, run: runs[2] }).toEqual({ name: scenario.name, run: runs[0] })
+          expect(runs[0]!.bodies.length).toBeGreaterThan(0)
+        }
+      }),
+    120_000,
+  )
+})
+
+// How many findings a review lists, wherever it lists them.
+function listedCount(outcome: ReviewOutcome) {
+  const selection = outcome.selection
+  return [
+    ...selection.inline,
+    ...selection.overflow,
+    ...selection.outsideDiff,
+    ...selection.elsewhere,
+    ...selection.nits,
+  ].length
+}

@@ -371,6 +371,79 @@ describe("mergeReviewConfig", () => {
     ).toEqual(parseReviewConfig({ trigger: "desktop" }).config)
   })
 
+  // VS-23b (SF-11): `vector review`, the local review service and the eval's replay read review.json through
+  // mergeReviewConfig on the "local" surface, with no global config until SF-15. With no sourced key named, and no
+  // unreadable review.json that mentions privacy, each reads what parseReviewConfig read: every config and warning.
+  test("VS-23b: the local surfaces' calls are parseReviewConfig while no sourced key is named", () => {
+    const texts = [
+      undefined,
+      "",
+      "{}",
+      JSON_TEXT,
+      '{"verify": "off", "security": "always", "maxSteps": 7, "maxCostUsd": 0}',
+      '{"verifyPolicy": "shared"}',
+      '{"triageModel": "acme/small", "verify": "off", "panel": true, "judgeModel": "other/judge"}',
+      '{"auto": true, "drafts": false, "bogus": 1}',
+      '{"trivial": "skip", "guardrail": "strict", "depth": "auto", "lenses": "high"}',
+      "{",
+      "[1, 2]",
+      "null",
+      '﻿{"minConfidence": 0.5}',
+    ]
+    const envs = [
+      {},
+      ENV,
+      { REVIEW_VERIFY_POLICY: "shared", REVIEW_SECURITY: "off", REVIEW_MAX_COST_USD: "2" },
+      { REVIEW_AUTO_MODEL: "acme/auto", MODEL: "acme/env", REVIEW_TIMEOUT_MINUTES: "500" },
+    ]
+    for (const text of texts)
+      for (const env of envs)
+        for (const trigger of ["local", "command", "auto", "desktop"] as const)
+          for (const at of ["base", "working-tree"] as const)
+            expect(mergeReviewConfig({ surface: "local", json: { at, text }, env, trigger })).toEqual(
+              parseReviewConfig({ json: text, env, trigger }),
+            )
+  })
+
+  // What those surfaces now read differently. None is a default change: each is a sourced key named in review.json or
+  // the environment, or an unreadable review.json that mentions privacy.
+  test("VS-23b: on the local surfaces a sourced key is read, not unknown, and an unreadable mention fails closed", () => {
+    const local = (text: string | undefined, env: Record<string, string> = {}) =>
+      mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, env, trigger: "local" })
+    // "privacy": "standard" was an unknown key; it is the default now, and says nothing.
+    expect(parseReviewConfig({ json: '{"privacy": "standard"}' }).warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: unknown key "privacy" is ignored.`,
+    ])
+    expect(local('{"privacy": "standard"}')).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
+    // "zdr" raises it from review.json or REVIEW_PRIVACY, and "standard" never lowers it.
+    expect(local('{"privacy": "zdr"}')).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" }, warnings: [] })
+    expect(local(undefined, { REVIEW_PRIVACY: "zdr" }).config.privacy).toBe("zdr")
+    expect(local('{"privacy": "zdr"}', { REVIEW_PRIVACY: "standard" }).config.privacy).toBe("zdr")
+    expect(local('{"privacy": "standard"}', { REVIEW_PRIVACY: "zdr" }).config.privacy).toBe("zdr")
+    // zdrAttested and runtime were unknown keys; they are ignored as trusted-only, read from the global config alone.
+    for (const [key, value] of [
+      ["zdrAttested", ["openrouter"]],
+      ["runtime", "ask"],
+    ] as const) {
+      const text = JSON.stringify({ [key]: value })
+      expect(parseReviewConfig({ json: text }).warnings).toEqual([
+        `${REVIEW_CONFIG_PATH}: unknown key "${key}" is ignored.`,
+      ])
+      for (const at of ["base", "working-tree"] as const)
+        expect(mergeReviewConfig({ surface: "local", json: { at, text }, trigger: "local" })).toEqual({
+          config: DEFAULT_REVIEW_CONFIG,
+          warnings: [`${REVIEW_CONFIG_PATH}: "${key}" is ignored: "${key}" is read only from the global config.`],
+        })
+    }
+    // A review.json that cannot be read and mentions privacy may have meant "zdr", so it reads as "zdr".
+    const unreadable = local('{"privacy": "zdr",')
+    expect(unreadable.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" })
+    expect(unreadable.warnings).toContain(
+      `${REVIEW_CONFIG_PATH} could not be read and mentions "privacy"; using "zdr", the stricter setting.`,
+    )
+    expect(parseReviewConfig({ json: '{"privacy": "zdr",' }).config).toEqual(DEFAULT_REVIEW_CONFIG)
+  })
+
   test("parseReviewConfig itself still ignores both, so no surface takes zdr before it enforces it", () => {
     const { config, warnings } = parseReviewConfig({
       json: JSON.stringify({ privacy: "zdr", zdrAttested: ["openrouter"] }),

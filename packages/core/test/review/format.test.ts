@@ -668,6 +668,12 @@ describe("notes", () => {
     expect(notePrivacyRefused({ model: "openai/gpt-5.5", refusal: "extended-cache-unattested", attempts: 0 })).toBe(
       '**Not reviewed.** `openai/gpt-5.5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: OpenAI keeps this model\'s prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`). Nothing was sent. Vector does not retry the review on another model.',
     )
+    // VS-23b: admission refuses a route whose attestation asks Vector to check the account, which it cannot yet.
+    expect(
+      notePrivacyRefused({ model: "anthropic/claude-sonnet-5", refusal: "attestation-unverified", attempts: 0 }),
+    ).toBe(
+      '**Not reviewed.** `anthropic/claude-sonnet-5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: its `zdrAttested` entry asks Vector to check the account itself (`verify: "api"`), and Vector cannot check accounts yet. Nothing was sent. Vector does not retry the review on another model.',
+    )
     // The model's name comes from configuration, so it cannot close the code span.
     expect(notePrivacyRefused({ model: "acme/odd`name", refusal: "free-model", attempts: 0 })).toContain(
       "`acme/odd'name`",

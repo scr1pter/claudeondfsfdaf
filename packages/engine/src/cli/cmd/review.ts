@@ -11,7 +11,7 @@ import path from "path"
 import { Effect, Schema } from "effect"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import {
-  parseReviewConfig,
+  mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
@@ -25,6 +25,7 @@ import {
   formatUsd,
   noteMoved,
   noteNothingToReview,
+  notePrivacyRefused,
 } from "@vectordevai/core/review/format"
 import {
   buildCreateReviewPayload,
@@ -77,6 +78,7 @@ import { Config } from "@/config/config"
 import { SessionPosting } from "@/session/posting"
 import { ReviewContext } from "@/review/context"
 import type { ReviewModel, ResolvedModel } from "@/review/model"
+import { ReviewRoutes } from "@/review/route"
 import type { Review } from "@/review/run"
 import { ReviewSource } from "@/review/source"
 import { Process } from "@/util/process"
@@ -146,6 +148,7 @@ export interface PullInfo {
 
 export interface LocalReviewDeps<RunR = never, ModelR = never> {
   runReview: (input: Review.RunInput) => Effect.Effect<ReviewOutcome, never, RunR>
+  // Under privacy "zdr" its error carries `refusal` when the model has no route the rules allow (VS-23b).
   resolveModel: (input: ReviewModel.ResolveInput) => Effect.Effect<ResolvedModel, ReviewModel.ReviewModelError, ModelR>
   confirm: (question: string) => Promise<boolean> // false when nobody can answer
   pullInfo?: (pr: number, directory: string) => Promise<PullInfo | undefined>
@@ -273,7 +276,9 @@ export function executeLocalReview<RunR, ModelR>(
         ? undefined
         : yield* resolveBase(git, root, { requested: options.base, suggested: pull?.baseRefName })
 
-    // 2. Settings: your working tree for your own changes, the base for a pull request.
+    // 2. Settings: your working tree for your own changes, the base for a pull request. review.json is read with its
+    // sources tagged (VS-23b): `privacy` there or in REVIEW_PRIVACY can only raise. There is no global config source
+    // until SF-15 (VS-23d), so `zdrAttested` is empty here and a "zdr" review refuses every route off this computer.
     const setting = (file: string) =>
       denied(file)
         ? Effect.succeed(undefined)
@@ -282,7 +287,15 @@ export function executeLocalReview<RunR, ModelR>(
           : trust === "trusted"
             ? readWorkingFile(root, file)
             : readBlob(git, root, base!.sha, file)
-    const parsed = parseReviewConfig({ json: yield* setting(REVIEW_CONFIG_PATH), env, trigger: "local" })
+    const parsed = mergeReviewConfig({
+      surface: "local",
+      json: {
+        at: options.context || trust !== "trusted" ? "base" : "working-tree",
+        text: yield* setting(REVIEW_CONFIG_PATH),
+      },
+      env,
+      trigger: "local",
+    })
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
     const config = withFlags(
       parsed.config,
@@ -328,6 +341,34 @@ export function executeLocalReview<RunR, ModelR>(
         if (options.json) yield* print(JSON.stringify({ version: 1, target, outcome: null, note }, null, 2) + "\n")
         else yield* print(note + "\n")
         return { exitCode: countAtOrAbove(left, failOn) ? 1 : 0, target } satisfies LocalReviewResult
+      })
+    // A review the route rules stopped (VS-23b) reviewed nothing: it is shown as not reviewed, never as clean, and fails
+    // as a review that could not run does, so a --fail-on hook cannot pass the change. As that failure does, it leaves
+    // the "since last review" state alone, so the next run reviews the change again. Nothing is applied or posted.
+    const notReviewed = (outcome: ReviewOutcome) =>
+      Effect.gen(function* () {
+        if (options.json)
+          yield* print(JSON.stringify({ version: 1, target, outcome: reviewForOutput(outcome) }, null, 2) + "\n")
+        else
+          yield* print(
+            renderLocalReview({
+              target,
+              outcome,
+              limits: {
+                maxCostUsd: config.maxCostUsd,
+                maxSteps: config.maxSteps,
+                timeoutMinutes: config.timeoutMinutes,
+              },
+              color: deps.color,
+            }),
+          )
+        return {
+          exitCode: 2,
+          error:
+            'Vector did not review this change: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.',
+          target,
+          outcome,
+        } satisfies LocalReviewResult
       })
 
     if (!range.files.length) {
@@ -425,37 +466,87 @@ export function executeLocalReview<RunR, ModelR>(
     yield* ReviewGit.preflight
 
     // 5. The model, and what running tests on this branch would mean.
-    // Under "modelEvidence": "warn" (VS-07) a retired model is refused as retired.
+    // Under "modelEvidence": "warn" (VS-07) a retired model is refused as retired. Under privacy "zdr" (VS-23b) each
+    // model needs a route the rules allow, and a refused one stops the review here, before anything is gathered or sent.
     const evidence = config.modelEvidence === "warn" ? { evidence: true } : {}
-    const model = yield* deps.resolveModel({
-      trigger: "local",
-      flag: options.model,
-      config: config.model,
-      env,
-      ...evidence,
-      ...(options.context?.identity ? { identity: options.context.identity } : {}),
-    })
-    // review.json's cheaper first pass; the double-check stays on `model`.
-    const triage = config.triageModel
-      ? yield* deps.resolveModel({
-          trigger: "local",
-          exact: config.triageModel,
-          env,
-          ...evidence,
-          ...(options.context?.identity ? { identity: options.context.identity } : {}),
-        })
-      : undefined
-    // The panel's judge (WP A35); on Vector Codium the runner uses the plan's panel judge when judgeModel is unset.
-    const judge =
-      config.panel && config.judgeModel
+    const route = ReviewRoutes.policyOf(config)
+    const routed = route.privacy === "zdr" ? { route } : {}
+    const resolved = yield* Effect.gen(function* () {
+      const model = yield* deps.resolveModel({
+        trigger: "local",
+        flag: options.model,
+        config: config.model,
+        env,
+        ...evidence,
+        ...routed,
+        ...(options.context?.identity ? { identity: options.context.identity } : {}),
+      })
+      // review.json's cheaper first pass; the double-check stays on `model`.
+      const triage = config.triageModel
         ? yield* deps.resolveModel({
             trigger: "local",
-            exact: config.judgeModel,
+            exact: config.triageModel,
             env,
             ...evidence,
+            ...routed,
             ...(options.context?.identity ? { identity: options.context.identity } : {}),
           })
         : undefined
+      // The panel's judge (WP A35); on Vector Codium the runner uses the plan's panel judge when judgeModel is unset.
+      const judge =
+        config.panel && config.judgeModel
+          ? yield* deps.resolveModel({
+              trigger: "local",
+              exact: config.judgeModel,
+              env,
+              ...evidence,
+              ...routed,
+              ...(options.context?.identity ? { identity: options.context.identity } : {}),
+            })
+          : undefined
+      return { model, triage, judge }
+    }).pipe(
+      Effect.catchTag("ReviewModelError", (error) =>
+        error.refusal
+          ? Effect.succeed({ refused: { model: error.model ?? "the review model", refusal: error.refusal } })
+          : Effect.fail(error),
+      ),
+    )
+    if ("refused" in resolved)
+      return yield* notReviewed({
+        report: { summary: "", risk: "low", files: [], findings: [] },
+        selection: {
+          inline: [],
+          outsideDiff: [],
+          elsewhere: [],
+          nits: [],
+          overflow: [],
+          stillOpen: [],
+          fixed: [],
+          dismissed: [],
+          reappeared: [],
+          raised: [],
+          dropped: [],
+          risk: "low",
+        },
+        skipped,
+        durationMs: 0,
+        base: range.mergeBase,
+        head: range.head,
+        ...(range.since ? { since: range.since } : {}),
+        mode: range.mode === "incremental" ? "incremental" : "full",
+        partial: "privacy",
+        unreviewed: [...new Set([...review, ...withheld].map((file) => file.path))],
+        specialists: [],
+        sessions: [],
+        stats: {
+          files: review.length,
+          additions: review.reduce((sum, file) => sum + file.additions, 0),
+          deletions: review.reduce((sum, file) => sum + file.deletions, 0),
+        },
+        notes: [notePrivacyRefused({ ...resolved.refused, attempts: 0 })],
+      })
+    const model = resolved.model
     const modelName = `${model.providerID}/${model.modelID}`
     if (options.checks) {
       const start = target.kind === "branch" ? range.mergeBase : yield* branchStart(git, root, range.head, base)
@@ -564,8 +655,8 @@ export function executeLocalReview<RunR, ModelR>(
       ),
       config,
       model,
-      ...(triage ? { triage } : {}),
-      ...(judge ? { judge } : {}),
+      ...(resolved.triage ? { triage: resolved.triage } : {}),
+      ...(resolved.judge ? { judge: resolved.judge } : {}),
       ...(options.checks ? { checks: true } : {}),
       knownPath,
       onProgress: (event) => {
@@ -581,6 +672,7 @@ export function executeLocalReview<RunR, ModelR>(
           notes: [...result.notes, "Some changed files were not reviewed because this conversation cannot read them."],
         }
       : result
+    if (reviewed.partial === "privacy") return yield* notReviewed(reviewed)
     const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
     if (!reviewers.some((entry) => entry.status !== "failed")) {
       const detail = (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no report").replace(

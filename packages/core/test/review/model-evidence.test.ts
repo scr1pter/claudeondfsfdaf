@@ -51,6 +51,8 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // review/fix-owner.ts, VS-12d) and its wire schema (schema review-fix.ts), for the same reason; the review routes and
 // owner files they extend stay pinned. So are the fix planner the CLI step shares with the desktop (core
 // review/fix-plan.ts) and the desktop's fix adapter (app features/vectorscope/local-fix*.ts), for the same reason.
+// The route rules' admission (VS-23b's engine review/route.ts) is pinned from the day it lands: it decides which models
+// a review may send code to, and with privacy "zdr" whether it runs at all.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/hub.ts",
   "packages/engine/src/connect/adapters/vectorscope.ts",
@@ -81,6 +83,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/session/prompt.ts",
   "packages/engine/src/agent/agent.ts",
   "packages/engine/src/review/model.ts",
+  "packages/engine/src/review/route.ts",
   "packages/engine/src/config/agent.ts",
   "packages/engine/src/session/processor.ts",
   "packages/engine/src/session/llm.ts",

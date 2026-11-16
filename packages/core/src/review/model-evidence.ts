@@ -59,7 +59,7 @@ export const REVIEW_PIPELINE_REVISION = 4
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "b49b61aed2d6b707"
+export const REVIEW_PIPELINE_SOURCES = "86ab977f0b9734c6"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -109,8 +109,9 @@ export interface EvidenceScope {
   prompts: string // promptsDigest()
   policy: string // policyDigest(config)
   triage?: string // the cheaper first pass's "provider/model", when the review had one
-  // "zdr" only when a runner enforced the route rules (privacy.ts) for the whole review: VS-23b and VS-23c set it.
-  // Absent otherwise, so every scope and certificate made before VS-23 still matches.
+  // "zdr" only when a runner enforced the route rules (privacy.ts) for the whole review. VS-23c sets it once the
+  // transport also enforces them; VS-23b's admission alone does not. Absent otherwise, so every scope and certificate
+  // made before VS-23 still matches.
   route?: "zdr"
 }
 

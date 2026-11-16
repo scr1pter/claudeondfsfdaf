@@ -4,7 +4,8 @@
 // Review admits each provider attempt, including retries, and one separate finalizer. Dollar reservations are
 // estimates; reported usage can exceed them, so they are not a hard billing cap. An eval projection (VS-21b,
 // ReviewEval.project) may run what the dollar cap alone refuses, against a fake provider on this computer; nothing
-// else sets it, and unset it changes nothing.
+// else sets it, and unset it changes nothing. Under privacy "zdr" (VS-23b) admission also holds every model and every
+// provider attempt to the route rules (route.ts), before any reservation; a refusal stops the review unreviewed.
 
 import path from "path"
 import { Billing } from "@vectordevai/schema/billing"
@@ -25,6 +26,7 @@ import { checkedLabs, noteJudgeUnfinished, reviewModels } from "@vectordevai/cor
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import {
+  notePrivacyRefused,
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
   noteVerifySkipped,
@@ -70,6 +72,7 @@ import {
   VERIFY_JSON_SCHEMA,
 } from "@vectordevai/core/review/schema"
 import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
+import type { RouteRefusal } from "@vectordevai/core/review/privacy"
 import type {
   CostKind,
   Finding,
@@ -101,6 +104,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
+import { ReviewRoutes } from "./route"
 
 export interface RunInput {
   parentID?: SessionID
@@ -165,7 +169,8 @@ export interface RunInput {
 }
 
 type Name = ReviewOutcome["specialists"][number]["name"]
-type Stop = "budget" | "steps" | "timeout"
+// "privacy": the route rules refused the model or the attempt (VS-23b).
+type Stop = "budget" | "steps" | "timeout" | "privacy"
 type Phase = "turn" | "finalize"
 
 // A decision the review's dollar cap would refuse, and where it was made: before a pass's session ("pass"), at a
@@ -294,13 +299,43 @@ export const run: (
   const config = input.config
   const priceOf = (model: ResolvedModel) =>
     model.costKind === "priced" && config.maxCostUsd > 0 ? model.price : undefined
+  // VS-23b: under privacy "zdr" every model a pass may use needs a route the rules allow (route.ts), checked before any
+  // session: the models' own refusals first, before the Codium listing or review.json's judgeModel is looked up, then
+  // where each chosen model sends. Each pass's session and every provider attempt are checked again below.
+  const route = ReviewRoutes.policyOf(config)
+  const zdr = route.privacy === "zdr"
+  const early = zdr
+    ? [
+        input.model,
+        ...(input.triage ? [input.triage] : []),
+        ...(input.judge ? [input.judge] : []),
+        ...(config.panel && !input.judge && config.judgeModel ? [Provider.parseModel(config.judgeModel)] : []),
+      ].flatMap((item) => {
+        const refusal = ReviewRoutes.modelRefusal(item, route)
+        return refusal ? [{ model: nameOf(item), refusal }] : []
+      })[0]
+    : undefined
   // WP A35: the models the passes run on. A review on Vector Codium without a triageModel runs the plan's review pair,
   // a same-lab pair runs one pass, and the panel adds a judge from a third lab.
-  const picked = yield* chooseModels(input, provider)
+  const picked = early
+    ? { model: input.model, triage: input.triage, judge: input.judge, notes: [] }
+    : yield* chooseModels(input, provider)
   const model = picked.model
   const triage = picked.triage ?? model
   const triaged = nameOf(triage) !== nameOf(model)
   const judgeModel = picked.judge
+  const decided =
+    zdr && !early
+      ? yield* Effect.forEach([model, ...(triaged ? [triage] : []), ...(judgeModel ? [judgeModel] : [])], (chosen) =>
+          ReviewRoutes.decide(provider, chosen, route).pipe(Effect.map((result) => ({ chosen, result }))),
+        )
+      : []
+  // The first model or attempt the route rules refused (VS-23b), seeded here. Once set no pass starts another attempt.
+  const refusedUpFront: { model: string; refusal: RouteRefusal } | undefined =
+    early ??
+    decided.flatMap((entry) =>
+      entry.result.decision.allowed ? [] : [{ model: nameOf(entry.chosen), refusal: entry.result.decision.refusal }],
+    )[0]
   // The dollar cap applies when any pass runs on a priced model.
   const capped =
     priceOf(model) !== undefined ||
@@ -339,6 +374,7 @@ export const run: (
     uncertain: 0,
     incomplete: false,
     served: [] as string[],
+    refused: refusedUpFront,
   }
   const scope = yield* Scope.make()
   const bridge = input.stopSignal ? yield* EffectBridge.make() : undefined
@@ -587,6 +623,15 @@ export const run: (
       const price = priceOf(spec.model)
       const firstCost = nextCost({ context, cached: 0, price })
       observe({ type: "pass", pass: spec.name, model: nameOf(spec.model), text: spec.text, maxSteps: spec.cap })
+      // VS-23b: before the session, the pass's model is decided again, and once any model or attempt of the review was
+      // refused no pass starts.
+      const decided = zdr && !state.refused ? yield* ReviewRoutes.decide(provider, spec.model, route) : undefined
+      if (decided && !decided.decision.allowed)
+        state.refused = { model: nameOf(spec.model), refusal: decided.decision.refusal }
+      if (state.refused) {
+        observe({ type: "attempt", pass: spec.name, phase: "turn", admitted: false, stop: "privacy", estimateUsd: 0 })
+        return { name: spec.name, status: "stopped", stop: "privacy", detail: "privacy", steps: 0 } satisfies Asked<T>
+      }
       if (!reserve(spec.name, firstCost, firstCost, { phase: "turn", site: "pass" })) {
         observe({
           type: "attempt",
@@ -624,6 +669,12 @@ export const run: (
       yield* guard.ignoreLoops(session.id)
       tracks.set(session.id, track)
       sessionIDs.push(session.id)
+      // Every session is registered with the review's policy, and under "zdr" with the model its pass was decided for,
+      // which admission below and VS-23c's transport backstop hold each attempt to. Released when the review ends.
+      ReviewRoutes.register(session.id, {
+        policy: route,
+        ...(decided ? { key: decided.key, decision: decided.decision } : {}),
+      })
       yield* progress({ type: "specialist", name: spec.name, status: "running" })
 
       // One policy survives every processor instance, retry and prompt for this fresh owned session. It is never
@@ -633,6 +684,17 @@ export const run: (
         admit: (request) => {
           const phase: Phase = track.finalizing ? "finalize" : "turn"
           const attempt = { type: "attempt", pass: track.name, phase, sessionID: session.id } as const
+          // VS-23b, before the step and budget logic (never inside reserve(), which admits every uncapped attempt): the
+          // attempt's model must be the one its pass was decided for, and no model or attempt of the review refused.
+          // This holds every retry, continuation, finalizer and switch of model. A refused attempt is never sent.
+          const refusal = zdr ? (state.refused?.refusal ?? ReviewRoutes.attempt(session.id, request.model)) : undefined
+          if (refusal) {
+            state.refused ??= { model: `${request.model.providerID}/${request.model.id}`, refusal }
+            track.stop = "privacy"
+            track.denied = true
+            observe({ ...attempt, admitted: false, stop: "privacy", estimateUsd: 0 })
+            return
+          }
           const stop = input.stopSignal?.aborted
             ? "timeout"
             : track.finalizing
@@ -771,6 +833,8 @@ export const run: (
         structured !== undefined ? spec.decode(structured) : !track.stop ? spec.decode(lastText(message)) : undefined
       if (value !== undefined) return done(value, "ok")
       if (input.stopSignal?.aborted) return done(undefined, "stopped", "timeout", "timeout")
+      // A refused route is never finalized, and once any pass was refused no other pass starts its finalizer.
+      if (track.stop === "privacy" || state.refused) return done(undefined, "stopped", "privacy", "privacy")
 
       // The first prompt is now idle. Unknown exposure stays in the review's ledger; only unused future work is
       // released. The finalizer must still fit beside every other specialist's admitted work.
@@ -1040,9 +1104,14 @@ export const run: (
         }
       : report
 
-    // 8. Select. Paths outside the diff are checked against the repository first; selection is synchronous.
+    // 8. Select. Paths outside the diff are checked against the repository first; selection is synchronous. A review
+    // the route rules stopped (VS-23b) is not reviewed, so it lists no finding, not even one a pass before the refusal
+    // reported: no review that finished stands behind it (I-7). Nor does it assess risk or keep earlier findings'
+    // bookkeeping, so its selection is the empty one the CLI gives a model refused before Review.run.
+    const refused = state.refused
+    const listed = refused ? [] : findings
     const index = buildAnchorIndex(input.anchors)
-    const outside = [...new Set(findings.map((finding) => finding.path))].filter((file) => !lookupFile(index, file))
+    const outside = [...new Set(listed.map((finding) => finding.path))].filter((file) => !lookupFile(index, file))
     const known = new Map(
       yield* Effect.forEach(outside, (file) =>
         Effect.tryPromise(() => input.knownPath(file)).pipe(
@@ -1053,34 +1122,37 @@ export const run: (
     )
     const skipped = new Set(input.skipped.map((file) => file.path))
     const selection = selectFindings({
-      findings,
+      findings: listed,
       anchors: input.anchors,
       head: input.head,
       trust: input.trust,
       mode: input.mode,
       config,
-      prior: input.prior,
+      prior: refused ? [] : input.prior,
       ...(input.focus ? { focus: input.focus } : {}),
       inlinePosted: input.inlinePosted ?? 0,
       ignored: (file) => skipped.has(file) || classifyPath(file, { config }) !== undefined,
       knownPath: (file) => known.get(file) ?? true,
       teamDismissed: input.context.teamDismissed,
-      dropped: [
-        ...(rejected ? [{ reason: "rejected-by-verify" as const, count: rejected }] : []),
-        ...(unconfirmed ? [{ reason: "unconfirmed" as const, count: unconfirmed }] : []),
-      ],
-      modelRisk: report.risk,
-      sensitiveChanged: input.files.some((file) => isSensitivePath(file.path)),
-      changedLines: input.files.reduce((sum, file) => sum + file.additions + file.deletions, 0),
+      dropped: refused
+        ? []
+        : [
+            ...(rejected ? [{ reason: "rejected-by-verify" as const, count: rejected }] : []),
+            ...(unconfirmed ? [{ reason: "unconfirmed" as const, count: unconfirmed }] : []),
+          ],
+      modelRisk: refused ? "low" : report.risk,
+      sensitiveChanged: !refused && input.files.some((file) => isSensitivePath(file.path)),
+      changedLines: refused ? 0 : input.files.reduce((sum, file) => sum + file.additions + file.deletions, 0),
     })
 
     // A partial run records the files no finished specialist saw, so the next run reviews them. A run where no
-    // specialist finished leaves every file unreviewed.
-    const partial =
-      asked.find((entry) => entry.stop)?.stop ??
-      (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined)
+    // specialist finished, or one the route rules stopped, leaves every file unreviewed.
+    const partial = refused
+      ? ("privacy" as const)
+      : (asked.find((entry) => entry.stop)?.stop ??
+        (asked.some((entry) => !entry.value) ? ("model-error" as const) : undefined))
     const unreviewed =
-      !reports.length || asked.some((entry) => entry.stop && !entry.value)
+      refused || !reports.length || asked.some((entry) => entry.stop && !entry.value)
         ? input.files.map((file) => file.path)
         : partial && partial !== "model-error"
           ? yield* uncovered(asked.flatMap((entry) => (entry.value && entry.sessionID ? [entry.sessionID] : [])))
@@ -1150,8 +1222,13 @@ export const run: (
             }),
           )
         : []
+    const incomplete = state.incomplete
+      ? [
+          "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
+        ]
+      : []
     return {
-      report: checked,
+      report: refused ? { summary: "", risk: "low", files: [], findings: [] } : checked,
       selection,
       skipped: input.skipped,
       cost: { ...cost, ...(labs ? { labs } : {}) },
@@ -1175,17 +1252,22 @@ export const run: (
         additions: input.files.reduce((sum, file) => sum + file.additions, 0),
         deletions: input.files.reduce((sum, file) => sum + file.deletions, 0),
       },
-      notes: [
-        ...picked.notes,
-        ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
-        ...verifyNotes,
-        ...(state.incomplete
-          ? [
-              "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
-            ]
-          : []),
-        ...evidenceNotes,
-      ],
+      // A refusal says what was sent before it, and nothing about passes it stopped.
+      notes: refused
+        ? [
+            notePrivacyRefused({
+              ...refused,
+              attempts: [...tracks.values()].reduce((sum, track) => sum + track.attempts + track.finalizeAttempts, 0),
+            }),
+            ...incomplete,
+          ]
+        : [
+            ...picked.notes,
+            ...(judgeModel && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(nameOf(judgeModel))] : []),
+            ...verifyNotes,
+            ...incomplete,
+            ...evidenceNotes,
+          ],
     } satisfies ReviewOutcome
   })
 
@@ -1196,6 +1278,9 @@ export const run: (
         Effect.andThen(Scope.close(scope, Exit.void)),
       ),
     ),
+    // Its own finalizer, so the process-global registry is emptied of this review's sessions whatever the steps above
+    // do; VS-23c's transport backstop reads it by session ID.
+    Effect.ensuring(Effect.sync(() => sessionIDs.forEach((id) => ReviewRoutes.release(id)))),
   )
 })
 

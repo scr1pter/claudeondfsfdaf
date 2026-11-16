@@ -552,11 +552,14 @@ const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
   "durable-cache": "its Google Cloud project may keep cached prompts in durable storage.",
   "anthropic-non-zdr-feature":
     "the request uses an Anthropic feature that zero data retention does not cover, or one Vector cannot tell is covered, such as the MCP connector, code execution, the Files API or message threads.",
+  "attestation-unverified":
+    'its `zdrAttested` entry asks Vector to check the account itself (`verify: "api"`), and Vector cannot check accounts yet.',
 }
 
 // A review stopped by the route rules (privacy.ts) before it sent code to `model`. `attempts` counts the requests the
 // review had already sent on allowed routes, so the note says what left the machine. A refusal is never retried on
-// another model (I-3), and the review is never shown as clean (I-7). Nothing shows it before VS-23b.
+// another model (I-3), and the review is never shown as clean (I-7). Review.run gives it for a model or attempt its
+// admission refuses, and `vector review` for a model its resolution refuses (VS-23b).
 export function notePrivacyRefused(input: { model: string; refusal: RouteRefusal; attempts: number }): string {
   const reason = PRIVACY_REFUSAL[input.refusal]
   const sent =

@@ -79,7 +79,10 @@ export function renderLocalReview(input: RenderInput): string {
       `Vectorscope review · ${plain(target.label)} vs ${plain(target.baseRef)} (${at}) · ${files} ${files === 1 ? "file" : "files"}, +${outcome.stats.additions} −${outcome.stats.deletions}`,
     ),
   )
-  lines.push(`Risk: ${capitalize(selection.risk)} · ${counts(outcome)}`)
+  // A review the route rules stopped (VS-23b) assessed nothing, so it names no risk.
+  lines.push(
+    outcome.partial === "privacy" ? "Not reviewed" : `Risk: ${capitalize(selection.risk)} · ${counts(outcome)}`,
+  )
   const partial = partialLine(input)
   if (partial) lines.push(partial)
 
@@ -159,6 +162,15 @@ function counts(outcome: ReviewOutcome): string {
 function partialLine(input: RenderInput): string | undefined {
   const { outcome, limits } = input
   if (!outcome.partial) return undefined
+  // VS-23b: the route rules' stop is no partial review; the note below says which model and why.
+  if (outcome.partial === "privacy") {
+    const files = outcome.unreviewed
+    const shown = files.slice(0, MAX_UNREVIEWED_SHOWN).map(plain).join(", ")
+    const more = files.length > MAX_UNREVIEWED_SHOWN ? ` and ${files.length - MAX_UNREVIEWED_SHOWN} more` : ""
+    const stop =
+      'Not reviewed: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.'
+    return files.length ? `${stop} Files not reviewed: ${shown}${more}.` : stop
+  }
   const failed = outcome.specialists.find(
     (entry) => entry.status === "failed" && entry.name !== "verify" && entry.name !== "judge",
   )

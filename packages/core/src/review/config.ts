@@ -336,9 +336,11 @@ export function parseReviewConfig(
 }
 
 /**
- * Review settings from sources tagged with where each comes from (contract §1.1). Nothing calls this yet: the surfaces
- * switch to it when the route rules are enforced (VS-23b to VS-23d), and until then they read parseReviewConfig, which
- * ignores the keys below.
+ * Review settings from sources tagged with where each comes from (contract §1.1). `vector review`, the local review
+ * service (through the CLI's executeLocalReview) and the eval's replay call it on "local" from VS-23b, which enforces
+ * the route rules there, with no `global` until VS-23d puts `review.*` in the global config (SF-15). The desktop
+ * (VS-23d, SF-15), the GitHub job (SF-37) and connect's consent preview still read parseReviewConfig, which ignores the
+ * keys below.
  * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point, whose global config is the
  *   operator's (the eval passes its own settings as `global`); "github" for the CI job.
  * - `global`: the global config's `review` block (VS-23d adds it to the config schema).

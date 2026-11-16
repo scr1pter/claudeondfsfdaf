@@ -118,6 +118,9 @@ describe("the refusal vocabulary", () => {
       "grounding-tool",
       "durable-cache",
       "anthropic-non-zdr-feature",
+      // VS-23b admission's own: an allowed route that lists an attestation with `verify: "api"`, which nothing can
+      // check yet (Q20).
+      "attestation-unverified",
     ])
   })
 })

@@ -23,7 +23,9 @@ import {
   type ModelFinding,
   type ReviewConfig,
   type ReviewOutcome,
+  UNAPPLIED_REVIEW_KEYS,
 } from "@vectordevai/core/review/types"
+import { parseReviewConfig } from "@vectordevai/core/review/config"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
 import { findingKey, type SliceUtilisation } from "@vectordevai/core/review/eval"
 import { evidenceScope, policyDigest, promptsDigest } from "@vectordevai/core/review/model-evidence"
@@ -1316,6 +1318,114 @@ describe("ReviewEval.replay", () => {
               expect(JSON.stringify(body)).not.toContain(`You are Vector's ${lens} reviewer`)
           expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual([listBug.title])
         }
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23b (SF-11): the replay reads the base's review.json as the CLI does (mergeReviewConfig on "local"), so a case's
+  // review.json may raise privacy, and Review.run's admission holds it to the route rules. The fake provider is on this
+  // computer, the one route "zdr" allows without an attestation, and the eval attests nothing before VS-23c's variant.
+  it.instance(
+    'replays a base review.json under privacy "zdr" on the server on this computer, claiming no zdr route',
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ privacy: "zdr" }) },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.config.value.privacy).toBe("zdr")
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        expect(artifact.attempts.some((attempt) => attempt.stop === "privacy")).toBe(false)
+        expect(artifact.outcome?.partial).toBeUndefined()
+        // Admission alone claims no zero data retention route; VS-23c sets the scope's route with the transport.
+        expect(artifact.scope.route).toBeUndefined()
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23b (I-1): with no sourced key named, the replay's switch to mergeReviewConfig reads what parseReviewConfig read.
+  it.instance(
+    "a base review.json that names no sourced key is replayed with parseReviewConfig's settings and warnings",
+    () =>
+      Effect.gen(function* () {
+        // Ordinary keys, one unknown key and one no runner applies yet, read under the variant's verify policy.
+        const settings = JSON.stringify({
+          verify: "blocking",
+          maxSteps: 3,
+          minConfidence: 0.75,
+          trivial: "skip",
+          nonsense: 1,
+        })
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": settings },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2 },
+          variant: SHARED,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const parsed = parseReviewConfig({
+          json: settings,
+          env: { REVIEW_VERIFY_POLICY: SHARED.keys.verifyPolicy },
+          trigger: artifact.trigger,
+        })
+        const applied: ReviewConfig = { ...parsed.config }
+        UNAPPLIED_REVIEW_KEYS.forEach((key) => delete applied[key])
+        expect(parsed.warnings.length).toBeGreaterThan(0)
+        expect(artifact.config.warnings).toEqual(parsed.warnings)
+        // The replay's own settings over it, as it applies them: the eval's cap, limits and the variant's keys.
+        expect(artifact.config.value).toEqual({
+          ...applied,
+          ...SHARED.keys,
+          maxCostUsd: 2,
+          maxSteps: DEFAULT_REVIEW_CONFIG.maxSteps,
+          timeoutMinutes: DEFAULT_REVIEW_CONFIG.timeoutMinutes,
+        })
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a base review.json's zdrAttested attests nothing: it is read only from the global config",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ zdrAttested: ["openrouter"] }) },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(Object.hasOwn(artifact.config.value, "zdrAttested")).toBe(false)
+        expect(Object.hasOwn(artifact.config.value, "privacy")).toBe(false)
+        expect(artifact.config.warnings).toEqual([
+          '.vector/review.json: "zdrAttested" is ignored: "zdrAttested" is read only from the global config.',
+        ])
       }),
     GIT,
     TIMEOUT,
