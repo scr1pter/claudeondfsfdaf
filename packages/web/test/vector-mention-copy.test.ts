@@ -3,10 +3,32 @@ import { expect, test } from "bun:test"
 const root = new URL("../../../", import.meta.url)
 const page = () => Bun.file(new URL("packages/web/src/pages/docs/vectorscope.astro", root)).text()
 const github = async () => (await page()).split('<h2 id="github">')[1]!.split('<h2 id="before-you-push">')[0]!
+// The repository-agent section waits in an unbuilt draft until the CLI and desktop that ship it are published.
+const draft = () => Bun.file(new URL("packages/web/src/drafts/docs/vectorscope-github.astro", root)).text()
 
-// These assertions protect the public contract rather than the unrelated local-review dollar-budget examples.
-test("GitHub documentation keeps stable links and explains whose repository, model access and Actions minutes are used", async () => {
-  const source = await page()
+// Released 1.99.112 installs its GitHub workflow with `vector github install` and the VECTOR_CLI_TOKEN secret; the
+// live page keeps those instructions and says nothing of the unreleased paths as if they were available.
+test("the live GitHub section keeps the released instructions and leaves the unreleased ones out", async () => {
+  const source = (await page()).replace(/\s+/g, " ")
+  const copy = (await github()).replace(/\s+/g, " ")
+  expect(copy).toContain("Run <code>vector github install</code> once inside a repository")
+  expect(copy).toContain("add the <code>VECTOR_CLI_TOKEN</code> secret from your account page")
+  expect(source).toContain("From 1.99.99, reviews and GitHub runs need your own provider credentials.")
+  for (const unreleased of [
+    "--own-key",
+    "Run in GitHub",
+    "Vector App publishing",
+    "withholds credentials",
+    "binder's plan",
+    "CODIUM_LISTED_PERKS",
+    'id="github-own-key"',
+  ])
+    expect(source).not.toContain(unreleased)
+})
+
+// These assertions protect the draft's contract rather than the unrelated local-review dollar-budget examples.
+test("the GitHub draft keeps stable links and explains whose repository, model access and Actions minutes are used", async () => {
+  const source = await draft()
   for (const anchor of [
     "github",
     "github-codium",
@@ -18,7 +40,7 @@ test("GitHub documentation keeps stable links and explains whose repository, mod
     "github-privacy",
   ])
     expect(source).toContain(`id="${anchor}"`)
-  const copy = (await github()).replace(/\s+/g, " ")
+  const copy = source.replace(/\s+/g, " ")
   expect(copy).toContain("in your own repo, on your own Actions minutes")
   expect(copy).toContain("GitHub's terms")
   expect(copy).toContain("model access")
@@ -42,8 +64,8 @@ test("GitHub documentation keeps stable links and explains whose repository, mod
   )
 })
 
-test("docs Codium and schedule sections require the build's listed perks and own-key instructions remain unconditional", async () => {
-  const source = await page()
+test("the draft's Codium and schedule sections require the build's listed perks and own-key instructions remain unconditional", async () => {
+  const source = await draft()
   expect(source).toContain('process.env.CODIUM_LISTED_PERKS ?? ""')
   expect(source).toContain('const githubCodium = listed.has("github-agents")')
   expect(source).toContain('const githubSchedules = githubCodium && listed.has("scheduled")')
@@ -51,7 +73,7 @@ test("docs Codium and schedule sections require the build's listed perks and own
   expect(source).toMatch(/\{githubCodium && \([\s\S]*?id="github-codium"[\s\S]*?\)\}\s*<h3 id="github-own-key">/)
   expect(source).toMatch(/\{githubSchedules && \([\s\S]*?Codium schedules[\s\S]*?\)\}/)
   expect(source).toMatch(/\{githubNoSecret && [^\n]*no provider API key or model secret/)
-  expect(source).not.toContain("reviews and GitHub runs need your own provider credentials")
+  expect(source).toContain("With your own key selected, reviews and GitHub runs use your provider credentials.")
 })
 
 test("owner acceptance retains default-off publication and actual runtime, artifact and erasure checks", async () => {

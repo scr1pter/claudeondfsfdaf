@@ -5,14 +5,12 @@ name: Vector everywhere
 # touches and the store tests against a real Redis run here. The lane holds no secrets and reaches no platform: every
 # test uses local fakes on 127.0.0.1.
 #
-# It runs on every push to the vector-everywhere branch, and on pull requests and pushes to main that touch the paths
-# below. One push trigger cannot filter one of its branches by path, so the scope job applies the pull_request paths
-# to pushes to main, and every other job waits for its answer. packages/web/test/everywhere-lane.test.ts holds the
-# lane's shape and runs its two scripts.
+# It runs on pull requests and pushes to main that touch the paths below, and by hand. The scope job applies the
+# pull_request paths to pushes to main, so the paths are listed once, and every other job waits for its answer.
+# packages/web/test/everywhere-lane.test.ts holds the lane's shape and runs its two scripts.
 on:
   push:
     branches:
-      - vector-everywhere
       - main
   pull_request:
     paths:
@@ -63,8 +61,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Every run on main keeps its own group, so a cancelled check never marks main's history; the branch and pull
-  # requests cancel their stale runs. Both format() results are non-empty, so the && / || idiom is safe here.
+  # Every run on main keeps its own group, so a cancelled check never marks main's history; pull requests and manual
+  # runs cancel their stale runs. Both format() results are non-empty, so the && / || idiom is safe here.
   group: ${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
   cancel-in-progress: true
 
@@ -97,7 +95,7 @@ jobs:
         with:
           bun-version-file: package.json
 
-      # The branch, pull requests (already filtered by GitHub) and manual runs always run. A push to main runs only
+      # Pull requests (already filtered by GitHub) and manual runs always run. A push to main runs only
       # when a changed file matches this file's pull_request paths, and runs when the change cannot be listed.
       - name: Decide whether this run concerns Vector everywhere
         id: scope
@@ -300,7 +298,7 @@ jobs:
           fi
 
       # The repository's own rules for every workflow (a named Ubuntu, among others). The test workflow checks them on
-      # pull requests; this lane also checks them on pushes to the branch.
+      # pull requests; this lane repeats them so its own result covers them.
       - name: Check the repository's workflow rules
         if: ${{ !cancelled() }}
         working-directory: packages/cloud

@@ -214,13 +214,11 @@ describe("@vector CI lane", () => {
   const steps = (workflow: Workflow) =>
     Object.entries(workflow.jobs).flatMap(([job, entry]) => (entry.steps ?? []).map((step) => ({ job, step })))
 
-  test("the lane runs on every push to its branch with read-only access and no secrets", async () => {
+  test("the lane runs on every push to main with read-only access and no secrets", async () => {
     const workflow = await lane()
     expect(Object.keys(workflow.on).sort()).toEqual(["pull_request", "push", "workflow_dispatch"])
-    // A path filter or an ignore list here would leave a package's commit with no CI at all.
-    expect(workflow.on.push).toEqual({
-      branches: ["main", "vector-at-mention", "build-integrate", "build-github-ui"],
-    })
+    // A path filter or an ignore list here would leave a commit on main with no CI at all.
+    expect(workflow.on.push).toEqual({ branches: ["main"] })
     // No other workflow runs the web GitHub tests, so every hosted API module they load (http, abuse, persistent-store
     // as well as github-*), the lockfile that pins jose and the Bun version in package.json start the lane on a pull
     // request. api/** takes in the contract's four api/ entries.
@@ -431,6 +429,37 @@ test("Vector's workflows pin their Ubuntu runner", async () => {
     )
   ).flat()
   expect(floating).toEqual([])
+})
+
+// Build and integration branches are deleted once they merge, and a trigger that still names one is dead
+// configuration that hides where a lane really runs. Permanent lanes run on main, on pull requests and by hand. Only
+// two lanes keep a branch namespace of their own, each pinned by its own test: the native helper's ci/computer-**
+// branches and the Codium lane's branches.
+test("Vector's workflows trigger on main and name no build or integration branch", async () => {
+  const own: Record<string, string[]> = {
+    "computer-helper.yml": ["ci/computer-**"],
+    "vector-codium.yml": ["main", "codium", "codium/**", "codium-legal", "codium-113", "codium-113/**"],
+  }
+  const files = [...new Bun.Glob("*.yml").scanSync(`${root}/.github/workflows`)].sort()
+  expect(files.length).toBeGreaterThan(0)
+  const named = await Promise.all(
+    files.map(async (file) => {
+      const workflow = Bun.YAML.parse(await read(`.github/workflows/${file}`)) as { on?: unknown }
+      const on = typeof workflow.on === "object" && workflow.on !== null ? (workflow.on as Record<string, unknown>) : {}
+      return ["push", "pull_request"].flatMap((event) => {
+        const trigger = on[event]
+        const branches =
+          typeof trigger === "object" && trigger !== null ? (trigger as { branches?: unknown }).branches : undefined
+        if (branches === undefined) return []
+        const allowed = own[file] ?? ["main"]
+        return [branches]
+          .flat()
+          .filter((branch) => typeof branch !== "string" || !allowed.includes(branch))
+          .map((branch) => ({ file, event, branch }))
+      })
+    }),
+  )
+  expect(named.flat()).toEqual([])
 })
 
 // The release's package tests run on the Node the test workflow and Electron 42 use: the desktop guard smoke calls

@@ -150,10 +150,10 @@ async function fakeBun() {
 }
 
 describe("the lane's shape", () => {
-  test("it runs on the branch, on pull requests that touch its paths, on pushes to main and by hand", () => {
+  test("it runs on pull requests that touch its paths, on pushes to main and by hand, and names no lane branch", () => {
     expect(Object.keys(lane.on).sort()).toEqual(["pull_request", "push", "workflow_dispatch"])
     // Pushes to main are filtered by the scope job, so the push trigger itself carries no path filter.
-    expect(lane.on.push).toEqual({ branches: ["vector-everywhere", "main"] })
+    expect(lane.on.push).toEqual({ branches: ["main"] })
     expect(Object.keys(lane.on.pull_request as object)).toEqual(["paths"])
     expect(text).not.toContain("pull_request_target")
   })
@@ -238,7 +238,7 @@ describe("the lane's shape", () => {
     )
   })
 
-  test("it checks the repository's workflow rules on the branch too", () => {
+  test("it checks the repository's workflow rules too", () => {
     expect(step("tests", "Check the repository's workflow rules")).toMatchObject({
       if: "${{ !cancelled() }}",
       "working-directory": "packages/cloud",
@@ -328,7 +328,7 @@ describe("the lane's shape", () => {
 })
 
 describe("the scope job", () => {
-  test("runs the lane on the branch, pull requests and manual runs, and on pushes to main that touch its paths", async () => {
+  test("runs the lane on pull requests and manual runs, and on pushes to main that touch its paths", async () => {
     const directory = await repository({ [LANE]: text, "README.md": "one\n" })
     try {
       const a = git(directory, "rev-parse", "HEAD")
@@ -350,8 +350,6 @@ describe("the scope job", () => {
         return result.output.trim()
       }
       expect(SCOPE).not.toBe("")
-      // The branch always runs, even for a change outside the paths.
-      expect(await scope("push", "refs/heads/vector-everywhere", a, b)).toBe("run=true")
       // GitHub has already filtered pull requests by path; manual runs always run.
       expect(await scope("pull_request", "refs/pull/7/merge", "", e)).toBe("run=true")
       expect(await scope("workflow_dispatch", "refs/heads/main", "", e)).toBe("run=true")
