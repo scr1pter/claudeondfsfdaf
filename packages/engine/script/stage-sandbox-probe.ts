@@ -3,6 +3,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { sandboxProbeTarget } from "./sandbox-probe-target"
 import { sandboxBunUndici } from "./sandbox-bun-undici"
+import { sandboxBunEsprima } from "./sandbox-bun-esprima"
 
 // CI-only packaging: include the actual ShellTool and its runtime assets in the immutable disposable probe.
 const engine = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -20,7 +21,7 @@ const result = await Bun.build({
   tsconfig: path.join(engine, "tsconfig.json"),
   format: "esm",
   plugins: [
-    ...(undici ? [undici.plugin] : []),
+    ...(undici ? [undici.plugin, sandboxBunEsprima] : []),
     {
       name: "installed-jsonc-esm",
       setup(build) {
