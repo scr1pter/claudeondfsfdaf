@@ -195,6 +195,24 @@ describe("probe a typed address", () => {
     expect(litellm?.forwards).toBe("litellm")
   })
 
+  // CI job 133439824061: Add server on a Windows runner got no answer to Ollama's /api/version within Detect's 400 ms,
+  // refused the address as not found, and never reached the identity confirm.
+  test("waits for one typed address on this computer as long as for one elsewhere, not Detect's short wait", async () => {
+    const version = (await LocalServers.load("ollama")).interactions.find((item) =>
+      item.request.url.endsWith(OllamaServer.identify),
+    )!
+    const server = await fake("ollama", {
+      [`GET ${OllamaServer.identify}`]: async () => {
+        await Bun.sleep(LocalProbe.IDENTIFY_TIMEOUT.loopback + 200)
+        return new Response(version.response.body, {
+          status: version.response.status,
+          headers: version.response.headers,
+        })
+      },
+    })
+    expect(await LocalProbe.probe(server.origin)).toMatchObject({ kind: "ollama", origin: server.origin })
+  })
+
   test("an address where nothing answers, or something Vector does not recognise, is not a server", async () => {
     const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") })
     const port = closed.port

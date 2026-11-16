@@ -309,9 +309,10 @@ test("sandbox run errors map to closed labels by exact message or allowlisted er
   for (const [label, message] of Object.entries(RUN_REFUSALS)) expect(runError(new Error(message), "x")).toBe(label)
   expect(runError(new Error(ProcessIsolation.REFUSAL), ProcessIsolation.REFUSAL)).toBe("run-isolation")
   for (const name of RUN_OPERATIONS)
-    expect(runError(new Error(`Sandbox operation ${name} failed or timed out; the run is refused.`), "x")).toBe(
-      `run-operation-${name}`,
-    )
+    for (const outcome of ["timed out", "exited 1", "exited 255", "failed"])
+      expect(runError(new Error(`Sandbox operation ${name} ${outcome}; the run is refused.`), "x")).toBe(
+        `run-operation-${name}`,
+      )
   expect(runError(new LinuxIsolation.Unavailable(), "x")).toBe("run-unavailable")
   const errno = (code: string, syscall: string, file = "/home/runner/private/secret-path") =>
     Object.assign(new Error(`${code}: permission denied, ${syscall} '${file}'`), { code, syscall, path: file })
@@ -321,8 +322,11 @@ test("sandbox run errors map to closed labels by exact message or allowlisted er
   for (const syscall of RUN_SYSCALLS)
     for (const code of RUN_ERRNOS) expect(SHELL_STAGES.run).toContain(runError(errno(code, syscall), "x"))
   for (const value of [
-    new Error("Sandbox operation docker failed or timed out; the run is refused."),
-    new Error("Sandbox operation id failed or timed out; the run is refused. /home/runner"),
+    new Error("Sandbox operation docker timed out; the run is refused."),
+    new Error("Sandbox operation id timed out; the run is refused. /home/runner"),
+    new Error("Sandbox operation id exited 1 /home/runner; the run is refused."),
+    new Error("Sandbox operation id exited 1000; the run is refused."),
+    new Error("Sandbox operation id failed or timed out; the run is refused."),
     new Error(RUN_REFUSALS["run-refused"] + " "),
     new Error("/home/runner/private/secret-path"),
     errno("EACCES", "spawn /usr/bin/sudo"),

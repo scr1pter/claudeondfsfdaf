@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Schema } from "effect"
 import { createVectorClient } from "@vectordevai/sdk/v2"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
+import { Connect } from "@vectordevai/schema/connect"
 import { reviewTarget, formatConnectedResult, executeConnectedCommand } from "../../src/cli/cmd/connected"
 
 const marker = process.env[ChildEnvironment.AGENT_MARKER]
@@ -49,6 +51,29 @@ describe("connected CLI targets", () => {
     expect(await requests[2]!.json()).toEqual({ target: { kind: "staged" }, background: true })
     for (const request of requests)
       expect(decodeURIComponent(request.headers.get("x-vector-directory") ?? "")).toBe("/fixture")
+  })
+  test("a branch base is sent as written", async () => {
+    for (const base of ["origin/main", "v1.2.0", "ABCDEF0"])
+      expect(reviewTarget({ action: "review", base })).toEqual({ kind: "branch", base })
+    for (const base of ["", " main", "main\n"])
+      expect(() => reviewTarget({ action: "review", base })).toThrow("--base needs a valid git ref.")
+    delete process.env[ChildEnvironment.AGENT_MARKER]
+    const requests: Request[] = []
+    const client = createVectorClient({
+      baseUrl: "http://fixture.invalid",
+      throwOnError: true,
+      fetch: async (request) => {
+        requests.push(request)
+        return Response.json({})
+      },
+    })
+    await executeConnectedCommand(client, { action: "review", session: "ses_fixture", base: "main" })
+    expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+      ["POST", "/experimental/session/ses_fixture/connect"],
+    ])
+    const body = await requests[0]!.json()
+    expect(body).toEqual({ target: { kind: "branch", base: "main" }, background: true })
+    expect(Schema.decodeUnknownSync(Connect.ReviewInput)(body)).toEqual(body)
   })
   test("the agent marker refuses review and cancellation before transport", async () => {
     process.env[ChildEnvironment.AGENT_MARKER] = "1"

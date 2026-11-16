@@ -18,6 +18,12 @@ import { ApprovalError, type PasskeyApprovals } from "./remote-passkey"
 // - Sessions the phone creates carry only a title; no permission ruleset.
 // - Every request names a directory, which must be one of the engine's projects (a worktree or a sandbox, never the
 //   global "/"), so a phone cannot start agents anywhere else on this computer.
+// - Connected tools (CW-23b) are offered only while the engine's `/experimental/capabilities` reports `connections`,
+//   read for each request. A phone may list the members, list and read a conversation's runs, cancel a run, and start
+//   one VectorScope review of uncommitted, staged or branch changes in a conversation, after a passkey check bound to
+//   that conversation, folder and target; its questions then wait for a person, as those of a phone's turn do.
+//   Fixes, budgets, security passes, foreground runs, dismissals, registered findings and the sessionless folder
+//   review are never reachable.
 
 export type EngineRequest = {
   method: "GET" | "POST"
@@ -42,12 +48,23 @@ type Route = {
   body?: (body: unknown) => unknown | undefined
   /** The project list carries no directory. */
   global?: true
+  /** Checks for `:name` segments beyond the id rule. */
+  params?: Query
+  /** Query fields the request must carry. */
+  required?: readonly string[]
+  /** Offered only while the engine reports connected tools on. */
+  connect?: true
 }
 
 const isInteger = (value: string) => /^\d{1,9}$/.test(value)
 const isBoolean = (value: string) => value === "true" || value === "false"
 const isId = (value: string) => ID.test(value)
 const isText = (value: string) => value.length <= 200
+// As SessionID (schema session-id.ts) and Connect.RunID (schema connect.ts), within the id rule. The phone's RUN_ID
+// (app phone/remote/model.ts) is the same run rule; the workspace supervisor's (cloud-workspaces protocol.ts) takes
+// letters and digits only, which is all RunID.create() emits. remote-routes.test.ts checks this one against the schema.
+const isSession = (value: string) => value.startsWith("ses") && isId(value)
+const isRun = (value: string) => /^cr_[A-Za-z0-9_-]{1,61}$/.test(value)
 
 /** The allowlist. `:name` segments are ids. Methods and paths not listed here never reach the engine. */
 export const REMOTE_ROUTES: readonly Route[] = [
@@ -76,6 +93,41 @@ export const REMOTE_ROUTES: readonly Route[] = [
   { method: "GET", path: "/question" },
   { method: "POST", path: "/question/:requestID/reply", body: questionBody },
   { method: "POST", path: "/question/:requestID/reject", body: () => ({}) },
+  // Connected tools (CW-23b), offered only while the engine reports them on.
+  { method: "GET", path: "/experimental/connect", query: { sessionID: isSession }, connect: true },
+  {
+    method: "GET",
+    path: "/experimental/connect/runs",
+    query: { sessionID: isSession },
+    required: ["sessionID"],
+    connect: true,
+  },
+  {
+    method: "GET",
+    path: "/experimental/connect/runs/:runID",
+    params: { runID: isRun },
+    query: { sessionID: isSession },
+    required: ["sessionID"],
+    connect: true,
+  },
+  {
+    method: "POST",
+    path: "/experimental/connect/runs/:runID/cancel",
+    params: { runID: isRun },
+    query: { sessionID: isSession },
+    // Scoped as the run read is: the phone cancels only a run of a conversation it names.
+    required: ["sessionID"],
+    body: (value) => (value === undefined || (isRecord(value) && Object.keys(value).length === 0) ? {} : undefined),
+    connect: true,
+  },
+  // Started only through startReview, after a passkey check; every other path refuses its body.
+  {
+    method: "POST",
+    path: "/experimental/session/:sessionID/connect",
+    params: { sessionID: isSession },
+    body: () => undefined,
+    connect: true,
+  },
 ]
 
 /** Sessions whose current turn a phone started. The app's auto-accept answers none of their requests. */
@@ -241,6 +293,71 @@ export function createRemoteRoutes(deps: RouteDependencies) {
     })
   }
 
+  // Read for each request, so turning connected tools off on this computer takes effect at once; any doubt is "off".
+  const connectionsOff = async (directory: string) => {
+    const answer = await deps
+      .engine({ method: "GET", path: "/experimental/capabilities", query: { directory } })
+      .catch(() => undefined)
+    if (answer?.status === 200 && isRecord(answer.body) && answer.body.connections === true) return undefined
+    return refuse(403, "REMOTE_CONNECT_OFF", "Connected tools are off on this computer.")
+  }
+
+  const reviewApproval = async (phone: string, directory: string, body: unknown): Promise<RouteAnswer> => {
+    const review = reviewRequest(body)
+    if (!review) return refuse(400, "REMOTE_REQUEST_INVALID", "Name the conversation and the changes to review.")
+    const credential = deps.credential(phone)
+    if (!credential) return refuse(403, "REMOTE_NOT_PAIRED", "This phone is not paired with this computer.")
+    const off = await connectionsOff(directory)
+    if (off) return off
+    return {
+      status: 200,
+      body: deps.approvals.challenge(
+        phone,
+        { requestID: reviewKey(review.target), sessionID: review.sessionID, directory },
+        credential.id,
+      ),
+    }
+  }
+
+  const startReview = async (
+    phone: string,
+    directory: string,
+    sessionID: string,
+    raw: unknown,
+  ): Promise<RouteAnswer> => {
+    const input = reviewBody(raw)
+    if (!input)
+      return refuse(
+        400,
+        "REMOTE_BODY_REFUSED",
+        "From your phone you can start a VectorScope review of uncommitted, staged or branch changes.",
+      )
+    const credential = deps.credential(phone)
+    if (!credential) return refuse(403, "REMOTE_NOT_PAIRED", "This phone is not paired with this computer.")
+    const verified = await deps.approvals
+      .verify(phone, { requestID: reviewKey(input.target), sessionID, directory }, input.passkey, credential)
+      .catch((error: unknown) => {
+        if (error instanceof ApprovalError) return error
+        throw error
+      })
+    if (verified instanceof ApprovalError) return refuse(403, verified.code, verified.message)
+    await deps.saveCredential(phone, verified)
+    const off = await connectionsOff(directory)
+    if (off) return off
+    // Held as a phone's turn is, before the engine starts the review, so no `connect` or `connect_model` question it
+    // raises before the engine answers reaches the app's auto-accept. Only the conversation's next idle releases the
+    // hold, even after a start the engine did not take: a phone turn begun while the start waited may hold it too, and
+    // `RemoteTurns` cannot tell the two apart here. A hold kept too long only leaves more questions to a person.
+    if (!deps.turns.has([sessionID])) deps.turns.mark(sessionID)
+    return send({
+      method: "POST",
+      path: `/experimental/session/${sessionID}/connect`,
+      query: { directory },
+      // Always the background run, so the engine answers once the review's questions are behind it.
+      body: { to: "vectorscope", target: input.target, background: true },
+    })
+  }
+
   return {
     async handle(phone: string, raw: unknown): Promise<RouteAnswer> {
       const request = readRequest(raw)
@@ -253,6 +370,7 @@ export function createRemoteRoutes(deps: RouteDependencies) {
             "REMOTE_DIRECTORY",
             "That folder is not one of the repositories Vector has open on this computer.",
           )
+        if (isRecord(request.body) && "review" in request.body) return reviewApproval(phone, directory, request.body)
         return approval(phone, directory, request.body)
       }
       const match = matchRoute(request.method, request.path)
@@ -277,6 +395,19 @@ export function createRemoteRoutes(deps: RouteDependencies) {
       query.directory = directory
       if (match.route.path === "/permission/:requestID/reply")
         return reply(phone, directory, match.params.requestID!, request.body)
+      if (match.route.params && !Object.entries(match.route.params).every(([name, check]) => check(match.params[name])))
+        return refuse(400, "REMOTE_PATH_REFUSED", "Vector could not find that on this computer.")
+      const missing = match.route.required?.find((name) => query[name] === undefined)
+      if (missing) return refuse(400, "REMOTE_QUERY_REFUSED", `The ${missing} field is needed.`)
+      if (match.route.path === "/experimental/session/:sessionID/connect")
+        return startReview(phone, directory, match.params.sessionID, request.body)
+      if (match.route.connect) {
+        // Everything this computer refuses by itself is refused before the engine is asked whether connect is on.
+        if (match.route.method === "POST" && match.route.body?.(request.body) === undefined)
+          return refuse(400, "REMOTE_BODY_REFUSED", "Vector could not send that to this computer.")
+        const off = await connectionsOff(directory)
+        if (off) return off
+      }
       let body: unknown
       if (match.route.method === "POST") {
         body = match.route.body?.(request.body)
@@ -377,6 +508,58 @@ function questionBody(body: unknown) {
     answers.push(answer as string[])
   }
   return { answers }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+// A git ref or revision for a branch review's base, as Connect.Ref (schema connect.ts) and `vector connected review
+// --base` (cli/cmd/connected.ts): never an option, no space or control character. A 7-40 hex commit id passes. The
+// phone's REF (app phone/remote/client.ts) and the workspace supervisor's (cloud-workspaces protocol.ts) mirror the
+// same schema; remote-routes.test.ts checks this copy against Connect.Ref.
+const REF = /^(?!-)[^\s\u0000-\u001f\u007f]{1,256}$/
+
+/** What a phone may review: uncommitted, staged, or branch changes against an optional base; never a task's. */
+function reviewTarget(value: unknown) {
+  if (!isRecord(value)) return undefined
+  const keys = Object.keys(value)
+  if ((value.kind === "uncommitted" || value.kind === "staged") && keys.length === 1) return { kind: value.kind }
+  if (value.kind !== "branch" || keys.some((key) => key !== "kind" && key !== "base")) return undefined
+  if (value.base === undefined) return { kind: "branch" as const }
+  if (typeof value.base !== "string" || !REF.test(value.base)) return undefined
+  return { kind: "branch" as const, base: value.base }
+}
+
+/** A review challenge's request: exactly `{review: {sessionID, target}}`. */
+function reviewRequest(body: unknown) {
+  if (!isRecord(body) || Object.keys(body).length !== 1 || !isRecord(body.review)) return undefined
+  const review = body.review
+  if (Object.keys(review).some((key) => key !== "sessionID" && key !== "target")) return undefined
+  if (typeof review.sessionID !== "string" || !isSession(review.sessionID)) return undefined
+  const target = reviewTarget(review.target)
+  return target ? { sessionID: review.sessionID, target } : undefined
+}
+
+/**
+ * A phone's review start: exactly VectorScope's `review` of one target, and the passkey answer. Anything else (a fix,
+ * another member, a budget, a security pass, an earlier run to compare with, a foreground run) is refused. The action
+ * is checked here, not sent, because the engine's review input has none.
+ */
+function reviewBody(body: unknown) {
+  if (!isRecord(body) || Object.keys(body).some((key) => !["to", "action", "target", "passkey"].includes(key)))
+    return undefined
+  if (body.to !== "vectorscope" || body.action !== "review") return undefined
+  const target = reviewTarget(body.target)
+  return target ? { target, passkey: body.passkey } : undefined
+}
+
+/**
+ * The approval a review start is checked against: the member, the action and the exact target. It has ":", which the
+ * id rule refuses, so a permission's challenge never starts a review and a review's never answers a permission.
+ */
+function reviewKey(target: NonNullable<ReturnType<typeof reviewTarget>>) {
+  return `connect-review:vectorscope:review:${JSON.stringify(target)}`
 }
 
 /** The project list as the phone sees it: ids, names and folders, without the global project. */

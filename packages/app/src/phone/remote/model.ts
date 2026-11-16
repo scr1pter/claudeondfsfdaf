@@ -1,3 +1,7 @@
+import type { Connect } from "@vectordevai/schema/connect"
+import { destinationLabel, metadataRunID, verdictLabel } from "@/features/connect/connect-model"
+import { connectConsentDetails, connectConsentDiff } from "@/features/connect/consent"
+import { goingFirst, runState, type TaskRow } from "@/features/connect/task-rows"
 import type { EngineEvent, RemoteState, RemoteView } from "./client"
 
 // What the phone's Remote pages show (WP A42), as pure functions of what the computer and Vector's API answer. The
@@ -204,11 +208,12 @@ export function sessionRows(
 
 export type PartView =
   | { id: string; kind: "text"; text: string }
-  | { id: string; kind: "tool"; tool: string; state: string; title?: string }
+  | { id: string; kind: "tool"; tool: string; state: string; title?: string; run?: string }
   | { id: string; kind: "other"; label: string }
 export type MessageView = { id: string; role: "user" | "assistant"; created: number; parts: PartView[]; error?: string }
 
-function partView(value: unknown): PartView | undefined {
+/** `sessionID` is the conversation open on the phone; a `connect` part points at its run only for that one. */
+function partView(value: unknown, sessionID?: string): PartView | undefined {
   if (!value || typeof value !== "object") return undefined
   const part = value as Record<string, unknown>
   if (typeof part.id !== "string") return undefined
@@ -219,12 +224,14 @@ function partView(value: unknown): PartView | undefined {
   if (part.type === "reasoning") return undefined
   if (part.type === "tool") {
     const state = part.state && typeof part.state === "object" ? (part.state as Record<string, unknown>) : {}
+    const run = part.tool === "connect" ? metadataRunID(fieldsOf(state.metadata) ?? {}, sessionID) : undefined
     return {
       id: part.id,
       kind: "tool",
       tool: typeof part.tool === "string" ? part.tool : "tool",
       state: typeof state.status === "string" ? state.status : "pending",
       ...(typeof state.title === "string" && state.title ? { title: state.title.slice(0, 200) } : {}),
+      ...(run ? { run } : {}),
     }
   }
   if (part.type === "file") return { id: part.id, kind: "other", label: "A file" }
@@ -247,8 +254,8 @@ function messageInfo(value: unknown) {
   }
 }
 
-/** A session's messages as `GET /session/:id/message` answers them. */
-export function decodeMessages(body: unknown): MessageView[] {
+/** A session's messages as `GET /session/:id/message` answers them, for the conversation `sessionID` names. */
+export function decodeMessages(body: unknown, sessionID?: string): MessageView[] {
   if (!Array.isArray(body)) return []
   return body
     .flatMap((item): MessageView[] => {
@@ -258,7 +265,7 @@ export function decodeMessages(body: unknown): MessageView[] {
       if (!info) return []
       const parts = Array.isArray(entry.parts)
         ? entry.parts.flatMap((part) => {
-            const view = partView(part)
+            const view = partView(part, sessionID)
             return view ? [view] : []
           })
         : []
@@ -290,7 +297,7 @@ export function applyMessageEvent(messages: MessageView[], sessionID: string, ev
   }
   if (event.type === "message.removed") return { messages: next.filter((item) => item.id !== properties.messageID), stale: false }
   if (event.type === "message.part.updated") {
-    const view = partView(properties.part)
+    const view = partView(properties.part, sessionID)
     const message = find(part.messageID)
     if (!message) return { messages, stale: true }
     const index = message.parts.findIndex((item) => item.id === part.id)
@@ -341,6 +348,10 @@ const TITLES: Record<string, string> = {
   websearch: "Search the web",
   external_directory: "Work outside the repository",
   task: "Start an agent",
+  // Connected tools (CW-23c). `connect_cloud` is left out: its presentation stays held (CN-14).
+  connect: "Hand work to a connected tool",
+  connect_model: "Send code to a review model",
+  connect_write: "Change files with a connected tool's fix",
 }
 
 /** One pending permission request, in words, with what it would do. */
@@ -354,7 +365,7 @@ export function permissionView(value: unknown, directory: string): PermissionVie
     ? request.patterns.filter((item): item is string => typeof item === "string")
     : []
   const command = typeof metadata.command === "string" ? metadata.command : undefined
-  const detail = (command ?? patterns.join("\n")).slice(0, 2_000)
+  const detail = consentDetail(permission, metadata) ?? (command ?? patterns.join("\n")).slice(0, 2_000)
   return {
     id: request.id,
     sessionID: request.sessionID,
@@ -457,4 +468,288 @@ export function refusalText(answer: { status: number; body: unknown }) {
   const message = error && typeof error === "object" ? (error as { message?: unknown }).message : undefined
   if (typeof message === "string" && message.trim()) return message.slice(0, 300)
   return answer.status === 404 ? "That was already answered." : "The computer did not do that."
+}
+
+// ── Connected tools (CW-23c) ─────────────────────────────────────────────────────────────────────────────────────
+//
+// A `connect` tool part only points at its run. The card shows the run as the engine answers
+// `GET /experimental/connect/runs` for the open conversation, never the copy saved in the part: that copy can be cut
+// short by a stop or a restart, which the engine reads as cancelled, and it does not follow later fixes and
+// dismissals. What the engine answers is projected here for display, not decoded against the schema, and a run, a
+// status, a verdict, a severity or a finding status this build does not know is left out (fail closed). Finding titles
+// and paths are written by a model, so they stay plain text: format characters are removed (as core
+// connect/frame.ts does), other control characters become a space, and nothing is HTML- or entity-encoded, because the
+// page renders text nodes. Finding bodies and suggestions never reach the view, and no view offers a fix, a dismissal
+// or a worktree.
+
+export type ConnectFindingLine = { severity: Connect.Severity; title: string; place: string }
+export type ConnectRunView = {
+  id: string
+  title: string
+  status: TaskRow["status"]
+  going: boolean
+  verdict?: string
+  sendsTo?: string
+  detail?: string
+  /** Findings neither fixed nor dismissed. */
+  findings: number
+  /** "3 open findings: 1 blocking, 2 concerns", once a run completed, in full or in part. */
+  breakdown?: string
+  /** The first open findings, the most severe first. */
+  shown: ConnectFindingLine[]
+}
+
+/** The finding lines a card shows; the rest stay in Vector on the computer. */
+const SHOWN = 5
+/** The most of a fix's change an approval shows. */
+const MAX_DIFF = 12_000
+// As the computer's run rule (desktop remote-routes.ts `isRun`, Connect.RunID within its id rule); model.test.ts
+// checks that it keeps every id RunID.create() makes and nothing that is not a Connect.RunID.
+const RUN_ID = /^cr_[A-Za-z0-9_-]{1,61}$/
+// As Connect.SendsTo (schema connect.ts).
+const SENDS_TO = /^(this-computer|vector-codium|(model-server|provider):\S+)$/
+
+// Every literal the schema allows, so one it adds fails typecheck here until the phone knows how to show it.
+const RUN_STATUS: Record<Connect.RunStatus, true> = { queued: true, running: true, done: true }
+const ACTION: Record<Connect.ActionID, true> = { review: true, fix: true }
+const RESULT_STATE: Record<Connect.ResultState, true> = {
+  completed: true,
+  partial: true,
+  refused: true,
+  failed: true,
+  cancelled: true,
+}
+const VERDICT: Record<Connect.Verdict, true> = {
+  clean: true,
+  findings: true,
+  blocking: true,
+  incomplete: true,
+  "not-reviewed": true,
+}
+const SEVERITY: Record<Connect.Severity, number> = { blocking: 0, concern: 1, nit: 2 }
+const FINDING_STATUS: Record<Connect.FindingStatus, true> = {
+  open: true,
+  fixing: true,
+  fixed: true,
+  "still-open": true,
+  new: true,
+  dismissed: true,
+}
+
+/** Whether the computer reports connected tools on: exactly `connections: true` in a 200 answer, as it checks. */
+export function connectionsOn(answer: { status: number; body: unknown }) {
+  return answer.status === 200 && fieldsOf(answer.body)?.connections === true
+}
+
+/** The open conversation's runs, newest first, from what `GET /experimental/connect/runs` answered. */
+export function connectRuns(body: unknown, sessionID: string): ConnectRunView[] {
+  if (!Array.isArray(body)) return []
+  return body.slice(0, 200).flatMap((item) => connectRun(item, sessionID) ?? [])
+}
+
+/** The runs list: those still going first, at most `MAX_TASK_ROWS` in all, as the desktop's Tasks pane lists them. */
+export function connectRunRows(runs: readonly ConnectRunView[]) {
+  return goingFirst(runs, (run) => run.going)
+}
+
+/** The card for an assistant's `connect` part, while connected tools are on and its run is in the engine's answer. */
+export function connectCard(
+  message: Pick<MessageView, "role">,
+  part: PartView,
+  runs: readonly ConnectRunView[] | undefined,
+  connections: boolean,
+) {
+  if (!connections || message.role !== "assistant" || part.kind !== "tool" || part.tool !== "connect") return undefined
+  return part.run ? runs?.find((run) => run.id === part.run) : undefined
+}
+
+/**
+ * Whether an event may have changed the open conversation's runs: its turn ended, a `connect` part changed, or one of
+ * its runs did. The computer does not stream `connect.run.updated` yet, so until it does a review started from the
+ * phone, which has no part, changes only on Refresh.
+ */
+export function connectRunsChanged(event: EngineEvent, sessionID: string) {
+  const properties = fieldsOf(event.properties) ?? {}
+  if (["session.idle", "session.status", "session.error", "connect.run.updated"].includes(event.type))
+    return properties.sessionID === sessionID
+  if (event.type !== "message.part.updated") return false
+  // A part too large to stream arrives without its tool name.
+  if (event.truncated) return properties.sessionID === sessionID
+  const part = fieldsOf(properties.part)
+  return part?.sessionID === sessionID && part.tool === "connect"
+}
+
+/** The open conversation's pending connected-tools questions, from what `GET /permission` answered. */
+export function connectAsks(body: unknown, directory: string, sessionID: string): PermissionView[] {
+  if (!Array.isArray(body)) return []
+  return body.flatMap((item) => (connectAsk(item, sessionID) ? (permissionView(item, directory) ?? []) : []))
+}
+
+/** Applies one streamed event to those questions; `stale` when one of this conversation's arrived cut short. */
+export function applyConnectAskEvent(asks: PermissionView[], sessionID: string, event: EngineEvent) {
+  const properties = fieldsOf(event.properties) ?? {}
+  if (event.type === "permission.replied")
+    return { asks: asks.filter((item) => item.id !== properties.requestID), stale: false }
+  if (event.type !== "permission.asked" || properties.sessionID !== sessionID) return { asks, stale: false }
+  if (event.truncated) return { asks, stale: true }
+  const view = connectAsk(properties, sessionID) ? permissionView(properties, event.directory) : undefined
+  if (!view || asks.some((item) => item.id === view.id)) return { asks, stale: false }
+  return { asks: [...asks, view], stale: false }
+}
+
+/** A connected-tools refusal in the engine's words (a 400 with its own message), else as any other refusal. */
+export function connectRefusalText(answer: { status: number; body: unknown }) {
+  const message = fieldsOf(answer.body)?.message
+  if (answer.status === 400 && typeof message === "string" && message.trim()) return message.slice(0, 300)
+  return refusalText(answer)
+}
+
+/** What to say after a cancel, or undefined when the run was stopped. */
+export function connectCancelProblem(answer: { status: number; body: unknown }) {
+  if (answer.status !== 200) return connectRefusalText(answer)
+  return answer.body === true ? undefined : "That run had already ended."
+}
+
+function connectRun(value: unknown, sessionID: string): ConnectRunView | undefined {
+  const run = fieldsOf(value)
+  const request = fieldsOf(run?.request)
+  if (!run || !request || typeof run.id !== "string" || !RUN_ID.test(run.id) || request.id !== run.id) return undefined
+  if (fieldsOf(request.requester)?.sessionID !== sessionID || typeof request.to !== "string") return undefined
+  if (!isOneOf(RUN_STATUS, run.status) || !isOneOf(ACTION, request.action)) return undefined
+  const result = connectResult(run.result)
+  // A run carries a result exactly when it is done.
+  if ((run.result !== undefined && !result) || (run.status === "done") !== (result !== undefined)) return undefined
+  const ended = result && (result.state === "completed" || result.state === "partial") ? result : undefined
+  const open = (ended?.findings ?? [])
+    .filter((finding) => finding.status !== "fixed" && finding.status !== "dismissed")
+    .sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity])
+  const progress = fieldsOf(run.progress)?.message
+  const detail = !result
+    ? typeof progress === "string"
+      ? plain(progress, 300)
+      : ""
+    : result.state === "refused" || result.state === "failed"
+      ? plain(result.summary, 300)
+      : ""
+  return {
+    id: run.id,
+    title: `${request.to === "vectorscope" ? "VectorScope" : plain(request.to, 60)} ${request.action}`,
+    status: runState({ status: run.status, ...(result ? { result } : {}) }).status,
+    going: run.status !== "done",
+    ...(request.action === "review" && ended ? { verdict: verdictLabel(ended) } : {}),
+    ...(result ? { sendsTo: `Code sent to: ${destinationLabel(result.sendsTo)}` } : {}),
+    ...(detail ? { detail } : {}),
+    findings: open.length,
+    ...(ended ? { breakdown: breakdown(open) } : {}),
+    shown: open.slice(0, SHOWN).map((finding) => ({
+      severity: finding.severity,
+      title: plain(finding.title, 200),
+      place: tail(plain(finding.line ? `${finding.path}:${finding.line}` : finding.path, Infinity), 200),
+    })),
+  }
+}
+
+/** A run's result as the card reads it, or undefined when absent or not recognised. */
+function connectResult(value: unknown) {
+  const result = fieldsOf(value)
+  if (!result || !isOneOf(RESULT_STATE, result.state) || !Array.isArray(result.findings)) return undefined
+  if (result.verdict !== undefined && !isOneOf(VERDICT, result.verdict)) return undefined
+  if (result.sendsTo !== undefined && !isSendsTo(result.sendsTo)) return undefined
+  const findings = result.findings.flatMap((item) => connectFinding(item) ?? [])
+  // One finding it cannot read would make the count and the verdict understate the review.
+  if (findings.length !== result.findings.length) return undefined
+  return {
+    state: result.state,
+    ...(result.verdict !== undefined ? { verdict: result.verdict } : {}),
+    ...(result.sendsTo !== undefined ? { sendsTo: result.sendsTo } : {}),
+    summary: typeof result.summary === "string" ? result.summary : "",
+    findings,
+  }
+}
+
+function connectFinding(value: unknown) {
+  const finding = fieldsOf(value)
+  if (!finding || !isOneOf(SEVERITY, finding.severity) || !isOneOf(FINDING_STATUS, finding.status)) return undefined
+  if (typeof finding.title !== "string" || typeof finding.path !== "string") return undefined
+  const line = Number.isSafeInteger(finding.line) && Number(finding.line) > 0 ? Number(finding.line) : undefined
+  return { severity: finding.severity, status: finding.status, title: finding.title, path: finding.path, line }
+}
+
+function breakdown(open: readonly { severity: Connect.Severity }[]) {
+  if (!open.length) return "No open findings"
+  const counts = (["blocking", "concern", "nit"] as const).flatMap((severity) => {
+    const count = open.filter((finding) => finding.severity === severity).length
+    if (!count) return []
+    return [`${count} ${severity === "blocking" || count === 1 ? severity : `${severity}s`}`]
+  })
+  return `${open.length} open ${open.length === 1 ? "finding" : "findings"}: ${counts.join(", ")}`
+}
+
+/** Whether a pending question is one of the connect hub's, in this conversation. */
+function connectAsk(value: unknown, sessionID: string) {
+  const request = fieldsOf(value)
+  if (!request || request.sessionID !== sessionID || typeof request.permission !== "string") return false
+  return (
+    connectConsentDetails({ permission: request.permission, metadata: fieldsOf(request.metadata) ?? {} }) !== undefined
+  )
+}
+
+/**
+ * A connected-tools question in the hub's own sentence; a fix's question also shows its change, as text. Format
+ * characters in the change (bidirectional controls, zero-width characters) are shown as their code point, so the code
+ * cannot read differently from what it applies.
+ */
+function consentDetail(permission: string, metadata: Record<string, unknown>) {
+  const sentence = connectConsentDetails({ permission, metadata })
+  if (sentence === undefined || permission !== "connect_write") return sentence
+  const diff = connectConsentDiff({ permission, metadata })
+  if (diff === undefined) return `${sentence}\n\nThe change itself is shown only in Vector on your computer.`
+  if (diff.length <= MAX_DIFF) return `${sentence}\n\n${visible(diff)}`
+  return `${sentence}\n\n${visible(head(diff, MAX_DIFF))}\n\nThe rest of this change is shown only in Vector on your computer.`
+}
+
+/** Model-written text as one plain line: format characters removed, control characters and runs of space as one. */
+function plain(value: string, limit: number) {
+  return head(
+    value
+      .replace(/\p{Cf}/gu, "")
+      .replace(/[\p{Cc}\s]+/gu, " ")
+      .trim(),
+    limit,
+  )
+}
+
+/** Each format character as "[U+202E]", in text. */
+function visible(value: string) {
+  return value.replace(
+    /\p{Cf}/gu,
+    (char) => `[U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}]`,
+  )
+}
+
+/** The start of a text, never ending in the first half of a surrogate pair. */
+function head(value: string, limit: number) {
+  const last = value.charCodeAt(limit - 1)
+  return value.slice(0, last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit)
+}
+
+/** The end of a long path, where its file name and line are, never starting in the second half of a surrogate pair. */
+function tail(value: string, limit: number) {
+  if (value.length <= limit) return value
+  const start = value.length - limit + 1
+  const first = value.charCodeAt(start)
+  return `…${value.slice(first >= 0xdc00 && first <= 0xdfff ? start + 1 : start)}`
+}
+
+function isSendsTo(value: unknown): value is Connect.SendsTo {
+  return typeof value === "string" && value.length <= 300 && SENDS_TO.test(value)
+}
+
+function isOneOf<K extends string>(values: Record<K, unknown>, value: unknown): value is K {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(values, value)
+}
+
+function fieldsOf(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return Object.fromEntries(Object.entries(value))
 }

@@ -1,0 +1,31 @@
+/* Connected runs in the Background tasks pane. The section sits beside the
+   pane's own scroller (.vector-bg-tasks-list, or the empty state, both
+   flex: 1), so it scrolls on its own and never takes more than 45% of the
+   pane, leaving the rest to them. */
+.vector-bg-tasks-section.vector-connect-task-rows {
+  flex: none;
+  min-height: 0;
+  max-height: 45%;
+  padding: 0 8px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bgt-well) transparent;
+}
+
+.vector-connect-task-title,
+.vector-connect-task-line {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vector-connect-task-title {
+  color: var(--bgt-text-1);
+  font-size: var(--bgt-fs-table);
+}
+
+.vector-connect-task-line {
+  color: var(--bgt-text-2);
+  font-size: var(--bgt-fs-table);
+}

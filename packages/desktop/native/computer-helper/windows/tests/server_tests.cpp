@@ -637,6 +637,39 @@ size_t run_server_tests() {
     }
   });
   test([] {
+    // HF-5: the isolated self-test's apps.list registration (non-mutating, no session requirement).
+    Fixture fixture; fixture.ready = false; fixture.begin(4); size_t calls = 0; Dispatcher::Completion held;
+    fixture.dispatcher->register_handler(L"apps.list", 15'000, false, false, [&](const auto&, const auto&, auto done) { ++calls; held = done; });
+    fixture.receive(2, L"apps.list", object(LR"({"installed":false})")); fixture.workers();
+    require(calls == 1 && fixture.replies(2) == 0, "server.read-only-request-in-flight-before-detection-loss");
+    const auto current = *fixture.dispatcher->session_snapshot();
+    require(fixture.dispatcher->input_detection(false, L"probe_missing", current), "server.first-detection-loss-admitted"); fixture.drain();
+    require(fixture.code(2, L"paused") && fixture.reply(2).GetNamedString(L"error") == L"Native input detection became unavailable.", "server.first-detection-loss-cancels-in-flight-read-only-request");
+    held(Reply{}); fixture.drain(); require(fixture.replies(2) == 1, "server.cancelled-read-only-completion-is-inert");
+    const auto paused = *fixture.dispatcher->session_snapshot();
+    require(paused.paused && paused.observation_epoch != current.observation_epoch, "server.first-detection-loss-rotates-observation");
+    fixture.receive(3, L"apps.list", object(LR"({"installed":false})")); fixture.workers();
+    require(calls == 2 && fixture.replies(3) == 0, "server.paused-phase-admits-read-only-request");
+    require(fixture.dispatcher->input_detection(false, L"secure_desktop", paused), "server.repeated-detection-loss-admitted"); fixture.drain();
+    require(fixture.replies(3) == 0 && fixture.dispatcher->session_snapshot()->observation_epoch == paused.observation_epoch, "server.repeated-detection-loss-cancels-and-rotates-nothing");
+    held(Reply{}); fixture.drain();
+    require(fixture.reply(3).GetNamedBoolean(L"ok") && fixture.replies(3) == 1, "server.paused-phase-read-only-request-completes");
+  });
+  test([] {
+    Fixture fixture; fixture.ready = false; fixture.begin(4); size_t calls = 0; Dispatcher::Completion held;
+    fixture.dispatcher->register_handler(L"apps.list", 15'000, false, false, [&](const auto&, const auto&, auto done) { ++calls; held = done; });
+    fixture.receive(2, L"apps.list", object(LR"({"installed":false})")); fixture.workers();
+    const auto current = *fixture.dispatcher->session_snapshot();
+    require(fixture.dispatcher->physical_input(event_document(L"user_input", object(LR"({"kind":"click"})")), current, true), "server.physical-takeover-admitted"); fixture.drain();
+    require(fixture.code(2, L"paused") && fixture.reply(2).GetNamedString(L"error") == L"Physical input paused the task.", "server.physical-takeover-cancels-in-flight-read-only-request");
+    held(Reply{}); fixture.drain(); require(fixture.replies(2) == 1, "server.takeover-cancelled-completion-is-inert");
+    const auto paused = *fixture.dispatcher->session_snapshot();
+    fixture.receive(3, L"apps.list", object(LR"({"installed":false})")); fixture.workers();
+    require(calls == 2 && fixture.dispatcher->input_detection(false, L"probe_missing", paused), "server.detection-loss-after-takeover-admitted"); fixture.drain();
+    require(fixture.replies(3) == 0 && fixture.dispatcher->session_snapshot()->observation_epoch == paused.observation_epoch, "server.detection-loss-after-takeover-cancels-nothing");
+    held(Reply{}); fixture.drain(); require(fixture.reply(3).GetNamedBoolean(L"ok"), "server.takeover-paused-phase-read-only-request-completes");
+  });
+  test([] {
     Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4); OperationContext context;
     fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
     fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.receive(3, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.workers();

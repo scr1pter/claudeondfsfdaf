@@ -27,6 +27,7 @@ on:
           - linux
           - windows
           - windows-units
+          - macos-measure
           - macos-signing
           - macos-overlay
           - windows-overlay
@@ -106,7 +107,7 @@ jobs:
             exit 1
           fi
           case "$COMPUTER_HELPER_TARGET" in
-            all|linux|windows|windows-units|macos-signing|macos-overlay|windows-overlay) ;;
+            all|linux|windows|windows-units|macos-measure|macos-signing|macos-overlay|windows-overlay) ;;
             *) echo "::error::Unsupported computer-helper target."; exit 1 ;;
           esac
           for value in "$COMPUTER_HELPER" "$DESKTOP_ENGINE_NODE" "$HANDS_UI" "$HANDS_BENCHMARK" "$RELEASE_EVIDENCE" "$PRODUCTION_BENCHMARK" "$OFFLINE_FOOTPRINT"; do
@@ -144,6 +145,25 @@ jobs:
       # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
       # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
       isolated-desktop: true
+
+  # Measurement uses the registered dispatcher without enabling isolated input, desktop fixtures or publication.
+  # The existing helper still enforces the old measured Mac lock after reproducibility and grant-free core checks.
+  computer-helper-macos-measure:
+    needs: validate-dispatch
+    if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'macos-measure' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    uses: ./.github/workflows/computer-helper.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      helper-channel: prod
+      artifact-suffix: mac-measure-${{ github.sha }}
+      reuse-artifacts: false
+      full-desktop-e2e: false
+      isolated-desktop: false
+      privileged-required: false
+      windows-only: false
+      linux-only: false
 
   computer-helper-windows-units:
     needs: validate-dispatch
@@ -736,11 +756,11 @@ jobs:
   engine-linux:
     needs: validate-dispatch
     if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
-    name: engine (linux, shard ${{ matrix.shard }}/4)
+    name: engine (linux, shard ${{ matrix.shard }}/6)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -778,10 +798,17 @@ jobs:
         run: GITHUB_ACTIONS=false bun turbo run build --filter='@vectordevai/engine^...' --log-order=stream
 
       - name: Run Engine shard
-        # Four shards keep each Bun process near a quarter of the suite; one process for all of it crashed in Bun.
+        # Sharding keeps each Bun process to part of the suite; one process for all of it crashed in Bun.
+        # Bun's --shard sends sorted test file i to shard i%N+1. Green main run 43896073886 (2034e1da) took
+        # 17.6/14.5/15.8/10.9 min of test time in 4 shards. Measured slow runs stretched shards 1.3-2.0x, more
+        # toward a shard's end: main 33fc9fbc shard 3/4 (job 133346297374) and connect 1d944dd9 shard 3/4
+        # (job 133464471365) hit 30 min with every test passing, at 1.63x and 1.71x the green run's times.
+        # From those per-file times, 1d944dd9's largest shard is 19.5 min in 4 (37 min at 1.9x), 16.9 in 5
+        # (32 min at 1.9x) and 13.9 in 6 (shard 1/6; 26 min at 1.9x), so six. Replace this estimate with the
+        # first green 6-shard run's step times; if its largest shard tops about 15 min, also raise this to 45.
         timeout-minutes: 30
         working-directory: packages/engine
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/4
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/6
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 

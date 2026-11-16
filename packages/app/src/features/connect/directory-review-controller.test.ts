@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { Connect } from "@vectordevai/schema/connect"
-import type { PermissionRequest } from "@vectordevai/sdk/v2/client"
+import { createVectorClient, type PermissionRequest } from "@vectordevai/sdk/v2/client"
+import { createConnectClient } from "./client"
 import {
   createDirectoryReviewController,
   directoryPermissionMatches,
@@ -10,6 +11,49 @@ import {
 import { reviewRun } from "./test-fixture"
 
 const target = { workspaceID: "workspace-fixture", directory: "/fixture/isolated", base: "a".repeat(40) }
+const consumed = {
+  code: "consumed" as const,
+  message: "This review start did not complete and no review ran. Start a new review.",
+}
+const pending = {
+  code: "pending" as const,
+  message: "This review start is not confirmed yet. Retry it shortly; a retry never starts a second review.",
+}
+
+/** A real SDK rejection, so the controller sees the SDK's own error shape. */
+function refusal(body: unknown, status = 400) {
+  return createConnectClient(
+    createVectorClient({
+      baseUrl: "http://engine.test",
+      directory: target.directory,
+      fetch: async () => Response.json(body, { status }),
+    }),
+  ).directoryReview({
+    requestKey: "0196aa50-50d0-4f17-9c1d-85eff018e829",
+    target: { kind: "branch", base: target.base },
+    background: true,
+  })
+}
+
+function marker() {
+  const value = { pending: false, holds: [] as boolean[], confirms: 0, discards: 0 }
+  const admission = {
+    pending: () => value.pending,
+    hold: (retry: boolean) => {
+      value.holds.push(retry)
+      value.pending = true
+    },
+    confirm: () => {
+      value.confirms++
+      value.pending = false
+    },
+    discard: () => {
+      value.discards++
+      value.pending = false
+    },
+  }
+  return { value, admission }
+}
 
 function run(): Connect.Run {
   const fixture = reviewRun()
@@ -311,6 +355,9 @@ test("a lost admission flushes early notifications but empty or unrelated termin
     confirm: () => {
       marker.pending = false
     },
+    discard: () => {
+      marker.pending = false
+    },
   }
   const { data, controller } = fixture(true, admission)
   await controller.refresh()
@@ -348,6 +395,9 @@ test("only an explicit retry can confirm the same held admission, and a stale su
     confirm: () => {
       marker.pending = false
       marker.confirmations++
+    },
+    discard: () => {
+      marker.pending = false
     },
   }
   const first = fixture(true, admission)
@@ -394,4 +444,203 @@ test("authority retirement while an approval GET is pending cannot send an old p
   await reply
   expect(data.replies).toEqual([])
   expect(controller.state.run).toBeUndefined()
+})
+
+test("a consumed answer discards its key and shows the engine's message; only an explicit new start sends again", async () => {
+  const saved = marker()
+  const { data, controller } = fixture(true, saved.admission)
+  await controller.refresh()
+  data.start = async () => {
+    throw new TypeError("The POST response was lost")
+  }
+  await controller.start()
+  data.start = () => refusal(consumed)
+  await controller.start(true)
+  expect(saved.value.discards).toBe(1)
+  expect(saved.value.pending).toBe(false)
+  expect(controller.state.admissionUncertain).toBe(false)
+  expect(controller.state.admissionAnswer).toEqual(consumed)
+  data.invalidate()
+  await controller.refresh()
+  await controller.start(true)
+  expect(controller.state.admissionAnswer).toEqual(consumed)
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(2)
+  expect(saved.value.holds).toEqual([false, true])
+  data.start = async () => data.run
+  await controller.start()
+  expect(saved.value.holds).toEqual([false, true, false])
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(3)
+  expect(saved.value.confirms).toBe(1)
+  expect(saved.value.discards).toBe(1)
+  expect(controller.state.admissionAnswer).toBeUndefined()
+  expect(controller.state.run?.status).toBe("running")
+  controller.dispose()
+})
+
+test("a pending answer keeps its key and the engine's message, and nothing retries on its own", async () => {
+  const saved = marker()
+  const { data, controller } = fixture(true, saved.admission)
+  await controller.refresh()
+  data.start = () => refusal(pending)
+  await controller.start()
+  expect(controller.state.admissionUncertain).toBe(true)
+  expect(controller.state.admissionAnswer).toEqual(pending)
+  expect(saved.value.pending).toBe(true)
+  data.invalidate()
+  await controller.refresh()
+  await controller.start()
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(1)
+  expect(saved.value.holds).toEqual([false])
+  expect(saved.value.discards).toBe(0)
+  data.start = async () => data.run
+  await controller.start(true)
+  expect(saved.value.holds).toEqual([false, true])
+  expect(saved.value.confirms).toBe(1)
+  expect(saved.value.discards).toBe(0)
+  expect(controller.state.admissionUncertain).toBe(false)
+  expect(controller.state.admissionAnswer).toBeUndefined()
+  controller.dispose()
+})
+
+test("a consumed answer that lands after retirement leaves the marker for the next view", async () => {
+  const saved = marker()
+  const { data, controller } = fixture(true, saved.admission)
+  await controller.refresh()
+  const answered = deferred<void>()
+  data.start = async () => {
+    await answered.promise
+    return refusal(consumed)
+  }
+  const starting = controller.start()
+  controller.retire()
+  answered.resolve()
+  await starting
+  expect(saved.value.discards).toBe(0)
+  expect(saved.value.pending).toBe(true)
+  expect(controller.state.admissionAnswer).toBeUndefined()
+})
+
+for (const [name, failure] of [
+  [
+    "an invalid answer",
+    () => refusal({ code: "invalid", message: "This request key already belongs to a different review input." }),
+  ],
+  ["a 403 refusal", () => refusal({ message: "Owner only" }, 403)],
+  ["a consumed code on another status", () => refusal(consumed, 500)],
+  ["a consumed answer without a message", () => refusal({ code: "consumed", message: "" })],
+  ["an unknown code", () => refusal({ code: "other", message: "Something else happened." })],
+  [
+    "a fetch failure",
+    async () => {
+      throw new TypeError("fetch failed")
+    },
+  ],
+] as const)
+  test(`${name} keeps the key for the same explicit retry`, async () => {
+    const saved = marker()
+    const { data, controller } = fixture(true, saved.admission)
+    await controller.refresh()
+    data.start = failure
+    await controller.start()
+    expect(controller.state.admissionUncertain).toBe(true)
+    expect(controller.state.admissionAnswer).toBeUndefined()
+    expect(saved.value.pending).toBe(true)
+    expect(saved.value.discards).toBe(0)
+    await controller.start()
+    expect(data.calls.filter((call) => call === "start")).toHaveLength(1)
+    controller.dispose()
+  })
+
+test("a consumed answer whose discard is refused keeps the key held and still shows the engine's message", async () => {
+  const saved = marker()
+  const admission = {
+    ...saved.admission,
+    discard: () => {
+      throw new Error("The saved review request changed.")
+    },
+  }
+  const { data, controller } = fixture(true, admission)
+  await controller.refresh()
+  data.start = async () => {
+    throw new TypeError("The POST response was lost")
+  }
+  await controller.start()
+  data.start = () => refusal(consumed)
+  await controller.start(true)
+  expect(saved.value.pending).toBe(true)
+  expect(controller.state.admissionUncertain).toBe(true)
+  expect(controller.state.admissionAnswer).toEqual(consumed)
+  data.runs = [data.run]
+  data.invalidate()
+  await controller.refresh()
+  expect(controller.state.run?.status).toBe("running")
+  expect(controller.state.admissionAnswer).toEqual(consumed)
+  await controller.start()
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(2)
+  controller.dispose()
+})
+
+test("a consumed answer stays beside the finished run it was answered beside", async () => {
+  const saved = marker()
+  const { data, controller } = fixture(true, saved.admission)
+  data.run = { ...data.run, status: "done", result: reviewRun().result }
+  data.runs = [data.run]
+  await controller.refresh()
+  data.start = async () => {
+    throw new TypeError("The POST response was lost")
+  }
+  await controller.start()
+  data.start = () => refusal(consumed)
+  await controller.start(true)
+  expect(controller.state.run?.id).toBe(data.run.id)
+  expect(controller.state.admissionAnswer).toEqual(consumed)
+  data.invalidate()
+  await controller.refresh()
+  expect(controller.state.run?.status).toBe("done")
+  expect(controller.state.admissionAnswer).toEqual(consumed)
+  controller.dispose()
+})
+
+for (const status of ["running", "done"] as const)
+  test(`another view's later ${status} run replaces a consumed message for good`, async () => {
+    const saved = marker()
+    const { data, controller } = fixture(true, saved.admission)
+    await controller.refresh()
+    data.start = async () => {
+      throw new TypeError("The POST response was lost")
+    }
+    await controller.start()
+    data.start = () => refusal(consumed)
+    await controller.start(true)
+    expect(controller.state.admissionAnswer).toEqual(consumed)
+    data.run = status === "done" ? { ...data.run, status, result: reviewRun().result } : data.run
+    data.runs = [data.run]
+    data.invalidate()
+    await controller.refresh()
+    expect(controller.state.run?.status).toBe(status)
+    expect(controller.state.admissionAnswer).toBeUndefined()
+    data.run = { ...data.run, status: "done", result: reviewRun().result }
+    data.invalidate()
+    await controller.refresh()
+    expect(controller.state.run?.status).toBe("done")
+    expect(controller.state.admissionAnswer).toBeUndefined()
+    expect(data.calls.filter((call) => call === "start")).toHaveLength(2)
+    controller.dispose()
+  })
+
+test("a consumed retry beside another view's live run leaves only that run on the card", async () => {
+  const saved = marker()
+  saved.value.pending = true
+  const { data, controller } = fixture(true, saved.admission)
+  data.runs = [data.run]
+  await controller.refresh()
+  expect(controller.state.run?.status).toBe("running")
+  expect(controller.state.admissionUncertain).toBe(true)
+  data.start = () => refusal(consumed)
+  await controller.start(true)
+  expect(saved.value.discards).toBe(1)
+  expect(controller.state.admissionUncertain).toBe(false)
+  expect(controller.state.run?.status).toBe("running")
+  expect(controller.state.admissionAnswer).toBeUndefined()
+  controller.dispose()
 })

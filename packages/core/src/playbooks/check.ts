@@ -10,7 +10,8 @@ import { WorkflowSpec } from "../orchestration/spec"
 // workflow: its stages are prompts the agent reads, so the commands it names are the code spans in its text. Every one
 // of them must pass the skill command allowlist (`commands.ts`); every other code span must be a file inside the
 // repository. The file is then a saved workflow (`WorkflowSpec.parse`, source "saved") that nests only other Vector
-// Playbooks and names a model only as a Codium role (`codium:floor`, `codium:default` or `codium:ceiling`).
+// Playbooks, names a model only as a Codium role (`codium:floor`, `codium:default` or `codium:ceiling`) and connects
+// only for a read-only VectorScope review (`to: "vectorscope"`, `action: "review"`).
 //
 // What is refused, in any string of the file (object keys too):
 // - hidden characters (zero-width, bidirectional controls, tag characters), which a reviewer would not see;
@@ -127,6 +128,7 @@ export function validate(input: {
   if (workflow.spec.stages.some((stage) => "workflow" in stage && !Playbooks.validName(stage.workflow)))
     issues.push({ path: "/stages", message: "A Vector Playbook may nest only other personal Vector Playbooks." })
   issues.push(...modelIssues(workflow.spec))
+  issues.push(...connectIssues(workflow.spec))
   if (issues.length) return { ok: false, issues }
   return { ok: true, name: input.name, commands: [...commands].sort(), files: [...files].sort() }
 }
@@ -229,4 +231,20 @@ function command(text: string, path: string, issues: Issue[], commands: Set<stri
 // JSON Pointer escaping, so a path names exactly one place.
 function pointer(key: string) {
   return key.replace(/~/g, "~0").replace(/\//g, "~1")
+}
+
+// A playbook runs in the repository of whoever installs it, and this check has no member manifest to read an action's
+// effects from, so a connect stage may only be a VectorScope review, whose only effect is read. A fix writes code, so it
+// is an agent stage after the review. Running a connect stage stays held at run time (engine orchestration/runner.ts).
+function connectIssues(spec: WorkflowSpec.Spec) {
+  return spec.stages.flatMap((stage, index) =>
+    "connect" in stage && (stage.connect.to !== "vectorscope" || stage.connect.action !== "review")
+      ? [
+          {
+            path: `/stages/${index}/connect`,
+            message: "A Vector Playbook may only review with VectorScope; fixes are separate agent stages.",
+          },
+        ]
+      : [],
+  )
 }

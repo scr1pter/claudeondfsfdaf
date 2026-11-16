@@ -103,6 +103,24 @@ test("approvals never offer to allow always (S6)", async () => {
   const text = (await readFile(path.join(DIR, "routes", "approvals.tsx"), "utf8")).replace(/\s+/g, " ")
   expect(text).toContain("allow it once or deny it")
   expect(/allow always|always allow/i.test(text)).toBe(false)
+  // A conversation's connected-tools questions (CW-23c) are answered with the same card, once or denied.
+  const session = (await readFile(path.join(DIR, "routes", "session-tasks.tsx"), "utf8")).replace(/\s+/g, " ")
+  expect(session).toContain("<PermissionCard")
+  expect(/always/i.test(session)).toBe(false)
+})
+
+test("connected tools on the phone offer no fix, dismissal or worktree (CW-23c)", async () => {
+  for (const file of ["session-tasks.tsx", "remote-parts.tsx"]) {
+    const text = await readFile(path.join(DIR, "routes", file), "utf8")
+    expect({ file, found: /\b(fix|fixes|dismiss|worktree)\b/i.test(text) }).toEqual({ file, found: false })
+  }
+})
+
+test("a review's choices cannot change while its start waits, so a passkey prompt kept for a tap is theirs (CW-23c)", async () => {
+  const text = (await readFile(path.join(DIR, "routes", "session-tasks.tsx"), "utf8")).replace(/\s+/g, " ")
+  const form = text.slice(text.indexOf("<form"), text.indexOf("</form>"))
+  expect(form.match(/<(select|input)\b/g)).toHaveLength(2)
+  expect(form.match(/<(select|input) disabled=\{state\.starting\}/g)).toHaveLength(2)
 })
 
 test("the page and the worker bundle no Node or Bun module", async () => {
