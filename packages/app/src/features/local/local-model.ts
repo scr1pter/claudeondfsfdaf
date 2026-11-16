@@ -107,6 +107,7 @@ const NAMES: Record<string, string> = {
   "support-report": "Support reports",
   "report-status": "Report status",
   remote: "Vector Remote",
+  everywhere: "Jobs for this computer",
   "phone-alerts": "Phone alerts",
   "brain-vault": "Brain Vault",
   "ship-desk": "Ship Desk",
@@ -141,7 +142,11 @@ const NAMES: Record<string, string> = {
 
 // Sources Vector Local keeps off in this release without offering Allow…, each with why in its own words. External
 // agents are programs that make their own connections, which no allow entry could cover, so Vector does not start them.
+// Jobs for this computer stay off with no Allow… until the owner approves showing them and their GitHub calls are
+// labelled (vector-everywhere-deviations.md, "2026-11-16, EV-15", (h)).
 const KEPT_OFF: Record<string, string> = {
+  everywhere:
+    "Jobs for this computer come from vectordev.ai and report back to it, so this computer takes none while Vector Local is on.",
   "external-agents":
     "Claude Code, Codex and Cursor make their own connections, usually to their makers' cloud models, and Vector Local does not see them. Vector does not start them while Vector Local is on.",
   "help-assistant":

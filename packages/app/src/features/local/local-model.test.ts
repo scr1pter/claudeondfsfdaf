@@ -235,6 +235,7 @@ describe("the Allow dialog", () => {
       "chatgpt-signin",
       "help-assistant",
       "external-agents",
+      "everywhere",
       "unlabelled",
     ])
       expect(allowChoices(source(id), status())).toEqual({ once: false, always: false })
@@ -288,6 +289,14 @@ describe("Off in Vector Local", () => {
     expect(external.state).toBe("never")
     expect(external.allowable).toBe(false)
     expect(external.why).toContain("Vector does not start them while Vector Local is on.")
+    // Jobs for this computer are listed under their neutral name, kept off with no Allow… in this release.
+    const jobs = offInLocal(status()).find((item) => item.source.id === "everywhere")!
+    expect(jobs.name).toBe("Jobs for this computer")
+    expect(jobs.state).toBe("never")
+    expect(jobs.allowable).toBe(false)
+    expect(jobs.why).toBe(
+      "Jobs for this computer come from vectordev.ai and report back to it, so this computer takes none while Vector Local is on.",
+    )
     expect(Object.values(OFF_STATE).some((label) => label.includes("Hidden"))).toBe(false)
   })
 

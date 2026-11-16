@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process"
 import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { createJobId } from "@vectordevai/schema/everywhere"
 import { createEverywhereGit, GIT_HARDENING, runnerGitEnvironment, safeRepositoryConfig } from "./everywhere-git"
 
@@ -113,6 +115,78 @@ test("network git uses a canonical URL and job-specific ref rather than shared F
   expect(pushed).not.toContain("origin")
   expect(pushed).not.toContain("--force")
   expect(mutable.find((args) => args.includes("fetch"))).toContain(`refs/heads/main:refs/vector-everywhere/${jid}`)
+})
+
+test("Vector Local decides each fetch and push as git-remote on github.com before git or its credentials start", async () => {
+  const calls: string[][] = []
+  const directory = await realpath(os.tmpdir())
+  const jid = createJobId(Date.now())
+  // What each git call the fetch and push make answers, by the argument that names it, in this order.
+  const answer = (args: readonly string[]) => {
+    // The snapshot check reads the repository config: one GitHub remote and nothing executable.
+    if (args.includes("config")) return "remote.origin.url\nhttps://github.com/acme/app.git\0"
+    // A config.worktree that does not exist, so only the local config is read.
+    if (args.includes("--git-path")) return path.join(directory, `vector-fixture-${jid}-config.worktree`)
+    if (args.some((arg) => ["--show-toplevel", "--absolute-git-dir", "--git-common-dir"].includes(arg)))
+      return directory
+    // The fetched ref's commit, which the fetch reads back after git fetch.
+    if (args.includes("rev-parse")) return "a".repeat(40)
+    return ""
+  }
+  const runner = createEverywhereGit({
+    directory: os.tmpdir(),
+    repository: "acme/app",
+    identity: { name: "Fixture", email: "fixture@example.invalid" },
+    authenticate: async () => {
+      calls.push(["authenticate"])
+      return undefined
+    },
+    execute: async ({ args }) => {
+      calls.push([...args])
+      return answer(args)
+    },
+  })
+  const snapshot = {
+    directory,
+    gitDirectory: directory,
+    commonDirectory: directory,
+    config: [],
+    pushUrl: "https://github.com/acme/app.git",
+    baseSha: "a".repeat(40),
+  }
+  const words = ["authenticate", "fetch", "push"]
+  const network = () => calls.flatMap((args) => args.find((word) => words.includes(word)) ?? [])
+  // The fetch is logged as GET and the push, which carries the commits, as POST.
+  const lines = (decision: string, rule: string) =>
+    ["GET", "POST"].map((method) =>
+      expect.objectContaining({
+        source: "git-remote",
+        purpose: "git-remote",
+        origin: "https://github.com",
+        method,
+        decision,
+        rule,
+      }),
+    )
+  try {
+    Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+    await expect(runner.fetch(snapshot, "main", jid)).rejects.toThrow("Vector Local blocks the Everywhere git fetch")
+    // A refused push never started, so it answers false (the runner then settles held), never an ambiguous failure.
+    expect(await runner.push(snapshot, os.tmpdir(), "vector/ve-abcdefghijkl")).toBe(false)
+    expect(network()).toEqual([])
+    expect(Egress.events().slice(-2)).toEqual(lines("block", "not-listed"))
+    Egress.configure(
+      LocalPolicy.resolve({
+        global: { enabled: true, allow: [{ source: "git-remote", reason: "Fixture", added_at: 1, added_by: "app" }] },
+      }),
+    )
+    await runner.fetch(snapshot, "main", jid)
+    expect(await runner.push(snapshot, os.tmpdir(), "vector/ve-abcdefghijkl")).toBe(true)
+    expect(network()).toEqual(["authenticate", "fetch", "authenticate", "push"])
+    expect(Egress.events().slice(-2)).toEqual(lines("allow", "allowed-source"))
+  } finally {
+    Egress.configure(LocalPolicy.OFF)
+  }
 })
 
 test("core.worktree cannot redirect snapshot or publication outside the allowed canonical directory", async () => {

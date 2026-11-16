@@ -4,6 +4,7 @@ import { readFile, realpath, rm } from "node:fs/promises"
 import path from "node:path"
 import { GIT_HARDENING, fetchRef, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
 import { heldBack } from "@vectordevai/core/everywhere/publish"
+import { Egress } from "@vectordevai/core/local-mode/egress"
 import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN, isRepositoryName } from "@vectordevai/schema/everywhere"
 import { parseGithubRemote } from "./github-api"
 
@@ -31,6 +32,18 @@ function mapsRepository(config: string, repository: string) {
     const remote = parseGithubRemote(url)
     return remote !== undefined && `${remote.owner}/${remote.name}`.toLowerCase() === repository.toLowerCase()
   }))
+}
+
+/**
+ * Whether Vector Local blocks git's request to `remote` now. git is a child process the backstop guard never sees, so
+ * each fetch and push is decided as git-remote on the remote's host before git starts, and the decision is logged, as
+ * the vault's git does (vault-github.ts remoteRefusal). A push is logged as POST, the request that carries its
+ * commits, so the network log tells it from a fetch (GET). Nothing is decided with Vector Local off.
+ */
+function localBlocks(remote: string, method: "GET" | "POST") {
+  if (!Egress.policy().enabled) return false
+  if (!URL.canParse(remote)) return true
+  return Egress.decide({ source: "git-remote", url: `${new URL(remote).origin}/`, method }).decision !== "allow"
 }
 
 export type GitExec = (input: { readonly directory: string; readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv; readonly signal?: AbortSignal }) => Promise<string>
@@ -127,6 +140,7 @@ export function createEverywhereGit(input: {
     },
     async fetch(snapshot: GitSnapshot, base: string, jid: string) {
       if (!JOB_ID_PATTERN.test(jid) || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/.test(base) || base.includes("..") || !await unchanged(snapshot, input.directory)) throw new Error("Everywhere git authority changed")
+      if (localBlocks(snapshot.pushUrl, "GET")) throw new Error("Vector Local blocks the Everywhere git fetch")
       const ref = fetchRef(jid)
       await run(["fetch", "--no-write-fetch-head", "--no-tags", "--no-recurse-submodules", snapshot.pushUrl, `refs/heads/${base}:${ref}`], input.directory, true)
       const from = (await run(["rev-parse", ref])).trim()
@@ -155,7 +169,8 @@ export function createEverywhereGit(input: {
       return (await run(["rev-parse", "HEAD"], directory)).trim()
     },
     async push(snapshot: GitSnapshot, directory: string, branch: string) {
-      if (!BRANCH_PATTERN.test(branch) || !await unchanged(snapshot, directory)) return false
+      // A refusal is a push that never started, so the runner keeps the branch on this computer and settles `held`.
+      if (!BRANCH_PATTERN.test(branch) || !await unchanged(snapshot, directory) || localBlocks(snapshot.pushUrl, "POST")) return false
       await run(["push", "--no-verify", "--", snapshot.pushUrl, `HEAD:refs/heads/${branch}`], directory, true)
       return true
     },

@@ -395,6 +395,18 @@ export const SOURCES: readonly Source[] = [
     note: "The relay's address comes with each ticket from vectordev.ai; it only ever sees encrypted messages",
   },
   {
+    id: "everywhere",
+    purpose: "account",
+    hosts: VECTOR,
+    sends:
+      "Your Vector sign-in and this computer's device id, and for each job offered to it: the job's id and lease, a reason when it declines, progress steps with a count of changed files, and the result: an outcome, a short summary, the permissions the job was refused, and the branch, commit, file count and pull request link",
+    why: "Takes the jobs vectordev.ai offers this computer and reports how each one went",
+    local: "blocked",
+    where: ["desktop"],
+    callSites: ["packages/desktop/src/main/everywhere-runner.ts"],
+    note: "Offers come over Vector Remote's link (remote); a job's git fetch and push to GitHub are git-remote, decided before git starts",
+  },
+  {
     id: "brain-vault",
     purpose: "account",
     hosts: ["api.github.com", ...VECTOR],
@@ -645,6 +657,7 @@ export const SOURCES: readonly Source[] = [
       "packages/engine/src/worktree/index.ts",
       "packages/engine/src/review/source.ts",
       "packages/desktop/src/main/vault-github.ts",
+      "packages/desktop/src/main/everywhere-git.ts",
     ],
     note: "Decided on the remote's host before git starts",
   },

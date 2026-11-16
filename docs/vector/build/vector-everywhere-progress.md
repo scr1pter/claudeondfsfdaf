@@ -2508,3 +2508,100 @@ The other regression files in the table above were not re-run: this round change
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
 
 Committed as `feat(engine): give unattended sessions the outward memory audience`, staging by path the three engine source files, the two engine test files and the four lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-14 bullet keeps "CI pending" until then.
+
+## EV-15: Vector Local `everywhere` source and the runner's E15 decision (2026-11-16)
+
+Package EV-15 (spec §11 R-M1; §5 E15; §3.5 step 2): core local-mode/sources.ts declares the `everywhere` source and lists desktop everywhere-git.ts under `git-remote`; the desktop runner replaces its three blanket `settings.localMode` checks with the registry's decision (`localAllows`: `everywhere`, `git-remote` and `github` all allowed), its jobs client sends through `Egress.fetch("everywhere", …)`, and everywhere-git.ts decides each fetch and push as `git-remote` before git starts. Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-15". Built in the working tree and not committed, as the task said.
+
+**Base.** `git fetch origin release-finish main everywhere-finish` and every lane tip: HEAD `cb2a73ba` (EV-14) equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main is `2034e1da`, not merged here (the lead's merge); none of its files is one of this package's. Cross-lane check over this package's files: empty for every lane but codium-finish `0b9f8337` (sources.ts brain-vault text and one sources.test.ts case; `git merge-file` merges both files cleanly) and scope-finish `1b6df982` (egress-inventory.test.ts :157, not edited here). No review-fixes or brain-transport precondition; no spawn site changes.
+
+**Files** (line numbers after the change):
+
+- packages/core/src/local-mode/sources.ts (+13): the `everywhere` source after `remote` (:397-408); `packages/desktop/src/main/everywhere-git.ts` in `git-remote`'s call sites (:660).
+- packages/desktop/src/main/everywhere-runner.ts (+41/-6): imports (:9-12); `RunnerSettings.localMode` removed; the jobs client through `Egress.fetch("everywhere", …, input.fetcher)` with its comment (:38-45); `RunnerDeps.localPolicy` (:93-94); `LOCAL_NEEDS` (:112-119) and exported `localAllows` (:121-134); `localAllowed` (:149); the timer (:243), the push gate (:319) and the offer with its comment (:378-380).
+- packages/desktop/src/main/everywhere-git.ts (+15/-1): the `Egress` import (:7); `localBlocks` (:37-46); the fetch refusal (:142) and the push refusal with its comment (:171-172).
+- packages/app/src/features/local/local-model.ts (+1): `everywhere: "Jobs for this computer"` (:110).
+- packages/desktop/src/main/everywhere-runner.test.ts (+127/-10; 49 tests to 52): helpers (:16-21), fixture `localPolicy` and `f.local` (:74, :87, :91), `afterEach` (:99), R1 (:225-234), R2 (:236-264), R4 (:266-280), R5 (:282-331), the abort loop with `local` (:603-621).
+- packages/desktop/src/main/everywhere-git.test.ts (+27; 8 tests to 9): imports (:7-8) and the Vector Local case (:120-143).
+- packages/core/test/local-mode/sources.test.ts (+21; 15 tests to 16): `blocked("everywhere")` (:104) and the new case (:257-275).
+- Lane docs: vector-everywhere-deviations.md (the EV-15 entry), this receipt, vector-everywhere-spec.md (dated EV-15 notes under §3.5 step 2, §5 E15, §6.4 and §11 R-M1), vector-everywhere-handoff.md (a "Current gates" bullet and a "Left open" item).
+- engine test/compliance/egress-inventory.test.ts and app src/components/settings-v2/local-model.test.ts are run, not edited. No generated file, flag, env var, dependency, lockfile, workflow, route or config changed.
+
+**Checks**, each through `vector-serial`, one file at a time from the owning package with `--timeout 30000` (desktop with `--no-env-file`, app with `--isolate`); logs in /tmp/vector-v2/everywhere/ev15/:
+
+| Check | At HEAD, before any change | With the change |
+| --- | --- | --- |
+| desktop src/main/everywhere-runner.test.ts (vector-everywhere.yml) | 49 pass, 0 fail, 355 expects | 52 pass, 0 fail, 412 expects |
+| desktop src/main/everywhere-git.test.ts (vector-everywhere.yml) | 8 pass, 0 fail, 88 expects | 9 pass, 0 fail, 96 expects |
+| core test/local-mode/sources.test.ts (no lane workflow) | 15 pass, 0 fail, 49 expects | 16 pass, 0 fail, 55 expects |
+| engine test/compliance/egress-inventory.test.ts (no lane workflow; unchanged, scans no desktop code) | 5 pass, 0 fail, 12 expects | 5 pass, 0 fail, 12 expects |
+| app src/features/local/local-model.test.ts (no lane workflow; "every source has a name of its own", the Off in Vector Local list, the copy words) | 39 pass, 0 fail, 1014 expects | 39 pass, 0 fail, 1025 expects |
+| app src/components/settings-v2/local-model.test.ts (no lane workflow) | 15 pass, 0 fail, 36 expects | 15 pass, 0 fail, 36 expects |
+| root test/hosted-clients.test.ts (reads sources.ts between `cloud-computer` and `phone-alerts`; run from test/) | not run | 8 pass, 0 fail, 50 expects |
+| `bun typecheck` in packages/core, engine, desktop and app | | exit 0 each |
+| prettier (`semi: false`, `printWidth: 120`) | | sources.ts, sources.test.ts and local-model.ts conform. The four desktop files do not conform at HEAD (hand-packed); their prettier diff grows from 316/391/166/197 lines to 332/454/167/253 (runner, runner test, git, git test), all in this package's hunks in the files' own style, with `localAllows` reflowed to prettier's form |
+| `git diff` scan for personal paths and email addresses | | none (the git test's `fixture@example.invalid` is the file's existing fixture identity) |
+
+**Mutations:** thirteen, one source file at a time, the named test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev15-mut/: mutations.py, round1/ and round2/ with one log per run). Every mutation is red; the table and the case each one turned red are in the deviations entry. Round one was stopped by the 30-minute background limit while M11 ran on sources.ts (each run waited about three minutes for the shared Bun lock); the file was restored by hand to the same sha256 and M11 to M13 ran again in round two.
+
+**Final-state run (2026-11-16, after the mutations, with every restore checked).** The runner's `localAllows` was reflowed to prettier's form and sources.test.ts formatted after the first runs, so each file and typecheck ran again on the final sources, through `vector-serial`, one at a time (logs in /tmp/vector-v2/everywhere/ev15/gate/):
+
+| Check | Result |
+| --- | --- |
+| desktop src/main/everywhere-runner.test.ts | 52 pass, 0 fail, 412 expects |
+| desktop src/main/everywhere-git.test.ts | 9 pass, 0 fail, 96 expects |
+| core test/local-mode/sources.test.ts | 16 pass, 0 fail, 55 expects |
+| engine test/compliance/egress-inventory.test.ts | 5 pass, 0 fail, 12 expects |
+| app src/features/local/local-model.test.ts | 39 pass, 0 fail, 1025 expects |
+| app src/components/settings-v2/local-model.test.ts | 15 pass, 0 fail, 36 expects |
+| `bun typecheck` in packages/desktop, core, engine and app | exit 0 each |
+
+The full `bun turbo typecheck --concurrency=2` is the pre-push gate and was not run here (no commit or push in this task).
+
+**Not done here (the task said not to commit):** the commit (`feat(everywhere): decide laptop jobs by Vector Local's everywhere source`, staging by path the seven code and test files above, app src/features/local/local-model.test.ts (review round one) and the four lane documents; the body says no generated file, flag, env var, dependency or workflow changed), the full `bun turbo typecheck --concurrency=2` before the push, the push, and the workflow_dispatch runs of vector-everywhere.yml and typecheck.yml on everywhere-finish, whose run ids go in the next lane-docs commit; the handoff's EV-15 bullet keeps "CI pending" until then.
+
+### EV-15 review round one (2026-11-16)
+
+Eight non-blocking findings; each is taken or recorded (deviations log, "2026-11-16, EV-15", "Review round one"). Left in the working tree, not committed. HEAD is still `cb2a73ba`; nothing was fetched or merged for this round.
+
+**Files** (line numbers after the change):
+
+- packages/desktop/src/main/everywhere-runner.ts (+4): the `github` need refuses whenever Vector Local is on, with a dated comment naming EV-21 (:128-131).
+- packages/desktop/src/main/everywhere-git.ts: `localBlocks(remote, method)` forwards the method to `Egress.decide` (:37-47); `fetch` passes `GET` (:143) and `push` `POST` (:173).
+- packages/app/src/features/local/local-model.ts (+5): `everywhere` in `KEPT_OFF` with a fixed reason (:148-149) and a comment (:145-146).
+- packages/desktop/src/main/everywhere-runner.test.ts: R2 retitled, two more refusing policies (all three allowed by the user and by the company, :248-251), and its success case now runs with Vector Local off (:261-266).
+- packages/desktop/src/main/everywhere-git.test.ts: the Vector Local case (:120-190) has a named `answer` with one early return per git call, asserts `GET` for the fetch's log line and `POST` for the push's, and is in prettier's form.
+- packages/app/src/features/local/local-model.test.ts (+9): `everywhere` in the never-offers list (:238) and its row checked (:292-300).
+- Lane documents: the deviations entry ((a), (c), (h), (i), (j), Safe by default, Left open, round-three mutations, Review round one), this receipt, the spec's four EV-15 notes and the handoff's EV-15 bullet and Left open item.
+
+**Checks**, each through `vector-serial`, one file at a time from the owning package with `--timeout 30000` (desktop with `--no-env-file`, app with `--isolate`), on the final sources:
+
+| Check | Result |
+| --- | --- |
+| desktop src/main/everywhere-runner.test.ts (vector-everywhere.yml) | 52 pass, 0 fail, 420 expects |
+| desktop src/main/everywhere-git.test.ts (vector-everywhere.yml) | 9 pass, 0 fail, 96 expects |
+| core test/local-mode/sources.test.ts (no lane workflow; unchanged this round) | 16 pass, 0 fail, 55 expects |
+| engine test/compliance/egress-inventory.test.ts (no lane workflow; unchanged this round) | 5 pass, 0 fail, 12 expects |
+| app src/features/local/local-model.test.ts (no lane workflow) | 39 pass, 0 fail, 1030 expects |
+| app src/components/settings-v2/local-model.test.ts (no lane workflow) | 15 pass, 0 fail, 36 expects |
+| `bun typecheck` in packages/desktop and app | exit 0 each |
+| `bun typecheck` in packages/core and engine | not re-run: this round changes no core or engine file; the earlier exit 0 stands |
+| prettier (`semi: false`, `printWidth: 120`) | app local-model.ts and local-model.test.ts conform; `localAllows` and the git case are in prettier's form; R2's two pre-existing long `expect` lines keep the file's hand-packed style |
+
+**Mutations, round three:** nine, run with round3.py (/tmp/vector-v2/everywhere/ev15-mut/round3/; the four git mutations again after the git case's reflow). M14 (the guard removed), M2, M3, M12, M13, M15 and M16 are red; M1 and M4 are green, as predicted: with the guard they change no outcome, and both turn red again once EV-21 removes it. Table in the deviations entry. Both source files matched round3/before.sha after every run.
+
+**Commit gate (2026-11-16).** `git fetch origin release-finish main everywhere-finish`: HEAD was still `cb2a73ba` = origin/everywhere-finish, holding origin/release-finish `67ec3a60`. origin/main is `3ab7858e`, 35 commits and 45 files past the merge base `67ec3a60`, none of them this package's files; it is not merged here (the lead merges main into this branch). The working tree held only this package's twelve paths (the eight code and test files and the four lane documents). Re-run at the gate, each through `vector-serial`, one file at a time from the owning package with `--timeout 30000` (desktop with `--no-env-file`, app with `--isolate`; logs in /tmp/vector-v2/everywhere/ev15/commit-gate/):
+
+| Check | Result |
+| --- | --- |
+| desktop src/main/everywhere-runner.test.ts | 52 pass, 0 fail, 420 expects |
+| desktop src/main/everywhere-git.test.ts | 9 pass, 0 fail, 96 expects |
+| core test/local-mode/sources.test.ts (no lane workflow) | 16 pass, 0 fail, 55 expects |
+| engine test/compliance/egress-inventory.test.ts (no lane workflow) | 5 pass, 0 fail, 12 expects |
+| app src/features/local/local-model.test.ts (no lane workflow) | 39 pass, 0 fail, 1030 expects |
+| app src/components/settings-v2/local-model.test.ts (no lane workflow) | 15 pass, 0 fail, 36 expects |
+| root test/hosted-clients.test.ts (run from test/) | 8 pass, 0 fail, 50 expects |
+| `bun typecheck` in packages/core, desktop, app and engine | exit 0 each |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+Committed as `feat(core): register the everywhere egress source for Vector Local` (the lead's title, in place of the one proposed above), staging by path the eight code and test files and the four lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-15 bullet keeps "CI pending" until then.

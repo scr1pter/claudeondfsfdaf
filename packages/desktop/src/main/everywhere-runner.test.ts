@@ -1,13 +1,24 @@
 import { installFetchGuard } from "../../../web/test/lib/everywhere-fetch-guard"
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { branchFor } from "@vectordevai/core/everywhere/publish"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { EgressGuard } from "@vectordevai/core/local-mode/guard"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { COMPUTER_CAPS, TIMING, createJobId, randomId, type EverywhereJob, type Settle } from "@vectordevai/schema/everywhere"
 import { renderResult } from "@vectordevai/schema/everywhere-policy"
+import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { createLedger, type RunnerLedger } from "./everywhere-ledger"
-import { createEverywhereJobsClient, createEverywhereRunner, type RunnerDeps, type RunnerSettings } from "./everywhere-runner"
+import { createEverywhereJobsClient, createEverywhereRunner, localAllows, type RunnerDeps, type RunnerSettings } from "./everywhere-runner"
 import type { RunnerEngine } from "./everywhere-engine"
 import { unattendedRules } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
+
+// Vector Local on with nothing allowed (its default), and on with allow entries for the named registry sources.
+const LOCAL_ON = LocalPolicy.resolve({ global: { enabled: true } })
+const JOB_SOURCES = ["everywhere", "git-remote", "github"]
+const entries = (sources: readonly string[]) => sources.map((source) => ({ source, reason: "Fixture", added_at: 1, added_by: "app" as const }))
+const allowing = (sources: readonly string[], web?: LocalMode.Web) =>
+  LocalPolicy.resolve({ global: { enabled: true, ...(web ? { web } : {}), allow: entries(sources) } })
 
 function deferred() {
   let resolve!: () => void
@@ -26,7 +37,7 @@ function fixture() {
     limits: { maxUsd: 50, minutes: 120, deadline: time + 120 * 60_000 }, reply: { format: "slack", maxChars: 1500 },
     lease: { id: randomId(), expiresAt: time + 5 * 60_000 },
   }
-  let settings: RunnerSettings = { enabled: true, localMode: false, modelAllowed: true, maxUsd: 1, minutes: 5, atOnce: 1, perDay: 20, push: true,
+  let settings: RunnerSettings = { enabled: true, modelAllowed: true, maxUsd: 1, minutes: 5, atOnce: 1, perDay: 20, push: true,
     projects: [{ directory: "/fixture/project", repository: "acme/app", base: "main" }] }
   const ledger = createLedger({ read: async () => stored, write: async (state) => { stored = state }, now: () => time })
   const prompted = deferred()
@@ -60,6 +71,7 @@ function fixture() {
     push: async (_, __, branch) => { calls.push({ kind: "push", value: branch }); return true },
   }
   let tick: (() => Promise<void>) | undefined
+  let local = LocalPolicy.OFF
   const deps: RunnerDeps = {
     settings: async () => settings, verify: async () => ({ jid: job.jid }), ledger,
     jobs: {
@@ -72,15 +84,19 @@ function fixture() {
     git: () => git, engine: () => engine, privateRepository: async () => true,
     openPr: async () => { calls.push({ kind: "open-pr" }); return "https://github.com/acme/app/pull/4" }, now: () => time,
     every: (_, work) => { tick = work; return () => { tick = undefined } },
+    localPolicy: () => local,
   }
   return { job, ledger, calls, results, deps, engine, git, prompted,
     settings: (value: Partial<RunnerSettings>) => { settings = { ...settings, ...value } },
+    local: (value: LocalMode.Policy) => { local = value },
     hold: () => { held = true }, ask: () => { ask = true }, askQuestion: () => { question = true },
     tick: async (ms: number) => { time += ms; await tick?.() },
   }
 }
 
 installFetchGuard()
+// The jobs client test below sets this process's Vector Local policy, through the module's own API.
+afterEach(() => { Egress.configure(LocalPolicy.OFF) })
 
 test("an editing job uses the lower computer cap and a runner-owned skipped-CI publication", async () => {
   const f = fixture()
@@ -206,14 +222,115 @@ test("unattended rules deny shell, terminals, connect and unknown tools even wit
   expect(unattendedRules([{ permission: "*", pattern: "*", action: "deny" }]).findLast((rule) => rule.permission === "read")?.action).toBe("deny")
 })
 
-test("local mode and disallowed training models decline without claiming or starting the engine", async () => {
-  for (const value of [{ localMode: true }, { modelAllowed: false }]) {
+test("Vector Local and disallowed training models decline with their reason before any claim or engine start", async () => {
+  for (const reason of ["local-mode", "model-not-allowed"] as const) {
     const f = fixture()
-    f.settings(value)
+    if (reason === "local-mode") f.local(LOCAL_ON)
+    if (reason === "model-not-allowed") f.settings({ modelAllowed: false })
     expect(await createEverywhereRunner(f.deps).offer("fixture-offer")).toBe(false)
-    expect(f.calls.some((call) => call.kind === "claim")).toBe(false)
-    expect(f.calls.some((call) => call.kind === "create")).toBe(false)
+    expect(f.calls.filter((call) => call.kind === "decline").map((call) => call.value)).toEqual([{ reason, lease: undefined }])
+    expect(f.calls.some((call) => ["claim", "create"].includes(call.kind))).toBe(false)
   }
+})
+
+test("Vector Local declines laptop jobs before any claim, whatever it allows, until the GitHub calls are labelled", async () => {
+  const refusing = [
+    LOCAL_ON,
+    LocalPolicy.PENDING,
+    allowing(["everywhere"]),
+    allowing(["everywhere", "git-remote"]),
+    allowing(["everywhere", "github"]),
+    allowing(JOB_SOURCES, "none"),
+    // Web access "your network" keeps git off the internet.
+    allowing(JOB_SOURCES, "network"),
+    // A company lock that leaves `allow` to nobody drops the user's entries.
+    LocalPolicy.resolve({ managed: { enabled: true, lock: true }, global: { allow: entries(JOB_SOURCES) } }),
+    // All three allowed, by the user and by the company: desktop github-api.ts is unlabelled, so the github need
+    // refuses whenever Vector Local is on until EV-21 labels it, and the job is never claimed only to be held.
+    allowing(JOB_SOURCES),
+    LocalPolicy.resolve({ managed: { enabled: true, allow: entries(JOB_SOURCES) } }),
+  ]
+  for (const [index, policy] of refusing.entries()) {
+    const f = fixture()
+    f.local(policy)
+    expect({ index, allows: localAllows(policy) }).toEqual({ index, allows: false })
+    expect({ index, offered: await createEverywhereRunner(f.deps).offer("fixture-offer") }).toEqual({ index, offered: false })
+    expect(f.calls.filter((call) => call.kind === "decline").map((call) => call.value)).toEqual([{ reason: "local-mode", lease: undefined }])
+    expect(f.calls.some((call) => ["claim", "create", "prompt", "push"].includes(call.kind))).toBe(false)
+  }
+  // With Vector Local off the same runner claims, runs and publishes.
+  expect(localAllows(LocalPolicy.OFF)).toBe(true)
+  const f = fixture()
+  expect(await createEverywhereRunner(f.deps).offer("fixture-offer")).toBe(true)
+  expect(f.results[0]?.outcome).toBe("changes")
+  expect(f.calls.filter((call) => call.kind === "push")).toHaveLength(1)
+})
+
+test("Vector Local turned on after the commit keeps the branch local, with no pushing report or publication receipt", async () => {
+  const f = fixture()
+  const commit = f.git.commit
+  f.git.commit = async (snapshot, directory, message) => {
+    const head = await commit(snapshot, directory, message)
+    f.local(LOCAL_ON)
+    return head
+  }
+  await createEverywhereRunner(f.deps).offer("fixture-offer")
+  expect(f.results).toEqual([expect.objectContaining({ outcome: "held", branch: branchFor(f.job.jid), checks: "skipped" })])
+  expect(f.calls.filter((call) => call.kind === "commit")).toHaveLength(1)
+  expect(f.calls.some((call) => ["push", "open-pr"].includes(call.kind))).toBe(false)
+  expect(f.calls.filter((call) => call.kind === "report").map((call) => call.value)).toEqual([{ seq: 0, milestone: "started" }])
+  expect((await f.ledger.inspect()).pending).toEqual([])
+})
+
+test("the jobs client labels its requests everywhere, so Vector Local refuses them before anything is sent", async () => {
+  const sent: { url: string; method?: string; authorization: string | null; device: string | null; body: unknown }[] = []
+  const client = createEverywhereJobsClient({
+    device: "fixture-device",
+    token: async () => "fixture-desktop-token",
+    fetcher: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        sent.push({
+          url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+          method: init?.method,
+          authorization: headers.get("authorization"),
+          device: headers.get("x-vector-device"),
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        })
+        return Response.json({ recorded: true })
+      },
+      { preconnect: () => undefined },
+    ),
+  })
+  const jid = createJobId(Date.now())
+  Egress.configure(LOCAL_ON)
+  await expect(client.decline(jid, "local-mode")).rejects.toBeInstanceOf(EgressGuard.EgressBlocked)
+  expect(sent).toEqual([])
+  expect(Egress.events().at(-1)).toMatchObject({
+    source: "everywhere",
+    purpose: "account",
+    origin: "https://vectordev.ai",
+    method: "POST",
+    decision: "block",
+    rule: "vector-service",
+  })
+  // A runner on the real client and this process's own policy (no localPolicy) sends nothing for an offer either: its
+  // local-mode decline is refused the same way, so the offer rejects before any claim.
+  const f = fixture()
+  const runner = createEverywhereRunner({ ...f.deps, localPolicy: undefined, jobs: { ...f.deps.jobs, claim: client.claim, decline: client.decline } })
+  await expect(runner.offer("fixture-offer")).rejects.toBeInstanceOf(EgressGuard.EgressBlocked)
+  expect(sent).toEqual([])
+  expect(f.calls.some((call) => ["claim", "create"].includes(call.kind))).toBe(false)
+  // With Vector Local off the same decline reaches the fetcher.
+  Egress.configure(LocalPolicy.OFF)
+  await client.decline(jid, "local-mode")
+  expect(sent).toEqual([{
+    url: "https://vectordev.ai/api/everywhere/jobs/decline",
+    method: "POST",
+    authorization: "Bearer fixture-desktop-token",
+    device: "fixture-device",
+    body: { jid, device: "fixture-device", reason: "local-mode" },
+  }])
 })
 
 test("an unmapped repository declines under its exact lease", async () => {
@@ -486,16 +603,19 @@ test("a successful heartbeat acknowledgement keeps a live job running past the o
   expect((await f.ledger.inspect()).jobs).toHaveLength(0)
 })
 
-test("turning the toggle off, Stop and the job deadline abort without pushing", async () => {
-  for (const cause of ["toggle", "stop", "deadline"] as const) {
+test("turning the toggle off, Vector Local on, Stop and the job deadline abort without pushing", async () => {
+  for (const cause of ["toggle", "local", "stop", "deadline"] as const) {
     const f = fixture()
     f.hold()
     const runner = createEverywhereRunner(f.deps)
     const running = runner.offer("fixture-offer")
     await f.prompted.promise
     if (cause === "toggle") { f.settings({ enabled: false }); await f.tick(1_000) }
+    if (cause === "local") { f.local(LOCAL_ON); await f.tick(1_000) }
     if (cause === "stop") runner.stop()
     if (cause === "deadline") await f.tick(5 * 60_000)
+    // A timer-driven abort has happened by the time its tick returns, so a missed one fails here, not by the timeout.
+    if (cause !== "stop") expect({ cause, aborted: f.calls.some((call) => call.kind === "abort") }).toEqual({ cause, aborted: true })
     await running
     expect(f.calls.some((call) => call.kind === "abort")).toBe(true)
     expect(f.calls.some((call) => call.kind === "push")).toBe(false)

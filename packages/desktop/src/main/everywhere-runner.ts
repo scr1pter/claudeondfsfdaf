@@ -6,10 +6,13 @@ import type { RunnerGit } from "./everywhere-git"
 import type { JobLedger } from "./everywhere-ledger"
 import { checkedSummary, mayPushDiff } from "./everywhere-scan"
 import { frameTask, type FrameOptions } from "@vectordevai/core/everywhere/frame"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { LocalSources } from "@vectordevai/core/local-mode/sources"
+import type { LocalMode } from "@vectordevai/schema/local-mode"
 
 export type RunnerSettings = {
   readonly enabled: boolean
-  readonly localMode: boolean
   readonly modelAllowed: boolean
   readonly maxUsd: number
   readonly minutes: number
@@ -32,11 +35,14 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
   const origin = new URL(input.url ?? "https://vectordev.ai")
   if (!(origin.origin === "https://vectordev.ai" || (origin.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname))) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Invalid Everywhere service")
   const call = async (route: string, body: unknown) => {
-    const response = await (input.fetcher ?? fetch)(new URL(`/api/everywhere/jobs/${route}`, origin), {
+    // Each request is the `everywhere` source: Vector Local decides and logs it first, and one it blocks rejects with
+    // EgressGuard.EgressBlocked before anything is sent. With Vector Local off it goes to the fetcher unchanged (under
+    // Bun, with a company's certificate authorities added: LocalCA).
+    const response = await Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device, "content-type": "application/json" },
       body: JSON.stringify(body),
-    })
+    }, input.fetcher)
     if (!response.ok) throw new Error(response.status === 404 || response.status === 409 ? "Everywhere job stopped" : "Everywhere service unavailable")
     return await response.json() as Record<string, unknown>
   }
@@ -84,6 +90,8 @@ export type RunnerDeps = {
   readonly openPr: (input: { job: EverywhereJob; branch: string; base: string; summary: string; held: number }) => Promise<string | undefined>
   readonly now?: () => number
   readonly every?: (ms: number, work: () => Promise<void>) => () => void
+  /** Vector Local's policy in effect. Default: this process's (Egress.policy). */
+  readonly localPolicy?: () => LocalMode.Policy
   /** Local diagnostics with fixed text only: no repository output, paths or job content. */
   readonly log?: (message: string) => void
 }
@@ -101,6 +109,34 @@ function settingsValid(settings: RunnerSettings) {
     Number.isInteger(settings.perDay) && settings.perDay >= 1 && settings.perDay <= COMPUTER_CAPS.perDay.max
 }
 
+// What a laptop job reaches, by registry source (E15): the jobs service; git's fetch and push on GitHub, which run in a
+// child process the backstop guard never sees, so they are decided here and again before git starts
+// (everywhere-git.ts); and GitHub's API, for the visibility check, the GitHub thread and the draft pull request.
+const LOCAL_NEEDS = [
+  { source: "everywhere", url: "https://vectordev.ai/api/everywhere/jobs" },
+  { source: "git-remote", url: "https://github.com/" },
+  { source: "github", url: "https://api.github.com/" },
+] as const
+
+/**
+ * Whether Vector Local lets this computer take and publish a laptop job (E15): every source the job needs is allowed.
+ * With Vector Local off every verdict allows. A source the registry lacks, and a pending policy, refuse. Pure, so the
+ * runner's one-second check logs nothing; the requests themselves are decided and logged where they are made.
+ */
+export function localAllows(policy: LocalMode.Policy) {
+  return LOCAL_NEEDS.every((need) => {
+    // 2026-11-16 (EV-15): desktop github-api.ts still sends unlabelled, so under Vector Local the backstop refuses every
+    // GitHub API call whatever is allowed, and a claimed job could only end held. Until EV-21 labels those calls
+    // `github`, that need refuses whenever Vector Local is on, and laptop jobs stay declined under it.
+    if (need.source === "github" && policy.enabled) return false
+    const source = LocalSources.get(need.source)
+    return (
+      source !== undefined &&
+      LocalPolicy.decide(policy, { purpose: source.purpose, url: need.url, source: source.id }).decision === "allow"
+    )
+  })
+}
+
 const every = (ms: number, work: () => Promise<void>) => {
   let running = false
   const timer = setInterval(() => {
@@ -114,6 +150,7 @@ const every = (ms: number, work: () => Promise<void>) => {
 export function createEverywhereRunner(deps: RunnerDeps) {
   const now = deps.now ?? Date.now
   const active = new Map<string, AbortController>()
+  const localAllowed = () => localAllows((deps.localPolicy ?? Egress.policy)())
 
   async function deliver(result: Settle, journaled = false) {
     // JobsClient has a ten-second request bound. An acknowledgement loss must replay this
@@ -207,7 +244,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       }
       stopTimer = (deps.every ?? every)(1_000, async () => {
         const current = await deps.settings().catch(() => undefined)
-        if (!current?.enabled || current.localMode || !current.modelAllowed) return abort("cancelled")
+        if (!current?.enabled || !localAllowed() || !current.modelAllowed) return abort("cancelled")
         if (now() >= deadline) return abort("over-budget")
         if (now() - acknowledgedAt >= TIMING.leaseMs) return abort("interrupted")
         if (now() - acknowledgedAt >= 60_000) await report("heartbeat", true)
@@ -283,7 +320,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         const headSha = await git.commit(snapshot, placed.directory, commitMessage({ jid, task, issueKey: job.issue?.key }))
         const current = await deps.settings()
         const mapped = current.projects.some((item) => item.directory === project.directory && item.repository.toLowerCase() === project.repository.toLowerCase())
-        if (!headSha || !settings.push || !current.enabled || !current.push || !current.modelAllowed || !mapped || current.localMode || job.repository.shared || now() >= deadline || controller.signal.aborted || !await report("pushing", true) || !await deps.privateRepository(job).catch(() => false)) outcome = "held"
+        if (!headSha || !settings.push || !current.enabled || !current.push || !current.modelAllowed || !mapped || !localAllowed() || job.repository.shared || now() >= deadline || controller.signal.aborted || !await report("pushing", true) || !await deps.privateRepository(job).catch(() => false)) outcome = "held"
         else {
           // Persist before crossing the remote side-effect boundary. A process crash or
           // ambiguous transport failure can then never recover as "nothing published".
@@ -342,7 +379,9 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       const verified = await deps.verify(offer)
       if (!verified || active.has(verified.jid)) return false
       const settings = await deps.settings()
-      const reason: DeclineCode | undefined = !settings.enabled ? "off" : settings.localMode ? "local-mode" : !settings.modelAllowed ? "model-not-allowed" : !settingsValid(settings) ? "busy" : undefined
+      // While Vector Local blocks the jobs service itself (its default), the jobs client refuses this decline before
+      // sending it and the offer rejects: the server hears no answer from this computer.
+      const reason: DeclineCode | undefined = !settings.enabled ? "off" : !localAllowed() ? "local-mode" : !settings.modelAllowed ? "model-not-allowed" : !settingsValid(settings) ? "busy" : undefined
       if (reason) { await deps.jobs.decline(verified.jid, reason); return false }
       if (!await deps.ledger.reserve(verified.jid, settings)) { await deps.jobs.decline(verified.jid, "busy"); return false }
       const controller = new AbortController()
