@@ -632,6 +632,59 @@ size_t run_input_guardian_tests() {
     const auto waiting=std::chrono::steady_clock::now(); releaser.wait(current,10'000); waker.join();
     check(std::chrono::steady_clock::now()-waiting<std::chrono::seconds(5) && releaser.generation()!=current,"guardian.notify-wakes-a-waiter-before-its-timeout");
   });
+  test([] {
+    // The child's release thread stands in for the hook thread's old drain: it is not the caller's
+    // thread, it takes the ledger and wake locks only around its calls, and it never needs a pump.
+    InputGuardianLedger ledger(own_tag); std::atomic<bool> stopping{false}; std::thread worker,hook;
+    const auto caller=std::this_thread::get_id(); std::promise<std::thread::id> released; auto releasing=released.get_future(); std::atomic<int> releases{0};
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease& release) {
+      if (releases.fetch_add(1)==0) {
+        std::promise<bool> done; auto recorded=done.get_future();
+        hook=std::thread([&,release,promise=std::move(done)]() mutable { promise.set_value(ledger.observe(event(release,false))); });
+        const auto unlocked=recorded.wait_for(std::chrono::seconds(5))==std::future_status::ready && recorded.get();
+        released.set_value(unlocked ? std::this_thread::get_id() : std::thread::id{});
+      }
+      return true;
+    });
+    check(!releaser.started(),"guardian.release-thread-is-not-running-before-start");
+    releaser.start(stopping,[&](std::function<void()> body) { worker=std::thread(std::move(body)); });
+    check(releaser.started(),"guardian.release-thread-is-reported-once-spawned");
+    bool rejected=false; try { releaser.start(stopping,[](std::function<void()>) {}); } catch (const std::logic_error&) { rejected=true; }
+    check(rejected,"guardian.release-thread-starts-once");
+    const auto ticket=reserve(ledger,mouse()); check(ledger.observe(event(ticket.release,true,GetTickCount64())),"guardian.release-thread-fixture-down");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    check(releases.load()==0,"guardian.release-thread-leaves-an-unretired-down-held");
+    ledger.retire(ticket); const auto retired=std::chrono::steady_clock::now(); releaser.notify();
+    check(releasing.wait_for(std::chrono::seconds(5))==std::future_status::ready,"guardian.retired-down-is-released-within-a-bounded-time");
+    const auto owner=releasing.get();
+    check(owner!=std::thread::id{} && owner!=caller && owner==worker.get_id(),"guardian.release-runs-on-the-hookless-release-thread-with-no-lock-held");
+    check(std::chrono::steady_clock::now()-retired<std::chrono::seconds(5) && !ledger.pending() && releases.load()==1,"guardian.release-thread-sends-one-up-per-ticket");
+    releaser.stop(); worker.join(); if (hook.joinable()) hook.join();
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); std::atomic<bool> stopping{false}; std::thread worker; std::atomic<int> releases{0};
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease&) { releases.fetch_add(1); return true; });
+    releaser.start(stopping,[&](std::function<void()> body) { worker=std::thread(std::move(body)); });
+    const auto ticket=reserve(ledger,scan()); check(ledger.observe(event(ticket.release,true,GetTickCount64())),"guardian.stopping-fixture-down");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    check(releases.load()==0 && ledger.pending(),"guardian.release-thread-waits-for-retirement-before-stopping");
+    stopping.store(true); releaser.notify();
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while (releases.load()==0 && std::chrono::steady_clock::now()<deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(releases.load()==1,"guardian.stopping-releases-every-observed-down-once");
+    releaser.stop(); worker.join();
+  });
+  test([] {
+    // A failed spawn leaves started() false with nothing released, so the child fails before ready
+    // and its exception path releases inline.
+    InputGuardianLedger ledger(own_tag); std::atomic<bool> stopping{false}; std::atomic<int> releases{0};
+    InputGuardianReleaser releaser(ledger,[&](const InputRelease&) { releases.fetch_add(1); return true; });
+    const auto ticket=reserve(ledger,mouse()); check(ledger.observe(event(ticket.release,true)),"guardian.spawn-failure-fixture-down"); ledger.retire(ticket);
+    bool failed=false; try { releaser.start(stopping,[](std::function<void()>) { throw std::runtime_error("spawn"); }); } catch (const std::runtime_error&) { failed=true; }
+    check(failed && !releaser.started() && releases.load()==0,"guardian.release-thread-creation-failure-fails-before-any-release");
+    (void)releaser.drain(5);
+    check(releases.load()==1,"guardian.never-started-release-thread-leaves-inline-release-available");
+  });
   return groups;
 }
 }
