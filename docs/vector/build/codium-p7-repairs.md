@@ -206,6 +206,11 @@ searched for vault, backup and restore lines:
       puts the skills in use before those waiting, so the 20 a restore keeps are approved ones; the same test asserts
       it.
     - Evidence: `codium-deviations.md`, "Codium finish: B10 acceptance (15 Nov 2026)". CI pending.
+    - CI, 15 Nov 2026 (recorded by Codium finish DZ): B10's runs at `8a43f2b2`. Vector Codium run 43715519898 is
+      green under the lane rule; its Codium browser specs job 132816094736 ran the four `codium-vault-sections.spec.ts`
+      cases ("9 passed"). typecheck.yml run 43715522956 passed. In vector-hosted-ci.yml run 43715921854, Hosted tests
+      job 132817317859 ends "Hosted: 147/147 test files passed". See `codium-deviations.md` "Lane status (15 Nov 2026,
+      codium-finish)".
 - **R45-11. The GitHub backend.** Confirmed. The privacy check is unauthenticated with `redirect: "manual"`, and only a
   404 or `private: true` passes (core `github.ts:60-87`); it runs before every push (`:182`). git runs with
   `untrustedChildEnvironment(process.env)`, which drops `VECTOR_*_TOKEN`, `_KEY`, `_SECRET` and `_PASSWORD`
@@ -625,6 +630,16 @@ vector-hosted-ci.yml's Hosted tests job, which runs the desktop `vault-*` files 
 change is uncommitted, and the run and job ids go in a dated line here in the lane commit that follows the runs. Never
 exercised: the Backup screen in a real browser or the running app (B10's package), Electron's own invoke error text in
 a packaged app (read from the repository's handling), safeStorage, and a real startup race.
+
+CI, 15 Nov 2026 (recorded by Codium finish DZ): R45b's runs at `4bd146e7`.
+
+- Vector Codium run 43705851187 had 18 jobs: 15 succeeded, 2 were skipped by `services_only`, and Codium tests job
+  132786637759 failed only at the exerciser step. Its visible tail shows "Codium: 136/136 test files passed" and the
+  four baseline review-memory MISS lines with `fail=0`, so the run is green under the lane rule.
+- typecheck.yml run 43705853689 and vector-hosted-ci.yml run 43706515849: success (run conclusions).
+
+The receipts are in `codium-deviations.md` "Lane status (15 Nov 2026, codium-finish)" and in the B10 section's receipt
+block. The Backup screen's browser run is B10's, recorded there.
 
 `packages/app/src/context/settings.tsx`, `settings-memory.css` and `general.tsx`: unchanged.
 
@@ -1290,6 +1305,14 @@ step left the change uncommitted. After the package commit is pushed and the thr
 base `origin/release-finish`, typecheck.yml, then vector-hosted-ci.yml once the Vector Codium run has finished) are
 green, a `docs(codium)` receipt commit adds dated lines with the run and job ids here and in the a46 notes. A failure
 gets a root-caused fix commit, not a re-run, except for the RULES-v2 flakes.
+
+CI, 15 Nov 2026 (recorded by Codium finish DZ): R46b's runs at `dfef44e3`. Vector Codium run 43726343168 is green
+under the lane rule. `failed_only` lists one failed job of 18, Codium tests job 132848987130. Its visible tail shows
+"Codium: 148/148 test files passed" and the four baseline MISS lines with `fail=0`, and its step list
+(`get_workflow_job`) shows that "Run the Codium test files" and "Check generated client" succeeded and only "Run
+HttpApi exerciser gates" failed. typecheck.yml run 43726319195 and vector-hosted-ci.yml run 43726762155 concluded
+success (run conclusions; the Ops Worker and Hosted tests job logs were not read). See `codium-deviations.md` "Lane
+status (15 Nov 2026, codium-finish)".
 
 Edits to `api/_lib/model-plan-*.ts`: none.
 

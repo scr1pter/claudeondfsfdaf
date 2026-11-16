@@ -144,3 +144,7 @@ These are in `owner-actions/hosted-ops.md`:
   `/experimental/review-memory` MISS lines; Ops Worker job 132831553772), typecheck.yml run 43720604063 and
   vector-hosted-ci.yml run 43721009223 (Hosted tests job 132832781366), all at `d866364f`. R46b's own CI is pending
   until its commit is pushed. P7 now covers A44–A50.
+  15 Nov 2026 (Codium finish DZ): R46b's CI receipts. Vector Codium run 43726343168 is green under the lane rule
+  (Codium tests job 132848987130 failed only at the exerciser, with the four baseline MISS lines and `fail=0`).
+  typecheck.yml run 43726319195 and vector-hosted-ci.yml run 43726762155 concluded success, all at `dfef44e3`. See
+  `codium-deviations.md` "Lane status (15 Nov 2026, codium-finish)".

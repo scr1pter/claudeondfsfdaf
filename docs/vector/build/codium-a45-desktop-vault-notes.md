@@ -102,6 +102,8 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
     `packages/app/e2e/regression/codium-vault-sections.spec.ts`. It renders the real page on a fixture with a stand-in
     bridge (`e2e/fixtures/vault-sections.jsx`) whose answers are the native test's. CI ids follow in
     `codium-track-b-checkpoint.md`.
+    15 Nov 2026 (Codium finish DZ): they do. The checkpoint's dated B10 bullet cites Vector Codium run 43715519898,
+    whose Codium browser specs job 132816094736 ran the spec's four cases ("9 passed").
   - The native roundtrip (`vault-sections.test.ts`) ran locally only. It covers `startVault`, the sealed key and the
     desktop's git against real engine processes and a local bare repository.
   - Still not exercised: the running Electron app, real safeStorage, real GitHub, and GitHub's API.
@@ -153,3 +155,9 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
   locally: 4 pass. The "Backups hold memory only" sentence above is out of date, as R45a noted; the owner's A60 read
   now also covers the allow dialog's new "Sends" text. Settings → Memory → Backup has still never run in a browser or
   the running app (B10's package). Local receipts are in the P7 record; CI is pending.
+- **Status on 15 Nov 2026 (Codium finish DZ).** CI for R45b (`4bd146e7`: Vector Codium run 43705851187,
+  typecheck.yml run 43705853689, vector-hosted-ci.yml run 43706515849) and B10 (`8a43f2b2`: runs 43715519898,
+  43715522956 and 43715921854) is green under the lane rule. Settings → Memory → Backup has now run in a browser,
+  on a fixture with a stand-in bridge (`codium-vault-sections.spec.ts`, Codium browser specs jobs 132816094736 and
+  132886071679). It has still not run in the packaged app. See `codium-deviations.md` "Lane status (15 Nov 2026,
+  codium-finish)".

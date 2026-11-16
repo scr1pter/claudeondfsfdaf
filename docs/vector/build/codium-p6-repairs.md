@@ -295,6 +295,10 @@ lines, `DELETE /experimental/review-memory/previews/{previewId}`, `GET /experime
 lane's baseline rule the run counts as green. The visible tail covers only the exerciser, so no file-level result for
 the playbook tests is claimed from it; the step's success is the receipt.
 
+CI, 15 Nov 2026 (recorded by Codium finish DZ): R36's vector-hosted-ci.yml run 43686386024, at `265f4ea7`,
+concluded success. This is the run conclusion only; its Hosted tests log was not read. See `codium-deviations.md` "Lane
+status (15 Nov 2026, codium-finish)".
+
 Edits to `api/_lib/model-plan-*.ts`: none.
 
 ## A41 phone usage alert (F28, P6 addendum)

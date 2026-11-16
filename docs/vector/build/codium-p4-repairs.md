@@ -114,6 +114,12 @@ hand-off for this tree's reader, since self-evolving and codium are already comb
 still drop the whole array on a newer kind, which is why the delegated scope stays out of `budgetScopes` (I29). CI ids
 follow in a dated line.
 
+CI, 15 Nov 2026 (recorded by Codium finish DZ): F6's runs at `5f19b0c9`. Vector Codium run 43674652525 is green
+under the lane rule: its Codium tests job 132692043010 failed only at the exerciser, with the four baseline MISS
+lines and `fail=0`, as read in the F44 section's For the lead item 2. typecheck.yml run 43674654638 and
+vector-hosted-ci.yml run 43675036401 concluded success. See `codium-deviations.md` "Lane status (15 Nov 2026,
+codium-finish)".
+
 ## A22 stamping and accounting
 
 **F7. The `SessionV1.Event.Updated` strip list might write back stale Codium counts.** Not confirmed. The handler
@@ -864,6 +870,15 @@ The F43 case's `title` and `unrelated.label` now expect redaction markers. Its t
 
 Readings, mutations, the review fixes and the local and CI-only runs are in `codium-deviations.md`, "Codium finish:
 F44 sanitized lifecycle text (15 Nov 2026)". CI ids follow in a dated line.
+
+CI, 15 Nov 2026 (recorded by Codium finish DZ): F44's runs at `2924d94b`.
+
+- Vector Codium run 43679383178 had 18 jobs: 15 succeeded, 2 were skipped by `services_only`, and Codium tests job
+  132706470083 failed only at the exerciser step. Its visible tail shows "Codium: 122/122 test files passed" and the
+  four baseline MISS lines with `fail=0`, so the run is green under the lane rule.
+- typecheck.yml run 43679385886 and vector-hosted-ci.yml run 43679749016: success.
+
+No per-file count is claimed. See `codium-deviations.md` "Lane status (15 Nov 2026, codium-finish)".
 
 **F45. Token provenance is trusted only from the engine.** Not confirmed.
 

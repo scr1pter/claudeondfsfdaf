@@ -3171,6 +3171,25 @@ under two minutes), but the run is not green under the lane rule, because of the
   its fresh Node ESM entries (the ledger-first order failed with that ReferenceError before the change). The same
   two-file change is needed on `release-finish`; the lead decides whether it goes there first.
 
+**31ddb43b's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
+
+These are for `31ddb43b`, the fix(api) commit named in the dated line above, read from the runs' jobs and logs.
+
+- Vector Codium run 43668405381 had 18 jobs. 15 succeeded, and 2 were skipped by `services_only` (Hosted services'
+  typecheck matrix and Hosted tests).
+  - Codium tests job 132672820820 failed only at "Run HttpApi exerciser gates". Its visible tail shows "Codium:
+    120/120 test files passed", no longer 119/120. It then shows exactly the four review-memory MISS lines and `summary
+    pass=359 fail=0 skip=0 missing=4 extra=0`.
+  - The job's step list shows that "Run the Codium test files" and "Check generated client" succeeded, so the run is
+    green under the lane rule.
+  - Codium browser specs job 132672821092 passed.
+- typecheck.yml run 43668408121: success.
+- vector-hosted-ci.yml run 43669004895: success. This is the run conclusion only; its Hosted tests log was not read.
+- TB's own vector-hosted-ci.yml run 43665560776, at `7c479924`: success (run conclusion).
+
+This closes For the lead item 1 on `codium-finish`. The same two-file change is still needed on `release-finish`, and
+the lead decides that.
+
 ## Codium finish: F6 cost kind on read (15 Nov 2026)
 
 - **Why.** P4 finding F6 (`codium-p4-repairs.md`, the F6 paragraph; not Everywhere's F6 in `v2-master-prompt.md`), the
@@ -3575,6 +3594,25 @@ under two minutes), but the run is not green under the lane rule, because of the
      could assert that a plain `vector export` output contains a child's title and mailbox text, and a `--sanitize`
      output does not. It starts `vector serve`, so it runs only in CI. It is left for the lead or a later package.
 - Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change.
+
+**F44's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
+
+These are for `2924d94b`, read from the runs' jobs and logs.
+
+- Vector Codium run 43679383178 had 18 jobs. 15 succeeded, and 2 were skipped by `services_only`.
+  - Codium tests job 132706470083 failed only at the exerciser step. Its visible tail shows "Codium: 122/122 test
+    files passed", then exactly the four review-memory MISS lines and `summary pass=359 fail=0 skip=0 missing=4
+    extra=0`.
+  - Its step list shows that "Run the Codium test files" and "Check generated client" succeeded, so the run is green
+    under the lane rule.
+  - Codium browser specs job 132706469934 passed.
+- typecheck.yml run 43679385886: success.
+- vector-hosted-ci.yml run 43679749016: success (run conclusion).
+- For the lead item 2 above, F6's receipt, is completed here for F6's other two runs at `5f19b0c9`. typecheck.yml run
+  43674654638 and vector-hosted-ci.yml run 43675036401 both concluded success. F6's dated CI line is now in
+  `codium-p4-repairs.md`.
+
+No per-file count for F44's test files is claimed.
 
 ## P6 review addendum (15 Nov 2026)
 
@@ -4391,6 +4429,29 @@ blocking.
 No flag, setting, listing, route, schema, price or public page changed, and no SDK or generated output, so
 `MODEL-PLANS.md` and the owner-actions files are unchanged. Edits to `api/_lib/model-plan-*.ts`: none.
 
+**R45b's and B10's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
+
+- R45b, `4bd146e7`:
+  - Vector Codium run 43705851187 had 18 jobs. 15 succeeded and 2 were skipped by `services_only`.
+  - Codium tests job 132786637759 failed only at the exerciser step: "Codium: 136/136 test files passed", then
+    exactly the four review-memory MISS lines and `summary pass=359 fail=0 skip=0 missing=4 extra=0`. "Run the Codium
+    test files" and "Check generated client" succeeded.
+  - Codium browser specs job 132786637589 passed.
+  - typecheck.yml run 43705853689 and vector-hosted-ci.yml run 43706515849: success (run conclusions).
+- B10, `8a43f2b2`:
+  - Vector Codium run 43715519898 had 18 jobs, with the same 15 succeeded, 2 skipped and 1 failed.
+  - Codium tests job 132816093909 failed only at the exerciser step: "Codium: 140/140 test files passed", then
+    exactly the four review-memory MISS lines and `summary pass=359 fail=0 skip=0 missing=4 extra=0`. "Run the Codium
+    test files" and "Check generated client" succeeded.
+  - Codium browser specs job 132816094736 (679 lines, wholly visible) ran `codium-image-routing.spec.ts`,
+    `codium-usage-labels.spec.ts` and `codium-vault-sections.spec.ts`. Its log shows "Running 9 tests using 1
+    worker" and "9 passed (35.6s)". The cases include `codium-vault-sections.spec.ts:28:1`, `:41:1`, `:58:1` and
+    `:66:1`.
+  - typecheck.yml run 43715522956: success.
+  - vector-hosted-ci.yml run 43715921854: Hosted tests job 132817317859 ends "Hosted: 147/147 test files passed".
+- The same four browser cases passed again in B09b's browser job 132886071679. The checkpoint's B10 row and its dated
+  B10 bullets now cite these runs. "Validate all lanes together" stays with the lead's end-of-lane test.yml run.
+
 ## Codium finish: B09 combined Remote authorization (15 Nov 2026)
 
 Track B B09 ("Phone Tasks view of helper and background-job states, "Stop including helpers", waiting and interrupted
@@ -4832,6 +4893,25 @@ No flag, setting, listing, route, `REMOTE_ROUTES` entry, price, copy or page cha
 changed, so `MODEL-PLANS.md` and the owner-actions files are unchanged. The fixture is built only by
 `e2e/vite.config.ts` (into the gitignored `dist-e2e`) for Playwright, not for the app, the phone build or vectordev.ai.
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+**B09b's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
+
+These are for `572de5c4`.
+
+- Vector Codium run 43738423276: `get_job_logs` with `failed_only` lists one failed job of 18, Codium tests job
+  132886071440. Its visible tail shows "Codium: 153/153 test files passed", then exactly the four review-memory MISS
+  lines and `summary pass=359 fail=0 skip=0 missing=4 extra=0`. The job's step list (`get_workflow_job`) shows that
+  "Run the Codium test files" and "Check generated client" succeeded and only "Run HttpApi exerciser gates" failed, so
+  the run is green under the lane rule.
+- Codium browser specs job 132886071679 (688 lines, wholly visible):
+  - its env shows `CODIUM_CI_BROWSER_SPECS: packages/app/e2e/regression/remote-phone.spec.ts`;
+  - "Running 13 tests using 1 worker", then "13 passed (1.1m)";
+  - the cases include `codium-remote-helpers.spec.ts:88:1` and `:176:1`, `remote-phone.spec.ts:44:1` and `:102:1`,
+    and `codium-vault-sections.spec.ts:28:1`, `:41:1`, `:58:1` and `:66:1`.
+- typecheck.yml run 43738426563 and vector-hosted-ci.yml run 43738962650: success (run conclusions).
+
+This closes "Actual paired desktop/phone browser check" (checkpoint, B09). It ran on A42's browser fixture with the
+desktop's real forwarder. No real phone, passkey device or packaged desktop app was used.
 
 ## Codium finish: H1 download-only start (15 Nov 2026)
 
@@ -5915,6 +5995,19 @@ is rebuilt. Records also touched: `codium-a54-hosted-image-notes.md`, `codium-a5
 
 Edits to `api/_lib/model-plan-*.ts`: none.
 
+**H2a's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
+
+These are for `0d6bfc53`.
+
+- Vector Codium run 43767172051: `failed_only` lists one failed job of 18, Codium tests job 132974801751. Its visible
+  tail shows "Codium: 159/159 test files passed", then exactly the four review-memory MISS lines and `summary pass=359
+  fail=0 skip=0 missing=4 extra=0`. The job's step list (`get_workflow_job`) shows that "Run the Codium test files"
+  and "Check generated client" succeeded and only "Run HttpApi exerciser gates" failed, so the run is green under the
+  lane rule.
+- typecheck.yml run 43767175427: success.
+- vector-hosted-ci.yml run 43767672460: success. Its Hosted tests job 132976338618 ends "Hosted: 150/150 test files
+  passed".
+
 ## Codium finish: H2 image notices (15 Nov 2026)
 
 Package H2b closes the gap in `codium-a58-deploy-workflows-notes.md` "Not done": "The CLI's notice files are not
@@ -6131,3 +6224,227 @@ never dispatches it.
   carry an OCI licenses label like the CLI container's.
 
 Edits to `api/_lib/model-plan-*.ts`: none.
+
+**H2b's CI receipts (recorded by Codium finish DZ, 15 Nov 2026)**
+
+These are for `66d0427b`.
+
+- Vector Codium run 43771136293: `failed_only` lists one failed job of 18, Codium tests job 132987079831. Its visible
+  tail shows "Codium: 161/161 test files passed", then exactly the four review-memory MISS lines and `summary pass=359
+  fail=0 skip=0 missing=4 extra=0`. The job's step list (`get_workflow_job`) shows that "Run the Codium test files"
+  and "Check generated client" succeeded and only "Run HttpApi exerciser gates" failed, so the run is green under the
+  lane rule.
+- typecheck.yml run 43771140154: success.
+- vector-hosted-ci.yml run 43771677546: success (run conclusion). Its jobs, the Docker job with the stand-in notices
+  among them, were not read one by one.
+
+## Lane status (15 Nov 2026, codium-finish)
+
+Package DZ is the lane's final package, and it changes only docs. It was built on `codium-finish` `66d0427b`, equal to
+origin/codium-finish.
+
+- The branch was cut from `release-finish` 0ee486e3. PR #33 is open and still a draft (head cf2373c4, base main
+  58f85edc), so every lane dispatch used the picker base `origin/release-finish`.
+- On 15 and 16 Nov 2026 this package made read-only GitHub queries (run lists, job lists, job step lists and job
+  logs) and local git reads.
+  Its one write was the B11 test.yml dispatch.
+- Scratch is under `/tmp/vector-v2/codium/dz/`. This review step does not commit; the package's commit step commits,
+  typechecks, pushes and dispatches, and its run ids go in a dated line after the runs.
+
+Dated lines were added to:
+
+- `codium-track-b-checkpoint.md`: the B09, B10 and B11 cells; dated B07, B09, B10 and B11 bullets; and the new "B11
+  post-change measurement" subsection;
+- this file: the receipt blocks above for `31ddb43b`, F44 (with F6's other two runs), R45b and B10, B09b, H2a and
+  H2b;
+- `codium-p7-repairs.md`: R45b, R46b and B10;
+- `codium-a45-desktop-vault-notes.md`: B10, and R45b with B10;
+- `codium-a46-ops-worker-notes.md`: R46b;
+- `codium-p4-repairs.md`: F6 and F44;
+- `codium-p6-repairs.md`: R36's vector-hosted-ci.yml run.
+
+### Package runs
+
+Each package commit was checked against the runs' `head_sha`, not inferred from the order of the run ids. For
+example, typecheck.yml run 43726319195 has a lower id than Vector Codium run 43726343168, and both are at `dfef44e3`.
+
+Every Vector Codium run concluded failure, and every typecheck.yml and vector-hosted-ci.yml run concluded success.
+"Green" means green under the lane rule: every job passed or was skipped by `services_only`, except Codium tests, which
+failed only at "Run HttpApi exerciser gates" with the four baseline MISS lines and `fail=0`.
+
+| Package | Commit | Vector Codium | typecheck.yml | vector-hosted-ci.yml | Under the lane rule | Read in |
+| --- | --- | --- | --- | --- | --- | --- |
+| CI0 | `02c9fc14` | 43659654730; 43661511343 (browser receipts) | 43659657077 | none | red: "Codium: 119/120", the gateway-hooks import cycle | CI0 and TB sections |
+| TB | `7c479924` | 43665227929 | 43665230627 | 43665560776 | red: the same 119/120 | TB section (dated line); hosted run in the 31ddb43b receipts block |
+| TB fix (meter epoch) | `31ddb43b` | 43668405381 | 43668408121 | 43669004895 | green; fixes the cycle | this file, TB section |
+| F6 | `5f19b0c9` | 43674652525 | 43674654638 | 43675036401 | green | F44 section (item 2 and receipts) |
+| F44 | `2924d94b` | 43679383178 | 43679385886 | 43679749016 | green | F44 section |
+| R36 (A36) | `265f4ea7` | 43685974875 | 43685977976 | 43686386024 | green | `codium-p6-repairs.md` |
+| F28 | `ab784e44` | 43689606818 | 43689609193 | 43690118133 | green | `codium-p6-repairs.md` |
+| R45a | `420e729f` | 43700085301 | 43700088239 | 43700704217 | green | checkpoint, `codium-p7-repairs.md` |
+| R45b | `4bd146e7` | 43705851187 | 43705853689 | 43706515849 | green | B10 section |
+| B10 | `8a43f2b2` | 43715519898 | 43715522956 | 43715921854 | green | B10 section |
+| R46a | `d866364f` | 43720600992 | 43720604063 | 43721009223 | green | `codium-p7-repairs.md`, a46 notes |
+| R46b | `dfef44e3` | 43726343168 | 43726319195 | 43726762155 | green | `codium-p7-repairs.md` |
+| B09a | `03266e2e` | 43733017049 | 43733021027 | 43733598222 | green | B09 browser section, checkpoint |
+| B09b | `572de5c4` | 43738423276 | 43738426563 | 43738962650 | green | B09 browser section |
+| H1a | `ae7280f8` | 43746787694 | 43746790825 | 43747724868 | green | H1 download-only section |
+| H1b | `539cddf5` | 43752968478 | 43752971608 | 43753689797 | green | H1 computer section |
+| H1c | `5003fa2b` | 43760889035 | 43760891870 | 43761604770 | green | H1 clients section |
+| H2a | `0d6bfc53` | 43767172051 | 43767175427 | 43767672460 | green | H2 generation floor section |
+| H2b | `66d0427b` | 43771136293 | 43771140154 | 43771677546 | green | H2 image notices section |
+
+**The baseline exerciser lines.** In every green run, the Codium tests tail shows these four lines and then
+`summary pass=359 fail=0 skip=0 missing=4 extra=0`, as read here or in the cited record:
+
+- `MISS DELETE /experimental/review-memory/previews/{previewId}`
+- `MISS GET /experimental/review-memory`
+- `MISS POST /experimental/review-memory/confirm`
+- `MISS POST /experimental/review-memory/prepare`
+
+This package read them in Codium tests jobs 132672820820, 132706470083, 132786637759, 132816093909, 132848987130
+(R46b), 132886071440, 132974801751 and 132987079831. The other rows' jobs are in their records.
+
+- For the runs of `31ddb43b`, F44, R45b and B10, the job lists were read: 15 succeeded, 2 were skipped and 1 failed.
+- For R46b, B09b, H2a and H2b, `get_job_logs` with `failed_only` was read: it lists one failed job of 18. The step
+  list of each of those Codium tests jobs (`get_workflow_job`) shows that "Run the Codium test files" and "Check
+  generated client" succeeded and only "Run HttpApi exerciser gates" failed.
+- The four lines belong to the VectorScope and PR #33 CI lanes (TB For the lead item 5).
+
+**Other runs.**
+
+- B11: test.yml run 43773518841, job 132994512597, at `66d0427b` (checkpoint, "B11 post-change measurement").
+- DZ's own post-push Vector Codium and typecheck.yml runs are not in this record: they run on DZ's commit, after it,
+  and the package's commit step names them in a dated line after the runs. DZ lists no vector-hosted-ci.yml run.
+
+### For the lead
+
+These are pointers only; nothing is fixed here.
+
+- CI0 ("Codium finish: CI0 lane dispatch inputs", For the lead):
+  - switch the dispatch base to empty once main contains #33, before `release-finish` is deleted;
+  - confirm the Windows run of the "dispatch's inputs reach the picker only as step environment" compliance case in the
+    end-of-lane test.yml.
+- TB ("Codium finish: Track B receipts and P4 closings", For the lead):
+  - item 1 is closed on this branch by `31ddb43b`, but the same change is still needed on `release-finish`;
+  - item 2: `prompt.test.ts` on Linux;
+  - item 3: the engine (linux) shard step limits;
+  - item 4: the app `memory-*-model` suites, which no visible log shows;
+  - item 5: the review-memory MISS lines, fixed upstream by 0f6fce89 and 225905e2;
+  - item 6: the shard-matrix merge conflict with `release-finish` dbfca832;
+  - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
+- F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
+  (`packages/engine/src/task/desktop.ts:24-33`), and `packages/core/src/review/local-result.ts:26`'s own closed
+  cost-kind literal.
+- F44 ("Codium finish: F44 sanitized lifecycle text", For the lead):
+  - item 1, F44b's `sanitizeLegacy` pass-throughs (`export.ts:127-131`, `:250` and the parts listed there);
+  - item 3, a CLI-level export check. Item 2 is completed above.
+- P6 review addendum (For the lead):
+  - item 1, an allowlist module out of `packages/core/src/brain/skill.ts`;
+  - item 2, `ROLE` at `packages/core/src/playbooks/check.ts:137` against
+    `packages/engine/src/orchestration/runs.ts:202`.
+- P7 review addendum (For the lead) and `codium-p7-repairs.md`'s "For the lead" blocks:
+  - R45-4(b), `packages/core/src/vault/github.ts:115-118`;
+  - the A46 erasure tombstone check, `api/_lib/ops-incidents.ts:328-357` (a46 notes);
+  - the other blocks name no defect in another lane's file.
+- B10 (For the lead): the privacy-draft note, B10-3 and the "memory files" count wording.
+- B09a and B09b (For the lead): Hands' second, helper-titled phone alert for a helper's ask
+  (`packages/app/src/pages/layout/ask-notifications.ts:59-64`), and the `session-stop.test.ts` excess-field status.
+- H1c's D1 and D2 and H2a's two hosted API fields: accept them, or move them to H1a.
+- New from DZ:
+  - the B11 shift recorded in the checkpoint, which is a decision on whether to re-measure both sources on one day;
+  - this lane's PR description should cite this section, not the earlier "Lane status (8 Nov 2026)".
+
+### What stays open
+
+- B08 and A59 stay with the brain-transport lane (`v2-master-prompt.md` 8.4; checkpoint "A59 and launch gates").
+- The estimate API's `{kind: "playbook"}` band (`api/_lib/model-plan-estimate.ts:275-277`; `codium-p6-repairs.md`
+  R36-14).
+- Server-side judging of Done by Morning reports. It waits for A60 and owner-accepted model captures
+  (`codium-p8-repairs.md` "CI only and not done").
+- The hosted git-token route (`codium-a54-hosted-image-notes.md:121`). It needs A59's repository binding and an S9
+  decision.
+- The Vercel CLI lockfile pin (`codium-p8-repairs.md` "CI only and not done"). It needs network access to update
+  bun.lock.
+- Phone job start, which needs an account-token design (`codium-a56-hosted-clients-notes.md:120` and `:143-144`). The
+  phone already starts download-only sessions.
+- The Cloudflare hosted-provider adapter, a stub that needs Cloudflare's written OK
+  (`codium-a52-hosted-provider-notes.md:123`).
+- Real-microVM checks of H1b's download mode and H2b's notice files. They need an owner image rebuild and
+  `vector-codium-e2e.yml hosted: true` (H1 computer, "Unverified on a real computer"; H2 image notices, "Deferred
+  verification").
+- The H1b server gaps O1, O2, O4 and O6 (H1 computer section). O6, the charged download that cannot run, is a tracked
+  defect.
+- The owner's questions:
+  - H1a's R2 (who pays a download-only block), R3 (the retention charge) and R4 (which plans may download);
+  - H2a's refuse-only reading of below-floor rebuilds and its other owner decisions (`owner-actions/hosted-computer.md`,
+    "The image floor").
+- Track B (checkpoint):
+  - B01's combined final checks;
+  - B02 to B03 and B05, open on the PR #33 CI lanes;
+  - B10-3, as recorded;
+  - "validate all lanes together", with the lead's end-of-lane test.yml run.
+- B11: the measurement and comparison are recorded, with no regression claim either way. Whether that meets B11's
+  acceptance, or needs the same-day re-measurement, is the lead's call. Using the numbers anywhere else is the owner's.
+
+### The owner's
+
+A60 as a whole stays the owner's, and so does every account, key, price, rate, cap and retention day count. So do every
+perk listing (`CODIUM_LISTED_PERKS`, `CODIUM_TRACK_B_LIVE`, the `VECTOR_HOSTED_ALLOW_ACCOUNTS` and
+`VECTOR_OPS_ALLOW_ACCOUNTS` values), all legal and privacy text (`codium-privacy-proposed.patch` is never applied),
+every release, `MODEL_PLANS_ENABLED` and `MODEL_PLANS_MIN_CLIENT`, and any public or comparative claim, the B11
+measurement included. Nothing was enabled, listed, priced or published by this lane.
+
+### Readings (package DZ)
+
+- **R1. The table cells.** The checkpoint says its 12 Nov table "stays as written", which is why TB put its dated
+  text in bullets. DZ's package text tells it to update the B09, B10 and B11 "Remaining acceptance" cells, so it
+  appends one short dated sentence to each. The 12 Nov text is kept word for word, and the detail is in the dated
+  bullets and the subsection. This departs from the "stays as written" sentence for those three cells only.
+- **R2. The measured SHA.** The measured source is the pre-DZ head `66d0427b`, because DZ changes only docs. Measuring
+  after the commit would measure the same app.
+- **R3. The verdict rule** was written to `/tmp/vector-v2/codium/dz/verdict-rule.txt` at 23:12:13Z, before the
+  dispatch at 23:12:18Z, so before any post-change number existed. It is stricter than the plan's rule:
+  - it compares each median with 1.25 times the baseline median, not with the baseline maximum, whose cold first
+    repeat (new session: 340.5 and 506.9 ms) would hide a doubling;
+  - it leaves the child-session case out;
+  - it fails on any retry or "flaky" line, and checks the run attempt.
+- **R4. Runs already recorded** elsewhere are cited by their records and were not re-read. Only the unrecorded runs
+  were read, and Hosted tests tails only where a line cites their counts (B10 and H2a). Elsewhere a vector-hosted-ci.yml
+  run is cited by its conclusion.
+- **R5. The date.** Every line says 15 Nov 2026, the day the dispatch was created (23:12:18Z). Writing may run past
+  midnight UTC; the date is not moved.
+- **Plan review.** All ten points were taken:
+  - the stricter rule (R3);
+  - the child-session caveat;
+  - retries and flaky lines and the run attempt;
+  - `timeline-stability/fixture.ts` and its import graph;
+  - the B07 bullet and the a45 notes' line 103;
+  - R1 stated honestly;
+  - the 15/2/1 rule with `head_sha` checks;
+  - the date (R5);
+  - the parsing described in one sentence;
+  - fewer reads (R4).
+
+  Two were taken in part:
+  - R36's vector-hosted-ci.yml run 43686386024 is cited by its conclusion, because its Hosted tests job id was not
+    listed;
+  - for four runs the 15/2/1 count rests on `failed_only` (one failed of 18), not a full job list.
+
+### Ran locally
+
+- git reads and diffs, including the harness diff, the renderer diff, `rev-list --count` and the import-graph walk;
+- python parsing of the saved logs (scripts under `/tmp/vector-v2/codium/dz/tools/`);
+- the full typecheck, `TURBO_CACHE_DIR=/home/user/wt/cf/.turbo/cache /home/user/.tools/vector-serial bun turbo
+  typecheck --concurrency=2` (27 of 27 tasks, all cached because no code changed);
+- the api tree, `bun typecheck --project ../../tsconfig.json` from `packages/engine` (clean).
+
+No test file was added or changed, so no test ran.
+
+### Only in CI
+
+Every run cited above. The test.yml run 43773518841 is the one B11 `production_benchmark` dispatch, and it used no
+keys or providers.
+
+Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change (no new setting). No code, test, workflow, flag or
+setting changed.

@@ -13,9 +13,9 @@ Source checkpoint: 2026-11-12, branch `build-codium`, based on Codium `4d544e0c4
 | B06 | `becb7c6b4` adds the Tasks Race form and bounded independent worktree lanes, distinct labs and an unused-lab read-only judge. Preview precedes Run, edits invalidate it, and existing isolation review owns any merge. Shared routing quotes Codium per-request share bands before inference. | Browser execution of the added E2E; the typechecked test file alone is not a browser receipt. Per-request bands are not a whole-workflow bill or cap. |
 | B07 | `1bff87a46` adds CLI install, bounded signed-link downloads without forwarded account auth, exact digest checks, personal-only reserved files, project-shadow refusal, and current-account role resolution. Settings now also has an owner-only listing/install surface in `12f3eafa7`, with the real client and API authorization tests passing. | Execute the added Settings browser regression; prove two Playbooks before listing the perk. No Playbook was published by this work. |
 | B08 | `a80513a1c` prepares explicitly selected posting-checked repository context at `brain/bundle.json`; public repositories omit skills/procedures. Verified incoming bundles become review proposals, including historical insight lessons, without seeding live learner stats. | Transport/browser ports are checkpointed in `5da096548`, immutable approval snapshots in `20f8417ae`, separate returned proposal files in `85eb2abed`, and the actual Engine collect/import adapter in `0808ccb6d`. All local named tests/types passed. Redis/Lua remains CI-only; the GitHub lane also owns declared-key, current visibility/source/allowance, and cryptographic Brain-history hardening before activation. The real dispatch UI/live-run reader integrations still belong to the GitHub lane. Helpers alone do not establish an end-to-end upload path. Vector servers never decrypt or inspect the repository payload; the local client and authenticated run check its approved digest/schema/public policy. |
-| B09 | `df3951bae` adds phone helper/shell state projection and exact owner Stop routes; fresh waiting/interrupted lifecycle alerts omit report/prompt/command content and use existing notification/privacy gates. | Actual paired desktop/phone browser check and combined remote authorization regression. |
-| B10 | `3b1ce6d53` adds separate Vault skills/insights sections and `minReader:2` when needed. Learned sections restore as proposals; skill privacy survives import. Old memory-only backups retain reader 1. | Normal clients were regenerated; validate all lanes together and execute native/browser acceptance. |
-| B11 | `3dd501832` adds owner-only conversation binding, GET-only durable local readers, token-rotation/restart reconnect and stable quiet result receipts. `9941eb31b` exposes owner APIs with normally generated SDKs. Focused real-state, partial-write, owner/guest and display-marker tests passed. | The shared renderer now displays only explicitly marked final hosted reports, labels them Cloud computer report and omits the human Revert action. The required pre-change measurement and local owner API regression passed; runtime browser behavior and post-change measurement/comparison remain pending. |
+| B09 | `df3951bae` adds phone helper/shell state projection and exact owner Stop routes; fresh waiting/interrupted lifecycle alerts omit report/prompt/command content and use existing notification/privacy gates. | Actual paired desktop/phone browser check and combined remote authorization regression. 15 Nov 2026 (Codium finish DZ): both done in CI (Vector Codium runs 43733017049 and 43738423276, browser job 132886071679); see the dated B09 bullets below. |
+| B10 | `3b1ce6d53` adds separate Vault skills/insights sections and `minReader:2` when needed. Learned sections restore as proposals; skill privacy survives import. Old memory-only backups retain reader 1. | Normal clients were regenerated; validate all lanes together and execute native/browser acceptance. 15 Nov 2026 (Codium finish DZ): native acceptance ran locally and browser acceptance in CI (browser jobs 132816094736 and 132886071679); validating all lanes together stays with the lead's end-of-lane test.yml run. See the dated B10 bullets below. |
+| B11 | `3dd501832` adds owner-only conversation binding, GET-only durable local readers, token-rotation/restart reconnect and stable quiet result receipts. `9941eb31b` exposes owner APIs with normally generated SDKs. Focused real-state, partial-write, owner/guest and display-marker tests passed. | The shared renderer now displays only explicitly marked final hosted reports, labels them Cloud computer report and omits the human Revert action. The required pre-change measurement and local owner API regression passed; runtime browser behavior and post-change measurement/comparison remain pending. 15 Nov 2026 (Codium finish DZ): runtime browser receipt in Vector Codium run 43661511343 (job 132651657817); post-change measurement in test.yml run 43773518841 (job 132994512597), with no regression claim either way. See "B11 post-change measurement" below. |
 
 **Status, 15 Nov 2026 (Codium finish TB).** The table above is the 12 Nov record and stays as written; the evidence for each line below is in `codium-deviations.md` ("Codium finish: Track B receipts and P4 closings (15 Nov 2026)"). "Combined source" means PR #33's merge ref 0975ed15 (0ee486e3 merged into main 58f85edc; main is an ancestor of 0ee486e3, so that merge has 0ee486e3's tree, a reading from ancestry because 0975ed15 is not in the lane's object store) or `codium-finish` 02c9fc14, which is 0ee486e3 plus CI-only changes (the test picker, the lane workflow, its compliance test and two docs). A suite counts as passed only where a CI log whose first line is visible shows it passing; runs and jobs are cited by id.
 
@@ -47,6 +47,17 @@ Source checkpoint: 2026-11-12, branch `build-codium`, based on Codium `4d544e0c4
   - B10-4: overlapping reads of a new GitHub copy.
   Recorded, not changed: B10-3, a restore takes at most 20 skill proposals per repository (the backup puts skills in use first, so the 20 kept are approved ones). CI pending.
 - B11: runtime renderer done (`hosted-result-note.spec.ts:4`, the same three jobs, first attempt). The post-change measurement and its comparison with run 43153942138 / job 130969401195 remain for the lane's final package.
+- B07, R36's CI receipt (15 Nov 2026, recorded by Codium finish DZ): `codium-p6-repairs.md` has it (the "CI, 15 Nov 2026 (recorded by Codium finish F28)" paragraph under the A36 addendum): Vector Codium run 43685974875, green under the lane rule, and typecheck.yml run 43685977976, at `265f4ea7`. vector-hosted-ci.yml run 43686386024 at the same commit concluded success (run conclusion only; its Hosted tests log was not read). This closes the "CI receipt is pending" line in the B07 bullet above.
+- B09, B09b's CI receipt (15 Nov 2026, recorded by Codium finish DZ), at `572de5c4`:
+  - Vector Codium run 43738423276: `failed_only` lists one failed job of 18, Codium tests job 132886071440. Its visible tail shows "Codium: 153/153 test files passed", then the exerciser's four review-memory MISS lines and `summary pass=359 fail=0 skip=0 missing=4 extra=0`. The job's step list (`get_workflow_job`) shows that "Run the Codium test files" and "Check generated client" succeeded and only "Run HttpApi exerciser gates" failed. Green under the lane rule.
+  - Codium browser specs job 132886071679 (688 lines, wholly visible): `CODIUM_CI_BROWSER_SPECS: packages/app/e2e/regression/remote-phone.spec.ts`, "Running 13 tests using 1 worker", "13 passed (1.1m)". The cases include `codium-remote-helpers.spec.ts:88:1` and `:176:1` and `remote-phone.spec.ts:44:1` and `:102:1`.
+  - typecheck.yml run 43738426563 and vector-hosted-ci.yml run 43738962650: success (run conclusions).
+  - This closes "Actual paired desktop/phone browser check". It ran on A42's browser fixture with the desktop's real forwarder; no real phone, passkey device or packaged desktop app was used.
+- B10, R45b's and B10's CI receipts (15 Nov 2026, recorded by Codium finish DZ):
+  - R45b, `4bd146e7`: Vector Codium run 43705851187 had 18 jobs: 15 succeeded, 2 were skipped by `services_only`, and Codium tests job 132786637759 failed only at the exerciser ("Codium: 136/136 test files passed", the four MISS lines, `fail=0`). typecheck.yml run 43705853689 and vector-hosted-ci.yml run 43706515849: success (run conclusions).
+  - B10, `8a43f2b2`: Vector Codium run 43715519898, the same 15/2/1 pattern, with Codium tests job 132816093909 failing only at the exerciser ("Codium: 140/140 test files passed", the four MISS lines, `fail=0`). Codium browser specs job 132816094736 (679 lines, wholly visible) ran `codium-image-routing.spec.ts`, `codium-usage-labels.spec.ts` and `codium-vault-sections.spec.ts`: "Running 9 tests using 1 worker", "9 passed (35.6s)", the cases including `codium-vault-sections.spec.ts:28:1`, `:41:1`, `:58:1` and `:66:1`. The same four cases passed again in B09b's browser job 132886071679. typecheck.yml run 43715522956: success. vector-hosted-ci.yml run 43715921854: Hosted tests job 132817317859 ends "Hosted: 147/147 test files passed".
+  - This closes B10's native acceptance (local receipts above) and browser acceptance. "Validate all lanes together" stays with the lead's end-of-lane test.yml run, and B10-3 stays as recorded.
+- B11, 15 Nov 2026 (Codium finish DZ): the runtime receipt stands as TB recorded it above (`hosted-result-note.spec.ts:4` in Vector Codium run 43661511343, Codium browser specs job 132651657817, and test.yml run 43636452606 e2e jobs 132574288954 and 132574289008). `git diff --stat 02c9fc14 66d0427b` over `packages/session-ui/src/components/message-part.tsx`, `packages/app/e2e/utils/multiagent.ts` and `packages/app/e2e/regression/hosted-result-note.spec.ts` is empty, so the renderer that receipt covers is unchanged. The post-change measurement ran in test.yml run 43773518841, job 132994512597, source `66d0427b`. See "B11 post-change measurement" below for the numbers and the verdict: no regression claim either way.
 
 ## Executed receipts
 
@@ -77,6 +88,77 @@ Final Core, Engine, session-ui, App, App E2E and API-only types passed after the
 **Status, 15 Nov 2026 (Codium finish TB).** The Race, Playbooks Settings and hosted-note browser tests have since run and passed in CI (see the status under Source packages); still no native release test is claimed.
 
 The pre-render production benchmark was run at exact source `1bff87a46d28f582aea829e19eb232cc9c5fe0e9`: [run 43153942138, measurement job 130969401195](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43153942138/job/130969401195). The official decoded job log has nine passing cases, retry 0 and zero blank/unknown samples. This fulfills the before-change baseline requirement only. Other jobs in that workflow failed on stale migration inventories and legacy CLI-off copy; the corresponding exact local fixture tests now pass in `35a885ff6`, but the final remote workflow still must run; it is not a clean-workflow, whole-source CI or performance-improvement claim. The post-change measurement/comparison is still required.
+
+### B11 post-change measurement (15 Nov 2026, Codium finish DZ)
+
+**Dispatch.** test.yml `workflow_dispatch` on `codium-finish` with `production_benchmark: true` and nothing else: no `production_source_sha` and no other mode. The run was created 2026-11-15T23:12:18Z.
+
+- Run 43773518841, attempt 1, head `66d0427bcf8d9c722623e7f9d5fb201dd56fce5b`. That is the lane head before DZ, and DZ changes only docs.
+- 16 jobs. "Validate workflow selectors" (job 132994493034) and "production app benchmark (manual)" (job 132994512597) succeeded. The other 14 were skipped, the Hands "production app benchmark" job among them.
+- Both logs were read with `get_job_logs` and are wholly visible. The measurement job's 755 lines and the baseline job's 726 lines each start at "Current runner version".
+- Both logs were parsed the same way. Each BENCHMARK line's JSON was decoded, and its `name`, `status`, `retry`, `repeatEachIndex` and `metrics.summary` were read. The medians are taken over the three repeats.
+
+**Verdict rule, fixed before the dispatch.** The rule is stricter than the package plan's, after that plan's review. "No regression observed" may be written only if all three hold:
+
+1. There is exactly one BENCHMARK line per case and repeat, each with status passed and retry 0. There is no Playwright "flaky" line, the result is "9 passed", and `VECTOR_PERFORMANCE_RUN_ID` is `<sha>-<run>-<attempt>`.
+2. `blankSamples` and `unknownSamples` are 0 in every line, and both destination times are set.
+3. For the unvisited-task and new-session cases, each post-change median of `firstDestinationObservedMs` and `stableDestinationObservedMs` is at most 1.25 times that case's baseline median. The 1.25 is arbitrary.
+
+The child-session case is outside rule 3, because its trigger changed (see the harness differences). If 1 and 2 hold but 3 does not, the record says so with the numbers and makes no regression claim either way.
+
+| | Baseline | Post-change |
+| --- | --- | --- |
+| test.yml run | 43153942138 | 43773518841 (attempt 1) |
+| Measurement job | 130969401195 (12 Nov 2026) | 132994512597 (15 Nov 2026) |
+| Source SHA | `1bff87a46d28f582aea829e19eb232cc9c5fe0e9` | `66d0427bcf8d9c722623e7f9d5fb201dd56fce5b` |
+| `VECTOR_PERFORMANCE_RUN_ID` | `1bff87a46d28f582aea829e19eb232cc9c5fe0e9-43153942138-1` | `66d0427bcf8d9c722623e7f9d5fb201dd56fce5b-43773518841-1` |
+| Playwright lines | "Running 9 tests using 1 worker", "9 passed (2.0m)" | "Running 9 tests using 1 worker", "9 passed (2.6m)" |
+| BENCHMARK lines passed / total | 9 / 9 (three cases, repeats 0 to 2) | 9 / 9 (three cases, repeats 0 to 2) |
+| Max retry; "flaky" lines | 0; none | 0; none |
+| Blank samples (sum) | 0 | 0 |
+| Unknown samples (sum) | 0 | 0 |
+| Runner image | ubuntu-24.04 20261101.360.1 | ubuntu-24.04 20261111.370.1 |
+| Node; Bun; Playwright Chromium cache | 24.15.0; 1.3.14; 1.59.1 | 24.15.0; 1.3.14; 1.59.1 |
+
+Destination times in ms, median [min to max] over repeats 0 to 2:
+
+| Case | Time | Baseline | Post-change | Rule 3 limit |
+| --- | --- | --- | --- | --- |
+| Opens an unvisited task | first | 133.8 [128.1 to 134.6] | 177.1 [168.7 to 182.3] | 167.3 |
+| Opens an unvisited task | stable | 146.5 [144.6 to 148.5] | 192.9 [183.2 to 195.7] | 183.1 |
+| Opens the new session page | first | 161.3 [140.5 to 340.5] | 183.0 [168.8 to 216.0] | 201.6 |
+| Opens the new session page | stable | 222.6 [211.0 to 506.9] | 333.5 [323.1 to 373.3] | 278.3 |
+| Opens a child session (changed trigger) | first | 95.4 [93.9 to 98.1] | 126.7 [121.3 to 141.9] | outside the rule |
+| Opens a child session (changed trigger) | stable | 156.3 [154.0 to 157.3] | 214.8 [211.2 to 219.2] | outside the rule |
+
+**Harness differences.** These were read locally with git. `git diff --stat 1bff87a46d28f582aea829e19eb232cc9c5fe0e9 66d0427b` over `packages/app/e2e/performance`, `packages/app/e2e/utils/mock-server.ts`, `packages/app/playwright.config.ts` and `.github/workflows/test.yml` shows six files:
+
+- `timeline/first-navigation-benchmark.spec.ts`: only the child-session case changed (58a904d7). It now clicks the last source message's `button[aria-controls="vector-bg-tasks"]` instead of the "Inspect child navigation" button, so its timing starts from a different element's click on a different UI path. The other two cases' bodies are unchanged.
+- `timeline/first-navigation-probe.ts:57`: the click-start condition tests `clickSelector !== undefined` instead of a truthy selector. The result is the same for these cases: the two route cases pass no selector and the child case passes a non-empty one.
+- `timeline-stability/fixture.ts` (4b9fd1fe): an `attachments` option on `toolPart`. This is outside the spec's import graph. The spec's relative imports reach `benchmark.ts`, `chrome-trace.ts`, the timeline probe, metrics, stress fixture and helpers, `utils/mock-server.ts` and `utils/waits.ts`, and nothing under `timeline-stability/`.
+- `utils/mock-server.ts`: an unset `capabilities` option now answers `GET /experimental/capabilities` with 404 instead of `{}`, and the mock gained the `directoryConfig` and `mcpStatus` options. `mockStressTimeline` sets none of them, so in all three cases the app now gets a 404 from that route where it got `{}`.
+- `playwright.config.ts`: a new `PLAYWRIGHT_PREVIEW` branch. It is unused here, because the performance config replaces `webServer.command`.
+- test.yml: the step now writes `historicalReference` from `docs/vector/build/benchmark-source.json` into `source.json`, and refuses an unapproved source without that file. The baseline's step wrote `commit: GITHUB_SHA` only. This changes only the provenance file, not the measured command.
+
+Two more facts bound the comparison. `git rev-list --count 1bff87a46..66d0427b` is 971 commits: PR #33's integration plus this lane, not B11 alone. And `session-timeline-stress.fixture.ts` and `timeline-test-helpers.ts` name no hosted note (grep count 0), so this measures general first-navigation paint, not B11's renderer.
+
+**Verdict.** Rules 1 and 2 hold. The spec's own checks passed: no blank or unknown frame, 9/9 cases, retry 0, and the run ID matches run 43773518841, attempt 1. Rule 3 does not hold:
+
+- The unvisited-task case's medians were slower: first 177.1 ms against 133.8 ms, and stable 192.9 ms against 146.5 ms.
+- The new-session case's stable median was slower: 333.5 ms against 222.6 ms.
+- The new-session first median, 183.0 ms against 161.3 ms, is within the limit.
+
+With three repeats on one shared runner per run, this cannot be told apart from runner noise, so no regression claim is made either way, and "no regression observed" is not written. The shift is consistent within each run, though. Every post-change repeat of the unvisited-task case is slower than every baseline repeat, and every post-change stable time of the new-session case is above both of the baseline's warm repeats (211.0 ms and 222.6 ms). It is therefore recorded for the lead and not dismissed. Telling a real shift from noise would need more repeats, or both sources measured on the same day: test.yml's `production_source_sha` can measure `1bff87a46` again. That dispatch is beyond the one B11 run this lane may make, so it is the lead's or the owner's call. The child-session numbers are also slower, but they measure a changed trigger.
+
+**Limits.**
+
+- The fixture is the mock, navigation-only `mockStressTimeline`, with no engine and no provider execution.
+- Each run has three repeats on one worker, on one GitHub-hosted ubuntu-24.04 runner, on 12 Nov and 15 Nov, on different runner images.
+- `observedAtMs` is measured in the page. It is not a user-facing or production metric.
+- The comparison spans 971 commits.
+- This is an internal record, never a public or comparative claim. Any use of it outside this record is the owner's.
+
+DZ edits no benchmark, performance-spec or `docs/benchmarks/` file and no `benchmark-source.json`, and creates no new file. Its diff touches only `docs/vector/build/*.md`: `git diff --stat -- packages api .github docs/benchmarks` is empty.
 
 ## A59 and launch gates
 
