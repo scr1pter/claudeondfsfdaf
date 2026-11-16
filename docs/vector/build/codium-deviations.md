@@ -6355,6 +6355,10 @@ This package read them in Codium tests jobs 132672820820, 132706470083, 13278663
   generated client" succeeded and only "Run HttpApi exerciser gates" failed.
 - The four lines belong to the VectorScope and PR #33 CI lanes (TB For the lead item 5).
 
+16 Nov 2026: no longer expected. With 0f6fce89 and 225905e2 in HEAD (through main `b362fdf6`), Vector Codium run
+43844651835 at `34c20b62`, job 133221689218, shows no MISS line and `summary pass=363 fail=0 skip=0 missing=0
+extra=0`, and the step succeeded. A MISS line in a later run is a real failure that needs a root cause.
+
 **Other runs.**
 
 - B11: test.yml run 43773518841, job 132994512597, at `66d0427b` (checkpoint, "B11 post-change measurement").
@@ -6380,6 +6384,9 @@ These are pointers only; nothing is fixed here.
   - item 3: the engine (linux) shard step limits;
   - item 4: the app `memory-*-model` suites, which no visible log shows;
   - item 5: the review-memory MISS lines, fixed upstream by 0f6fce89 and 225905e2;
+    16 Nov 2026: closed. Vector Codium run 43844651835 at `34c20b62` (main `b362fdf6` merged), Codium tests (shard
+    1/4) job 133221689218: "Run HttpApi exerciser gates" succeeded with `summary pass=363 fail=0 skip=0 missing=0
+    extra=0` and no MISS line;
   - item 6: the shard-matrix merge conflict with `release-finish` dbfca832;
   - item 7: the non-hermetic `upstream-free.test.ts:148`, which reads host provider variables.
 - F6 ("Codium finish: F6 cost kind on read", For the lead): the desktop task-bridge store's closed literals
@@ -7156,7 +7163,9 @@ non-blocking findings; none rejected.
 - **Lane status, For the lead: CI0 item 1 and TB item 1.** Each has a dated line: the dispatch base is now empty (main
   contains #33), and TB item 1 points to the Lead ruling under round three.
 - **TB item 5, the four review-memory MISS lines.** 0f6fce89 and 225905e2 are ancestors of origin/main and of HEAD.
-  The post-push Vector Codium run of the merged branch is recorded in a dated line below once it has run.
+  The post-push Vector Codium run of the merged branch (43844651835 at `34c20b62`, Codium tests shard 1/4 job
+  133221689218) shows `summary pass=363 fail=0 skip=0 missing=0 extra=0`, so item 5 is closed (dated lines under the
+  item and under "The baseline exerciser lines").
 
 Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeout 30000`): `hosted-sessions-api.test.ts`
 59 pass, 0 fail, 1 skip; `hosted-copy.test.ts` 7/0; `account-delete.test.ts` 38 pass, 0 fail, 1 skip;
