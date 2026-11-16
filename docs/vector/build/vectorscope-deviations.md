@@ -19445,3 +19445,642 @@ vectorscope-finish lane (lane run `wf_ce299fef-a2c`, 2026-11-16), verbatim:
   above.
 - **Not claimed.** No licence classification of any repository, no seed count
   reproduced, no D8 or Q36 decision, and no dataset or benchmark change.
+
+## 2026-11-16 · VS-12a Fix executor in an isolated detached worktree (SF-07)
+
+The first half of the VS-12 executor (`vectorscope-plan.md:322`, the "Fix
+proposals and consent" section `:214`, the reuse rows `:404-405`, v2 plan §4
+`:171` and `:186`). It was built on `scope-finish` at `f11f8b35` (SF-06) as
+lane package SF-07, from the SF-07 plan as corrected by its critique and the
+lead's ruling below. Where a critique point was taken in another form or
+rejected, the reason is under "Critique points". This entry is also the lane's
+progress record for SF-07.
+
+- **Status.** Built and tested in the working tree, then revised for the
+  first review's findings (see "Review findings, round one" below), then
+  committed by the lane's commit gate as one commit,
+  `feat(review): apply consented fix proposals in an isolated worktree`
+  (`task/isolation.ts`, `tool/owned-path.ts`, `review/fix.ts`,
+  `test/review/fix.test.ts` and this entry). The two-commit split suggested
+  at build time was not used: the test file drives both halves, so the
+  placement half alone would have had no test of its own.
+
+- **The lead's ruling (2026-11-16), verbatim:**
+
+  > LEAD RULING ON THE SF-07 HOSTING GAP (2026-11-16): Option A is approved,
+  > with these limits. (1) Add the fix lifecycle as a separate, additive record
+  > kind (fix.json) with reserveFix/startFix/verifyFix/removeFix beside the task
+  > records in the isolation registry; do not change any existing task record,
+  > key, fence, check/reserve/start path or its behaviour, and do not seed a
+  > parent session's uncommitted or untracked files into a fix checkout. (2) The
+  > fix checkout is detached at the exact verified commit, owned by the
+  > registry's existing cleanup and stop rules; widen OwnedPath only at the type
+  > level as the plan says, with no runtime loosening for task sessions. (3)
+  > Every existing isolation, worktree and owned-path test must pass unchanged;
+  > add tests that prove task consumers never see fix records and that a fix
+  > record cannot be claimed as a task. (4) Follow
+  > docs/vector/build/v2-spawn-review.md: anything that starts a process stays
+  > behind the existing owner and single-signaller rules; no new spawn path. (5)
+  > Record the ruling and the second-lifecycle trade-off in the VectorScope
+  > deviation log. The same ruling applies to every later package that builds
+  > on the fix executor (SF-08, SF-09, SF-10a, SF-10b, SF-40, SF-41).
+
+  _How it was read._ The label "Option A" does not match the planner's
+  options: the planner's A was "use TaskIsolation as a task" (an agent and a
+  session), which the ruling's content excludes. The content (a separate,
+  additive `fix.json` record kind with `reserveFix`/`startFix`/`verifyFix`/
+  `removeFix` beside the task records) is the planner's Option B, and that is
+  what was built. If the lead meant something else by "Option A", the
+  additive placement is the part to revisit.
+
+- **The gap (why the registry could not host a fix as it was).** At
+  `f11f8b35`: `reserve` goes through `check` (`isolation.ts:1015`), which needs
+  an owner conversation (`:1018`) and a non-read-only agent (`:1020`); `start`
+  (`:1255`) seeds the checkout from the parent's uncommitted files (`seed`
+  `:1169`, `stage` `:1127`); the checkout is always attached to
+  `vector/subagent/<id>` through `Worktree.createForTask`
+  (`worktree/index.ts:319`, `:351`); `start` loads an instance and resolves an
+  agent in the checkout (`:1342`, `:1370-1372`); `remove`/`discard` need a
+  settled tip (`:1438-1440`) and `merge` writes the user's checkout
+  (`:2299`).
+
+- **Second-lifecycle trade-off (ruling item 5).** TaskIsolation now holds two
+  record kinds and two sets of code paths: about 400 added lines that a reader
+  of task isolation has to know are not task paths. The alternative, a fix
+  shaped as a task, would misattribute an agent and a session to a trusted
+  executor, boot an instance (and its project config) at a reviewed head,
+  attach a branch, and seed the user's uncommitted files into what must be the
+  exact reviewed commit. The second kind costs reading effort; the task shape
+  would cost correctness and isolation. Mitigations: every fix function is in
+  one block after `admit`, reads and writes only `.fix` names, and the task
+  functions are byte-for-byte unchanged (`git diff --numstat`: 404 added, 0
+  removed in `isolation.ts`). Later packages (SF-08 onward) extend `FixRecord`
+  (`version: 1`, the `applied` field and state are already reserved) instead
+  of adding a third kind.
+
+- **Scope.** Proposal -> preview -> apply, cancel and cleanup. Checks, commit
+  and push are SF-08. GitHub fixes are VS-13. Nothing is wired: no layer in
+  AppRuntime, no route, CLI, app, key, flag, default or permission, and no
+  model call.
+
+- **What landed.**
+  - `packages/engine/src/task/isolation.ts` (additive only):
+    - `FixRecord` schema (`:136`) and `FixRemoval`: `kind: "fix"`, project, fix ID, parent and
+      home directories, checkout directory, head, state
+      (`preparing | ready | applied | retained`), `createdAt`, the owner
+      lease, the Git binding, `applied` and `error`.
+    - `fixPaths` (`:434`) and `readFixRecord` (`:444`). The record is
+      `task-isolation/<project>/.fix/<fixID>/fix.json` and the checkout
+      `task-worktree/<project>/.fix/<fixID>`. Fix IDs match
+      `/^fix_[A-Za-z0-9-]{1,64}$/`. `readFixRecord` decodes the file with
+      `Schema.fromJsonString(FixRecord)` and checks the fix ID,
+      project, reserved directory, home and launching directories and a
+      40- or 64-hex head, as `readRecord` does for tasks.
+    - In `make` (`:2882-3217`): `getFix`, `verifyFix` (`checkFix`: Git lists
+      the checkout as a **detached** worktree; it resolves to its reserved
+      name under the data folder's real path; `--show-toplevel`, `--git-dir`,
+      `--git-common-dir` and `--git-path index` match the record and the
+      parent; `symbolic-ref -q HEAD` fails; it returns the record with both Git
+      directories narrowed to present), `reserveFix` (an explicit
+      `unavailable` refusal off Linux, as `startFix` has; head regex before
+      any Git argument, object-format length,
+      `rev-parse --verify --end-of-options <head>^{commit}`, sparse refusal,
+      free space sized from
+      the head's own tree, `exists` refusal, then the record and the
+      protection), `startFix` (`worktree add --detach --no-checkout`, bind and
+      save the Git metadata, then `reset --hard <head>`, all under
+      `FileLock.forTree(<common dir>)`, the key `Worktree.createForTask` takes;
+      on failure the record is kept as `retained` and removal is attempted),
+      `removeFix` (`dropFix`: removes only a verified checkout, with
+      `worktree remove --force`, after disposing any instance at it; a checkout
+      Git still lists but that is gone, or whose binding does not verify, is
+      kept `retained` and still protected; nothing is removed recursively
+      except the fix's own registry folder), `retainFix`, `markFixApplied`,
+      and `fixes` (lists `.fix/*`; protects by its reserved names only an
+      entry that has no protection yet, then each readable record fully, so
+      a protection already held is never narrowed, also while a record cannot
+      be read).
+    - The sweep's fix branch (`sweepFixes`, run from `sweep` `:2801` on its
+      once-per-process scan, which TaskRecovery's boot pass triggers at
+      `recovery.ts:477`): protects every placement again, then removes each
+      placement whose owner lease is dead and logs one it had to keep. A
+      failure there is logged and never stops the task sweep below it.
+  - `packages/engine/src/tool/owned-path.ts`: `Context` widened at the type
+    level only, `sessionID: SessionID` to `string`. No runtime line changed.
+  - `packages/engine/src/review/fix.ts` (new, `ReviewFix`, 831 lines):
+    `REFUSALS` and `Refused`; `reserve`, `preview`, `apply`, `cancel`,
+    `state`, `placements`; `Service`, `layer`, `node` (deps `TaskIsolation`,
+    `Git`). Each method refuses `unavailable` off Linux before any effect.
+    - `preview`: `prepareFixProposal` (`fix-proposal.ts:91`) or "proposal";
+      a local scope naming exactly this placement and its repository, not
+      overlapping ("scope"); the reserved head ("head"); `startFix`; then
+      `ready`: `verifyFix`, the source branch's ref still at the head, the
+      base a commit and the checkout at the head ("head"), a clean checkout
+      ("worktree"), then the per-file plan.
+    - The plan, per file in path order: the head's tree walked by tree ID
+      (a gitlink or symbolic link is never descended into: "symlink" or
+      "path"); on disk, every ancestor a real folder and the target a
+      single-link regular file inside the checkout ("symlink" or "path"); an
+      added file absent in both, and not matched by Git's ignore rules
+      (`check-ignore -q --no-index`: "path"); a modified or deleted file a
+      `100644`/`100755`
+      blob (deleted: `100644`); size under `TaskIsolation.Limits.fileBytes`
+      and a sha256 stamp ("limit"); `sha256:` of the bytes equal to the
+      approved preimage, and Git's blob ID of the bytes equal to the tree
+      entry ("preimage": an eol or filter conversion fails closed); UTF-8
+      without NUL ("binary"); the index line's blob and mode; an exact hunk
+      applier at each stated line with no fuzz ("patch"); the result's
+      sha256 equal to the approved postimage ("postimage"); a 64 MiB bound on
+      everything held for rollback, checked before each file is read and
+      again once its bytes are held ("limit"). Then, over all files: each
+      missing folder belongs to the first file in path order that needs it,
+      so two files in one new folder never both create it; a file that is
+      also another file's missing folder refuses as "path"; then
+      `OwnedPath.assertWritable({ sessionID: fixID }, { files })`, whose
+      defect becomes "path".
+    - `apply`: state `preview` ("state"), the previewed digest and patch
+      digest ("digest"), the scope, `ready` again, then
+      `FileLock.withFiles(targets)` and, inside the locks, the owned-path
+      guard again. Only then, in one uninterruptible step, `policy.consume(
+      consent, proposal, { kind: "apply" }, actor)` (`fix-proposal.ts:179`),
+      whose refusals map one to one, and the `undo` handler attached to
+      everything after it. Every refusal or interrupt up to the consume,
+      the wait for the locks included, leaves the consent unspent and the
+      fix in preview. Then `finish`: the receipt's digest ("digest"); per
+      file, in one uninterruptible step, a FileState re-stamp against the preimage
+      ("preimage"), the journal entry, the `writing` hook, missing folders,
+      and the write through `TaskIsolation.place` (`isolation.ts:374`) or an
+      unlink; only the `wrote` hook between steps is interruptible. After the
+      writes: every stamp equals its postimage ("postimage"), `verifyFix`, HEAD
+      unchanged and Git's changed-path set exactly the proposal's
+      ("worktree"), then `markFixApplied`. On any failure or interrupt after
+      the consent was spent, `undo` runs, still under the locks: it rolls the
+      journal back newest first, and each step's folders deepest first (a
+      file is put back only when it holds this fix's bytes or was removed by
+      it), then removes the placement and forgets the fix, or keeps it with
+      `retainFix` when the rollback was uncertain. A kept fix's state is
+      `cancelled` after an interrupt, `failed` otherwise.
+    - `cancel` removes the placement through `removeFix`, from the registry
+      alone, so it also works after a restart, and forgets the fix once its
+      placement is gone. Cancelling a running apply is interrupting its
+      fiber: before the consent is spent that leaves the fix in preview
+      (cancel then removes it); after, `undo` runs.
+    - `state` is in memory and holds only fixes whose placement exists: an
+      entry goes when its placement is removed, so the map never outgrows
+      the placements on disk. `cancelled` and `failed` describe a kept
+      placement.
+
+- **Decisions and deviations from the plan.**
+  - _ReadOnlyGit dropped (critique blocker, taken)._ `ReadOnlyGit.open`
+    (`read-only-git.ts:1220`) runs `/usr/bin/python3` and refuses unless it is
+    exactly 3.12 with prefix `/usr` (`directory-identity.ts:13`, `:29`); this
+    host has 3.13.18. It also refuses while process isolation is required
+    (`:1221`) and while any earlier review's Git cleanup is unconfirmed
+    (`:1225`), which would couple fix apply to the review pipeline. `fix.ts`
+    instead reads Git through the Git service with hooks, fsmonitor and
+    optional locks off (`GIT_OPTIONAL_LOCKS=0`, so `status` writes no index).
+    The Linux-only refusal is an explicit platform check.
+  - _OwnedPath through its own entry point (critique, taken)._ The ruling
+    says to widen OwnedPath at the type level, so `assertWritable` is called
+    with the fix ID as its `sessionID`. This keeps every guard it is built
+    from (protected trees, `parentTarget`, `assertOwnedPath`, running
+    subagents' claims) instead of the plan's direct calls to
+    `protectedConflict` and `parentTarget`.
+  - _Ownership is the job store's lease, not an in-process set (critique
+    point taken in another form)._ The critique asked for an `activeFixes`
+    set like the tasks' `active`. A set cannot tell this process's
+    placement from another engine's on the same data folder, so the sweep
+    would remove a live placement of the desktop app from a CLI's boot.
+    `reserveFix` opens a `BackgroundJobStore` lease; the sweep removes only
+    placements whose lease is `dead` (a closed lease in this process, or a
+    gone process on this machine and boot); removal closes it.
+  - _Checkout under `.fix/` (plan corrected)._ The plan put the checkout at
+    `task-worktree/<project>/<fixID>`. A task ID is any safe ID, so a task
+    could in principle name the same directory. Under `.fix/` no task path can
+    reach it, and `TaskPlace.isTaskDirectory` and `Worktree.removeForTask`
+    refuse it (tested). The record file is `fix.json`, as the ruling says.
+  - _Tree walk by tree ID._ `ls-tree` with several pathspecs prints a
+    directory pathspec's children, or nothing, depending on the other
+    pathspecs (checked on Git 2.43), so ancestors are typed by listing each
+    tree by its ID from its parent's listing. Listing `<head>:<path>` was also
+    rejected: for a gitlink it resolves to the linked commit and lists its
+    tree.
+  - _Room against the head, inline._ `room` sizes the parent's `HEAD`
+    (`isolation.ts:1007` at HEAD), so `reserveFix` sizes the fix head's tree
+    itself rather than changing `room` for task callers.
+  - _Removal difference._ `dropFix` disposes any instance at the checkout
+    through `InstanceStore.disposeDirectory` but does not run
+    `fsmonitor--daemon stop` as `Worktree.removeForTask` does: every Git
+    command on a fix checkout passes `core.fsmonitor=false`, so no daemon is
+    started for it.
+  - _Serialisation._ preview, apply and cancel of one fix take a module-level
+    `KeyedMutex` on the fix ID rather than `FileLock.forTree(<checkout>)`,
+    whose key is a real path and changes when the checkout appears. Writes
+    take `FileLock.withFiles`, the per-file lock every file writer shares.
+  - _Uncertain rollback is kept (critique minor, taken)._ A rollback before
+    removal is redundant when the removal succeeds, but it is what leaves
+    the checkout at the head when the removal cannot run (the retained
+    path, tested). An uncertain rollback marks the placement `retained`
+    rather than removing it at once. That keeping is not permanent:
+    `dropFix` does not ask why a placement was retained, so the next
+    `cancel`, or a later process's sweep once this process's lease is dead,
+    removes a rollback-retained placement whenever its Git binding still
+    verifies. Only a placement whose binding changed (or that Git still
+    lists but is gone) stays kept until its owner repairs it.
+  - _`FileState.wrote` is not called._ FileState's writer records are keyed
+    by session and feed other sessions' staleness messages; no session reads
+    a fix checkout (it is protected), and the executor has no session.
+  - _Limits._ The effective per-file bound is FileState's 16 MiB hash limit
+    under `Limits.fileBytes` (50 MB): a larger file has no sha256 and is
+    refused as "limit". `TOTAL_BYTES` (64 MiB) bounds what the executor holds
+    in memory for its rollback (every preimage and postimage).
+  - _Checkout filters._ `startFix` skips LFS smudge (`GIT_LFS_SKIP_SMUDGE`),
+    hooks and fsmonitor, as task worktrees do, but a smudge filter in the
+    user's Git config still runs at checkout, the same exposure as
+    `Worktree.createForTask`. Whatever a filter changes is refused at preview
+    by the blob-ID check.
+  - _Consent authenticity._ `apply` takes the caller's policy, and a handle
+    is valid only in its issuing policy, so whoever can call `apply` can also
+    approve. The header of `fix.ts` says so: proof of approval rests on the
+    trusted adapter, as `fix-proposal.ts:1-4` says. Moving the policy inside
+    `ReviewFix` would not change who can approve.
+  - _Merge, Review and Discard surfaces._ None of the task surfaces is used:
+    a local fix is committed on its destination branch by SF-08, not merged
+    into the user's checkout, and the fix's own removal is its discard.
+  - _`task/isolation-base.ts` and core `isolation/copy.ts` are not used
+    either_ (the reuse table, `vectorscope-plan.md:404-405`, names both).
+    The fix checkout is always Git's detached worktree at the exact verified
+    head: never seeded, never a copy-mode tree (`IsolationCopy`), and with
+    no partial-merge base, so neither applies. SF-08 would need
+    `isolation-base.ts` only if it merged into the user's checkout, which a
+    local fix does not.
+  - _Worktree.list and the user-facing worktree routes (critique, taken)._
+    `worktree/index.ts` is unchanged (sub-question (i) was not approved), so
+    a fix checkout appears in `Worktree.list` (tested) and the user-facing
+    `worktree.remove` and `worktree.reset` routes can remove or reset it.
+    `apply` then refuses as "worktree" without spending the consent, and
+    `cancel` cleans up the registry (tested for remove). The one-clause
+    change to `registeredTask` (`worktree/index.ts:414`) is a hand-off.
+  - _Protection after a restart, and across engines._ `TaskClaims`
+    protection is in memory, per process. A placement from an earlier
+    process is unprotected until `fixes()` runs: the boot sweep, or
+    `ReviewFix.placements`. The same holds for two engines running at once
+    on one data folder (the desktop app and a CLI): a placement made by
+    process A after process B started is not protected in B until B calls
+    `fixes()`, because B's sweep scan runs once per process. Until then B's
+    model file tools are not stopped by the protection guard from writing
+    A's fix checkout. An apply in A still fails closed (the per-file
+    re-stamp, the clean-checkout check before the consent and Git's
+    changed-path set after the writes), but the checkout is not protected
+    there. A process-independent rule (refusing every path under the
+    reserved `.fix` names in `TaskClaims.protectedConflict`) would close
+    this; it changes the guard every file tool runs, so it is a hand-off
+    for the lead rather than part of this package.
+  - _`ConnectFix` (CW-07) is unchanged._ `connect/fix.ts:13-14` says the
+    Vector agent fixes findings "until VectorScope has a fix mode of its
+    own". SF-07 is not wired, so it replaces nothing; retiring or rerouting
+    `ConnectFix` belongs to the wiring package and the connect lane.
+  - _Scratch._ `/tmp/vector-v2/scope/sf07/` (the task header's `scope/`, as
+    SF-06 used), with each test's fixture under the engine test data folder.
+
+- **Citations at `f11f8b35` (working-tree lines where new).** Core
+  `fix-proposal.ts`: `FIX_LIMITS` `:8`, `FixOperation` `:54`,
+  `prepareFixProposal` `:91`, `createFixConsentPolicy` `:127`, `approve`
+  `:147`, `consume` `:179`, `patchMatches` `:268`. Engine `isolation.ts` at
+  HEAD: `run`/`command` `:590-608`, `records` `:636`, `lock` `:651`, `verify`
+  `:653`, `room` `:1002`, `check` `:1015`, `reserve` `:1064`, `start`
+  `:1255`, `place` `:340`, `sweep` `:2731`, returned object `:2817`.
+  `worktree/index.ts`: `createForTask` `:319`, `registeredTask` `:414`,
+  `list` `:433`, `remove` `:501`, `removeForTask` `:575`; the user-facing
+  routes call `remove` and `reset` at `handlers/experimental.ts:406` and
+  `:414`. `recovery.ts`:
+  `recoverIsolations` `:441`, its sweep `:477`. `background-job-store.ts`:
+  `open` `:103`, `close` `:110`, `alive` `:118`.
+
+- **Default and parity proof.**
+  - No file in `REVIEW_PIPELINE_FILES` (core `model-evidence.test.ts:49-109`)
+    changes, so the pin stays `aef0d5c84ed90782` -> `aef0d5c84ed90782` and
+    `REVIEW_PIPELINE_REVISION` 4 -> 4.
+  - `git diff -- 'packages/*/src/review/permission.ts' packages/engine/src/agent`
+    is empty. Nothing under `packages/` imports `review/fix.ts` except its
+    test.
+  - `isolation.ts` is additions only (409 added, 0 removed, after the
+    review fixes). The one change inside an existing function is the
+    guarded `sweepFixes` call on the sweep's scan pass. `owned-path.ts`
+    changes a type alias only.
+  - Every existing isolation, worktree, owned-path and file-lock test file
+    run passes unchanged, except three that fail locally exactly as they do at
+    HEAD (below).
+- **Replay variant.** None. `script/vectorscope-eval/replay.ts` VARIANTS is
+  untouched; SF-07 adds no key.
+- **Desktop half: a documented difference.** No desktop or app half: the app
+  PR action and diff preview, and the CLI `review.ts` consented apply step on
+  StrictResult (`addendum-a.md:1077`), wait for the wiring package, which
+  will consume `ReviewFix.Preview` and `Applied`.
+
+- **Tests run** (through `/home/user/.tools/vector-serial`, one file at a
+  time, `--timeout 30000`, from the package directory):
+  - `packages/engine/test/review/fix.test.ts` (new), the final file after the
+    review fixes: 16 pass, 1 skip, 0 fail, 243 expect calls, 24.00 s (the
+    build round's file: 14 pass, 1 skip, 188 expect calls). The skip is the
+    non-Linux case, which runs only on CI's Windows shards. Cases:
+    1. an approved patch applies only in its detached checkout; the user's
+       unstaged, staged and untracked work, index, HEAD, refs and worktree
+       list are unchanged, before and after cancel; the cancelled fix is
+       forgotten;
+    2. traversal, absolute, `.git` and backslash paths refuse as "proposal"
+       before any checkout exists, and non-commit heads (`HEAD`, an option
+       string, an unknown ID) refuse as "head" with no placement;
+    3. a symlinked parent folder and a symlinked target refuse as "symlink";
+       nothing is written outside or inside;
+    4. a moved source branch, and a checkout moved off the head, refuse as
+       "head" with the consent still revocable;
+    5. a different proposal ("digest"), a consent for another proposal and
+       another actor ("mismatch"), an edited checkout ("worktree"), a wrong
+       postimage ("postimage"), a wrong hunk context ("patch"), and a file
+       changed between plan and write ("preimage", the earlier write undone,
+       the placement removed and the fix forgotten, the consent spent);
+    6. revoked, expired and reused consent, then a second apply ("state");
+    7. cancellation in the `wrote` hook, and an interrupt requested while a
+       write step runs (the step completes, the rollback is certain, the
+       placement is removed); then an interrupt while another
+       `FileLock.withFiles` caller holds one of the files' locks (the consume
+       is not called, nothing is written, the fix stays in preview), and the
+       same consent applied again, consumed only once that lock is free;
+    8. a failure after writes (the checkout attached to a branch in the
+       hook): both files back at their preimage, the placement `retained`,
+       protected and listed, `cancel` reports `removed: false`, and after the
+       owner detaches it `cancel` removes it;
+    9. the base branch, a tag, another branch, a linked worktree with dirty
+       and untracked files, and an ignored file stay byte-identical, and no
+       branch is created; a proposal adding `x.log` under `*.log` refuses as
+       "path" at preview;
+    10. NUL bytes and invalid UTF-8 ("binary"), a 101-byte file under a
+        100-byte limit ("limit"), a `GIT binary patch` ("proposal"), and an
+        `eol=crlf` checkout whose CRLF preimage differs from the LF blob
+        ("preimage");
+    11. a GitHub scope and a local scope naming another worktree ("scope");
+    12. protection (another session cannot write the checkout or the record;
+        the fix itself cannot write the checkout's `.git`; with its record
+        made unreadable, `placements()` leaves the fix out and its Git
+        directory stays protected), `records()` empty,
+        `TaskPlace.isTaskDirectory` false, a `fix.json` failing the task
+        `Record` decode, and every task entry point given the fix ID
+        (`get`, `find`, `start`, `settle`, `changes`, `merge`, `discard`,
+        `resume`, `reconcile`, `enqueue`, `review`, `markSettling`, `admit`,
+        `Worktree.removeForTask`, `sweep`) refusing or ignoring it, with the
+        placement intact and listed by `Worktree.list`;
+    13. a checkout removed through `Worktree.remove` after preview: apply
+        refuses as "worktree", the consent is unspent, cancel cleans up;
+    14. the sweep: a placement with a closed lease is removed, one with a
+        closed lease and a changed binding is kept `retained`, both are
+        protected again first, and a live placement is left alone;
+    15. three files added in one new folder (`src/new/c.ts`, `src/new/d.ts`,
+        `src/new/deep/e.ts`) apply; a second run failing after every write
+        (the checkout attached to a branch in the last hook) removes all
+        three files and both folders, leaves `changedIn` empty, keeps the
+        checkout `retained` with state `failed`; a proposal adding `src/new`
+        as a file and `src/new/x.ts` refuses as "path";
+    16. a deletion (`src/b.ts`, chmod 0640 in the checkout first) with a
+        modification: interrupted in the `wrote` hook after the deletion
+        (with the checkout attached to a branch so it is kept), `src/b.ts`
+        comes back with its bytes and mode 0640, `src/a.ts` with its bytes,
+        state `cancelled`, consent spent; applied in full, `changedIn` shows
+        the deletion; an exact patch with a wrong approved preimage digest
+        refuses as "preimage" with the preimage message; deleting a 100755
+        file (a patch without the mode line, which the core grammar admits)
+        refuses as "path".
+  - Existing files, unchanged, run after the change (pass/fail/skip, expect
+    calls):
+    - After the review fixes (the final `isolation.ts`):
+      `test/task/isolation.test.ts` 90/0, 450 (203.39 s);
+      `test/task/isolation-recovery.test.ts` 3/0, 11;
+      `test/task/recovery.test.ts` 7/0, 54; `test/tool/owned-path.test.ts`
+      7/0, 20. The rest below ran in the build round, against the build
+      round's `isolation.ts`; the review fixes change only the fix block.
+    - `packages/engine/test/task/`: `isolation.test.ts` 90/0, 450 (run twice,
+      the second after the last type-only edit to `isolation.ts`);
+      `isolation-recovery.test.ts` 3/0, 11; `isolation-admission.test.ts`
+      7/0, 37; `place.test.ts` 10/0, 50; `claims.test.ts` 10/0/1, 54;
+      `isolation-base.test.ts` 6/0, 44; `isolation-merge-ask.test.ts` 2/0,
+      14; `isolation-terminal.test.ts` 2/0, 29; `recovery.test.ts` 7/0, 54;
+      `shell-required-isolation.test.ts` 0/0/1.
+    - `test/server/task-isolation.test.ts` 4/0, 64;
+      `test/worktree/create-for-task.test.ts` 5/0, 38;
+      `test/project/worktree.test.ts` 14/0, 34;
+      `test/project/worktree-remove.test.ts` 2/0/2, 9.
+    - `test/tool/`: `owned-path.test.ts` 7/0, 20; `git-mutation.test.ts`
+      118/0, 225; `file-lock.test.ts` 10/0, 24; `file-state.test.ts` 12/0, 54;
+      `task-manage.test.ts` 52/0, 280; `task.test.ts` 161/0, 794.
+    - **Failing locally, identically at HEAD (pre-existing, not SF-07):**
+      `test/task/isolation-review-filter.test.ts` 0/1,
+      `test/connect/worktree-target.test.ts` 4/10 and
+      `test/connect/fix.test.ts` 6/7. Each was run again with `isolation.ts`
+      and `owned-path.ts` swapped back to their HEAD bytes (then restored and
+      compared byte for byte): the same counts and the same failing test
+      names. The review-filter and worktree-target failures are
+      `inspectReview`'s refusal ("This task's Git metadata cannot be inspected
+      safely"), that is `ReadOnlyGit`'s interpreter check on this host's
+      Python 3.13; in `connect/fix.test.ts` the setup review returns no
+      findings. CI's `scope-directory-identity.yml` runs
+      `connect/worktree-target.test.ts` on a host that meets the check.
+    - The critique's list also named `test/worktree/git-mutation.test.ts` and
+      `test/worktree/owned-path.test.ts`; no such files exist (the
+      `test/tool/` files above are the ones), so 23 existing files ran.
+  - Typecheck: `bun typecheck` in `packages/engine` exit 0 and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine` exit 0, both on the final files after the review
+    fixes. Core is not touched.
+  - `packages/core`: `test/review/model-evidence.test.ts` (pin proof) and
+    `test/review/fix-proposal.test.ts` (contract unchanged): 30 pass, 0
+    fail, 393 expect calls, and 15 pass, 0 fail, 152 expect calls.
+  - `bun prettier --check` on `fix.ts`, `fix.test.ts` and `owned-path.ts`:
+    clean. `isolation.ts` was not Prettier-clean at HEAD (one existing hunk in
+    `closeSessionTerminals`); its new lines are formatted and that hunk is
+    left as it was. `bun oxlint` (from the root, after the review fixes):
+    0 warnings in `fix.ts` and `fix.test.ts`; `isolation.ts` has the 13 it
+    has at HEAD and none in the new lines; `owned-path.ts`'s two warnings
+    are the two it has at HEAD (`consistent-return`, lines moved by 7).
+  - Mutations, each on the final files (the source copied to scratch,
+    mutated, the one test file run, the copy restored and compared byte for
+    byte):
+    - M1, no apply-time re-stamp: case 5 fails (13 pass, 1 fail).
+    - M2, the symbolic-link branch of the tree walk removed: case 3 fails. The
+      parent is still refused, as "path", by the next check: the mutation
+      shows the test pins the reason; the walk has two layers.
+    - M3, no source-branch check: case 4 fails.
+    - M4, no rollback: case 8 fails.
+    - M5, `worktree add -b <branch>` instead of `--detach`: 12 cases fail.
+    - M6, no `consume` (a forged receipt): cases 5, 6 and 7 fail.
+    - M7, the write step interruptible (the mask replaced by an identity
+      `restore`): case 7 fails on the in-flight assertion (the hook is
+      interrupted inside the step).
+    - M8, no sweep fix branch: case 14 fails.
+    - M9, no clean-checkout check: case 5 fails.
+    - M10, no blob-ID check: case 10 fails.
+    - Review-round mutations, on the final files (the same procedure, both
+      sources compared byte for byte with their copies afterwards):
+      - M11, no folder ownership (every file keeps all its missing folders):
+        case 15 fails with the reported `EEXIST` on `src/new` (15 pass,
+        1 fail).
+      - M12, the ignored-file refusal line removed: case 9 fails (the next
+        line then refuses as "worktree", not "path"); M12b, `check-ignore`
+        not run at all: case 9 fails (preview succeeds).
+      - M13, `fixes()` protecting every name first again (the old
+        downgrade): case 12 fails on the Git-directory assertion.
+      - M14, the consume moved before the lock wait (the locks taken
+        inside `finish`): case 7 fails on `consumed` being non-empty after
+        the interrupt.
+      - M15, the rollback restoring mode 0644: case 16 fails (416 expected,
+        420 received).
+      M1 to M10 ran on the build round's files and were not repeated.
+  - Commit gate (2026-11-16, on the final files): `test/review/fix.test.ts`
+    again 16 pass, 1 skip, 0 fail, 243 expect calls (27.88 s); `bun
+    typecheck` in `packages/engine` exit 0; the eval tsconfig exit 0; the
+    full TURBO typecheck (`--concurrency=2`, `TURBO_CACHE_DIR` in the
+    worktree) 27 of 27 tasks successful.
+  - Not run locally: the Windows leg of the new file.
+- **CI to dispatch with the commit.** `typecheck.yml`; `test.yml` (runtime
+  code in engine; it is the only workflow that runs `fix.test.ts`: the Linux
+  shards for the 14 cases, the Windows shards for the unavailable case;
+  there is no macOS engine leg); `scope-directory-identity.yml` (an engine
+  `src/review/**` and `test/review/**` change; it runs a fixed file list
+  that does not include `fix.test.ts`, but it does run
+  `connect/worktree-target.test.ts`, which exercises TaskIsolation). Not
+  `vector-at-mention.yml` (no core `review/**` or engine `cli/cmd/github*.ts`
+  change), `review-memory-fence.yml` (no `run.ts`, `model.ts` or
+  `session/llm.ts` change), `review-http-regression.yml` (no HttpApi or
+  review service change) or `scope-app-validation.yml` (no app change).
+  _What the commit gate dispatched instead:_ the gate's fixed set,
+  `typecheck.yml`, `scope-directory-identity.yml`, `review-memory-fence.yml`,
+  `scope-app-validation.yml` and `vector-at-mention.yml`. `test.yml` was not
+  in it, so `fix.test.ts` has no CI run from this commit; it is for the lead
+  to dispatch, or to batch with the next runtime package.
+
+- **Critique points** (the plan critique, before the build).
+  - _ReadOnlyGit cannot run here (blocker): taken_, as above.
+  - _§0 did not reflect the ruling (major): taken._ No gap note and no
+    Option C; the ruling is quoted and read above; the record is `fix.json`.
+  - _Cleanup and stop rules (major): taken in another form._ A fix-only
+    branch in the sweep's boot scan, with re-protection first and
+    lease-based ownership instead of an in-process set (reason above).
+  - _OwnedPath at the type level (major): taken._
+  - _A write landing after rollback (major): taken._ Per-step uninterruptible
+    writes with the journal entry before the write; the rollback compares
+    against both the preimage and the postimage; case 7's second half
+    interrupts during a write step (mutation M7).
+  - _Regression set and task-claim proofs (major): taken._ Every listed file
+    that exists ran (above); three fail locally exactly as at HEAD. Case 12 calls every task entry point with the fix ID. The
+    task-isolation server route is not called: it reads isolation through
+    each session's task result (`TaskManager`, `find(sessionID)`), and a fix
+    has no session, so `find(fixID)` returning nothing (asserted) is what it
+    would see.
+  - _Worktree.remove can delete a fix checkout (major): taken_, as above.
+  - _CI claims (minor): taken_, as above.
+  - _reserveFix/startFix details (minor): taken._ Head regex before Git,
+    `--end-of-options`, the head's own size, instance disposal before
+    removal.
+  - _Consent authenticity and SF-08's needs (minor): taken._ Documented; the
+    record has `applied` and the `applied` state.
+  - _Documentation and hygiene (minor): taken._ The trade-off paragraph,
+    `ConnectFix`, one scratch root, two suggested commits, and the limits'
+    justification.
+
+- **Review findings, round one** (the code review of the built package; 16
+  findings, several reported twice).
+  - _Two added files in one new folder always failed apply after the
+    consent was spent (blocking): fixed._ Each file's missing folders were
+    found before any write, so `src/new/c.ts` and `src/new/d.ts` both
+    listed `src/new`, and the second `mkdir` (not recursive) hit `EEXIST`
+    after the consent was spent. `plan` now gives each folder to the first
+    file in path order that needs it (`fix.ts:420-429`); the rollback order
+    is unchanged (newest step first, deepest folder first). A file that is
+    also another file's missing folder is refused as "path" at preview, the
+    one remaining way a folder write could collide. Case 15 and M11.
+  - _An ignored added file passed preview and failed every apply (twice
+    reported): fixed_ as asked, with `check-ignore -q --no-index` in the fix
+    checkout for each added file; exit 0 refuses as "path" before any
+    consent, and an exit other than 0 or 1 as "worktree" (`fix.ts:327-333`).
+    Case 9 and M12/M12b.
+  - _`fixes()` downgraded a full protection to names only (non-blocking):
+    fixed_ with the first option: names only for IDs without a protection
+    (`isolation.ts:3177-3196`). The second option (read first) was not
+    taken, because it leaves a placement from another process unprotected
+    during the reads. The bug was also permanent, not only a window, for a
+    record that cannot be read: the narrowed protection was never restored.
+    Case 12 and M13.
+  - _No deletion test, no direct preimage-digest test (non-blocking):
+    taken._ Case 16 covers the unlink path, its rollback with the saved
+    preimage and mode, the deleted postimage checks, the 100755 refusal and
+    the approved-preimage branch (pinned by its message). M15.
+  - _No undo between the consume and the lock acquisition (twice reported):
+    fixed in another form._ The locks are now taken before the consent is
+    spent, and the consume plus the attaching of `undo` are one
+    uninterruptible step (`fix.ts:525-545`). Waiting for a lock therefore
+    spends nothing: an interrupt there leaves the consent unspent and the
+    fix in preview, like any refusal before the consume, and `cancel`
+    removes it. This keeps the rollback under the files' locks, which
+    moving `onExit` outside `withFiles` would have given up, and it means
+    no interrupt can land between a successful consume and `undo`. The
+    spec's "cancellation removes the worktree" holds for an apply that
+    spent its consent; before that, cancelling is `cancel`. Case 7's third
+    part and M14.
+  - _The 64 MiB bound was checked only after every file was read: fixed._
+    A running total in `planFile` refuses before reading a file whose size
+    would cross it, and again once its bytes are held (`fix.ts:346`,
+    `:374-375`). Not tested: a test would need over 64 MiB of fixture text.
+  - _The `states` map was never pruned (twice reported): fixed._ An entry
+    goes when its placement is removed (`undo` after a removal, `cancel`
+    when it removed); `cancelled` and `failed` remain only for a kept
+    placement. Cases 1, 5, 7, 8, 15 and 16 assert both sides.
+  - _No platform gate in TaskIsolation's fix methods: fixed_ for
+    `reserveFix` and `startFix`, as asked; `sweepFixes`, `fixes` and the
+    removal methods stay ungated. `ReviewFix` now maps an `unavailable`
+    IsolationError to "unavailable". Not testable on Linux, and the
+    Windows case reaches only `ReviewFix`'s own gate.
+  - _Style (twice reported): mostly taken._ The `if`/`else` in `rollback`
+    is a ternary on the `io` call; `rollback` and the folder `mkdir`s are
+    `Effect.forEach`; the ancestor walk in `planFile` is an
+    `Effect.forEach` that still stops at the first link; `headEntries`
+    uses a recursive `descend` and `Effect.forEach`, with no `let` and no
+    destructuring (Effect 4 beta.83 has no `Effect.reduce`); `applyHunks`
+    is a `reduce`. Doing so showed a latent defect: `result.push(...)`
+    spread a whole file's lines into one call, which Bun refuses with
+    `RangeError` between 500,000 and 1,000,000 arguments (checked here), so
+    a long file died at preview instead of refusing; slices are now
+    joined once. `gitCommonDirectory!` is gone: `checkFix` returns the
+    record with both Git directories narrowed, and `dropFix` uses that.
+    `readFixRecord` decodes with `Schema.fromJsonString(FixRecord)`.
+    _Not taken:_ `sections` stays one `for` loop, a line state machine
+    whose `continue`s read more plainly than a reduce over the same
+    state; it has no `let`.
+  - _The deviation entry (twice reported): taken._ The isolation-base and
+    copy sentence, the retained-placement sentence and the cross-engine
+    protection note are above. The optional `.fix` prefix fallback in
+    `TaskClaims.protectedConflict` was not built (hand-off above): it
+    changes the guard every file tool runs, outside the ruling's additive
+    limit for this package.
+  - Apply's body after the consume moved into a `finish` helper, so the
+    happy path reads in one place; no behaviour change.
+
+- **Not claimed.** No model call, permission, route, CLI step or UI; no
+  durable consent (consent is in memory, `fix-proposal.ts:109` and
+  `:121-126`); no
+  checks, commit or push (SF-08); no GitHub fix (VS-13); no Windows or macOS
+  port; no default, key or flag change; no quality claim; no paid run.
+- **Hand-off.**
+  - For SF-08: extend `FixRecord` (`applied` is written after a successful
+    apply), run checks in the placement, commit on the destination branch,
+    and keep the same lease and sweep rules.
+  - For the wiring package and the lead: the `registeredTask` clause so that
+    `Worktree.list` hides fix checkouts (`worktree/index.ts:414`), and
+    retiring or rerouting `ConnectFix`.
+  - For the lead: a process-independent protection rule for the reserved
+    `.fix` names in `TaskClaims.protectedConflict`, so a second engine on
+    the same data folder protects a placement before its own `fixes()`
+    runs (see "Protection after a restart, and across engines").
+  - For the final package: `vectorscope-remaining.md:47` (the VS-12 row) and
+    `:100-102` (ordering item 2), v2 plan `:171` and `:186`, and
+    `vectorscope-continuation.md`; the correcting entry for the stale
+    `vectorscope-deviations.md:16000` sentence also belongs to it. SF-07
+    edits neither `remaining.md` nor `continuation.md`.
