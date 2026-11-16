@@ -50,8 +50,9 @@ export function goingFirst<T>(runs: readonly T[], going: (run: T) => boolean): T
 
 /**
  * One owner read of the session's runs. Undefined, with no request, while `connections` is off or there is no
- * session, and undefined for any refused or failed read, so a guest or a refusing engine shows nothing. The registry
- * is read only when a run names a member the caller does not already know.
+ * session. "refused" when the engine answers the read with a 4xx (a guest, or the owner's own refusal), and "failed"
+ * for anything else (the network, an abort, a timeout, a 5xx, an answer that does not decode), which a later read may
+ * get past. The registry is read only when a run names a member the caller does not already know.
  */
 export async function readTaskRows(input: {
   client: Pick<TaskRowsClient, "runs" | "list">
@@ -59,17 +60,28 @@ export async function readTaskRows(input: {
   connections: boolean
   members?: readonly Connect.Member[]
   signal?: AbortSignal
-}): Promise<TaskRowsRead | undefined> {
+}): Promise<TaskRowsRead | "refused" | "failed" | undefined> {
   const sessionID = input.sessionID
   if (!input.connections || !sessionID) return undefined
-  const runs = await input.client.runs(sessionID, input.signal).catch(() => undefined)
-  if (!runs) return undefined
+  const runs = await input.client
+    .runs(sessionID, input.signal)
+    .catch((error: unknown) => (refused(error) ? ("refused" as const) : ("failed" as const)))
+  if (typeof runs === "string") return runs
   const known = input.members ?? []
   if (runs.length === 0) return { rows: [], members: known }
   const members = runs.every((run) => known.some((member) => member.id === run.request.to))
     ? known
     : await input.client.list(sessionID, input.signal).catch(() => known)
   return { rows: taskRows({ sessionID, runs, members }), members }
+}
+
+// A `throwOnError` SDK call keeps the engine's answer status under `cause`; a network error or an abort has none.
+function refused(error: unknown) {
+  if (!(error instanceof Error)) return false
+  const cause = error.cause
+  if (typeof cause !== "object" || cause === null || !("status" in cause) || typeof cause.status !== "number")
+    return false
+  return cause.status >= 400 && cause.status < 500
 }
 
 /** Cancels a run still going. A finished row makes no request, and an aborted or timed-out request is "failed". */

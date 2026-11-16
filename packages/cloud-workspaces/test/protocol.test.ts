@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { Connect } from "@vectordevai/schema/connect"
 import { parseCommand, parsePublicWorkspace } from "../src/protocol"
 import { signWorkspaceRequest, verifyWorkspaceRequest } from "../src/signing"
 
@@ -197,6 +198,80 @@ test("connected tools reach the engine only as a conversation's reads, a run's c
     })),
   ])
     expect(() => parseCommand(engine("POST", start, body))).toThrow(refused)
+})
+
+// The same inputs as the copies of these rules in desktop remote-routes.test.ts and phone client.test.ts and
+// model.test.ts, so each copy is checked against the schema rather than against another copy.
+const REFS = [
+  "main",
+  "origin/main",
+  "release/2.0",
+  "HEAD~2",
+  "HEAD^",
+  "v1.0.0",
+  "a:b",
+  "a..b",
+  "\u00e9",
+  "0123abc",
+  "a".repeat(40),
+  "x".repeat(256),
+  "\u{1f642}".repeat(128),
+  "x".repeat(257),
+  "\u{1f642}".repeat(129),
+  "",
+  "-x",
+  "--upload-pack=x",
+  "a b",
+  "a\tb",
+  "a\nb",
+  "a\u0000b",
+  "a\u001fb",
+  "a\u007fb",
+  "a\u00a0b",
+  "a\u2028b",
+]
+const RUNS = [
+  "cr_1",
+  "cr_a-b",
+  "cr_a_b",
+  `cr_${"a".repeat(61)}`,
+  "cr_",
+  `cr_${"a".repeat(62)}`,
+  "CR_1",
+  "run_1",
+  "cr_a.b",
+]
+
+test("the connect checks agree with Connect.Ref and admit every Connect.RunID the engine makes", () => {
+  const engine = (method: "GET" | "POST", path: string, body?: unknown) => ({
+    action: "engine" as const,
+    workspaceId: id,
+    path,
+    method,
+    ...(body === undefined ? {} : { body }),
+  })
+  const refused = "The workspace request contains unsupported or invalid fields."
+  for (const base of REFS) {
+    const command = engine("POST", "/experimental/session/ses_example/connect", {
+      to: "vectorscope",
+      target: { kind: "branch", base },
+      background: true,
+    })
+    if (Connect.Ref.makeOption(base)._tag === "Some") expect(parseCommand(command)).toEqual(command)
+    else expect(() => parseCommand(command)).toThrow(refused)
+  }
+  const reads = (run: string) => [
+    engine("GET", `/experimental/connect/runs/${run}`),
+    engine("POST", `/experimental/connect/runs/${run}/cancel`),
+  ]
+  // Letters and digits only: every id RunID.create() makes, and nothing that is not a Connect.RunID.
+  const admitted = ["cr_1", `cr_${"a".repeat(61)}`]
+  for (const run of [...admitted, ...Array.from({ length: 50 }, () => Connect.RunID.create())]) {
+    expect(Connect.RunID.makeOption(run)._tag).toBe("Some")
+    for (const command of reads(run)) expect(parseCommand(command)).toEqual(command)
+  }
+  for (const run of RUNS.filter((run) => !admitted.includes(run)))
+    for (const command of reads(run)) expect(() => parseCommand(command)).toThrow(refused)
 })
 
 test("public workspace decoding refuses private fields and coerced states", () => {

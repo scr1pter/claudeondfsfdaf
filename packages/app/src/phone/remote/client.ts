@@ -145,7 +145,8 @@ export type ApprovalResult =
 /** The changes a phone may have VectorScope review: never a task's, and a branch against an optional base. */
 export type ReviewTarget = { kind: "uncommitted" } | { kind: "staged" } | { kind: "branch"; base?: string }
 
-// A branch review's base, as the computer checks it (desktop remote-routes.ts `REF`, schema Connect.Ref).
+// A branch review's base, as the computer checks it (desktop remote-routes.ts `REF`, schema Connect.Ref); the
+// workspace supervisor's copy (cloud-workspaces protocol.ts) is the same. client.test.ts checks it against Connect.Ref.
 const REF = /^(?!-)[^\s\u0000-\u001f\u007f]{1,256}$/
 
 /** The changes to review from the person's choice, or undefined for a base that is not a branch or commit name. */

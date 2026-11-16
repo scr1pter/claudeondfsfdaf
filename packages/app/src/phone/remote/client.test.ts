@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { generateDeviceIdentity } from "@vectordevai/core/remote/crypto"
+import { Connect } from "@vectordevai/schema/connect"
 import {
   cancelRunRequest,
   connectRunsRequest,
@@ -285,6 +286,46 @@ describe("connected tools", () => {
     expect(reviewTarget("branch", "0123abc")).toEqual({ kind: "branch", base: "0123abc" })
     for (const base of ["-x", "--output=/tmp/x", "a b", "a\u0007b", "x".repeat(257)])
       expect({ base, target: reviewTarget("branch", base) }).toEqual({ base, target: undefined })
+  })
+
+  test("a base passes exactly when Connect.Ref accepts it", () => {
+    // The same inputs as the computer's remote-routes.test.ts and the supervisor's protocol.test.ts.
+    const refs = [
+      "main",
+      "origin/main",
+      "release/2.0",
+      "HEAD~2",
+      "HEAD^",
+      "v1.0.0",
+      "a:b",
+      "a..b",
+      "\u00e9",
+      "0123abc",
+      "a".repeat(40),
+      "x".repeat(256),
+      "\u{1f642}".repeat(128),
+      "x".repeat(257),
+      "\u{1f642}".repeat(129),
+      "",
+      "-x",
+      "--upload-pack=x",
+      "a b",
+      "a\tb",
+      "a\nb",
+      "a\u0000b",
+      "a\u001fb",
+      "a\u007fb",
+      "a\u00a0b",
+      "a\u2028b",
+    ]
+    // A base the phone trims to another name, or to none, is not sent as written.
+    for (const base of refs) {
+      const target = reviewTarget("branch", base)
+      expect({ base, passed: target?.kind === "branch" && target.base === base }).toEqual({
+        base,
+        passed: Connect.Ref.makeOption(base)._tag === "Some",
+      })
+    }
   })
 
   test("runs are read and cancelled only within the conversation", () => {

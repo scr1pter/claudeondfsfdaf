@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { WebAuthn } from "@vectordevai/core/webauthn/verify"
+import { Connect } from "@vectordevai/schema/connect"
 import { fromBase64url } from "./remote-crypto"
 import { APPROVAL_TTL_MS, createPasskeyApprovals } from "./remote-passkey"
 import { softPasskey } from "./remote-phone.fixture"
@@ -577,6 +578,71 @@ describe("connected tools from a phone (CW-23b)", () => {
     for (const session of ["wrk_1", "per_1", "cr_1"])
       expect(code(await start(t, undefined, { session }))).toBe("REMOTE_PATH_REFUSED")
     expect(t.engineCalls()).toEqual([])
+  })
+
+  test("the run and base checks agree with Connect.RunID and Connect.Ref, and admit every id the engine makes", async () => {
+    const t = await setup()
+    // The same inputs as the supervisor's protocol.test.ts and the phone's client.test.ts and model.test.ts.
+    const refs = [
+      "main",
+      "origin/main",
+      "release/2.0",
+      "HEAD~2",
+      "HEAD^",
+      "v1.0.0",
+      "a:b",
+      "a..b",
+      "\u00e9",
+      "0123abc",
+      "a".repeat(40),
+      "x".repeat(256),
+      "\u{1f642}".repeat(128),
+      "x".repeat(257),
+      "\u{1f642}".repeat(129),
+      "",
+      "-x",
+      "--upload-pack=x",
+      "a b",
+      "a\tb",
+      "a\nb",
+      "a\u0000b",
+      "a\u001fb",
+      "a\u007fb",
+      "a\u00a0b",
+      "a\u2028b",
+    ]
+    for (const base of refs) {
+      // Without a passkey answer a start stops at its approval, so only a refused base reads as a refused body.
+      const answer = await start(t, undefined, { target: { kind: "branch", base } })
+      expect({ base, refused: code(answer) === "REMOTE_BODY_REFUSED" }).toEqual({
+        base,
+        refused: Connect.Ref.makeOption(base)._tag === "None",
+      })
+    }
+    const runs = [
+      "cr_1",
+      "cr_a-b",
+      "cr_a_b",
+      `cr_${"a".repeat(61)}`,
+      "cr_",
+      `cr_${"a".repeat(62)}`,
+      "CR_1",
+      "run_1",
+      "cr_a.b",
+    ]
+    const admitted = ["cr_1", "cr_a-b", "cr_a_b", `cr_${"a".repeat(61)}`]
+    for (const runID of [...runs, ...Array.from({ length: 50 }, () => Connect.RunID.create())]) {
+      const answer = await t.ask({
+        method: "GET",
+        path: `/experimental/connect/runs/${runID}`,
+        query: { sessionID: "ses_1" },
+        directory: "/repo",
+      })
+      const expected = !runs.includes(runID) || admitted.includes(runID)
+      expect({ runID, passed: answer.status === 200 }).toEqual({ runID, passed: expected })
+      // Nothing this check admits is anything but a Connect.RunID.
+      if (expected) expect(Connect.RunID.makeOption(runID)._tag).toBe("Some")
+    }
   })
 
   test("a review start needs a passkey check bound to its conversation, folder and target", async () => {

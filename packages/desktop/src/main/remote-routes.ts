@@ -57,7 +57,9 @@ const isInteger = (value: string) => /^\d{1,9}$/.test(value)
 const isBoolean = (value: string) => value === "true" || value === "false"
 const isId = (value: string) => ID.test(value)
 const isText = (value: string) => value.length <= 200
-// As SessionID (schema session-id.ts) and Connect.RunID (schema connect.ts), within the id rule.
+// As SessionID (schema session-id.ts) and Connect.RunID (schema connect.ts), within the id rule. The phone's RUN_ID
+// (app phone/remote/model.ts) is the same run rule; the workspace supervisor's (cloud-workspaces protocol.ts) takes
+// letters and digits only, which is all RunID.create() emits. remote-routes.test.ts checks this one against the schema.
 const isSession = (value: string) => value.startsWith("ses") && isId(value)
 const isRun = (value: string) => /^cr_[A-Za-z0-9_-]{1,61}$/.test(value)
 
@@ -466,7 +468,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // A git ref or revision for a branch review's base, as Connect.Ref (schema connect.ts) and `vector connected review
-// --base` (cli/cmd/connected.ts): never an option, no space or control character. A 7-40 hex commit id passes.
+// --base` (cli/cmd/connected.ts): never an option, no space or control character. A 7-40 hex commit id passes. The
+// phone's REF (app phone/remote/client.ts) and the workspace supervisor's (cloud-workspaces protocol.ts) mirror the
+// same schema; remote-routes.test.ts checks this copy against Connect.Ref.
 const REF = /^(?!-)[^\s\u0000-\u001f\u007f]{1,256}$/
 
 /** What a phone may review: uncommitted, staged, or branch changes against an optional base; never a task's. */

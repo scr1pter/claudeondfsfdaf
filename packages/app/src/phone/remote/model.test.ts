@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Connect } from "@vectordevai/schema/connect"
 import {
   applyApprovalEvent,
   applyConnectAskEvent,
@@ -600,6 +601,26 @@ describe("connected tools (CW-23c)", () => {
     )
     expect(connectRuns([fix], "ses_1")[0]).toMatchObject({ title: "VectorScope fix", status: "Done", findings: 0 })
     expect(connectRuns([fix], "ses_1")[0]).not.toHaveProperty("verdict")
+  })
+
+  test("a run is kept for every id the engine makes, and only for a Connect.RunID", () => {
+    // The same inputs as the computer's remote-routes.test.ts and the supervisor's protocol.test.ts.
+    const ids = [
+      "cr_1",
+      "cr_a-b",
+      "cr_a_b",
+      `cr_${"a".repeat(61)}`,
+      "cr_",
+      `cr_${"a".repeat(62)}`,
+      "CR_1",
+      "run_1",
+      "cr_a.b",
+    ]
+    const kept = ["cr_1", "cr_a-b", "cr_a_b", `cr_${"a".repeat(61)}`]
+    const made = Array.from({ length: 50 }, () => String(Connect.RunID.create()))
+    const body = [...ids, ...made].map((id) => run(id))
+    expect(connectRuns(body, "ses_1").map((view) => view.id)).toEqual([...kept, ...made])
+    for (const id of [...kept, ...made]) expect(Connect.RunID.makeOption(id)._tag).toBe("Some")
   })
 
   test("anything this build does not recognise is left out", () => {

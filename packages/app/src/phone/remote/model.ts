@@ -503,6 +503,8 @@ export type ConnectRunView = {
 const SHOWN = 5
 /** The most of a fix's change an approval shows. */
 const MAX_DIFF = 12_000
+// As the computer's run rule (desktop remote-routes.ts `isRun`, Connect.RunID within its id rule); model.test.ts
+// checks that it keeps every id RunID.create() makes and nothing that is not a Connect.RunID.
 const RUN_ID = /^cr_[A-Za-z0-9_-]{1,61}$/
 // As Connect.SendsTo (schema connect.ts).
 const SENDS_TO = /^(this-computer|vector-codium|(model-server|provider):\S+)$/

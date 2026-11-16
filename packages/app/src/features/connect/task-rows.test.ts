@@ -79,6 +79,13 @@ function engine(answer: {
   return { client, calls }
 }
 
+/** An owner read that answered with runs; a refused or failed read, or none, fails the case. */
+async function answered(input: Parameters<typeof readTaskRows>[0]) {
+  const read = await readTaskRows(input)
+  if (read === undefined || typeof read === "string") throw new Error(`Expected an owner read, got ${read}.`)
+  return read
+}
+
 test("an owner read maps running and finished reviews to rows over the registry member", async () => {
   const done = ended("cr_done", {
     state: "completed",
@@ -90,8 +97,8 @@ test("an owner read maps running and finished reviews to rows over the registry 
     runs: () => Response.json([done, going("cr_running", "running", "Reviewing src/example.ts")]),
     members: () => Response.json([vectorscope]),
   })
-  const read = await readTaskRows({ client: fake.client, sessionID, connections: true })
-  expect(read?.rows).toStrictEqual([
+  const read = await answered({ client: fake.client, sessionID, connections: true })
+  expect(read.rows).toStrictEqual([
     {
       id: Connect.RunID.make("cr_running"),
       title: "VectorScope",
@@ -117,7 +124,7 @@ test("an owner read maps running and finished reviews to rows over the registry 
       cancellable: false,
     },
   ])
-  expect(read?.members.map((member) => member.id)).toEqual(["vectorscope"])
+  expect(read.members.map((member) => member.id)).toEqual(["vectorscope"])
   expect(fake.calls.map((call) => [call.method, call.path])).toEqual([
     ["GET", "/experimental/connect/runs"],
     ["GET", "/experimental/connect"],
@@ -209,7 +216,7 @@ test("without connections or a session nothing is read and nothing shows", async
   expect(fake.calls).toEqual([])
 })
 
-test("a guest's refusal, an engine refusal and a failed fetch show nothing and never read the registry", async () => {
+test("a guest's refusal and an engine refusal are refused, and never read the registry", async () => {
   const refusals = [
     () => Response.json({ message: "This operation requires the server owner" }, { status: 403 }),
     ...["forbidden", "disabled", "invalid"].map(
@@ -218,16 +225,31 @@ test("a guest's refusal, an engine refusal and a failed fetch show nothing and n
   ]
   for (const runs of refusals) {
     const fake = engine({ runs, members: () => Response.json([vectorscope]) })
-    expect(await readTaskRows({ client: fake.client, sessionID, connections: true })).toBeUndefined()
+    expect(await readTaskRows({ client: fake.client, sessionID, connections: true })).toBe("refused")
     expect(fake.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs"])
   }
-  const offline = engine({
-    runs: () => {
+})
+
+test("a dropped, timed-out, failing or unreadable read is a failure, not a refusal, and never reads the registry", async () => {
+  const failures: (() => Response)[] = [
+    () => {
       throw new TypeError("fetch failed")
     },
-  })
-  expect(await readTaskRows({ client: offline.client, sessionID, connections: true })).toBeUndefined()
-  expect(offline.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs"])
+    () => {
+      throw new DOMException("The operation timed out.", "TimeoutError")
+    },
+    () => {
+      throw new DOMException("The operation was aborted.", "AbortError")
+    },
+    () => Response.json({ message: "Internal error" }, { status: 500 }),
+    () => Response.json({ message: "Bad gateway" }, { status: 502 }),
+    () => Response.json([{ id: "cr_not_a_run" }]),
+  ]
+  for (const runs of failures) {
+    const fake = engine({ runs, members: () => Response.json([vectorscope]) })
+    expect(await readTaskRows({ client: fake.client, sessionID, connections: true })).toBe("failed")
+    expect(fake.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs"])
+  }
 })
 
 test("an owner read with no runs shows no rows and skips the registry", async () => {
@@ -238,25 +260,25 @@ test("an owner read with no runs shows no rows and skips the registry", async ()
 
 test("the registry is read only for a member the caller does not know, and a failed read keeps the ids", async () => {
   const known = engine({ runs: () => Response.json([going("cr_running")]) })
-  const cached = await readTaskRows({ client: known.client, sessionID, connections: true, members: [vectorscope] })
-  expect(cached?.rows[0]?.title).toBe("VectorScope")
+  const cached = await answered({ client: known.client, sessionID, connections: true, members: [vectorscope] })
+  expect(cached.rows[0]?.title).toBe("VectorScope")
   expect(known.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs"])
 
   const unknown = engine({
     runs: () => Response.json([going("cr_running"), to("codium", going("cr_codium"))]),
     members: () => Response.json([vectorscope, codium]),
   })
-  const listed = await readTaskRows({ client: unknown.client, sessionID, connections: true, members: [vectorscope] })
-  expect(listed?.rows.map((row) => row.title)).toEqual(["VectorScope", "Vector Codium"])
+  const listed = await answered({ client: unknown.client, sessionID, connections: true, members: [vectorscope] })
+  expect(listed.rows.map((row) => row.title)).toEqual(["VectorScope", "Vector Codium"])
   expect(unknown.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs", "/experimental/connect"])
 
   const failing = engine({
     runs: () => Response.json([to("codium", going("cr_codium"))]),
     members: () => Response.json({ message: "Owner only" }, { status: 403 }),
   })
-  const fallback = await readTaskRows({ client: failing.client, sessionID, connections: true, members: [vectorscope] })
-  expect(fallback?.rows.map((row) => row.title)).toEqual(["codium"])
-  expect(fallback?.members).toEqual([vectorscope])
+  const fallback = await answered({ client: failing.client, sessionID, connections: true, members: [vectorscope] })
+  expect(fallback.rows.map((row) => row.title)).toEqual(["codium"])
+  expect(fallback.members).toEqual([vectorscope])
   expect(failing.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs", "/experimental/connect"])
 })
 
@@ -384,13 +406,13 @@ test("with the registry unread a run shows dollars only when its result names a 
       ]),
     members: () => Response.json({ message: "Owner only" }, { status: 403 }),
   })
-  const read = await readTaskRows({ client: failing.client, sessionID, connections: true })
-  expect(read?.members).toEqual([])
-  expect(read?.rows.map((row) => [row.title, row.spend])).toEqual([
+  const read = await answered({ client: failing.client, sessionID, connections: true })
+  expect(read.members).toEqual([])
+  expect(read.rows.map((row) => [row.title, row.spend])).toEqual([
     ["codium", "Usage unavailable"],
     ["elsewhere", "$0.50"],
   ])
-  expect(JSON.stringify(read?.rows)).not.toContain("1.25")
+  expect(JSON.stringify(read.rows)).not.toContain("1.25")
   expect(failing.calls.map((call) => call.path)).toEqual(["/experimental/connect/runs", "/experimental/connect"])
 })
 

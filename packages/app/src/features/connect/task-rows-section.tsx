@@ -20,7 +20,8 @@ type Key = {
 
 /**
  * The conversation's own connected runs in the Background tasks pane. Rows come only from a successful owner read
- * for the current client, root, stream and authority epoch; anything else shows nothing. A click can only cancel.
+ * for the current client, root, stream and authority epoch, and a later read that fails without a refusal keeps them;
+ * anything else shows nothing. A click can only cancel.
  */
 export function ConnectTaskRows(props: { rootID: string | undefined; connections: boolean }) {
   const sdk = useSDK()
@@ -33,7 +34,8 @@ export function ConnectTaskRows(props: { rootID: string | undefined; connections
   const [cancelling, setCancelling] = createSignal<string>()
   const [notice, setNotice] = createSignal<{ id: TaskRow["id"]; outcome: "ended" | "failed" }>()
   let pending: AbortController | undefined
-  let registry: { key: Key; members: readonly Connect.Member[] } | undefined
+  // The last successful read's members and rows, for its key only.
+  let last: { key: Key; members: readonly Connect.Member[]; rows: readonly TaskRow[] } | undefined
   let disposed = false
   // A pending revert makes the engine refuse the read, so none is made until it is settled.
   const key = createMemo<Key | undefined>(
@@ -54,7 +56,7 @@ export function ConnectTaskRows(props: { rootID: string | undefined; connections
           a.epoch === b.epoch),
     },
   )
-  // After a refusal this client makes no more owner reads until the key changes.
+  // After a refusal this client makes no more owner reads until the key changes; a failure without one blocks nothing.
   const source = createMemo(() => {
     const current = key()
     return current && current !== blocked() ? current : undefined
@@ -67,20 +69,22 @@ export function ConnectTaskRows(props: { rootID: string | undefined; connections
       client: input.client,
       sessionID: input.rootID,
       connections: props.connections,
-      members: registry?.key === input ? registry.members : undefined,
+      members: last?.key === input ? last.members : undefined,
       signal: AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]),
     })
     if (disposed || abort.signal.aborted || input !== key()) return { key: input, rows: [] as readonly TaskRow[] }
-    if (!read) {
+    // A dropped or timed-out read keeps this key's last rows; the next connect.run.updated event reads again.
+    if (read === "failed") return { key: input, rows: last?.key === input ? last.rows : [] }
+    if (!read || read === "refused") {
       setBlocked(input)
       return { key: input, rows: [] as readonly TaskRow[] }
     }
-    registry = { key: input, members: read.members }
+    last = { key: input, members: read.members, rows: read.rows }
     return { key: input, rows: read.rows }
   })
   const retire = () => {
     pending?.abort()
-    registry = undefined
+    last = undefined
     setCancelling(undefined)
     setNotice(undefined)
     setEpoch(Symbol())
