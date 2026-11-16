@@ -1,6 +1,6 @@
 # Vector Hands continuation checkpoint
 
-**Lane state at HF-8 (16 November 2026 UTC), with HF-5's two Windows runs recorded.** The source head is `ef9f809d` at helper `1.0.15`; the HF-6, HF-7 and HF-8 commits are docs only. HF-5's runs at `d9d5afaf`, which has the `ef9f809d` sources, compiled it under MSVC and passed `apps-running-target` on x64 in both runs and on ARM64 in run 2. Run 1 never reached ARM64, so HF-5 stays awaiting CI until the lead rules on one ARM64-only dispatch and on the coverage change ([HF-5 runs](#hf-5-runs--windows-x64-and-arm64-at-the-hf-5-source-16-november-2026)). No measured macOS input file differs from `0ee486e3`, whose mac-build job `132574657008` passed the enforced `1.0.15` lock; macOS sources and the lock file are unchanged, and lock confirmation at the merged source is pending. PR #33 merged into `main` as `b362fdf6`, and `hands-finish` has not merged `main` ([HF-8](#hf-8--lane-state-and-ledgers-16-november-2026)).
+**Lane state at HF-8 (16 November 2026 UTC), with HF-5's two Windows runs recorded.** The source head is `ef9f809d` at helper `1.0.15`; the HF-6, HF-7 and HF-8 commits are docs only. HF-5's runs at `d9d5afaf`, which has the `ef9f809d` sources, compiled it under MSVC and passed `apps-running-target` on x64 in both runs and on ARM64 in run 2. Run 1 never reached ARM64, so HF-5 stays awaiting CI until the lead rules on one ARM64-only dispatch and on the coverage change ([HF-5 runs](#hf-5-runs--windows-x64-and-arm64-at-the-hf-5-source-16-november-2026)). No measured macOS input file differs from `0ee486e3`, whose mac-build job `132574657008` passed the enforced `1.0.15` lock; macOS sources and the lock file are unchanged, and lock confirmation at the merged source is pending. PR #33 merged into `main` as `b362fdf6` ([HF-8](#hf-8--lane-state-and-ledgers-16-november-2026)), and `hands-finish` then merged `main` `2034e1da` in `c8ab4d87` ([merged main after #33](#merged-main-after-33-16-november-2026)).
 
 The merged native-stop-fix diagnostics (HF-1) do two things:
 
@@ -2393,3 +2393,13 @@ No row moved to skipped or failed because of the forced pause. Every x64 row at 
 - No report archive was downloaded; archive bytes and SHA-256 read "not downloaded", and the API or uploader-logged sizes are not archive hashes.
 
 HF-5's runs give no release, signing, device or qualification credit.
+
+## Merged main after #33 (16 November 2026)
+
+`c8ab4d87` merges `origin/main` `2034e1da` (#33, then #34 cloud workspaces, #37 Linux app e2e budget and #35 native qualify) into the lane head `a0e2128f`, with a merge commit. PR #39 (`windows-stop-observe`) had not merged, so `hands-deviations.md` merged without conflict.
+
+- **One conflict,** `docs/vector/build/v2-spawn-review.md`, where both sides appended after §6. Both are kept: the lane's HF-8 note, then main's NQ-2 and NQ-4 addenda. The HF-8 note's line citations are dated at `ef9f809d` and `b362fdf6` and were not re-checked against `2034e1da`.
+- **`test.yml` merged cleanly:** the lane's `macos-measure` dispatch target and main's removal of the `v2` push branch, the web account and workspace page tests and the 45-minute app e2e budget.
+- **No generated file** conflicted or needed regeneration, and no lockfile or `package.json` changed. The lane pins no review digest; `REVIEW_PIPELINE_SOURCES` is main's, and its test passes.
+- **Invariants.** `helperVersion` stays `1.0.15`, and no measured macOS helper input differs from `0ee486e3`, so invariant 2 stays empty. No flag changed; Hands stays off.
+- **Checks on the merged tree,** one file at a time: `core` `test/review/model-evidence.test.ts` and `test/pty/pty-required-isolation.test.ts`; `desktop` `scripts/computer-workflow.test.ts`, `scripts/diagnose-computer-overlay-electron-signature.test.ts`, `scripts/computer-helper-selftest.test.ts` and `scripts/computer-overlay-smoke-source.test.ts`; `engine` `test/spawn-inventory.test.ts` and `test/mcp/computer-policy-isolation.test.ts`; `web` `test/everywhere-lane.test.ts`; `cloud` `src/workflow-compliance.test.ts`. All pass, and the full `bun turbo typecheck` passes (27 of 27). The Windows native code builds only in CI, so HF-5's MSVC result still comes from the lane's PR run.
