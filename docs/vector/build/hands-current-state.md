@@ -1,6 +1,6 @@
 # Vector Hands: current state
 
-A plain summary on 15 November 2026, at `hands-finish` after HF-3. The evidence ledger is [hands-progress.md](./hands-progress.md); where this page and the ledger differ, the ledger wins. Hands is unreleased and unversioned. Nothing here is release, signing or device approval. Counts such as 30/0/1 are passed/failed/skipped.
+A plain summary on 16 November 2026 UTC, at `hands-finish` after HF-4. The evidence ledger is [hands-progress.md](./hands-progress.md); where this page and the ledger differ, the ledger wins. Hands is unreleased and unversioned. Nothing here is release, signing or device approval. Counts such as 30/0/1 are passed/failed/skipped.
 
 ## What is done
 
@@ -9,12 +9,13 @@ A plain summary on 15 November 2026, at `hands-finish` after HF-3. The evidence 
 - The owner-approved W9 redesign, one-time calibration plus a listener heartbeat, is implemented ([W9 proposal](./hands-deviations.md#w9-proposal-for-owner-review--real-calibration-and-a-separate-listener-heartbeat)).
 - HF-1 merged the native-stop-fix Windows diagnostics on `hands-finish`, not yet in PR #33, and kept helper `1.0.15` ([HF-1](./hands-progress.md#hf-1--native-stop-fix-merged-at-helper-1015-15-november-2026)).
 - HF-2 added the MCP and PTY isolation-order tests. It found that an isolation refusal inside MCP's `localTransport` already ends as a failed status, because `MCP.create`'s `Effect.catchCause` (`packages/engine/src/mcp/index.ts:553-559`) turns it into `{ status: "failed" }`, so no code change was needed ([HF-2](./hands-progress.md#hf-2--mcp-and-pty-isolation-order-tests-15-november-2026)).
+- HF-4 fixed the folded Windows self-test that did not compile and made the helper summaries print failed-row stages (`289af6bb`), then recorded three Windows runs at that head ([HF-4](./hands-progress.md#hf-4--folded-diagnostic-windows-x64-and-arm64-native-evidence-15-november-2026)).
 
 ## Last fully passing automated evidence (a0e5ce8e)
 
 - Full PR CI [run 43560683817](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43560683817) at `a0e5ce8e`: 27 successful jobs, 11 skipped, none failed. Windows core 30/0/1, isolated 37/0/11.
 - The unsigned artifacts-only [preview 43560764334](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43560764334) at the same source: 31 successful jobs, 3 skipped, none failed. The final Windows x64 and native ARM64 verifiers, both Mac helper verifiers and the Linux package checks passed. Windows was unsigned, Mac ad-hoc, and nothing was published.
-- `packages/desktop/native` and `computer-helper.yml` are identical at `a0e5ce8e`, `f830e3fd`, `0ee486e3` and `cf2373c4`; the only desktop script change among them is the test file `computer-workflow.test.ts`, between `a0e5ce8e` and `f830e3fd`. `hands-finish` adds Windows-only native diagnostics plus the unused `test.yml` Mac measurement route (HF-1) and tests (HF-2), none of which has run in CI yet.
+- `packages/desktop/native` and `computer-helper.yml` are identical at `a0e5ce8e`, `f830e3fd`, `0ee486e3` and `cf2373c4`; the only desktop script change among them is the test file `computer-workflow.test.ts`, between `a0e5ce8e` and `f830e3fd`. `hands-finish` adds Windows-only native diagnostics plus the unused `test.yml` Mac measurement route (HF-1) and tests (HF-2). The Windows diagnostics failed to compile at `a0fbfa3b` (run 43638862293) and ran three times after HF-4's fix at `289af6bb` ([HF-4](./hands-progress.md#hf-4--folded-diagnostic-windows-x64-and-arm64-native-evidence-15-november-2026)); the Mac route and HF-2's tests have not run in CI.
 
 ## PR #33 computer-helper observations
 
@@ -38,7 +39,7 @@ The isolated step continues on error when `privileged-required` is false, as in 
 - Windows staged Stop failed at `f830e3fd` and passed at `0ee486e3` and `cf2373c4` on identical native source; no cause is established.
 - Windows x64 isolated rows: `apps-running-target` at `f830e3fd` and `0ee486e3`; the capture color patch and affinity exclusion at `cf2373c4`.
 - ARM64 at `503418a1` (job `132576158733`): privileged 34/4/10, the aggregate row plus `apps-running-target`, `capture-affinity-exclusion` and `input-listener-health` ([diagnostic note](./hands-uia-timeout-diagnostic.md)).
-- HF-4 Windows native rows: x64 and ARM64 at `hands-finish`, through `test.yml` with `computer_helper=true` and `computer_helper_target=windows`.
+- HF-4 at `289af6bb` (runs 43809140577, 43813017303 and 43816713717): x64 `apps-running-target` failed at `apps-list-reply` / `paused` in runs 1 and 3. ARM64 run 1 failed `apps-running-target` at the same stage, `capture-color-patch`, `capture-affinity-exclusion` at `capture-service` and `input-listener-health` at `input-health-ready`. The staged Stop failed in run 2 at `observe-up` / `driver_failure`, and run 3's ARM64 core `unit` row failed. HF-5 and HF-6 (listener) meet their conditions; HF-6 (affinity) and HF-7 do not ([HF-4](./hands-progress.md#hf-4--folded-diagnostic-windows-x64-and-arm64-native-evidence-15-november-2026)).
 - HF-2's MCP `refused` branch on the Windows engine shards: a separate default-input `test.yml` dispatch on `hands-finish`, or the lane PR's run. A `computer_helper` dispatch skips the engine shards (`test.yml:747` and `:799`).
 - Mac lock confirmation at the merged source, in the lane's final full `test.yml`.
 - Packaging at the merged source: the artifacts-only preview accepts only `refs/heads/hands` (`vector-desktop-release.yml:74`; see [release artifacts](./hands-release-artifacts.md)).
