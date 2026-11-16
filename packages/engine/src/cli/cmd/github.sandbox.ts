@@ -108,7 +108,8 @@ export async function command(file: string, args: readonly string[], allowed = [
   if (!allowed.includes(result.code)) {
     // Fixed executable names and the exit code only: argv/stdout/stderr can contain private paths or credentials.
     const operation = file === "/usr/bin/sudo" ? args[1] : file
-    const outcome = result.code >= 0 ? `exited ${result.code}` : result.timedOut ? "timed out" : "failed"
+    // Timeout first: a child that traps SIGTERM still exits with a numeric code after execFile kills it.
+    const outcome = result.timedOut ? "timed out" : result.code >= 0 ? `exited ${result.code}` : "failed"
     throw new Error(`Sandbox operation ${path.basename(operation ?? file)} ${outcome}; the run is refused.`)
   }
   return result
@@ -334,8 +335,10 @@ export function sandboxEnvironment(
           : [[name, env[name]!]],
       ),
     ),
-    // Keep installed Go/Rust/other runner toolchains reachable, while pinning the resolved Node interpreter and
-    // excluding current-directory/relative lookups. The parent supplies this PATH before any agent code runs.
+    // Keep runner toolchains on PATH reachable, while pinning the resolved Node interpreter and excluding
+    // current-directory/relative lookups. rustup-managed Rust is not usable: the agent home is created empty
+    // without /etc/skel and RUSTUP_HOME/CARGO_HOME are not passed (deviations V16 item 11). The parent supplies
+    // this PATH before any agent code runs.
     PATH: [
       ...new Set([
         path.dirname(absolute(locations.node)),

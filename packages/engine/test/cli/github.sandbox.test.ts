@@ -366,6 +366,14 @@ test.skipIf(process.platform === "win32")(
     expect(await message("/bin/sh", ["-c", "echo private-output; exec sleep 5"], 200)).toBe(
       "Sandbox operation sh timed out; the run is refused.",
     )
+    // A child that traps SIGTERM exits with its own code after the timeout kill and still reads as a timeout.
+    expect(
+      await message(
+        "/bin/sh",
+        ["-c", "trap 'kill $pid; exit 3' TERM; sleep 5 >/dev/null 2>&1 & pid=$!; echo private-output; wait"],
+        300,
+      ),
+    ).toBe("Sandbox operation sh timed out; the run is refused.")
     expect(await message("/bin/sh", ["-c", "echo private-output >&2; exit 7"])).toBe(
       "Sandbox operation sh exited 7; the run is refused.",
     )
