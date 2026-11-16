@@ -384,6 +384,49 @@ describe("per-operation fix consent policy (in-process only)", () => {
     ).toBe(true)
   })
 
+  test("a local fix may push to a repository on this computer by absolute file:/// path; a GitHub fix may not", async () => {
+    const { policy } = fixture()
+    const local = { ...push, remote: "file:///srv/remote.git" }
+    const handle = await approved(policy, proposal(), local)
+    expect((await policy.consume(handle, proposal(), local, "local:alice")).ok).toBe(true)
+    // Two file remotes are two operations.
+    const other = await approved(policy, proposal(), local)
+    expect(
+      await policy.consume(other, proposal(), { ...local, remote: "file:///srv/other.git" }, "local:alice"),
+    ).toEqual({ ok: false, reason: "mismatch" })
+    for (const remote of [
+      "file://relative/remote.git",
+      "file://host/srv/remote.git",
+      "file:///srv/../etc/remote.git",
+      "file:///srv/./remote.git",
+      "file:///srv//remote.git",
+      "file:///srv/remote.git/",
+      "file:///srv/remote .git",
+      "file:///",
+      "file:///C:/remote.git",
+      "file:/srv/remote.git",
+    ])
+      expect(await policy.approve(proposal(), { ...push, remote }, "local:alice", 1_000)).toEqual({
+        ok: false,
+        reason: "operation",
+      })
+    const github = {
+      ...proposal(),
+      scope: {
+        kind: "github" as const,
+        repositoryID: 42,
+        owner: "vector",
+        repository: "example",
+        pullRequest: 7,
+        sourceBranch: "feature",
+        baseBranch: "main",
+        destinationBranch: "vector/fix-42",
+      },
+    }
+    expect(await policy.approve(github, local, "github:1", 500)).toEqual({ ok: false, reason: "operation" })
+    expect((await policy.approve(github, push, "github:1", 500)).ok).toBe(true)
+  })
+
   test("bounds pending grants, frees retired slots and rejects invalid/backwards clocks", async () => {
     const { policy, time } = fixture()
     const handles = await Promise.all(Array.from({ length: FIX_LIMITS.pending }, () => approved(policy)))

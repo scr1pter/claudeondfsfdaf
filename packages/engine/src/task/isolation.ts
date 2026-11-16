@@ -125,6 +125,24 @@ export const Record = Schema.Struct({
 export type Record = Schema.Schema.Type<typeof Record>
 const decode = Schema.decodeUnknownSync(Record)
 
+/** One consented check run of a review fix (SF-08), as its record keeps it: no output. */
+const FixChecks = Schema.Struct({
+  operation: Schema.String,
+  at: Schema.Number,
+  results: Schema.Array(
+    Schema.Struct({
+      argv: Schema.Array(Schema.String),
+      cwd: Schema.String,
+      exitCode: Schema.NullOr(Schema.Number),
+      timedOut: Schema.Boolean,
+      truncated: Schema.Boolean,
+      durationMs: Schema.Number,
+    }),
+  ),
+  aborted: Schema.optional(Schema.Literals(["head", "worktree", "cancelled"])),
+})
+const FIX_CHECK_RUNS = 16
+
 /**
  * A review fix's placement (VS-12a, SF-07): a second record kind beside the task records, never a task. Its checkout is
  * detached at one verified commit, is never seeded from the launching checkout's uncommitted or untracked files, runs
@@ -142,13 +160,32 @@ export const FixRecord = Schema.Struct({
   homeDirectory: Schema.String,
   directory: Schema.String,
   head: Schema.String,
-  state: Schema.Literals(["preparing", "ready", "applied", "retained"]),
+  state: Schema.Literals(["preparing", "ready", "applied", "committed", "pushed", "retained"]),
   createdAt: Schema.Number,
   owner: Schema.Struct({ runtime: Schema.String, pid: Schema.Number, boot: Schema.Number, machine: Schema.String }),
   gitDirectory: Schema.optional(Schema.String),
   gitCommonDirectory: Schema.optional(Schema.String),
   /** What an approved patch put in the checkout, so a later step (checks, commit: SF-08) knows what it holds. */
   applied: Schema.optional(Schema.Struct({ digest: Schema.String, patchDigest: Schema.String, at: Schema.Number })),
+  /**
+   * The consented check runs (SF-08), newest last, at most FIX_CHECK_RUNS: each command's argv, folder, exit and
+   * bounds, never its output, which is the checked code's and untrusted.
+   */
+  checks: Schema.optional(Schema.Array(FixChecks)),
+  /** The commit a consented commit made on the destination branch (SF-08). */
+  commit: Schema.optional(
+    Schema.Struct({ sha: Schema.String, branch: Schema.String, tree: Schema.String, at: Schema.Number }),
+  ),
+  /** Where a consented push put that commit (SF-08): the remote as approved, which holds no credential. */
+  push: Schema.optional(
+    Schema.Struct({
+      remote: Schema.String,
+      commit: Schema.String,
+      ref: Schema.String,
+      mode: Schema.Literals(["branch", "draft-pr"]),
+      at: Schema.Number,
+    }),
+  ),
   error: Schema.optional(Schema.String),
 })
 export type FixRecord = Schema.Schema.Type<typeof FixRecord>
@@ -440,6 +477,10 @@ const fixPaths = (projectID: string, fixID: string) => {
     directory: path.join(Global.Path.data, "task-worktree", projectID, ".fix", fixID),
   }
 }
+
+/** The private Git index a fix commit is built in (SF-08), inside the fix's registry folder and removed with it. */
+export const fixCommitIndex = (record: Pick<FixRecord, "projectID" | "fixID">) =>
+  path.join(fixPaths(record.projectID, record.fixID).registry, "commit.index")
 
 async function readFixRecord(ctx: InstanceContext, fixID: string): Promise<FixRecord> {
   const expected = fixPaths(ctx.project.id, fixID)
@@ -3174,6 +3215,40 @@ export const make = Effect.gen(function* () {
       }),
     )
   })
+  // SF-08's steps, each a compare-and-set on the record's state under the fix's lock, as markFixApplied is.
+  const fixStep = (fixID: string, from: readonly FixRecord["state"][], step: (record: FixRecord) => FixRecord) =>
+    lock(
+      fixID,
+      Effect.gen(function* () {
+        const record = yield* getFix(fixID)
+        if (!from.includes(record.state)) return yield* err("state", "This fix checkout is not at that step.")
+        const next = step(record)
+        yield* saveFix(next)
+        return next
+      }),
+    )
+  /** Records a consented check run without its output; the state is unchanged, and only the newest runs are kept. */
+  const recordFixChecks = Effect.fn("TaskIsolation.recordFixChecks")(function* (
+    fixID: string,
+    run: Schema.Schema.Type<typeof FixChecks>,
+  ) {
+    return yield* fixStep(fixID, ["applied", "committed"], (record) => ({
+      ...record,
+      checks: [...(record.checks ?? []), run].slice(-FIX_CHECK_RUNS),
+    }))
+  })
+  const markFixCommitted = Effect.fn("TaskIsolation.markFixCommitted")(function* (
+    fixID: string,
+    commit: NonNullable<FixRecord["commit"]>,
+  ) {
+    return yield* fixStep(fixID, ["applied"], (record) => ({ ...record, state: "committed", commit: { ...commit } }))
+  })
+  const markFixPushed = Effect.fn("TaskIsolation.markFixPushed")(function* (
+    fixID: string,
+    push: NonNullable<FixRecord["push"]>,
+  ) {
+    return yield* fixStep(fixID, ["committed"], (record) => ({ ...record, state: "pushed", push: { ...push } }))
+  })
   /**
    * Every placement of the project, each protected again (protection is held in memory, so a placement made by an
    * earlier process, or by another engine on this data folder, is unprotected here until this runs). A name without any
@@ -3243,6 +3318,9 @@ export const make = Effect.gen(function* () {
     removeFix,
     retainFix,
     markFixApplied,
+    recordFixChecks,
+    markFixCommitted,
+    markFixPushed,
     getFix,
     fixes,
   }

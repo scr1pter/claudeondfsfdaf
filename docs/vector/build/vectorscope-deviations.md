@@ -20084,3 +20084,881 @@ progress record for SF-07.
     `vectorscope-continuation.md`; the correcting entry for the stale
     `vectorscope-deviations.md:16000` sentence also belongs to it. SF-07
     edits neither `remaining.md` nor `continuation.md`.
+
+## 2026-11-16 · VS-12b Fix checks, commit and push operations (SF-08)
+
+The second half of the VS-12 executor (`vectorscope-plan.md:322`, the "Fix
+proposals and consent" section `:214-236`; `vectorscope-upgrade.md` I-6
+`:261` and VS-30 item 2 `:676-683`; the SF-07 hand-off above). Built on
+`scope-finish` at `1f5d62ad` (SF-07) as lane package SF-08, from the SF-08
+plan as corrected by its critique. Where a critique point was taken in
+another form or rejected, the reason is under "Critique points". This entry
+is also the lane's progress record for SF-08.
+
+- **Status.** Built and tested in the working tree, then committed by the
+  lane's commit gate (2026-11-16) as
+  `feat(review): run consented fix checks, commit and local push separately`.
+  Review round one's findings are applied in the same commit ("Review
+  findings, round one" below).
+
+- **The lead's 2026-11-16 ruling** (quoted in full in the SF-07 entry) applies
+  to SF-08 as it says. How it was applied: the fix lifecycle stays the
+  additive `fix.json` kind; SF-08 only widens `FixRecord` (two states and
+  three optional fields) and adds three fix-only functions in the fix block
+  of `isolation.ts`; no task record, key, fence, check, reserve or start path
+  changes (`git diff --numstat`: 77 added, 1 removed in `isolation.ts`, the
+  one removed line being `FixRecord`'s own state list); every process starts
+  through the existing spawner or the Git service; nothing seeds the user's
+  uncommitted files. Ruling item (3) is covered by a new case (below) that
+  shows a `committed` and a `pushed` record invisible to the task paths and
+  swept like any fix record.
+
+- **Scope.** Three new `ReviewFix` operations, each with its own consent:
+  `checks`, `commit`, `push`; `cancel` now also stops a running check or
+  push. Still unwired: no layer in AppRuntime, route, CLI, app, key, flag,
+  default or permission reaches `review/fix.ts`, and nothing calls a model.
+  Linux only, as SF-07.
+
+- **What landed.**
+  - `packages/engine/src/review/fix.ts` (2,060 lines, from 831; line
+    numbers here are after review round one):
+    - `REFUSALS` gains `context`, `sandbox`, `dependencies`,
+      `destination`, `remote`, `push` (`:60`). `State` gains `committed`
+      and `pushed`. New exported types `Identity` (`:130`), `CheckResult`
+      (`:132`), `CheckEvent` (`:142`), `Checked` (`:146`, with
+      `leftovers`), `Committed` (`:165`), `Pushed` (`:176`); two context
+      references: `SandboxPlatform` (`:187`, the platform the sandbox is
+      chosen for, default `process.platform`) and `RunnerContext` (`:194`,
+      why checks may not run here, read at each call:
+      `runnerContext(process.env)`, exported at `:213`).
+    - In `make` (`:299`): the Git `run` helper takes extra env and stdin
+      (`:309`); `applied` (`:857`, the applied proposal's digests and
+      scope again); `holds` (`:871`, D7 below); `cancellable` (`:896`);
+      `spend` (`:917`, one uninterruptible consume, refusals one to one,
+      receipt digest check); `execute` (`:930`, one sandboxed command);
+      `checks` (`:1004`); `commit` (`:1139`) with `build` (`:1209`) and
+      `unref` (`:1291`); `push` (`:1309`) with `remoteProblem` (`:1416`)
+      and `localRemoteProblem` (`:1459`); `cancel` (`:1493`). The returned
+      object is
+      `{ reserve, preview, apply, checks, commit, push, cancel, state, placements }`.
+    - Module helpers: `checksOperation` (`:1563`), `operationDigest`
+      (`:1619`), `commitOperation` (`:1632`), `pushOperation` (`:1648`),
+      `exact`, `person` (`:1684`), `environment` (`:1702`), `folder`
+      (`:1736`), `dependencies` (`:1770`) with `javascriptMissing`
+      (`:1787`), `cargoMissing` (`:1812`), `rustupProxy` (`:1834`),
+      `cargoExternal` (`:1852`), `goMissing` (`:1872`), `goRequires`
+      (`:1882`) and `nearest` (`:1896`); `held` (`:1926`), `readRegular`
+      (`:1957`). `node` deps add `CrossSpawnSpawner.node` (`:2054`).
+  - `packages/engine/src/task/isolation.ts` (fix block only): `FixChecks`
+    schema (with its own doc comment) and `FIX_CHECK_RUNS = 16`
+    (`:128-144`), above `FixRecord`'s doc comment, which stays directly on
+    `FixRecord` (`:146-154`); `FixRecord.state` adds `committed` and
+    `pushed`; optional `checks`, `commit` and `push` fields;
+    `fixCommitIndex` (`:482`, the private index path inside the fix's
+    registry folder); `fixStep`, `recordFixChecks`, `markFixCommitted`,
+    `markFixPushed` (`:3219-3251`), each a compare-and-set on the record's
+    state under the fix's lock, as `markFixApplied` is; the three are
+    exported in the returned object. Older records decode unchanged (every
+    new field is optional).
+  - `packages/engine/src/tool/shell/sandbox.ts`: `wrapCommand` (and so
+    `offline`) takes `writes?: "workspace"` (`:304`). Without it the argv is
+    the shell tool's, unchanged (compared in full with the argv at
+    `1f5d62ad`, below). With it (`:356-451`): the working folder must be
+    inside the workspace or the command is left unwrapped with a reason,
+    so `offline` refuses; the only writable bind is the workspace (no
+    `os.tmpdir()`, no package cache, no linked worktree's Git folder);
+    `--cap-drop ALL` after `--die-with-parent`, and no `--new-session`
+    (review finding 1); `--tmpfs /run` (and `/var/run` when it is a folder
+    of its own) after `--tmpfs /tmp`, with a PATH folder under them put back
+    read-only (`runtimeMounts`, `:516`); Vector's data folder mounted as an
+    empty tmpfs with its PATH folders put back read-only, the workspace
+    bound back into it, and the tmpfs made read-only last with
+    `--remount-ro` (`privateData`, `:527`, `searchFolders`, `:533`;
+    skipped when the data folder holds the home folder or is inside the
+    workspace: review finding 11); the resolver tmpfs is not needed then.
+    The Git marker and shared stores stay read-only, as before.
+    `Offline`'s `refused` case also carries the sandbox's own `reason`
+    (`offline`, `:253`; review finding 5); every existing reader uses
+    `message`, which is unchanged.
+  - `packages/core/src/review/fix-proposal.ts`: a local scope's push may
+    name `file:///<absolute path>` (regex `^file:\/\/\/[A-Za-z0-9_./-]+$`
+    and `absolute()` on the path: no empty, `.` or `..` segment, no
+    trailing slash). GitHub scopes are unchanged (exactly
+    `https://github.com/<owner>/<repo>.git`); the https form, the proposal
+    digest and every other binding are unchanged. The `FixOperation` push
+    comment says so.
+  - `packages/engine/test/compliance/egress-inventory.test.ts`: the
+    `fix-proposal.ts` excuse text mentions the `file:///` remote (text only;
+    the file still writes only the GitHub address).
+  - `.github/workflows/verify.yml`: the air-gap job's file loop runs
+    `test/review/fix.test.ts` too, with `VECTOR_FIX_SANDBOX_CI=1` on the
+    loop's `env` line (D8).
+  - Tests: `packages/engine/test/review/fix.test.ts` (16 new cases, and
+    the existing non-Linux case extended to checks, commit and push: 33 in
+    all), `packages/engine/src/tool/shell/sandbox.test.ts` (5 new cases),
+    `packages/engine/test/tool/shell-sandbox-local.test.ts` (one existing
+    case also expects the refusal's new `reason`: review round one),
+    `packages/core/test/review/fix-proposal.test.ts` (1 new case).
+
+- **How each operation runs.**
+  - _checks._ Under `cancellable` and the fix's lock: state `applied` or
+    `committed` ("state"); the applied proposal's digests ("digest") and
+    scope ("scope"); `RunnerContext` ("context"); the operation, copied once
+    with `structuredClone` and checked on that copy, which is also what the
+    consent is spent with ("operation": exact fields, kind `checks`,
+    network `off`, 1-16 commands, `timeoutMs` and `outputBytes` within
+    `FIX_LIMITS`, each argv a `CHECK_COMMANDS` prefix followed only by `.`,
+    `./...` or a safe relative path not starting with `-`, and `cwd` `.` or
+    a safe relative path); `holds`; each folder (`lstat` walk: a real folder,
+    no link, inside the checkout: "path"/"symlink"); dependencies (D4); the
+    `probe` event; the sandbox probe (`exit 0` through the same path, 10 s);
+    only then `spend`. Each command then runs through `execute`:
+    `Sandbox.offline({ shell: "/bin/sh", command: "exec <quoted argv>", cwd,
+    env, workspaceRoot: <checkout>, writes: "workspace", platform })`, where
+    argv[0] is the program resolved on the clean PATH; `ChildProcess.make(…,
+    { shell: false, cwd, env, extendEnv: false, stdin: "ignore", detached:
+    true, killSignal: "SIGKILL" })` on the spawner in its own scope;
+    stdout and stderr (`handle.all`) drained into a bounded buffer (the
+    first `outputBytes`, also on timeout) beside `handle.exitCode`, under
+    `Effect.timeoutOption(timeoutMs)`. A timeout gives `exitCode: null,
+    timedOut: true`; the scope release is the only signaller: one SIGKILL
+    to the process group, which holds the outer bwrap and its PID
+    namespace's init (no `--new-session`), and the init's death ends every
+    process in the namespace (review finding 1). Before every command after
+    the first, `holds` runs again; a moved head stops the run with
+    `aborted: "head"`, anything else with `aborted: "worktree"`. After the
+    run, the paths Git reports changed or untracked beyond the patch (at
+    most 32) come back as `leftovers` (review finding 3). The run is
+    recorded with `recordFixChecks` in `onExit` without output (`aborted:
+    "cancelled"` after an interrupt; a failure to record is logged). The
+    result is `Checked`; `passed` is informational, and the state does not
+    change, so a result authorizes nothing (I-6, "test failures or an
+    additional model pass cannot authorize new changes").
+  - _commit._ Under the fix's lock: state `applied`; digests and scope;
+    the operation (`{ kind: "commit", message }`, exact fields, well-formed
+    text without NUL, at most `messageBytes`); the identity from the trusted
+    adapter (`{ name, email }`, exact fields, 1-256 bytes, no `<`, `>`, CR,
+    LF or NUL, no surrounding space, one `@` address): "operation"; `holds`;
+    `check-ref-format refs/heads/<destination>` and no such branch
+    ("destination"). Then `FileLock.withFiles(targets)`, `holds` again inside
+    the locks (the bytes kept are what is committed, never read again),
+    and in one `uninterruptibleMask`: `spend`, then (interruptible) `build`,
+    then `update-ref -m "vector fix <id>" refs/heads/<dest> <commit>
+    <zero>` (create-only) under `FileLock.forTree(<common dir>)`, then
+    `markFixCommitted`; if that fails, `unref` deletes the branch only if it
+    still names the commit, or keeps the checkout `retained` and the fix
+    `failed`. `build` (D3): `hash-object -w --no-filters --stdin` of each
+    verified postimage (its ID must equal the bytes' blob ID), `read-tree
+    <head>` and `update-index -z --index-info` into the private index
+    (`fixCommitIndex`, removed in a finalizer; a deletion is mode 0 with a
+    zero ID; a modified file keeps the head's mode, an added one is
+    100644), `write-tree`, `commit-tree --no-gpg-sign <tree> -p <head> -F -`
+    with `commit.gpgSign=false` and `i18n.commitEncoding=UTF-8`, the message
+    on stdin verbatim, and `GIT_AUTHOR_*`/`GIT_COMMITTER_*` from the identity
+    with the date `@<floor(consumedAt/1000)> +0000`; then `show -s
+    --format=%T %P` must be exactly that tree on the head, and `diff-tree -r
+    -z --no-renames --name-status <head> <commit>` exactly the proposal's
+    paths with A/M/D ("worktree"). The fix checkout stays detached at the
+    head with the patch uncommitted, so every SF-07 check still holds.
+  - _push._ Under `cancellable` and the fix's lock: state `committed`;
+    digests and scope; the operation (`{ kind: "push", remote, commit, mode
+    }`, exact fields, `commit` the fix's own commit, `mode` `branch` or
+    `draft-pr`, `remote` an https address or `file:///<absolute path>`:
+    "operation"); `verifyFix` and `checkHead`; the local destination branch
+    still names the commit ("destination"); `remoteProblem` (D9); `spend`;
+    then `git push [--receive-pack="git -c core.hooksPath=/dev/null
+    receive-pack"] --porcelain --no-verify --no-signed --no-follow-tags
+    --atomic --recurse-submodules=no --force-with-lease=<ref>: -- <remote>
+    <commit>:<ref>` (the `--receive-pack` form for a `file:///` remote only:
+    review findings 8 and 9) with `push.followTags=false`, `push.gpgSign=false`,
+    `push.recurseSubmodules=no`, `push.negotiate=false`, `push.pushOption=`
+    (cleared), `protocol.allow=never` and `protocol.<file|https>.allow=
+    always`, `GIT_TERMINAL_PROMPT=0`, within `FIX_LIMITS.commandMs`. It
+    succeeds only on exit 0 and a porcelain line for exactly that refspec
+    flagged `*` (new branch) or `=` (already there). Then `markFixPushed`
+    and state `pushed`. Otherwise "push": the consent is spent, the state
+    stays `committed`, and pushing again needs a new approval. The mode is
+    recorded; no GitHub call is made.
+  - _cancel._ Marks the fix as cancelling, ends every running `checks` or
+    `push` of it (each raced in `cancellable` against its own `Deferred`,
+    registered before the lock is taken, so a cancel also stops one that is
+    still preparing or waiting for the lock), then removes the placement
+    under the lock as before. A commit's branch and a pushed branch stay.
+
+- **Decisions and deviations from the plan.**
+  - _D1, a local `file:///` remote (plan, taken)._ The task requires a
+    push test against a local bare repository, and the contract admitted
+    https only. A Git `insteadOf` alias in the test was rejected because the
+    executor must itself refuse rewritten addresses (D9). Core is a
+    `review/**` change, so `vector-at-mention.yml` is to be dispatched.
+  - _D2, workspace-only writes (plan, widened by the critique)._ As above.
+    Rejected: a second bubblewrap builder in `review/fix.ts` (it would
+    duplicate the secret masks and the linked-worktree read-only binds and
+    drift from them). `sandbox.ts` is not on the spawn-review hot-spot list;
+    the shell tool never passes the option, and its argv is pinned.
+  - _D3, a commit with Git's plumbing (plan, with the critique's details)._
+    Rejected: `git add` plus the worktree index (it would read the checkout
+    after untrusted checks wrote to it, apply filters, and move the
+    checkout's index), and moving the fix checkout's HEAD (every SF-07 check
+    assumes a detached checkout at the reviewed head). Taken from the
+    critique: `Math.floor` for the date, and the private index in the fix's
+    registry folder rather than the user's `.git/worktrees/<id>/`.
+  - _D4, dependencies (plan; widened in review round one, findings 2 and
+    12)._ `argv[0]` must resolve on the clean PATH. Each manifest is the
+    nearest one from the check's folder up to the checkout root, a regular
+    file of at most 1 MiB (`nearest`), else "is not a regular file Vector
+    reads". For bun, npm, pnpm and yarn, a `package.json` (parsed with
+    `Schema.decodeUnknownOption(Schema.UnknownFromJsonString)`) that
+    declares any `dependencies`, `devDependencies`, `optionalDependencies`
+    or `peerDependencies` needs a real `node_modules` folder or `.pnp.cjs`
+    there or at the root. For cargo: a program that is rustup's proxy (its
+    real path is named `rustup` or `rustup-init`, or it is a hard link to a
+    `rustup` beside it) is refused, since rustup's toolchains under the
+    user's home are hidden by the private home; then the nearest
+    `Cargo.lock` with a `source = "` line (a registry or Git package), or,
+    without a lockfile, the nearest `Cargo.toml` with a dependency entry
+    that names no `path` (read line by line: `[dependencies]`,
+    `[dev-dependencies]`, `[build-dependencies]`, their `target.*` forms and
+    `[workspace.dependencies]`; `workspace = true` entries are left to the
+    lockfile; a `[dependencies.<name>]` table counts), is refused unless a
+    `vendor` folder sits beside it or a `.cargo/config.toml` or
+    `.cargo/config` in the checkout has a `replace-with` line. For go: the
+    nearest `go.mod` with a `require` line or a non-empty `require (…)`
+    block is refused unless `vendor/modules.txt` sits beside it. The refusal
+    reads "Checks not run: dependencies unavailable (…)", before the consent
+    is spent. The resolved absolute program is what runs, so the host check
+    and the sandbox agree. _Limitations:_ a fresh fix checkout has no
+    `node_modules`, so a JavaScript project with dependencies always
+    reports them unavailable; the Cargo and Go reads are text scans, not
+    TOML or go.mod parsers, so a `replace` to a local path or an unusual
+    layout can be refused although it would build, and a vendor folder
+    that does not cover every package still runs and fails as the tool's
+    own error; pytest is checked for its program only (an uninstalled
+    virtual environment fails as pytest's error). Every such failure is a
+    result, which authorizes nothing. A read-only dependency mount is a
+    decision for VS-30 and the lead.
+  - _D5, cancel (critique taken)._ `cancellable` registers before the lock
+    (inside `make`, beside `states`), and a `cancelling` set stops a step
+    that starts while a cancel waits. `apply` and `commit` keep SF-07's
+    "interrupt the fiber" semantics: both are short and hold the files'
+    locks.
+  - _D6, `SandboxPlatform` (plan)._ A `Context.Reference` passed only to
+    `Sandbox.offline({ platform })`, so the Windows (`unfiltered`) and
+    no-sandbox (`refused`) refusals run on Linux; the Linux gate is still
+    `process.platform`. `RunnerContext` is the same kind of seam for the
+    context gate (critique minor).
+  - _D7, holding exactly the patch (plan, hardened by the critique)._
+    `holds`: `verifyFix`, `checkHead`, Git's changed paths equal to the
+    proposal's, then each file through `held`: every ancestor `lstat`ed (a
+    link refuses "symlink", a non-folder "path"); the target `lstat`ed (a
+    link "symlink"; not a single-link regular file "path"; over
+    `Limits.fileBytes` "limit"; absent where a postimage is expected, or
+    present for a deletion, "postimage"), then opened with `O_NOFOLLOW |
+    O_NONBLOCK`, `fstat`ed again and read; the sha256 must be the postimage
+    ("postimage"); a 64 MiB total as in apply ("limit"). A FIFO, a link to
+    `/dev/zero`, and a parent folder swapped for a link are tested. It runs
+    before each consent and between check commands; ignored outputs are
+    fine, anything else a check leaves blocks the commit as "worktree".
+  - _D8, CI evidence (critique taken)._ No new job: `test/review/fix.test.ts`
+    is one more file in verify.yml's air-gap loop, which already installs
+    bubblewrap, lifts `kernel.apparmor_restrict_unprivileged_userns`,
+    probes bwrap and runs each file as the runner user with
+    `GITHUB_ACTIONS=false` in a network namespace with loopback only. The
+    loop's `env` line also sets `VECTOR_FIX_SANDBOX_CI=1`, which turns on a
+    case that fails unless the sandbox works there, so the sandboxed cases
+    cannot all skip unnoticed. The outer `sudo` resets the environment by
+    default (sudo's `env_reset`; not checked on the runner), so the variable
+    goes on that line, not on the step. `scope-directory-
+    identity.yml` is not touched. That air-gap job is the CI evidence for the
+    sandboxed cases; test.yml's engine shards (no bubblewrap) run the rest
+    and the "no working sandbox" case.
+  - _D9, the remote, without connecting before consent (critique taken;
+    hardened in review round one, finding 4)._ For every remote: `ls-remote
+    --get-url -- <remote>` must print the remote itself (no `insteadOf`), no
+    `url.*.pushinsteadof` value is a prefix of it (read with `git config -z
+    --get-regexp`, each entry a key, a newline and a value, so a url
+    subsection with a space in it parses), no configured remote is named
+    exactly like it (`remote.<name>.url` or `.pushurl`, whose pushurl `git
+    push <name>` would use; "remote"), and core's egress
+    `refusal(["push", "--", remote, refspec])` is undefined (Vector Local;
+    `Git.run` decides the push again when it runs, so with Web access None
+    only file remotes run). For a
+    `file:///` remote only: its real path exists and overlaps neither the
+    repository, its Git common folder nor Vector's data folder ("remote");
+    `--git-dir=<path> rev-parse --is-bare-repository` is `true` ("remote");
+    its `HEAD` is not `refs/heads/<destination>` and it has no destination
+    branch at another commit ("destination"). These read the bare
+    repository's own files and open no transport. An https remote's
+    branches are not read before the consent is spent; the create-only
+    lease refuses an existing branch there instead, after the consent is
+    spent, and a remote whose default branch is the (unborn) destination is
+    not detected for https.
+  - _Create-only push (critique minor, decided)._ A push creates the
+    destination branch or finds it already at the commit; it never
+    fast-forwards or overwrites one. `--force-with-lease=<ref>:` (an empty
+    expected value: the ref must not exist) makes that atomic on the
+    remote, and only `*` or `=` count as success. The lease is a lease, not
+    a force: with the branch present at another commit Git rejects the push
+    as stale (checked on Git 2.43 in scratch). Tested: a remote whose
+    destination is at an ancestor (the base) is refused before the consent.
+    Not tested: the lease itself, which only a race or an https remote
+    reaches.
+  - _The clean environment._ Built from nothing: `PATH` (absolute entries
+    outside the checkout), `HOME=/tmp`, `TMPDIR=/tmp`, `XDG_CACHE_HOME`,
+    `XDG_CONFIG_HOME` and `XDG_DATA_HOME` under `/tmp` (the sandbox's
+    private tmpfs, so a tool that finds its dotfiles, login or global
+    config through `$HOME` or the XDG variables reads none of the user's:
+    critique minor taken; corrected in review round one, finding 10: a tool
+    that looks its home up with `getpwuid` (ssh, for one) and any absolute
+    path still read the host's files outside the sandbox's masks, the
+    user's home among them, such as `~/.git-credentials`, which is not in
+    `SECRETS`; Vector's data folder is hidden in workspace mode),
+    `LANG`/`LC_ALL=C.UTF-8`, `TZ=UTC`,
+    `TERM=dumb`, `CI=1`, `NO_COLOR=1`, `CARGO_NET_OFFLINE=true`,
+    `GOPROXY=off`, `GOTOOLCHAIN=local`, `npm_config_offline=true`,
+    `PIP_NO_INDEX=1`, `PYTHONDONTWRITEBYTECODE=1`,
+    `BUN_RUNTIME_TRANSPILER_CACHE_PATH=0`. The spawner adds only its floor
+    (`VECTOR_LOCAL`, `VECTOR_LOCAL_WEB`, the agent marker) when the process
+    set one (`child-environment.ts`).
+  - _The context gate (widened in review round one, finding 9)._
+    `runnerContext(env)` refuses "context" when process isolation is
+    required, on GitHub Actions (`GithubAgents.onActionsRunner`,
+    `github-agents.ts:64`, the child environment's test), when `CI` is set
+    to anything but empty, `0` or `false` (case and surrounding spaces
+    ignored), or when a runner's own variable is set (`GITLAB_CI`,
+    `BUILDKITE`, `JENKINS_URL`, `TF_BUILD`, `CIRCLECI`, `TEAMCITY_VERSION`,
+    `BITBUCKET_BUILD_NUMBER`, `CODEBUILD_BUILD_ID`), since such a job may
+    hold write tokens on disk as well as in its environment (I-6). Every
+    runner sets `CI=true`, so the test file's `steps()` fixture runs checks
+    with `RunnerContext` set to `() => undefined`, and case 1 checks the
+    gate through the executor as it is (`service`).
+  - _Hooks (changed in review round one, findings 8 and 9)._ No local hook
+    runs (`core.hooksPath=/dev/null` on every Git command, `commit-tree`
+    runs none, `--no-verify`). A file remote's own receive hooks
+    (`pre-receive`, `update`, `post-receive`, `post-update`,
+    `reference-transaction`) would run with this process's environment
+    (Git service, `extendEnv: true`), and the outer `-c` does not reach
+    `receive-pack` over the local transport (checked in scratch on Git
+    2.43: all five ran). The push to a `file:///` remote now passes
+    `--receive-pack=git -c core.hooksPath=/dev/null receive-pack`, which the
+    local transport runs as a shell command: checked in scratch, none of
+    the five ran, and the push test plants all five and finds no marker.
+    Not removed: `receive-pack` still reads the destination repository's
+    own configuration (for example `core.alternateRefsCommand` with
+    alternates, or `receive.autogc`), as in a manual push.
+  - _Crash window (critique minor, documented)._ A crash after `update-ref`
+    and before `markFixCommitted` leaves the destination branch in the
+    user's repository with the record still `applied`. A retry then refuses
+    "destination" (the branch exists). Hand-off: the user deletes the
+    branch, or a later package re-adopts a branch that names a commit it can
+    rebuild exactly.
+  - _Spawn rules (`v2-spawn-review.md`)._ Every check, the probe and every
+    Git command start through the existing `ChildProcessSpawner`
+    (CrossSpawnSpawner) or the Git service; no `OwnedProcess`, no
+    `process.kill`, no `handle.kill`; each process's one signaller is its
+    spawn scope's release, which for a check sends one SIGKILL to the
+    group (`killSignal`; the spawner already honours it). No hot-spot file
+    changes: `cross-spawn-spawner.ts`, `task/shells.ts`, `core/pty.ts`,
+    `tool/shell.ts` and `mcp/index.ts` are untouched (`git diff --stat`).
+    The spawner's `acquireRelease` runs its acquire uninterruptibly
+    (`effect` `internal/effect.js:1606`), so an interrupt during the spawn
+    waits for the `spawn` event and then runs the release, never the
+    callback's direct-child SIGTERM. Checks refuse while
+    `ProcessIsolation.required()`, so no isolation plan nests a second
+    bubblewrap. Hands' `beforeSpawn` recheck does not apply: no model
+    command runs, and the sandbox hides `/tmp` and `/run` (display and
+    session sockets).
+  - _Scratch._ `/tmp/vector-v2/scope/sf08/` (the task header's `scope/`, as
+    SF-06 and SF-07 used); review round one used `/tmp/vector-v2/scope/sf08r1/`
+    (the repeated runs and mutations) and `/tmp/vector-v2/scope/race/` (the
+    bubblewrap signal trials), with bubblewrap's public sources at
+    `/tmp/vector-v2/scope/bubblewrap.c`.
+
+- **Citations at `1f5d62ad`.** Core `review/permission.ts`: `CHECK_COMMANDS`
+  `:32`, `COVERAGE_COMMANDS` `:59`. Core `review/fix-proposal.ts`:
+  `FIX_LIMITS` `:8`, `prepareFixProposal` `:91`, `consume` `:179`,
+  `operationValue` `:343`. Engine `tool/shell/sandbox.ts`: `offline`
+  `:252`, `offlineRefusal` `:270`, `wrapCommand` `:285`,
+  `linkedWorktreeMetadata` `:434`. Core `cross-spawn-spawner.ts`: the child
+  environment `:244`, the scope release `:597-635`. Core `process.ts`:
+  `collectStream` `:121`. Core `git.ts`: `refusal` `:1070`. Core
+  `github-agents.ts`: `onActionsRunner` `:64`.
+
+- **Default and parity proof.**
+  - Nothing imports `review/fix.ts` except its test (grep). VS-30's
+    `runtime` key is not read by it, and `COVERAGE_COMMANDS` are refused.
+  - No file in `REVIEW_PIPELINE_FILES` changes: the pin stays
+    `aef0d5c84ed90782` -> `aef0d5c84ed90782`, `REVIEW_PIPELINE_REVISION`
+    4 -> 4.
+  - `isolation.ts`: 79 added, 1 changed, all in the fix block (the
+    `FixChecks` schema and its doc comment, the `FixRecord` schema,
+    `fixCommitIndex`, the three functions and the returned object).
+    Prettier rewrote one pre-existing task hunk (`closeSessionTerminals`)
+    on the first format and again in review round one; each time it was
+    put back byte for byte, so no task line differs.
+  - `sandbox.ts`: 81 added, 12 removed; every default branch is unchanged
+    (`workspace` is false). Pinned by "without workspace writes the shell
+    tool's argv is the one before SF-08, in full", which compares the whole
+    `Wrapped` (command, every argument, shell, env, mechanism) for fixed
+    inputs (a scratch workspace as the working folder, an empty home and
+    data folder, both network settings) with a literal array printed by
+    `wrapCommand` at `1f5d62ad` for the same inputs (`git show` into a
+    temporary file in the package, run, compared with `JSON.stringify` and
+    found equal for both settings, then deleted); and by
+    `test/tool/shell-sandbox-local.test.ts`. The credential masks still
+    take the data folder as given, not its real path, so the default masks
+    are unchanged even where the data folder is a link. The `refused`
+    case's new `reason` is an added field; every existing reader of
+    `Sandbox.offline` reads `message` (`tool/shell.ts:1225`).
+  - Core: the https and GitHub push rules and the proposal digest are
+    unchanged (every existing `fix-proposal.test.ts` case passes).
+- **Replay variant.** None: no key, so `script/vectorscope-eval/replay.ts`
+  VARIANTS is untouched.
+- **Desktop half: a documented difference.** No app or CLI surface. The
+  app's apply/checks/commit/push buttons belong to SF-10b and the CLI's
+  consented steps to SF-09; both will show the exact operation before
+  `policy.approve` and consume `Checked`, `Committed` and `Pushed`.
+
+- **Tests run** (through `/home/user/.tools/vector-serial`, one file at a
+  time, `--timeout 30000`, from the package directory; locally as root in a
+  container where bubblewrap works, so the sandboxed cases ran here, and
+  with capabilities dropped by `--cap-drop ALL`; CI's air-gap runner is
+  unprivileged):
+  - `packages/engine/test/review/fix.test.ts`, final file (33 cases: the
+    17 SF-07 cases, unchanged but for the non-Linux one, and 16 new
+    SF-08 cases), after review round one, run 10 times in a row from a
+    loop (`/tmp/vector-v2/scope/sf08r1/loop.sh`), each followed by a
+    `/proc` scan for processes with a check token: every run 30 pass,
+    3 skip, 0 fail, 553 expect calls (554 in one run: case 15 checks the
+    group of each sandbox process its first sight shows, one or two),
+    52.35-61.19 s, and no process left after any run. Then with
+    `VECTOR_FIX_SANDBOX_CI=1`: 31 pass, 2 skip, 0 fail, 554 expect calls
+    (56.61 s). The skips: the non-Linux case (Windows CI only), the "no
+    working sandbox" case (skipped where the sandbox works), and the
+    sandbox-required guard without the variable. The "no working sandbox"
+    case was also run here with bubblewrap taken off `PATH` (a folder of
+    links to `/usr/bin` without `bwrap`, in place of `/usr/bin` and
+    `/bin`), with the cases matching `refused before its consent`,
+    `unavailable dependencies` and `without a working sandbox`: 4 pass,
+    7 skip, 0 fail, 109 expect calls (85 before round one). The build's
+    first record here said "29 pass, 3 skip, 0 fail" from one run; the
+    reviewer's ten runs of that file failed twice (review finding 1). New
+    and extended cases (numbered as in the file's order):
+    1. a check is refused before its consent is spent: before apply
+       ("state"); `bun test --preload x.ts`, `sh -c touch …`, `bun x …`,
+       `../outside.test.ts` and `.git/hooks` argv ("operation"); VS-30's
+       coverage command, which core approves ("operation"); network `on`,
+       a time or output bound over `FIX_LIMITS`, an extra field, 17 commands
+       ("operation"); a folder `../x` ("operation"), missing or a file
+       ("path"), an ignored link ("symlink"); a `RunnerContext` reason
+       ("context", its message), a CI=1 run through the executor itself
+       ("context") and the rule on 13 environments (round one); another
+       proposal ("digest"); no marker written, the consent still revocable,
+       the fix still `applied`;
+    2. a `devDependencies` package without `node_modules` ("dependencies",
+       "Checks not run: dependencies unavailable (package.json declares…");
+       `pytest` with only Git on `PATH` for that one call ("dependencies"; this
+       host has pytest installed, so an earlier conditional form skipped it); with
+       `node_modules` present, `SandboxPlatform` `win32` and `freebsd`
+       refuse as "sandbox" with "Checks not run: …"; consent unspent;
+    3. a cancel while the check waits in its `probe` event returns
+       `removed: true` at once (under 10 s), the check is interrupted, the
+       checkout is gone and the consent is unspent;
+    4. a commit: an apply consent and a checks consent ("mismatch"), another
+       policy's ("unknown"), another message ("mismatch"), no branch after
+       those; with its consent, under `reference-transaction`, `post-commit`,
+       `pre-commit` and `commit-msg` hooks in the user's repository (none
+       runs): author and committer `Vector <bot@vectordev.ai>`, the head as
+       the only parent, the message byte for byte (with a `#` line), exactly
+       `M run.sh`, `M src/a.ts`, `D src/b.ts`, `A src/new/c.ts`, the
+       postimages' bytes, `run.sh` still 100755; the user's index, HEAD,
+       branch, files and refs unchanged but for the new branch; the fix
+       checkout still detached at the head; `placements()` shows the commit;
+       the private index is gone; a second commit is refused ("state");
+       cancel removes the placement and keeps the branch;
+    5. a commit is refused before its consent is spent: bad identities
+       (no `@`, `<x>`, a newline, an extra field) and a message with NUL
+       ("operation"); a stray untracked file ("worktree"); an edited fixed
+       file ("postimage"); a FIFO at the fixed path ("path", in under 10 s);
+       a link to `/dev/zero` there ("symlink"); `src/` swapped for a link to a
+       folder outside holding the postimage ("worktree"); an existing
+       destination branch ("destination"); a moved reviewed branch ("head");
+       the consent still revocable, no branch;
+    6. a push: a commit consent ("mismatch"), a consent for another remote
+       ("mismatch"), another commit ("operation"); a decoy remote that an
+       `insteadOf` and then a `pushInsteadOf` rewrite would send to the real
+       one ("remote", each pinned by its message); the user's own `.git`
+       and its project folder ("remote"); a bare remote whose `HEAD` is the
+       destination, and one holding the destination at the base
+       ("destination", left unchanged); the local destination moved
+       ("destination"); the reviewed branch moved ("head"); the remote
+       unchanged throughout; then with `push.followTags=true` and an
+       annotated tag on the head, the consented push adds exactly
+       `refs/heads/vector/fix-1` at the commit, no tag, `main` and `feature`
+       unchanged, mode `draft-pr` recorded; a second push ("state"); a
+       proposal whose destination is `main` ("proposal"); cancel removes
+       the placement and keeps the local and remote branches;
+    7. committed and pushed records: `records()` empty, `find`, `start`,
+       `get` and `settle` refuse or ignore the fix ID, the `fix.json`
+       fails the task `Record` decode in both states,
+       `TaskPlace.isTaskDirectory` false; with its lease closed, the sweep
+       removes the pushed placement and keeps the branch (ruling item 3);
+    8. (no working sandbox) a consented check refuses as "sandbox", "Checks
+       not run: …", nothing runs, consent unspent;
+    9. (sandbox) an unconsented check runs nothing: an apply consent
+       ("mismatch"), another policy's ("unknown"), a revoked one
+       ("revoked"); one consent runs once, then "used" and nothing runs;
+    10. (sandbox) the environment: the check counts its variables outside
+        the allowlist (0) and any named like a key, token, secret or
+        password (0), sees `CI=1`, and does not see a canary variable this
+        process set only for the run (it prints counts, never names); it
+        writes `out/probe.txt` in the checkout (seen on the host), and its
+        writes to the host's tmp folder, home, home cache and Vector's data
+        folder, and to its own `$HOME`, never reach the host; the record
+        keeps the run and not its output;
+    11. (sandbox) the network: a TCP server on 127.0.0.1 and Unix sockets in
+        the host's tmp folder and in `/run` (writable here as root) get no
+        connection; the check prints "blocked" for each;
+    12. (sandbox) a 300 KB output is cut to 4,096 bytes (exit 0,
+        `truncated`); a command over its 8 s is stopped (`exitCode` null,
+        `timedOut`, output kept, between 8 s and 21 s), and no process
+        whose command line holds its token remains (read from `/proc`);
+    13. (sandbox) a failing check (exit 1) changes no state or file and its
+        consent cannot commit ("used"); a reviewed branch moved after the
+        first of two commands stops the run (1 result, `aborted: "head"`),
+        and the next commit refuses "head"; both runs are recorded;
+    14. (sandbox) cancel during a running check returns `removed: true`, the
+        check is interrupted, its processes are gone, the checkout is gone
+        and the consent is used; an interrupt of a second run stops its
+        processes, leaves the fix `applied` and records `aborted:
+        "cancelled"`; cancel then removes it;
+    15. (sandbox; review round one) 8 check runs, each interrupted the
+        moment its outer bwrap shows in `/proc`: the outer bwrap leads its
+        own session with no terminal, every process seen is in its group,
+        no process with the token is left within 5 s, and the record holds
+        8 `cancelled` runs (review finding 1);
+    16. the sandbox-required guard (with `VECTOR_FIX_SANDBOX_CI=1`);
+    17. (the existing SF-07 non-Linux case, extended) it also refuses
+        `checks`, `commit` and `push` as "unavailable" (Windows CI).
+    Review round one also extended cases 1 (the CI rule on 13
+    environments and a CI=1 run through the executor itself), 2 (the
+    Cargo and Go gates), 5 (the "worktree" message), 6 (a rewrite under a
+    url with a space, a remote named like the address, five receive hooks
+    planted in the remote and none run), 9 (`leftovers` and the commit it
+    blocks) and 10 (a file planted in Vector's data folder is not
+    readable).
+  - `packages/engine/src/tool/shell/sandbox.test.ts`: 17 pass, 12 skip
+    (macOS only), 0 fail, 156 expect calls (12 pass before SF-08). New:
+    the workspace argv (`--die-with-parent --cap-drop ALL`, no
+    `--new-session`, `--unshare-net`, the one `--bind`, `--tmpfs /tmp`
+    then `/run` before it, the data folder's tmpfs, its PATH folder put
+    back read-only before the workspace bind, `--remount-ro <data>` just
+    before `--chdir`, and no mask when the data folder holds the home); a
+    data folder in `/var/tmp` (outside the private `/tmp`) whose planted
+    file a real bubblewrap run cannot read or write beside, while the
+    workspace inside it stays writable; a linked worktree's Git folder not
+    bound and its `.git` marker read-only (while the default policy binds
+    the Git folder); a working folder outside the workspace unwrapped and
+    refused by `offline`, with its `reason`; the default argv compared in
+    full with the one before SF-08 (the parity proof above).
+  - `packages/core/test/review/fix-proposal.test.ts`: 16 pass, 0 fail, 166
+    expect calls (15 and 152 before). New: a local `file:///srv/remote.git`
+    approves and consumes; another file remote mismatches; relative, host,
+    `..`, `.`, `//`, trailing slash, space, bare `file:///`, drive and
+    `file:/` forms refuse at approve; a GitHub scope refuses a file remote
+    and still takes its own https remote.
+  - Existing files, unchanged, run after the change (pass/fail/skip,
+    expect calls): engine `test/task/isolation.test.ts` 90/0, 450
+    (218.75 s); `test/task/isolation-recovery.test.ts` 3/0, 11;
+    `test/task/recovery.test.ts` 7/0, 54; `test/tool/owned-path.test.ts`
+    7/0, 20; `test/tool/file-lock.test.ts` 10/0, 24;
+    `test/tool/file-state.test.ts` 12/0, 54;
+    `test/tool/shell-sandbox-local.test.ts` 9/0/2, 30 (the default sandbox;
+    in review round one its `Sandbox.offline` refusal case also asserts the
+    new `reason`, two added lines, and it gave 9 pass, 2 skip, 0 fail,
+    30 expect calls after the change);
+    `test/compliance/egress-inventory.test.ts` 5/0, 12 (with the new
+    excuse text); core `test/review/model-evidence.test.ts` 30/0, 393 (the
+    pin). `test/local-mode/local-run.test.ts`: 30 pass, 1 fail, 222 expect
+    calls; the failure ("the provider under Vector Local > changes nothing
+    with Vector Local off": the provider list here also holds
+    `amazon-bedrock`) is this host's and pre-existing: run again with
+    `fix-proposal.ts`, `fix.ts`, `isolation.ts`, `sandbox.ts` and
+    `egress-inventory.test.ts` swapped back to their HEAD bytes (then
+    restored and compared byte for byte), the same case fails the same
+    way, 30/1.
+  - Typecheck: `bun typecheck` in `packages/core` and `packages/engine` exit
+    0, and `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine` exit 0, on the final files. `bun prettier --check`
+    clean on every touched file but `isolation.ts`, whose one Prettier
+    difference is the pre-existing `closeSessionTerminals` hunk (left as it
+    is at HEAD). `bun oxlint`: 0 warnings in `fix.ts`, `fix.test.ts`,
+    `sandbox.ts` and `sandbox.test.ts`; core `fix-proposal.ts` and its test
+    keep the warnings they have at HEAD (lines moved by the new lines). The
+    full TURBO typecheck was not run in the build: nothing is pushed from
+    it.
+  - Commit gate (2026-11-16, on the final files, before the commit): the
+    five changed test files again, one at a time: engine
+    `test/review/fix.test.ts` 30 pass, 3 skip, 0 fail, 553 expect calls
+    (52.79 s); `src/tool/shell/sandbox.test.ts` 17/0/12, 156;
+    `test/tool/shell-sandbox-local.test.ts` 9/0/2, 30;
+    `test/compliance/egress-inventory.test.ts` 5/0, 12; core
+    `test/review/fix-proposal.test.ts` 16/0, 166. `bun typecheck` in
+    `packages/core` and `packages/engine` and the eval tsconfig exit 0; the
+    full TURBO typecheck (`--concurrency=2`) 27 of 27 tasks successful.
+  - Mutations (each on the final files: copied to scratch, mutated, the one
+    test run with `-t`, restored and compared byte for byte; the runner is
+    `/tmp/vector-v2/scope/sf08/mut/run.py`). Each failed its named case:
+    - M1 `extendEnv: true` -> case 10 fails;
+    - M2 no `--unshare-net` -> case 11;
+    - M3 no `/run` and `/var/run` tmpfs -> case 11 (the `/run` socket);
+    - M4 no timeout -> case 12 (by its 90 s limit);
+    - M5 no output cap -> case 12;
+    - M6 a consume before validation in `checks` -> case 1 (the consent
+      is spent);
+    - M7 `holds` without the changed-path and postimage checks -> case 5;
+    - M8 no default-branch refusal -> case 6;
+    - M9 no `insteadOf` check -> case 6 (after the decoy remote replaced a
+      missing alias path, which another check refused first: the first
+      run of M9 survived and showed it); M9b no `pushInsteadOf` check ->
+      case 6;
+    - M10 `writes: "workspace"` dropped -> case 10;
+    - M11 coverage flags allowed -> case 1;
+    - M12 cancel not stopping running steps -> case 3 (by its 60 s limit);
+    - M13 a FIFO opened like a file (no kind check, no `O_NONBLOCK`) ->
+      case 5 (by its 60 s limit: the read blocks);
+    - M14 no `--cap-drop ALL` -> the sandbox.test.ts workspace argv case.
+    - Review round one (same runner, `/tmp/vector-v2/scope/sf08r1/mut/`):
+      M16 `killSignal: "SIGTERM"` and `--new-session` back (the code
+      before the round) -> case 15 fails, and the run left one orphaned
+      sandbox on this host (its init and the `bun test` inside it),
+      killed; M17 `SIGTERM` alone -> case 15 fails, with one orphaned
+      sandbox too, killed; M18 `--new-session` back alone ->
+      case 15 still passed (one run of 8 rounds; the window `setsid`
+      leaves is small) and the sandbox.test.ts workspace argv case fails;
+      M19 no `--receive-pack` -> case 6 (a remote hook ran); M20 no `-z`
+      -> case 6 (the url with a space); M21 no remote-name check -> case
+      6; M22 no `CI` rule -> case 1; M23 no data-folder mask -> case 10
+      still passed, since the test data folder lies under `/tmp`, which
+      the private `/tmp` already hides, and the sandbox.test.ts
+      `/var/tmp` case fails; M24 the Cargo.toml scan off, M25 the go.mod
+      scan off, M26 the rustup check off -> case 2 each; M27 no
+      `leftovers` -> case 9; M28 `--cap-drop ALL` in the default argv ->
+      the sandbox.test.ts full-argv case.
+    - Survived, as expected: M15, a plain `update-ref` instead of the
+      create-only form. The pre-consent "destination exists" check refuses
+      first; the create-only form only closes a race no test reaches.
+- **CI to dispatch with the commit** (on `scope-finish`): `typecheck.yml`;
+  `test.yml` (engine and core runtime code; its engine Linux shards run
+  `fix.test.ts` cases 1-8 with the sandboxed cases 9-15 skipped, as no
+  bubblewrap is installed there, its Windows shards run case 17, and it
+  runs `fix-proposal.test.ts` and `sandbox.test.ts`, whose bubblewrap cases
+  skip there); `verify.yml` (its air-gap job now runs `fix.test.ts` with
+  the sandbox and `VECTOR_FIX_SANDBOX_CI=1`, the CI evidence for cases
+  9-16, the early-interrupt case 15 among them, and runs
+  `shell-sandbox-local.test.ts` after the `sandbox.ts` change; it does not
+  run `sandbox.test.ts`, so the data-folder and workspace-argv cases there
+  have only this host's runs); `scope-directory-identity.yml` (engine
+  `src/review/**` and `test/review/**`); `vector-at-mention.yml` (core `review/**`). Not
+  `review-memory-fence.yml` (no `run.ts`, `model.ts` or `session/llm.ts`),
+  `review-http-regression.yml` (no HttpApi or review service) or
+  `scope-app-validation.yml` (no app). Nothing was dispatched from this
+  build: it is not committed.
+
+- **Critique points** (the plan critique, before the build).
+  - _The fix-executor job would refuse every check as "context" (blocker):
+    taken in its second form._ No new job; the air-gap loop sets
+    `GITHUB_ACTIONS=false` already (D8).
+  - _A cancel during the preparation waits for the whole run (major):
+    taken_ (D5, case 3, M12).
+  - _Unix sockets under /run (major): taken_ (D2, case 11, M3). The shell
+    tool's default profile keeps its old behaviour (pinned). Not claimed:
+    a socket elsewhere in the read-only tree stays reachable, since a
+    read-only mount does not stop `connect()`.
+  - _ls-remote before consent connects for https (major): taken_ (D9). The
+    file-remote checks read the bare repository directly rather than
+    through `ls-remote --symref`.
+  - _Printing environment names (major): taken in another form._ The check
+    prints counts only. The canary is set in this process's `process.env`
+    for the run (and restored), not passed through the executor's input or
+    a layer: the executor reads nothing of the environment but `PATH`, so a
+    canary it is handed would prove nothing; the defect the test guards
+    against (M1) is the process environment reaching the check, and only a
+    variable in it can show that. The name has no `VECTOR_` prefix, so the
+    spawner's own filter would not hide it under M1.
+  - _Host reads after untrusted writes (major): taken_ (D7, case 5, M13).
+  - _No context test (minor): taken_ (`RunnerContext`, case 1; the
+    detection rule above).
+  - _Root locally (minor): taken_ (`--cap-drop ALL`, asserted in
+    sandbox.test.ts, M14; the `--new-session` taken with it was dropped in
+    review round one, finding 1).
+  - _Create-only or fast-forward (minor): decided create-only_ (above).
+    The diverged-commit case is the same pre-consent branch as the ancestor
+    case, so only the ancestor is tested.
+  - _Parity and compliance re-runs (minor): taken_ (egress inventory and
+    the local-run strict guard above; the excuse text updated).
+  - _D3 details (minor): taken_ (floor, the private index, the crash
+    window documented).
+  - _HOME (minor): taken_ (the private `/tmp`).
+  - _The workflow edit (minor): taken_ (verify.yml's loop; nothing in
+    `scope-directory-identity.yml`).
+  - _Ruling item (3) for the new states (minor): taken_ (case 7, and case
+    10 checks that the record keeps no output).
+
+- **Review findings, round one** (the SF-08 review of the working tree,
+  numbered in the review's order; every finding but 13 was taken in full
+  or in part, and 13 is recorded with its reason).
+  1. _A cancel or interrupt during bubblewrap's setup leaked the sandbox
+     (blocking): fixed._ The reviewer saw 2 of 10 full-file runs fail in
+     the cancel case (`settles(token)` false after `Fiber.interrupt`) and
+     an orphan bwrap with PPid 1, pid 1 of its namespace, in the dead outer
+     bwrap's process group. Cause, read in bubblewrap 0.9.0's sources (this
+     host's version; `bubblewrap.c`, fetched to scratch): the namespace
+     child calls `setsid` for `--new-session` (`:3301`), forks pid 2
+     (`:3317`) and only then, in `do_init`, sets `PR_SET_PDEATHSIG`
+     (`:618`). Until then nothing ties it to the outer bwrap, and as the
+     init of a PID namespace with no SIGTERM handler it does not receive a
+     SIGTERM sent from outside the namespace (`pid_namespaces(7)`); SIGKILL
+     is delivered. The release's SIGTERM to the group killed the outer
+     bwrap, the release saw the leader close and stopped, and the init
+     ran on. Reproduced without Bun (`/tmp/vector-v2/scope/race/race.py`:
+     the workspace argv started in its own session, its group signalled
+     0 to 20 ms after the exec, survivors read from `/proc`):
+     `--new-session` with SIGTERM (the old code) left one in 88 of 200
+     trials; `--new-session` with SIGKILL in 8 of 200 and 5 of 400 (the
+     init has left the group through `setsid` before it sets the death
+     signal, so the reviewer's first option, one more group SIGKILL in the
+     spawner's release, would not have closed this); no `--new-session`
+     with SIGTERM in 36 of 200; no `--new-session` with SIGKILL in 0 of
+     1,800. The reviewer's second option, waiting for `--info-fd`, would
+     not close it either: bwrap writes the child's PID (`:2960-2966`)
+     before the child has even started its setup. The fix: workspace mode
+     no longer passes `--new-session`, so the init stays in the spawner's
+     process group for its whole life, and `execute` sets `killSignal:
+     "SIGKILL"`, so the spawner's own release (the one signaller, unchanged
+     code) sends one SIGKILL to that group, which kills the init at any
+     point of the setup and with it every process of the namespace.
+     `cross-spawn-spawner.ts` and every other hot-spot file are untouched,
+     so no spawn-review sign-off is needed. `--new-session` guarded the
+     controlling terminal (TIOCSTI); the spawner starts bwrap detached, so
+     bwrap already leads a session of its own with no controlling terminal,
+     which the new case asserts. New case 15 interrupts 8 check runs, each
+     the moment its outer bwrap shows in `/proc` (polled synchronously),
+     and asserts that the outer bwrap leads its own session with no
+     terminal, that every process seen is in its group, that no process
+     with the token is left within 5 s, and that the record holds 8
+     `cancelled` runs. Mutations M16-M18 below; M16 and M17 each left one
+     orphaned sandbox on this host, both killed: M16's init (pid 1 of its
+     namespace, PPid 1) in a session of its own, after `setsid`; M17's,
+     with no `--new-session`, in the dead outer bwrap's group, as in the
+     reviewer's `ps`. The earlier "29 pass, 3 skip" was a single run; the
+     full file was run 10 times in a row without a failure or a leftover
+     process, and once more with the sandbox required (below).
+  2. _Missing dependencies for cargo and go reported as a failed check
+     (non-blocking, with finding 12): fixed_ as D4 now says, with cases
+     for a crate with a registry dependency and no lockfile, a lockfile
+     with a registry package, a crate with only a path dependency and a
+     `[[bin]]` table, a vendored crate, a rustup proxy (a hard link to
+     `rustup`), a module that requires one, a vendored module and a module
+     that requires none. pytest stays program-only (D4's limitations).
+  3. _A check that leaves files blocks every later step (non-blocking):
+     taken in part._ `Checked.leftovers` names them (at most 32), and the
+     "worktree" refusal of `holds` now says "…such as files a check left.
+     Cancel the fix and apply it again." A consented cleanup is a later
+     package's (hand-offs). Case 9 asserts both.
+  4. _pushInsteadOf parsing and a remote named like the URL (non-blocking):
+     fixed_ (D9); case 6 adds a rewrite under a url with a space and a
+     remote named like the approved address with its own pushurl.
+  5. _The sandbox refusal lost its real reason (non-blocking): fixed._
+     `Offline`'s `refused` case carries `reason`, and `execute` uses it;
+     sandbox.test.ts asserts it for a working folder outside the
+     workspace (the case the old text reported as "the sandbox could not
+     be applied"), and `test/tool/shell-sandbox-local.test.ts`'s refusal
+     case now expects it beside the unchanged message. In `execute` that
+     refusal cannot occur, since `folder` keeps every working folder inside
+     the checkout.
+  6. _FixRecord's doc comment attached to FixChecks (non-blocking): fixed._
+  7. _The workspace doc comment overstated seatbelt (non-blocking): fixed._
+  8. _The destination's hooks were not named before approval
+     (non-blocking): fixed with finding 9_, so there is nothing left to
+     warn about but the destination's configuration, which the module
+     header and the SF-09/SF-10b hand-off now name.
+  9. _A file remote's hooks ran with the engine's environment
+     (non-blocking): fixed_ (the Hooks bullet above; case 6 plants five
+     hooks in the remote and finds no marker).
+  10. _CI=true alone was not detected (non-blocking): fixed_ (the context
+      gate above; case 1 checks a CI=1 run through the executor itself and
+      the rule on 13 environments).
+  11. _A check can read the host's home and Vector's data folder
+      (non-blocking): taken in part._ Vector's data folder is now hidden in
+      workspace mode (an empty tmpfs, made read-only last, with the
+      workspace and any PATH folder in it bound back). The evidence is
+      sandbox.test.ts's `/var/tmp` case (a real bubblewrap run cannot read
+      a planted file or write beside the workspace); case 10 also plants a
+      file in the test data folder, but that folder lies under `/tmp`, so
+      the private `/tmp` hides it with or without the mask (M23). The
+      home folder stays readable: a tmpfs over it would hide toolchains
+      installed under it
+      (`~/.bun`, `~/.cargo`, a version manager's Node whose `npm` lives in
+      a `lib` folder beside `bin`), so it needs the per-tool binds the
+      reviewer describes, which belong with the read-only dependency mount
+      (hand-offs). The clean-environment bullet is corrected, and the
+      module header and hand-off say a check's output is untrusted and
+      must be redacted before it reaches a model or a post.
+  12. _As finding 2._
+  13. _tmpfs and worktree sizes are unbounded (non-blocking): not taken,
+      recorded._ `--size` exists only from bubblewrap 0.7.0 (absent in
+      0.6.2's `bubblewrap.c`, present in 0.7.0's); Ubuntu 22.04 ships
+      0.6.1 and Debian 11 0.4.1, where an unconditional `--size` would make
+      the probe, and so every check, fail. Knowing the version needs a
+      spawn outside the spawner (`bwrap --version`) or a read of the
+      binary. Under "Not claimed", with a hand-off.
+  14. _The default argv was not pinned in full (non-blocking): fixed_ (the
+      parity proof above).
+  15. _The test counts (non-blocking): fixed_ in "Tests run".
+- **Not claimed.** No paid run, no quality claim, no model call; no default,
+  key, flag, permission, route, CLI step or UI; VS-30's runtime key stays
+  unapplied and its coverage commands are refused; no https push was
+  exercised (the tests reach no host) and no GitHub call is made; no
+  Windows or macOS executor; no durable consent (in memory, as SF-07); no
+  read-only dependency mount; no claim that a socket outside `/tmp` and
+  `/run` is unreachable. Added in review round one: no size bound on the
+  sandbox's tmpfs mounts (`/tmp`, `/run`, the data folder's) or on what a
+  check writes into the fix checkout within its time, so a check can fill
+  memory through a tmpfs (by default up to half of it) or the disk under
+  Vector's data folder (finding 13); the user's home folder outside the
+  masks stays readable to a check by absolute path (finding 11); no claim
+  that a file remote's own configuration starts nothing in `receive-pack`
+  (only its hooks are off); the Cargo and Go reads are text scans, not
+  parsers (D4); no claim about bubblewrap versions other than this
+  host's 0.9.0 for the early-signal behaviour (its source and this host's
+  binary were read and run; CI's air-gap runner installs its own).
+- **Hand-offs.**
+  - SF-09 (CLI): show each operation exactly before `policy.approve`, the
+    "others authored commits" confirmation for checks, and the "Checks not
+    run: …" reasons.
+  - SF-10a/SF-10b: API exposure and the app's buttons, consuming
+    `Checked`, `Committed` and `Pushed`.
+  - SF-09 and SF-10b, from review round one: a check's output is
+    untrusted and may hold host files the check read outside the masks,
+    so it passes redaction (the `session/posting.ts` lineage, I-4) before
+    it reaches a model or a post, and is never given to a model
+    unredacted; `Checked.leftovers` is shown as "a check left files in the
+    checkout: cancel the fix and apply it again" (a consented cleanup of
+    exactly those paths is a later package's); before a push to a
+    `file:///` remote is approved, the person is told that its hooks do
+    not run but its own configuration is read, as in a manual push.
+  - The lead and VS-30: a read-only dependency mount (JavaScript
+    `node_modules`, Cargo and Go caches) for checks, together with a home
+    folder hidden but for the toolchains a check needs (finding 11); a
+    `--size` bound on the workspace tmpfs mounts where bubblewrap 0.7 or
+    later is known without a spawn, and a size check of the checkout
+    before a commit (finding 13); the re-adoption of a destination branch
+    left by a crash between `update-ref` and the record.
+  - Still open from SF-07: the `.fix` protection rule in
+    `TaskClaims.protectedConflict` and hiding fix checkouts from
+    `Worktree.list`.
+  - The final package: refresh `vectorscope-remaining.md:47`,
+    `vectorscope-continuation.md`, and the correcting entry for the stale
+    `vectorscope-deviations.md:16000` sentence. SF-08 edits neither
+    `remaining.md` nor `continuation.md`, and no eval README.

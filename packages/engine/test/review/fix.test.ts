@@ -1,5 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { createHash, randomUUID } from "node:crypto"
+import { readdirSync, readFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -1102,6 +1103,1272 @@ describe.skipIf(!linux)("review fix executor (VS-12a)", () => {
   )
 })
 
+// VS-12b (SF-08): checks, commit and push. The checks run real `bun test` commands in the real sandbox where one works
+// here (bubblewrap with user namespaces: verify.yml's air-gap job, and a root container); test.yml's runners have
+// none, so there only the refusals before the sandbox run, and the case that the real sandbox refuses. Nothing here
+// reaches a network: the one push goes to a bare repository on this computer.
+const IDENTITY = { name: "Vector", email: "bot@vectordev.ai" }
+const bwrap = linux ? Bun.which("bwrap") : null
+const sandboxed =
+  !!bwrap &&
+  Bun.spawnSync(
+    [bwrap, "--die-with-parent", "--cap-drop", "ALL", "--unshare-ipc", "--unshare-uts"]
+      .concat(["--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"])
+      .concat(["--tmpfs", "/tmp", "true"]),
+    { stdout: "ignore", stderr: "ignore" },
+  ).exitCode === 0
+// The variables a check may see: the executor's own (fix.ts `environment`), what /bin/sh and bun test add, and the
+// floor every untrusted child of a process running agents gets (child-environment.ts).
+const ALLOWED = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "LANG",
+  "LC_ALL",
+  "TZ",
+  "TERM",
+  "CI",
+  "NO_COLOR",
+  "CARGO_NET_OFFLINE",
+  "GOPROXY",
+  "GOTOOLCHAIN",
+  "npm_config_offline",
+  "PIP_NO_INDEX",
+  "PYTHONDONTWRITEBYTECODE",
+  "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
+  "PWD",
+  "OLDPWD",
+  "SHLVL",
+  "_",
+  "NODE_ENV",
+  "VECTOR_LOCAL",
+  "VECTOR_LOCAL_WEB",
+  "VECTOR_AGENT_SESSION",
+]
+const BASE = {
+  "package.json": '{"name":"fixture","private":true}\n',
+  ".gitignore": "out/\nnode_modules/\n",
+  "src/a.ts": "one\n",
+}
+const checksOp = (
+  commands: readonly { argv: readonly string[]; cwd?: string }[],
+  bounds: { timeoutMs: number; outputBytes: number } = { timeoutMs: 60_000, outputBytes: 8_192 },
+) => ({
+  kind: "checks",
+  commands: commands.map((command) => ({ argv: [...command.argv], cwd: command.cwd ?? "." })),
+  network: "off",
+  ...bounds,
+})
+/** Whether a process whose command line holds `token` is alive, read from /proc without starting anything. */
+const runningWith = (token: string) =>
+  Effect.promise(async () => {
+    const names = (await fs.readdir("/proc")).filter((name) => /^\d+$/.test(name) && Number(name) !== process.pid)
+    const lines = await Promise.all(
+      names.map((name) =>
+        fs.readFile(path.join("/proc", name, "cmdline"), "utf8").then(
+          (text) => text,
+          () => "",
+        ),
+      ),
+    )
+    return lines.some((line) => line.includes(token))
+  })
+const settles = (token: string) =>
+  Effect.gen(function* () {
+    for (const _ of Array.from({ length: 50 })) {
+      if (!(yield* runningWith(token))) return true
+      yield* Effect.sleep("100 millis")
+    }
+    return false
+  })
+const starts = (token: string) =>
+  Effect.gen(function* () {
+    for (const _ of Array.from({ length: 300 })) {
+      if (yield* runningWith(token)) return true
+      yield* Effect.sleep("100 millis")
+    }
+    return false
+  })
+/**
+ * The processes whose command line holds `token`, from /proc/<pid>/stat (the fields after the command name: state,
+ * parent, process group, session, terminal), read synchronously so a poll sees bwrap within a millisecond of its exec.
+ */
+const processesWith = (token: string) =>
+  readdirSync("/proc").flatMap((name) => {
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) return []
+    try {
+      if (!readFileSync(path.join("/proc", name, "cmdline"), "utf8").includes(token)) return []
+      const stat = readFileSync(path.join("/proc", name, "stat"), "utf8")
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
+      return [
+        {
+          pid: Number(name),
+          parent: Number(fields[1]),
+          group: Number(fields[2]),
+          session: Number(fields[3]),
+          terminal: Number(fields[4]),
+        },
+      ]
+    } catch {
+      return []
+    }
+  })
+/** Polls without sleeping until a process with `token` exists: the outer bwrap, as soon as it is exec'd. */
+const appears = (token: string) =>
+  Effect.gen(function* () {
+    const deadline = Date.now() + 30_000
+    while (Date.now() < deadline) {
+      const found = processesWith(token)
+      if (found.length) return found
+      yield* Effect.yieldNow
+    }
+    return []
+  })
+
+/** Moves the user's reviewed branch (the checkout is on it) by one commit. */
+const move = (directory: string) => commit(directory, { [`moved-${randomUUID()}.txt`]: "x\n" }, "moved")
+
+/** The SF-07 fixture with a package and its ignores, plus helpers that take a fix through its consented steps. */
+const steps = Effect.fn("FixTest.steps")(function* (files: Record<string, string> = {}) {
+  const f = yield* fixture({ ...BASE, ...files })
+  const approveOp = (proposal: unknown, operation: unknown, actor = ACTOR, lifetime = 60_000) =>
+    Effect.promise(() => f.policy.approve(proposal, operation, actor, lifetime)).pipe(
+      Effect.map((result) => {
+        if (!result.ok) throw new Error(`approval refused: ${result.reason}`)
+        return result.consent
+      }),
+    )
+  const applied = Effect.fn("FixTest.applied")(function* (
+    changes: Record<string, string | null> = { "src/a.ts": "two\n" },
+  ) {
+    const fix = yield* f.place(changes)
+    yield* f.fix.preview(fix)
+    yield* f.fix.apply({ ...fix, consent: yield* f.approve(fix.proposal), policy: f.policy, actor: ACTOR })
+    return fix
+  })
+  const committed = Effect.fn("FixTest.committed")(function* (message = "fix: two\n") {
+    const fix = yield* applied()
+    const operation = { kind: "commit", message }
+    const made = yield* f.fix.commit({
+      ...fix,
+      operation,
+      consent: yield* approveOp(fix.proposal, operation),
+      policy: f.policy,
+      actor: ACTOR,
+      identity: IDENTITY,
+    })
+    return { ...fix, made }
+  })
+  /** A bare repository outside the project and the data folder, holding the user's main and feature. */
+  const bare = Effect.fn("FixTest.bare")(function* () {
+    const scratch = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "vector-fix-remote-")))
+    yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(scratch, { recursive: true, force: true })))
+    const directory = path.join(scratch, "remote.git")
+    yield* git(scratch, ["init", "-q", "--bare", directory])
+    yield* git(f.directory, ["push", "-q", directory, "main", "feature"])
+    return { directory, url: `file://${directory}` }
+  })
+  // CI sets CI=true, which the real context refuses, so these cases run checks as on a developer's computer; case 1
+  // checks the context gate itself through `service`, the executor as it is.
+  const local = (request: Parameters<typeof f.fix.checks>[0]) =>
+    f.fix.checks(request).pipe(Effect.provideService(ReviewFix.RunnerContext, () => undefined))
+  return { ...f, fix: { ...f.fix, checks: local }, service: f.fix, approveOp, applied, committed, bare }
+})
+
+describe.skipIf(!linux)("review fix checks, commit and push (VS-12b)", () => {
+  it.instance(
+    "a check is refused before its consent is spent: state, argv, flags, coverage, folders and context",
+    () =>
+      Effect.gen(function* () {
+        const marker = `marker-${randomUUID()}`
+        const f = yield* steps({
+          ".gitignore": "out/\nnode_modules/\nlinked\n",
+          [`test/${marker}.test.ts`]: `import { test } from "bun:test"\nimport fs from "node:fs"\ntest("m", () => fs.writeFileSync("${marker}", "ran"))\n`,
+        })
+        const good = checksOp([{ argv: ["bun", "test", `test/${marker}.test.ts`] }])
+        const fix = yield* f.place({ "src/a.ts": "two\n" })
+        yield* f.fix.preview(fix)
+        const consent = yield* f.approveOp(fix.proposal, good)
+        const checks = (operation: unknown) =>
+          f.fix.checks({ ...fix, operation, consent, policy: f.policy, actor: ACTOR })
+        // Not applied yet.
+        yield* refused(checks(good), "state")
+        yield* f.fix.apply({ ...fix, consent: yield* f.approve(fix.proposal), policy: f.policy, actor: ACTOR })
+        // Core refuses these at approve; the executor refuses them before it spends a consent.
+        for (const argv of [
+          ["bun", "test", "--preload", "x.ts"],
+          ["sh", "-c", `touch ${marker}`],
+          ["bun", "x", "anything"],
+          ["bun", "test", "../outside.test.ts"],
+          ["bun", "test", ".git/hooks"],
+        ])
+          yield* refused(checks(checksOp([{ argv }])), "operation")
+        // VS-30's coverage command: the core contract admits it; the executor does not while VS-30 is unapplied.
+        const coverage = checksOp([{ argv: ["bun", "test", "--coverage", "--coverage-reporter=lcov"] }])
+        expect((yield* Effect.promise(() => f.policy.approve(fix.proposal, coverage, ACTOR, 60_000))).ok).toBe(true)
+        yield* refused(checks(coverage), "operation")
+        yield* refused(checks({ ...good, network: "on" }), "operation")
+        yield* refused(checks({ ...good, timeoutMs: 120_001 }), "operation")
+        yield* refused(checks({ ...good, outputBytes: 80 * 1024 + 1 }), "operation")
+        yield* refused(checks({ ...good, extra: true }), "operation")
+        yield* refused(checks(checksOp(Array.from({ length: 17 }, () => good.commands[0]))), "operation")
+        // Folders: outside, missing, a file, a link.
+        yield* refused(checks(checksOp([{ argv: good.commands[0].argv, cwd: "../x" }])), "operation")
+        yield* refused(checks(checksOp([{ argv: good.commands[0].argv, cwd: "missing" }])), "path")
+        yield* refused(checks(checksOp([{ argv: good.commands[0].argv, cwd: "src/a.ts" }])), "path")
+        yield* Effect.promise(() => fs.symlink("src", path.join(fix.placement.worktree, "linked")))
+        yield* refused(checks(checksOp([{ argv: good.commands[0].argv, cwd: "linked" }])), "symlink")
+        yield* Effect.promise(() => fs.unlink(path.join(fix.placement.worktree, "linked")))
+        // Never in a CI job, a GitHub run or on Actions.
+        const raw = (operation: unknown) =>
+          f.service.checks({ ...fix, operation, consent, policy: f.policy, actor: ACTOR })
+        yield* refused(
+          raw(good).pipe(Effect.provideService(ReviewFix.RunnerContext, () => "Checks not run: a GitHub run.")),
+          "context",
+          "Checks not run: a GitHub run.",
+        )
+        const ci =
+          "Checks not run: checks never run in a CI job or a GitHub run, which may hold secrets or write tokens."
+        yield* refused(
+          raw(good).pipe(
+            Effect.provideService(ReviewFix.RunnerContext, () =>
+              ReviewFix.runnerContext({ PATH: "/usr/bin", CI: "1" }),
+            ),
+          ),
+          "context",
+          ci,
+        )
+        for (const env of [
+          { CI: "1" },
+          { CI: "true" },
+          { CI: " TRUE " },
+          { GITHUB_ACTIONS: "true" },
+          { GITLAB_CI: "true" },
+          { JENKINS_URL: "http://jenkins" },
+          { TF_BUILD: "True" },
+          { BUILDKITE: "true" },
+        ])
+          expect(ReviewFix.runnerContext(env)).toBe(ci)
+        for (const env of [{}, { CI: "" }, { CI: "0" }, { CI: "false" }, { GITHUB_ACTIONS: "false", CI: "False" }])
+          expect(ReviewFix.runnerContext(env)).toBeUndefined()
+        // A proposal other than the applied one.
+        const other = f.proposalFor(fix.placement, yield* patchFor(f.directory, f.head, { "src/a.ts": "three\n" }), [
+          { path: "src/a.ts", before: "one\n", after: "three\n" },
+        ])
+        yield* refused(
+          f.fix.checks({ ...fix, proposal: other, operation: good, consent, policy: f.policy, actor: ACTOR }),
+          "digest",
+        )
+        expect(yield* exists(path.join(fix.placement.worktree, marker))).toBe(false)
+        expect(f.policy.revoke(consent)).toEqual({ ok: true })
+        expect(yield* f.fix.state(fix.fixID)).toBe("applied")
+        expect(yield* f.fix.cancel(fix.fixID)).toEqual({ fixID: fix.fixID, removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "checks report unavailable dependencies, a missing program and no sandbox before the consent is spent",
+    () =>
+      Effect.gen(function* () {
+        const crate = '[package]\nname = "c"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1" # a registry package\n'
+        const module = "module example.com/m\n\ngo 1.22\n\nrequire (\n\texample.com/dep v1.0.0 // indirect\n)\n"
+        const f = yield* steps({
+          "package.json": '{"name":"fixture","private":true,"devDependencies":{"left-pad":"1.3.0"}}\n',
+          "test/a.test.ts": 'import { test } from "bun:test"\ntest("a", () => {})\n',
+          "crate/Cargo.toml": crate,
+          "locked/Cargo.toml": '[package]\nname = "l"\nversion = "0.1.0"\n',
+          "locked/Cargo.lock":
+            'version = 3\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+          "local/Cargo.toml":
+            '[package]\nname = "p"\nversion = "0.1.0"\n\n[dependencies]\nsibling = { path = "../sibling" }\n\n[[bin]]\nname = "x"\n',
+          "vendored/Cargo.toml": crate,
+          "vendored/.cargo/config.toml":
+            '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n',
+          "gomod/go.mod": module,
+          "govendor/go.mod": module,
+          "govendor/vendor/modules.txt": "# example.com/dep v1.0.0\n## explicit\n",
+          "goplain/go.mod": "module example.com/p\n\ngo 1.22\n",
+        })
+        const fix = yield* f.applied()
+        const operation = checksOp([{ argv: ["bun", "test", "test/a.test.ts"] }])
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        const checks = (input: unknown = operation) =>
+          f.fix.checks({ ...fix, operation: input, consent, policy: f.policy, actor: ACTOR })
+        const exit = yield* Effect.exit(checks())
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            reason: "dependencies",
+            message: expect.stringMatching(/^Checks not run: dependencies unavailable \(package\.json declares/),
+          })
+        // pytest is allowed; a program that is not on the check's PATH is the same refusal. PATH holds only Git here
+        // for this one call, which the steps before the dependencies need.
+        const only = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "vector-fix-path-")))
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(only, { recursive: true, force: true })))
+        yield* Effect.promise(() => fs.symlink(Bun.which("git") ?? "/usr/bin/git", path.join(only, "git")))
+        const saved = process.env.PATH
+        yield* Effect.sync(() => {
+          process.env.PATH = only
+        })
+        yield* refused(checks(checksOp([{ argv: ["pytest"] }])), "dependencies").pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              process.env.PATH = saved
+            }),
+          ),
+        )
+        // Cargo and Go: what they build from must be in the checkout, since a check sees no package cache, module cache
+        // or network. Programs that only fail stand for the toolchains, beside Git (the steps before need it); none runs.
+        const tools = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "vector-fix-tools-")))
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(tools, { recursive: true, force: true })))
+        const plain = path.join(tools, "plain")
+        const proxied = path.join(tools, "proxied")
+        for (const folder of [plain, proxied]) {
+          yield* Effect.promise(() => fs.mkdir(folder))
+          yield* Effect.promise(() => fs.symlink(Bun.which("git") ?? "/usr/bin/git", path.join(folder, "git")))
+        }
+        for (const file of [path.join(plain, "cargo"), path.join(plain, "go"), path.join(proxied, "rustup")])
+          yield* Effect.promise(() => fs.writeFile(file, "#!/bin/sh\nexit 1\n", { mode: 0o755 }))
+        // rustup installs its proxies as hard links (or links) to itself.
+        yield* Effect.promise(() => fs.link(path.join(proxied, "rustup"), path.join(proxied, "cargo")))
+        // Each gate with PATH set to one folder for that call; a platform with no sandbox stops what passes it.
+        const gate = (argv: string[], cwd: string, folder = plain) =>
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const before = process.env.PATH
+              process.env.PATH = folder
+              return before
+            }),
+            () =>
+              Effect.exit(
+                checks(checksOp([{ argv, cwd }])).pipe(Effect.provideService(ReviewFix.SandboxPlatform, "freebsd")),
+              ),
+            (before) =>
+              Effect.sync(() => {
+                process.env.PATH = before
+              }),
+          ).pipe(Effect.map((exit) => (Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit.value)))
+        const dependencies = (detail: string) => ({
+          reason: "dependencies",
+          message: `Checks not run: dependencies unavailable (${detail}).`,
+        })
+        const vendor = "names registry or git packages, and the checkout does not vendor them"
+        expect(yield* gate(["cargo", "test"], "crate")).toMatchObject(dependencies(`crate/Cargo.toml ${vendor}`))
+        expect(yield* gate(["cargo", "test"], "locked")).toMatchObject(dependencies(`locked/Cargo.lock ${vendor}`))
+        expect(yield* gate(["cargo", "test"], "local")).toMatchObject({ reason: "sandbox" })
+        expect(yield* gate(["cargo", "test"], "vendored")).toMatchObject({ reason: "sandbox" })
+        expect(yield* gate(["cargo", "test"], "local", proxied)).toMatchObject(
+          dependencies(
+            "cargo here is rustup's proxy, and the toolchains rustup keeps in your home folder are not visible to checks",
+          ),
+        )
+        expect(yield* gate(["go", "test", "./..."], "gomod")).toMatchObject(
+          dependencies("gomod/go.mod requires modules, and the checkout does not vendor them"),
+        )
+        expect(yield* gate(["go", "test", "./..."], "govendor")).toMatchObject({ reason: "sandbox" })
+        expect(yield* gate(["go", "test"], "goplain")).toMatchObject({ reason: "sandbox" })
+        // Installed (node_modules is ignored, so the checkout still holds exactly the patch), the next stage decides:
+        // here a platform with no sandbox to run in, and one where commands are not network-filtered.
+        yield* Effect.promise(() => fs.mkdir(path.join(fix.placement.worktree, "node_modules")))
+        for (const platform of ["win32", "freebsd"] as const) {
+          const refusedHere = yield* Effect.exit(
+            checks().pipe(Effect.provideService(ReviewFix.SandboxPlatform, platform)),
+          )
+          expect(Exit.isFailure(refusedHere)).toBe(true)
+          if (Exit.isFailure(refusedHere))
+            expect(Cause.squash(refusedHere.cause)).toMatchObject({
+              reason: "sandbox",
+              message: expect.stringMatching(/^Checks not run: /),
+            })
+        }
+        expect(f.policy.revoke(consent)).toEqual({ ok: true })
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "cancelling while a check is being prepared stops it at once and spends nothing",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* steps({ "test/a.test.ts": 'import { test } from "bun:test"\ntest("a", () => {})\n' })
+        const fix = yield* f.applied()
+        const operation = checksOp([{ argv: ["bun", "test", "test/a.test.ts"] }])
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        const probing = yield* Deferred.make<void>()
+        const fiber = yield* f.fix
+          .checks({
+            ...fix,
+            operation,
+            consent,
+            policy: f.policy,
+            actor: ACTOR,
+            observe: (event) =>
+              event.type === "probe"
+                ? Deferred.succeed(probing, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.void,
+          })
+          .pipe(Effect.forkScoped({ startImmediately: true }))
+        yield* Deferred.await(probing)
+        const started = Date.now()
+        expect(yield* f.fix.cancel(fix.fixID)).toEqual({ fixID: fix.fixID, removed: true })
+        expect(Date.now() - started).toBeLessThan(10_000)
+        const exit = yield* Fiber.await(fiber)
+        expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
+        expect(yield* exists(fix.placement.worktree)).toBe(false)
+        expect(f.policy.revoke(consent)).toEqual({ ok: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "a commit needs its own consent and lands the approved postimages on a new destination branch, without hooks",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* steps({ "src/b.ts": "bee\n", "run.sh": "echo hi\n" })
+        yield* Effect.promise(() => fs.chmod(path.join(f.directory, "run.sh"), 0o755))
+        yield* git(f.directory, ["add", "run.sh"])
+        yield* git(f.directory, ["commit", "-q", "-m", "mode"])
+        const head = yield* git(f.directory, ["rev-parse", "HEAD"])
+        // patchFor writes every file as 100644, so the executable's section is written by hand (no mode change).
+        const placement = yield* f.fix.reserve({ head })
+        const patch =
+          (yield* patchFor(f.directory, head, { "src/a.ts": "two\n", "src/b.ts": null, "src/new/c.ts": "new\n" })) +
+          "diff --git a/run.sh b/run.sh\n--- a/run.sh\n+++ b/run.sh\n@@ -1 +1 @@\n-echo hi\n+echo bye\n"
+        const fix = {
+          placement,
+          fixID: placement.fixID,
+          proposal: f.proposalFor(placement, patch, [
+            { path: "run.sh", before: "echo hi\n", after: "echo bye\n" },
+            { path: "src/a.ts", before: "one\n", after: "two\n" },
+            { path: "src/b.ts", before: "bee\n", after: null },
+            { path: "src/new/c.ts", before: null, after: "new\n" },
+          ]),
+        }
+        yield* f.fix.preview(fix)
+        yield* f.fix.apply({ ...fix, consent: yield* f.approve(fix.proposal), policy: f.policy, actor: ACTOR })
+        const message = "fix: apply the review fix\n\nfinding-1\n# kept verbatim\n"
+        const operation = { kind: "commit", message }
+        const commit = (consent: FixConsent, input: unknown = operation, policy = f.policy) =>
+          f.fix.commit({ ...fix, operation: input, consent, policy, actor: ACTOR, identity: IDENTITY })
+        const files = ["src/a.ts", "src/b.ts", "run.sh"]
+        const before = yield* snapshot(f.directory, files)
+        const unspent = yield* f.approve(fix.proposal)
+        yield* refused(commit(unspent), "mismatch")
+        const checks = yield* f.approveOp(fix.proposal, checksOp([{ argv: ["bun", "test"] }]))
+        yield* refused(commit(checks), "mismatch")
+        const elsewhere = createFixConsentPolicy(() => 1_000)
+        const foreign = yield* Effect.promise(() => elsewhere.approve(fix.proposal, operation, ACTOR, 60_000))
+        if (!foreign.ok) throw new Error(foreign.reason)
+        yield* refused(commit(foreign.consent), "unknown")
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        yield* refused(commit(consent, { kind: "commit", message: "fix: another message\n" }), "mismatch")
+        expect(
+          (yield* run(f.directory, ["rev-parse", "--verify", "--quiet", "refs/heads/vector/fix-1"])).exitCode,
+        ).not.toBe(0)
+        // Hooks in the user's repository, which nothing below may run.
+        const hooks = path.resolve(f.directory, yield* git(f.directory, ["rev-parse", "--git-path", "hooks"]))
+        const ran = path.join(f.home.directory, `hook-${randomUUID()}`)
+        for (const name of ["reference-transaction", "post-commit", "pre-commit", "commit-msg"]) {
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(hooks, name), `#!/bin/sh\ntouch "${ran}"\n`, { mode: 0o755 }),
+          )
+        }
+        const made = yield* commit(consent)
+        expect(yield* exists(ran)).toBe(false)
+        for (const name of ["reference-transaction", "post-commit", "pre-commit", "commit-msg"])
+          yield* Effect.promise(() => fs.rm(path.join(hooks, name)))
+        expect(made).toMatchObject({ fixID: fix.fixID, head, branch: "vector/fix-1", author: IDENTITY, actor: ACTOR })
+        expect(yield* git(f.directory, ["rev-parse", "refs/heads/vector/fix-1"])).toBe(made.commit)
+        expect(yield* git(f.directory, ["log", "-1", "--format=%an <%ae>|%cn <%ce>|%P|%T", made.commit])).toBe(
+          `Vector <bot@vectordev.ai>|Vector <bot@vectordev.ai>|${head}|${made.tree}`,
+        )
+        const raw = yield* git(f.directory, ["cat-file", "commit", made.commit])
+        expect(
+          (yield* run(f.directory, ["cat-file", "commit", made.commit])).text().split("\n\n").slice(1).join("\n\n"),
+        ).toBe(message)
+        expect(raw).toContain("author Vector <bot@vectordev.ai>")
+        expect(
+          (yield* git(f.directory, ["diff-tree", "-r", "--no-renames", "--name-status", head, made.commit])).split(
+            "\n",
+          ),
+        ).toEqual(["M\trun.sh", "M\tsrc/a.ts", "D\tsrc/b.ts", "A\tsrc/new/c.ts"])
+        expect(yield* git(f.directory, ["show", `${made.commit}:src/a.ts`])).toBe("two")
+        expect(yield* git(f.directory, ["show", `${made.commit}:src/new/c.ts`])).toBe("new")
+        // The head's mode is kept for a modified file.
+        expect(yield* git(f.directory, ["ls-tree", made.commit, "run.sh"])).toStartWith("100755 blob ")
+        // The user's checkout is as it was, but for the new branch; the fix checkout is still detached at the head.
+        const after = yield* snapshot(f.directory, files)
+        expect({ ...after, refs: "" }).toEqual({ ...before, refs: "" })
+        expect(after.refs.split("\n").filter((line) => !before.refs.split("\n").includes(line))).toEqual([
+          `refs/heads/vector/fix-1 ${made.commit}`,
+        ])
+        expect(yield* git(fix.placement.worktree, ["rev-parse", "HEAD"])).toBe(head)
+        expect((yield* run(fix.placement.worktree, ["symbolic-ref", "-q", "HEAD"])).exitCode).not.toBe(0)
+        expect(yield* f.fix.state(fix.fixID)).toBe("committed")
+        const listed = yield* f.fix.placements()
+        expect(listed.map((item) => [item.state, item.commit?.sha, item.commit?.branch])).toEqual([
+          ["committed", made.commit, "vector/fix-1"],
+        ])
+        // The private index is gone with the build.
+        for (const item of listed) expect(yield* exists(TaskIsolation.fixCommitIndex(item))).toBe(false)
+        yield* refused(commit(yield* f.approveOp(fix.proposal, operation)), "state")
+        expect(f.policy.revoke(unspent)).toEqual({ ok: true })
+        expect(f.policy.revoke(checks)).toEqual({ ok: true })
+        // Cancel removes the placement and keeps the branch.
+        expect(yield* f.fix.cancel(fix.fixID)).toEqual({ fixID: fix.fixID, removed: true })
+        expect(yield* git(f.directory, ["rev-parse", "refs/heads/vector/fix-1"])).toBe(made.commit)
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "a commit is refused before its consent is spent when the checkout or the destination is not as approved",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* steps()
+        const fix = yield* f.applied()
+        const operation = { kind: "commit", message: "fix: two\n" }
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        const commit = (identity: ReviewFix.Identity = IDENTITY) =>
+          f.fix.commit({
+            ...fix,
+            operation,
+            consent,
+            policy: f.policy,
+            actor: ACTOR,
+            identity,
+          })
+        const target = path.join(fix.placement.worktree, "src/a.ts")
+        for (const identity of [
+          { name: "Vector", email: "nobody" },
+          { name: "Vector <x>", email: "bot@vectordev.ai" },
+          { name: "Vector\n", email: "bot@vectordev.ai" },
+          { name: "Vector", email: "bot@vectordev.ai", extra: 1 },
+        ])
+          yield* refused(commit(identity), "operation")
+        yield* refused(
+          f.fix.commit({
+            ...fix,
+            operation: { kind: "commit", message: "a\0b" },
+            consent,
+            policy: f.policy,
+            actor: ACTOR,
+            identity: IDENTITY,
+          }),
+          "operation",
+        )
+        // A stray file, then an edit to the fixed file.
+        yield* write(fix.placement.worktree, "stray.txt", "x\n")
+        yield* refused(
+          commit(),
+          "worktree",
+          "The fix checkout holds other changes than the approved patch, such as files a check left. Cancel the fix and apply it again.",
+        )
+        yield* Effect.promise(() => fs.rm(path.join(fix.placement.worktree, "stray.txt")))
+        yield* write(fix.placement.worktree, "src/a.ts", "edited\n")
+        yield* refused(commit(), "postimage")
+        // What a check could leave at the fixed path: a FIFO and a link are refused at once, never opened.
+        yield* Effect.promise(() => fs.rm(target))
+        expect(Bun.spawnSync(["mkfifo", target]).exitCode).toBe(0)
+        const started = Date.now()
+        yield* refused(commit(), "path")
+        expect(Date.now() - started).toBeLessThan(10_000)
+        yield* Effect.promise(() => fs.rm(target))
+        yield* Effect.promise(() => fs.symlink("/dev/zero", target))
+        yield* refused(commit(), "symlink")
+        yield* Effect.promise(() => fs.rm(target))
+        yield* Effect.promise(() => fs.mkdir(path.join(f.home.directory, "elsewhere"), { recursive: true }))
+        yield* Effect.promise(() =>
+          fs.rename(path.join(fix.placement.worktree, "src"), path.join(f.home.directory, "elsewhere", "src")),
+        )
+        yield* Effect.promise(() =>
+          fs.symlink(path.join(f.home.directory, "elsewhere", "src"), path.join(fix.placement.worktree, "src")),
+        )
+        yield* write(path.join(f.home.directory, "elsewhere"), "src/a.ts", "two\n")
+        yield* refused(commit(), "worktree")
+        yield* Effect.promise(() => fs.rm(path.join(fix.placement.worktree, "src")))
+        yield* Effect.promise(() =>
+          fs.rename(path.join(f.home.directory, "elsewhere", "src"), path.join(fix.placement.worktree, "src")),
+        )
+        yield* write(fix.placement.worktree, "src/a.ts", "two\n")
+        // The destination branch exists, then the reviewed branch moved.
+        yield* git(f.directory, ["branch", "vector/fix-1", f.base])
+        yield* refused(commit(), "destination")
+        yield* git(f.directory, ["branch", "-D", "vector/fix-1"])
+        yield* move(f.directory)
+        yield* refused(commit(), "head")
+        expect(f.policy.revoke(consent)).toEqual({ ok: true })
+        expect(yield* f.fix.state(fix.fixID)).toBe("applied")
+        expect(
+          (yield* run(f.directory, ["rev-parse", "--verify", "--quiet", "refs/heads/vector/fix-1"])).exitCode,
+        ).not.toBe(0)
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "a push needs its own consent and sends only the commit, only to the approved local bare repository, as a new branch",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* steps()
+        const remote = yield* f.bare()
+        yield* git(f.directory, ["config", "push.followTags", "true"])
+        yield* git(f.directory, ["tag", "-a", "v-fix", "-m", "tag", f.head])
+        const fix = yield* f.committed()
+        const operation = { kind: "push", remote: remote.url, commit: fix.made.commit, mode: "draft-pr" }
+        const push = (consent: FixConsent, input: unknown = operation) =>
+          f.fix.push({ ...fix, operation: input, consent, policy: f.policy, actor: ACTOR })
+        const remoteRefs = () =>
+          git(f.directory, ["--git-dir", remote.directory, "for-each-ref", "--format=%(refname) %(objectname)"])
+        const before = yield* remoteRefs()
+        // Another step's consent, and a consent for another remote.
+        const commitConsent = yield* f.approveOp(fix.proposal, { kind: "commit", message: "fix: two\n" })
+        yield* refused(push(commitConsent), "mismatch")
+        const other = yield* f.approveOp(fix.proposal, { ...operation, remote: `file://${remote.directory}x` })
+        yield* refused(push(other), "mismatch")
+        yield* refused(push(yield* f.approveOp(fix.proposal, operation), { ...operation, commit: f.head }), "operation")
+        // A remote Git would rewrite, the user's own repository, and remotes whose default or existing branch is the
+        // destination: each refused before the consent is spent.
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        // The decoy is a valid remote of its own, so only the rewrite check stands between it and the real one.
+        const decoy = yield* f.bare()
+        const alias = { ...operation, remote: decoy.url }
+        yield* git(f.directory, ["config", `url.${remote.url}.insteadOf`, alias.remote])
+        yield* refused(
+          push(yield* f.approveOp(fix.proposal, alias), alias),
+          "remote",
+          "Git would push to another address than the approved remote (a url rewrite).",
+        )
+        yield* git(f.directory, ["config", "--unset", `url.${remote.url}.insteadOf`])
+        yield* git(f.directory, ["config", `url.${remote.url}.pushInsteadOf`, alias.remote])
+        yield* refused(
+          push(yield* f.approveOp(fix.proposal, alias), alias),
+          "remote",
+          "Git would push to another address than the approved remote (a push rewrite).",
+        )
+        yield* git(f.directory, ["config", "--unset", `url.${remote.url}.pushInsteadOf`])
+        // A rewrite whose url has a space in it, which a line split at its first space would not read.
+        yield* git(f.directory, ["config", "url.file:///nowhere with space/.pushInsteadOf", alias.remote])
+        yield* refused(
+          push(yield* f.approveOp(fix.proposal, alias), alias),
+          "remote",
+          "Git would push to another address than the approved remote (a push rewrite).",
+        )
+        yield* git(f.directory, ["config", "--remove-section", "url.file:///nowhere with space/"])
+        // A configured remote named like the address: Git would push to its pushurl instead.
+        yield* git(f.directory, ["config", `remote.${alias.remote}.pushurl`, remote.url])
+        yield* refused(
+          push(yield* f.approveOp(fix.proposal, alias), alias),
+          "remote",
+          "A Git remote of this repository is named like the approved address, so Git could push elsewhere.",
+        )
+        yield* git(f.directory, ["config", "--remove-section", `remote.${alias.remote}`])
+        const own = { ...operation, remote: `file://${path.join(f.directory, ".git")}` }
+        yield* refused(push(yield* f.approveOp(fix.proposal, own), own), "remote")
+        const plain = { ...operation, remote: `file://${f.home.directory}` }
+        yield* refused(push(yield* f.approveOp(fix.proposal, plain), plain), "remote")
+        const defaults = yield* f.bare()
+        yield* git(f.directory, ["--git-dir", defaults.directory, "symbolic-ref", "HEAD", "refs/heads/vector/fix-1"])
+        const named = { ...operation, remote: defaults.url }
+        yield* refused(push(yield* f.approveOp(fix.proposal, named), named), "destination")
+        const taken = yield* f.bare()
+        yield* git(f.directory, ["push", "-q", taken.directory, `${f.base}:refs/heads/vector/fix-1`])
+        const occupied = { ...operation, remote: taken.url }
+        yield* refused(push(yield* f.approveOp(fix.proposal, occupied), occupied), "destination")
+        expect(yield* git(f.directory, ["--git-dir", taken.directory, "rev-parse", "refs/heads/vector/fix-1"])).toBe(
+          f.base,
+        )
+        // The local destination branch moved, then the reviewed branch.
+        yield* git(f.directory, ["branch", "-f", "vector/fix-1", f.head])
+        yield* refused(push(consent), "destination")
+        yield* git(f.directory, ["branch", "-f", "vector/fix-1", fix.made.commit])
+        yield* move(f.directory)
+        yield* refused(push(consent), "head")
+        yield* git(f.directory, ["reset", "-q", "--hard", f.head])
+        expect(yield* remoteRefs()).toBe(before)
+        expect(yield* f.fix.state(fix.fixID)).toBe("committed")
+
+        // The remote's own receive hooks, which the push must not run: they would run with this process's environment.
+        const hooked = path.join(f.home.directory, `remote-hook-${randomUUID()}`)
+        for (const name of ["pre-receive", "update", "post-receive", "post-update", "reference-transaction"])
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(remote.directory, "hooks", name), `#!/bin/sh\ntouch "${hooked}"\ncat >/dev/null\n`, {
+              mode: 0o755,
+            }),
+          )
+        const pushed = yield* push(consent)
+        expect(yield* exists(hooked)).toBe(false)
+        expect(pushed).toEqual({
+          fixID: fix.fixID,
+          commit: fix.made.commit,
+          remote: remote.url,
+          ref: "refs/heads/vector/fix-1",
+          mode: "draft-pr",
+          actor: ACTOR,
+          consumedAt: expect.any(Number),
+        })
+        const after = (yield* remoteRefs()).split("\n")
+        expect(after.filter((line) => !before.split("\n").includes(line))).toEqual([
+          `refs/heads/vector/fix-1 ${fix.made.commit}`,
+        ])
+        expect(yield* git(f.directory, ["--git-dir", remote.directory, "tag", "-l"])).toBe("")
+        expect(yield* git(f.directory, ["--git-dir", remote.directory, "rev-parse", "main", "feature"])).toBe(
+          [f.base, f.head].join("\n"),
+        )
+        expect(yield* f.fix.state(fix.fixID)).toBe("pushed")
+        const listed = yield* f.fix.placements()
+        expect(listed.map((item) => [item.state, item.push?.remote, item.push?.ref, item.push?.mode])).toEqual([
+          ["pushed", remote.url, "refs/heads/vector/fix-1", "draft-pr"],
+        ])
+        yield* refused(push(yield* f.approveOp(fix.proposal, operation)), "state")
+        for (const item of [commitConsent, other]) expect(f.policy.revoke(item)).toEqual({ ok: true })
+        // The base branch can never be a destination: the proposal itself is refused.
+        const placement = yield* f.fix.reserve({ head: f.head })
+        const base = {
+          ...f.proposalFor(placement, yield* patchFor(f.directory, f.head, { "src/a.ts": "two\n" }), [
+            { path: "src/a.ts", before: "one\n", after: "two\n" },
+          ]),
+        }
+        yield* refused(
+          f.fix.preview({
+            fixID: placement.fixID,
+            proposal: { ...base, scope: { ...base.scope, destinationBranch: "main" } },
+          }),
+          "proposal",
+        )
+        expect(yield* f.fix.cancel(placement.fixID)).toMatchObject({ removed: true })
+        // Cancel removes the placement; the local and the remote branch stay.
+        expect(yield* f.fix.cancel(fix.fixID)).toEqual({ fixID: fix.fixID, removed: true })
+        expect(yield* exists(fix.placement.worktree)).toBe(false)
+        expect(yield* git(f.directory, ["rev-parse", "refs/heads/vector/fix-1"])).toBe(fix.made.commit)
+        expect(yield* git(f.directory, ["--git-dir", remote.directory, "rev-parse", "refs/heads/vector/fix-1"])).toBe(
+          fix.made.commit,
+        )
+      }),
+    { git: true },
+    90_000,
+  )
+
+  it.instance(
+    "committed and pushed fix records stay invisible to every task path and are swept when their process is gone",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* steps()
+        const remote = yield* f.bare()
+        const fix = yield* f.committed()
+        const registry = path.join(Global.Path.data, "task-isolation", f.home.project.id, ".fix", fix.fixID)
+        const committed = JSON.parse(yield* read(registry, "fix.json"))
+        expect(committed.state).toBe("committed")
+        expect(() => Schema.decodeUnknownSync(TaskIsolation.Record)(committed)).toThrow()
+        expect(yield* f.isolation.records()).toEqual([])
+        expect(yield* f.isolation.find(fix.fixID)).toBeUndefined()
+        yield* fails(f.isolation.start(fix.fixID))
+        const operation = { kind: "push", remote: remote.url, commit: fix.made.commit, mode: "branch" }
+        yield* f.fix.push({
+          ...fix,
+          operation,
+          consent: yield* f.approveOp(fix.proposal, operation),
+          policy: f.policy,
+          actor: ACTOR,
+        })
+        const pushed = yield* read(registry, "fix.json")
+        expect(JSON.parse(pushed)).toMatchObject({
+          state: "pushed",
+          commit: { sha: fix.made.commit },
+          push: { remote: remote.url, mode: "branch" },
+        })
+        expect(() => Schema.decodeUnknownSync(TaskIsolation.Record)(JSON.parse(pushed))).toThrow()
+        expect(yield* f.isolation.records()).toEqual([])
+        yield* fails(f.isolation.get(fix.fixID))
+        yield* fails(f.isolation.settle({ taskID: fix.fixID, attempt: 1 }))
+        expect(TaskPlace.isTaskDirectory(fix.placement.worktree)).toBe(false)
+        // An earlier process's pushed placement is removed by the sweep; its branches stay.
+        BackgroundJobStore.close((yield* f.isolation.getFix(fix.fixID)).owner)
+        TaskClaims.unprotect(fix.fixID)
+        expect(yield* f.isolation.sweep({ force: true })).toEqual([])
+        expect(yield* exists(fix.placement.worktree)).toBe(false)
+        expect(yield* f.fix.placements()).toEqual([])
+        expect(yield* git(f.directory, ["rev-parse", "refs/heads/vector/fix-1"])).toBe(fix.made.commit)
+      }),
+    { git: true },
+    60_000,
+  )
+  ;(sandboxed ? it.instance.skip : it.instance)(
+    "without a working sandbox, a consented check is refused as checks not run and nothing runs",
+    () =>
+      Effect.gen(function* () {
+        const marker = `marker-${randomUUID()}`
+        const f = yield* steps({
+          [`test/${marker}.test.ts`]: `import { test } from "bun:test"\nimport fs from "node:fs"\ntest("m", () => fs.writeFileSync("${marker}", "ran"))\n`,
+        })
+        const fix = yield* f.applied()
+        const operation = checksOp([{ argv: ["bun", "test", `test/${marker}.test.ts`] }])
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        const exit = yield* Effect.exit(f.fix.checks({ ...fix, operation, consent, policy: f.policy, actor: ACTOR }))
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            reason: "sandbox",
+            message: expect.stringMatching(/^Checks not run: /),
+          })
+        expect(yield* exists(path.join(fix.placement.worktree, marker))).toBe(false)
+        expect(f.policy.revoke(consent)).toEqual({ ok: true })
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+})
+
+describe.skipIf(!sandboxed)("review fix checks in the sandbox (VS-12b)", () => {
+  it.instance(
+    "an unconsented check runs nothing",
+    () =>
+      Effect.gen(function* () {
+        const marker = `marker-${randomUUID()}`
+        const f = yield* steps({
+          [`test/${marker}.test.ts`]: `import { test } from "bun:test"\nimport fs from "node:fs"\ntest("m", () => fs.writeFileSync("out-${marker}", "ran"))\n`,
+        })
+        const fix = yield* f.applied()
+        const operation = checksOp([{ argv: ["bun", "test", `test/${marker}.test.ts`] }])
+        const checks = (consent: FixConsent, policy = f.policy) =>
+          f.fix.checks({ ...fix, operation, consent, policy, actor: ACTOR })
+        yield* refused(checks(yield* f.approve(fix.proposal)), "mismatch")
+        const elsewhere = createFixConsentPolicy(() => 1_000)
+        const foreign = yield* Effect.promise(() => elsewhere.approve(fix.proposal, operation, ACTOR, 60_000))
+        if (!foreign.ok) throw new Error(foreign.reason)
+        yield* refused(checks(foreign.consent), "unknown")
+        const revoked = yield* f.approveOp(fix.proposal, operation)
+        expect(f.policy.revoke(revoked)).toEqual({ ok: true })
+        yield* refused(checks(revoked), "revoked")
+        const once = yield* f.approveOp(fix.proposal, operation)
+        const first = yield* checks(once)
+        expect(first.results.map((item) => item.exitCode)).toEqual([0])
+        expect(yield* exists(path.join(fix.placement.worktree, `out-${marker}`))).toBe(true)
+        // A file the check left (not ignored) is named, and blocks the commit until the fix is applied again.
+        expect(first.leftovers).toEqual([`out-${marker}`])
+        const commitOp = { kind: "commit", message: "fix: two\n" }
+        yield* refused(
+          f.fix.commit({
+            ...fix,
+            operation: commitOp,
+            consent: yield* f.approveOp(fix.proposal, commitOp),
+            policy: f.policy,
+            actor: ACTOR,
+            identity: IDENTITY,
+          }),
+          "worktree",
+          "The fix checkout holds other changes than the approved patch, such as files a check left. Cancel the fix and apply it again.",
+        )
+        yield* Effect.promise(() => fs.rm(path.join(fix.placement.worktree, `out-${marker}`)))
+        yield* refused(checks(once), "used")
+        expect(yield* exists(path.join(fix.placement.worktree, `out-${marker}`))).toBe(false)
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "a check sees only its clean environment and writes only inside the checkout",
+    () =>
+      Effect.gen(function* () {
+        const token = randomUUID()
+        const home = os.homedir()
+        const targets = [
+          path.join(os.tmpdir(), `vector-fix-escape-${token}`),
+          path.join(home, `vector-fix-escape-${token}`),
+          ...((yield* exists(path.join(home, ".cache")))
+            ? [path.join(home, ".cache", `vector-fix-escape-${token}`)]
+            : []),
+          path.join(Global.Path.data, `vector-fix-escape-${token}`),
+        ]
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(() => Promise.all(targets.map((target) => fs.rm(target, { force: true })))),
+        )
+        // Vector's data folder outside the checkout (other projects' checkouts, stores, logs) is hidden from a check.
+        const planted = path.join(Global.Path.data, `vector-fix-planted-${token}`)
+        yield* write(Global.Path.data, path.basename(planted), "planted\n")
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(planted, { force: true })))
+        const f = yield* steps({
+          "test/env.test.ts": [
+            'import { test } from "bun:test"',
+            'import fs from "node:fs"',
+            `const allowed = new Set(${JSON.stringify(ALLOWED)})`,
+            'test("env", () => {',
+            `  try { console.log("DATA " + fs.readFileSync(${JSON.stringify(planted)}, "utf8").trim()) } catch { console.log("DATA hidden") }`,
+            "  const keys = Object.keys(process.env)",
+            '  console.log("ENV extra=" + keys.filter((key) => !allowed.has(key)).length + " secret=" + keys.filter((key) => /KEY|TOKEN|SECRET|PASSWORD/i.test(key)).length + " ci=" + process.env.CI + " canary=" + (process.env.FIX_CANARY_PROVIDER_KEY === undefined ? "absent" : "present"))',
+            '  fs.mkdirSync("out", { recursive: true })',
+            '  fs.writeFileSync("out/probe.txt", "written")',
+            `  for (const target of [...${JSON.stringify(targets)}, process.env.HOME + "/home-${token}"]) {`,
+            '    try { fs.writeFileSync(target, "escaped"); console.log("WROTE " + (target.startsWith("/tmp/") ? "tmp" : "host")) } catch { console.log("DENIED") }',
+            "  }",
+            "})",
+            "",
+          ].join("\n"),
+        })
+        // Something that must never reach a check, set in this process only for the run.
+        const saved = process.env.FIX_CANARY_PROVIDER_KEY
+        process.env.FIX_CANARY_PROVIDER_KEY = "canary"
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (saved === undefined) delete process.env.FIX_CANARY_PROVIDER_KEY
+            else process.env.FIX_CANARY_PROVIDER_KEY = saved
+          }),
+        )
+        const fix = yield* f.applied()
+        const operation = checksOp([{ argv: ["bun", "test", "test/env.test.ts"] }])
+        const checked = yield* f.fix.checks({
+          ...fix,
+          operation,
+          consent: yield* f.approveOp(fix.proposal, operation),
+          policy: f.policy,
+          actor: ACTOR,
+        })
+        const output = checked.results[0]?.output ?? ""
+        expect(checked.results.map((item) => item.exitCode)).toEqual([0])
+        expect(output).toContain("ENV extra=0 secret=0 ci=1 canary=absent")
+        expect(output).toContain("DATA hidden")
+        expect(output).not.toContain("DATA planted")
+        expect(output).not.toContain("WROTE host")
+        expect(yield* read(fix.placement.worktree, "out/probe.txt")).toBe("written")
+        for (const target of targets) expect(yield* exists(target)).toBe(false)
+        expect(yield* exists(path.join(os.tmpdir(), `home-${token}`))).toBe(false)
+        // An ignored output leaves the checkout holding exactly the patch.
+        expect(yield* f.fix.state(fix.fixID)).toBe("applied")
+        expect(checked).toMatchObject({ passed: true, actor: ACTOR, operation: expect.stringMatching(/^sha256:/) })
+        // The record keeps the run but never its output.
+        const record = yield* read(
+          path.join(Global.Path.data, "task-isolation", f.home.project.id, ".fix", fix.fixID),
+          "fix.json",
+        )
+        expect(JSON.parse(record).checks).toEqual([
+          {
+            operation: checked.operation,
+            at: checked.consumedAt,
+            results: [
+              {
+                argv: ["bun", "test", "test/env.test.ts"],
+                cwd: ".",
+                exitCode: 0,
+                timedOut: false,
+                truncated: false,
+                durationMs: expect.any(Number),
+              },
+            ],
+          },
+        ])
+        expect(record).not.toContain("ENV extra")
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "the network is off: neither this computer's TCP servers nor its sockets in hidden folders are reachable",
+    () =>
+      Effect.gen(function* () {
+        const hits = { count: 0 }
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: () => {
+            hits.count++
+            return new Response("reached")
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+        const net = yield* Effect.promise(() => import("node:net"))
+        const folders = [os.tmpdir(), `/run/user/${process.getuid?.() ?? 0}`, "/run"]
+        const writable = yield* Effect.forEach(folders, (folder) =>
+          Effect.promise(() =>
+            fs.access(folder, fs.constants.W_OK).then(
+              () => [folder],
+              () => [],
+            ),
+          ),
+        )
+        const sockets = writable.flat().map((folder) => path.join(folder, `vector-fix-${randomUUID()}.sock`))
+        for (const file of sockets) {
+          const listener = net.createServer((socket) => {
+            hits.count++
+            socket.destroy()
+          })
+          yield* Effect.promise(() => new Promise<void>((resolve) => listener.listen(file, () => resolve())))
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(() => new Promise<void>((resolve) => listener.close(() => resolve()))).pipe(
+              Effect.andThen(Effect.promise(() => fs.rm(file, { force: true }))),
+            ),
+          )
+        }
+        const f = yield* steps({
+          "test/net.test.ts": [
+            'import { test } from "bun:test"',
+            'import net from "node:net"',
+            "const attempt = (connect: () => net.Socket) => new Promise<string>((resolve) => {",
+            "  const socket = connect()",
+            "  const done = (value: string) => { socket.destroy(); resolve(value) }",
+            '  socket.once("connect", () => done("reached"))',
+            '  socket.once("error", () => done("blocked"))',
+            '  setTimeout(() => done("blocked"), 3000)',
+            "})",
+            'test("network", async () => {',
+            `  console.log("NETWORK " + await attempt(() => net.createConnection({ host: "127.0.0.1", port: ${server.port} })))`,
+            `  for (const file of ${JSON.stringify(sockets)}) console.log("SOCKET " + await attempt(() => net.createConnection(file)))`,
+            "}, 30000)",
+            "",
+          ].join("\n"),
+        })
+        const fix = yield* f.applied()
+        const operation = checksOp([{ argv: ["bun", "test", "test/net.test.ts"] }])
+        const checked = yield* f.fix.checks({
+          ...fix,
+          operation,
+          consent: yield* f.approveOp(fix.proposal, operation),
+          policy: f.policy,
+          actor: ACTOR,
+        })
+        const output = checked.results[0]?.output ?? ""
+        expect(checked.results.map((item) => item.exitCode)).toEqual([0])
+        expect(output).toContain("NETWORK blocked")
+        expect(output.match(/SOCKET blocked/g)?.length).toBe(sockets.length)
+        expect(output).not.toContain("reached")
+        expect(hits.count).toBe(0)
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "output is capped and a command over its time is stopped, with nothing of it left running",
+    () =>
+      Effect.gen(function* () {
+        const token = randomUUID()
+        const f = yield* steps({
+          "test/loud.test.ts":
+            'import { test } from "bun:test"\ntest("loud", () => { process.stdout.write("x".repeat(300_000)) })\n',
+          [`test/slow-${token}.test.ts`]: `import { test } from "bun:test"\nconsole.log("SLOW started")\ntest("slow", async () => { await Bun.sleep(600_000) }, 1_000_000)\n`,
+        })
+        const fix = yield* f.applied()
+        const operation = checksOp(
+          [{ argv: ["bun", "test", "test/loud.test.ts"] }, { argv: ["bun", "test", `test/slow-${token}.test.ts`] }],
+          { timeoutMs: 8_000, outputBytes: 4_096 },
+        )
+        const checked = yield* f.fix.checks({
+          ...fix,
+          operation,
+          consent: yield* f.approveOp(fix.proposal, operation),
+          policy: f.policy,
+          actor: ACTOR,
+        })
+        const loud = checked.results[0]
+        const slow = checked.results[1]
+        expect(loud).toMatchObject({ exitCode: 0, timedOut: false, truncated: true })
+        expect(Buffer.byteLength(loud.output)).toBeLessThanOrEqual(4_096)
+        expect(slow).toMatchObject({ exitCode: null, timedOut: true })
+        expect(slow.output).toContain("SLOW started")
+        expect(slow.durationMs).toBeGreaterThanOrEqual(8_000)
+        expect(slow.durationMs).toBeLessThan(8_000 + 3_000 + 10_000)
+        expect(checked.passed).toBe(false)
+        expect(yield* settles(token)).toBe(true)
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    90_000,
+  )
+
+  it.instance(
+    "a failing check authorizes nothing, and a head that moves between commands stops the run",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* steps({
+          "test/fail.test.ts": 'import { test } from "bun:test"\ntest("fail", () => { throw new Error("fails") })\n',
+          "test/pass.test.ts": 'import { test } from "bun:test"\ntest("pass", () => {})\n',
+        })
+        const fix = yield* f.applied()
+        const failing = checksOp([{ argv: ["bun", "test", "test/fail.test.ts"] }])
+        const consent = yield* f.approveOp(fix.proposal, failing)
+        const checked = yield* f.fix.checks({ ...fix, operation: failing, consent, policy: f.policy, actor: ACTOR })
+        expect(checked.results.map((item) => item.exitCode)).toEqual([1])
+        expect(checked.passed).toBe(false)
+        expect(yield* f.fix.state(fix.fixID)).toBe("applied")
+        expect(yield* changedIn(fix.placement.worktree)).toEqual(["src/a.ts"])
+        // Its consent does not commit.
+        yield* refused(
+          f.fix.commit({
+            ...fix,
+            operation: { kind: "commit", message: "x\n" },
+            consent,
+            policy: f.policy,
+            actor: ACTOR,
+            identity: IDENTITY,
+          }),
+          "used",
+        )
+        const both = checksOp([
+          { argv: ["bun", "test", "test/pass.test.ts"] },
+          { argv: ["bun", "test", "test/fail.test.ts"] },
+        ])
+        const service = yield* Git.Service
+        const moved = yield* f.fix.checks({
+          ...fix,
+          operation: both,
+          consent: yield* f.approveOp(fix.proposal, both),
+          policy: f.policy,
+          actor: ACTOR,
+          observe: (event) =>
+            event.type === "finished" && event.index === 0
+              ? move(f.directory).pipe(Effect.provideService(Git.Service, service), Effect.asVoid)
+              : Effect.void,
+        })
+        expect(moved.results.length).toBe(1)
+        expect(moved.aborted).toBe("head")
+        expect(moved.passed).toBe(false)
+        const operation = { kind: "commit", message: "x\n" }
+        yield* refused(
+          f.fix.commit({
+            ...fix,
+            operation,
+            consent: yield* f.approveOp(fix.proposal, operation),
+            policy: f.policy,
+            actor: ACTOR,
+            identity: IDENTITY,
+          }),
+          "head",
+        )
+        const recorded = JSON.parse(
+          yield* read(path.join(Global.Path.data, "task-isolation", f.home.project.id, ".fix", fix.fixID), "fix.json"),
+        )
+        expect(
+          recorded.checks.map((item: { aborted?: string; results: unknown[] }) => [item.results.length, item.aborted]),
+        ).toEqual([
+          [1, undefined],
+          [1, "head"],
+        ])
+        expect(yield* f.fix.cancel(fix.fixID)).toMatchObject({ removed: true })
+      }),
+    { git: true },
+    60_000,
+  )
+
+  it.instance(
+    "cancel stops a running check and removes the checkout; an interrupt stops it and keeps the fix applied",
+    () =>
+      Effect.gen(function* () {
+        const token = randomUUID()
+        const f = yield* steps({
+          [`test/slow-${token}.test.ts`]: `import { test } from "bun:test"\ntest("slow", async () => { await Bun.sleep(600_000) }, 1_000_000)\n`,
+        })
+        const operation = checksOp([{ argv: ["bun", "test", `test/slow-${token}.test.ts`] }], {
+          timeoutMs: 120_000,
+          outputBytes: 4_096,
+        })
+        const fix = yield* f.applied()
+        const consent = yield* f.approveOp(fix.proposal, operation)
+        const fiber = yield* f.fix
+          .checks({ ...fix, operation, consent, policy: f.policy, actor: ACTOR })
+          .pipe(Effect.forkScoped({ startImmediately: true }))
+        expect(yield* starts(token)).toBe(true)
+        const started = Date.now()
+        expect(yield* f.fix.cancel(fix.fixID)).toEqual({ fixID: fix.fixID, removed: true })
+        expect(Date.now() - started).toBeLessThan(20_000)
+        const exit = yield* Fiber.await(fiber)
+        expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
+        expect(yield* settles(token)).toBe(true)
+        expect(yield* exists(fix.placement.worktree)).toBe(false)
+        expect(f.policy.revoke(consent)).toEqual({ ok: false, reason: "used" })
+
+        const again = yield* f.applied()
+        const second = yield* f.fix
+          .checks({
+            ...again,
+            operation,
+            consent: yield* f.approveOp(again.proposal, operation),
+            policy: f.policy,
+            actor: ACTOR,
+          })
+          .pipe(Effect.forkScoped({ startImmediately: true }))
+        expect(yield* starts(token)).toBe(true)
+        yield* Fiber.interrupt(second)
+        expect(yield* settles(token)).toBe(true)
+        expect(yield* f.fix.state(again.fixID)).toBe("applied")
+        const listed = yield* f.fix.placements()
+        expect(listed.map((item) => item.checks?.map((run) => run.aborted))).toEqual([["cancelled"]])
+        expect(yield* f.fix.cancel(again.fixID)).toEqual({ fixID: again.fixID, removed: true })
+      }),
+    { git: true },
+    90_000,
+  )
+
+  it.instance(
+    "an interrupt while bubblewrap is still starting leaves nothing of the sandbox running",
+    () =>
+      Effect.gen(function* () {
+        const token = randomUUID()
+        const f = yield* steps({
+          [`test/slow-${token}.test.ts`]: `import { test } from "bun:test"\ntest("slow", async () => { await Bun.sleep(600_000) }, 1_000_000)\n`,
+        })
+        const operation = checksOp([{ argv: ["bun", "test", `test/slow-${token}.test.ts`] }], {
+          timeoutMs: 120_000,
+          outputBytes: 4_096,
+        })
+        const fix = yield* f.applied()
+        const rounds = 8
+        for (const _ of Array.from({ length: rounds })) {
+          const fiber = yield* f.fix
+            .checks({
+              ...fix,
+              operation,
+              consent: yield* f.approveOp(fix.proposal, operation),
+              policy: f.policy,
+              actor: ACTOR,
+            })
+            .pipe(Effect.forkScoped({ startImmediately: true }))
+          // The first sight of the outer bwrap, usually before its namespace init has tied its life to bwrap's.
+          const seen = yield* appears(token)
+          yield* Fiber.interrupt(fiber)
+          const outer = seen.find((item) => item.parent === process.pid)
+          expect(outer).toBeDefined()
+          // bwrap leads a session of its own with no terminal, and every process of the sandbox is in its group.
+          expect(outer).toMatchObject({ session: outer?.pid, group: outer?.pid, terminal: 0 })
+          for (const item of seen) expect(item.group).toBe(outer?.pid ?? -1)
+          expect(yield* settles(token)).toBe(true)
+        }
+        expect(yield* f.fix.state(fix.fixID)).toBe("applied")
+        const listed = yield* f.fix.placements()
+        expect(listed.flatMap((item) => item.checks?.map((run) => run.aborted) ?? [])).toEqual(
+          Array.from({ length: rounds }, () => "cancelled"),
+        )
+        expect(yield* f.fix.cancel(fix.fixID)).toEqual({ fixID: fix.fixID, removed: true })
+      }),
+    { git: true },
+    120_000,
+  )
+})
+
+// verify.yml's air-gap job sets this where the sandbox must work, so the cases above cannot all skip unnoticed there.
+;(process.env.VECTOR_FIX_SANDBOX_CI === "1" ? it.instance : it.instance.skip)(
+  "this run requires a working sandbox",
+  () =>
+    Effect.sync(() => {
+      expect(sandboxed).toBe(true)
+    }),
+)
+
 // Runs on the Windows legs of CI only: test.yml has no macOS engine leg.
 ;(linux ? it.instance.skip : it.instance)(
   "other platforms refuse as unavailable before any effect",
@@ -1133,6 +2400,40 @@ describe.skipIf(!linux)("review fix executor (VS-12a)", () => {
       yield* refused(fix.preview({ fixID: "fix_x", proposal }), "unavailable")
       yield* refused(
         fix.apply({ fixID: "fix_x", proposal, consent: approved.consent, policy, actor: ACTOR }),
+        "unavailable",
+      )
+      const operation = {
+        kind: "checks",
+        commands: [{ argv: ["bun", "test"], cwd: "." }],
+        network: "off",
+        timeoutMs: 1_000,
+        outputBytes: 1_000,
+      }
+      yield* refused(
+        fix.checks({ fixID: "fix_x", proposal, operation, consent: approved.consent, policy, actor: ACTOR }),
+        "unavailable",
+      )
+      yield* refused(
+        fix.commit({
+          fixID: "fix_x",
+          proposal,
+          operation: { kind: "commit", message: "x\n" },
+          consent: approved.consent,
+          policy,
+          actor: ACTOR,
+          identity: { name: "Vector", email: "bot@vectordev.ai" },
+        }),
+        "unavailable",
+      )
+      yield* refused(
+        fix.push({
+          fixID: "fix_x",
+          proposal,
+          operation: { kind: "push", remote: "file:///remote.git", commit: head, mode: "branch" },
+          consent: approved.consent,
+          policy,
+          actor: ACTOR,
+        }),
         "unavailable",
       )
       yield* refused(fix.cancel("fix_x"), "unavailable")
