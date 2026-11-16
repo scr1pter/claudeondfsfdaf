@@ -7178,7 +7178,7 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   isolation saves > Stop returns while Git is still saving, and a same-ID resume waits for the saved result"
   (`packages/engine/test/tool/task.test.ts`) failed with `TaskIsolation.Error` code `registry`, "Isolation data cannot
   be a symbolic or hard link." Not caused by this lane: its diff touches no task, worktree or isolation code, no Git or
-  temp-dir helper and not `test.yml`; shard 4/4 ran the same 163 files in the same order in main's run 43839344467 (job
+  temp-dir helper and not `test.yml`; shard 4/4 ran the same 164 files in the same order in main's run 43839344467 (job
   133204672318) and #33's head run 43829091585 (job 133172046619), where the same test passed. Root cause, a real race
   in `guarded()` (`packages/engine/src/task/isolation.ts`): every save renames a fresh file over `record.json`, and the
   test polls `isolation.find` (no per-task lock) while the forked save writes. An `lstat` that resolved the old file
