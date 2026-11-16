@@ -2895,3 +2895,26 @@ CI runs against #33's fixes before the lane's PR into `main`. `native-qualify` w
   - `packages/engine` `test/fixture/native-shell-ci/policy.test.ts`: 10 pass, 0 fail;
   - `bun typecheck` in `packages/cloud`, `packages/core` and `packages/engine`: exit 0.
 - Not pushed. Both native build switches and `FLOOR` stay false.
+
+## Merge of `main` after PR #33, 16 November 2026
+
+PR #33 merged into `main` as `b362fdf6`. `native-qualify` was at `9b0623ae` (equal to
+`origin/native-qualify`, clean tree, already containing `release-finish` `0f034957`). The
+merge commit is `c9e6ebef` (`git merge --no-ff origin/main`).
+
+- No conflicts and no generated file. The merge brings in the #33 round-2 fixes, among them
+  `7659d81a`, which changes `packages/core/src/directory-identity.ts` again and re-pins
+  `READER_SHA`.
+- D95 is resolved by that re-pin: in the merged tree `READER_SHA` (`common.ts:11`) is
+  `33c834a9...`, equal to the sha256 of `packages/core/src/directory-identity.ts`, so
+  `native-shell-ci/build.ts:57` no longer refuses the compile step. The reader review behind
+  the re-pin is the lead's (`7659d81a`); the step-12 result at `ce5e5605` still holds only for
+  the reader bytes it ran.
+- Checks, each through `/home/user/.tools/vector-serial`:
+  - `packages/core` `test/directory-identity.test.ts`: 12 pass, 37 skip, 0 fail;
+  - `packages/engine` `test/task/isolation.test.ts`: 90 pass, 0 fail;
+  - `packages/engine` `test/cli/github.isolation.test.ts`: 36 pass, 0 fail;
+  - `packages/engine` `test/fixture/native-shell-ci/policy.test.ts`: 10 pass, 0 fail;
+  - `packages/cloud` `src/workflow-compliance.test.ts`: 53 pass, 0 fail;
+  - full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
+- Both native build switches and `FLOOR` stay false.
