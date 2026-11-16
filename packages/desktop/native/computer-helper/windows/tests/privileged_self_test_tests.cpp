@@ -150,7 +150,7 @@ size_t run_privileged_self_test_tests() {
   });
   test([] {
     for (const auto code : {L"unavailable", L"changed", L"no_ui_tree"}) {
-      const auto reply = response_failure(42, {code, L"PRIVATE native explanation"});
+      const auto reply = response_failure(42, code, L"PRIVATE native explanation");
       const auto stage = windows_privileged_origin_stage(reply.GetNamedString(L"error"), L"apps-list-reply");
       auto report = passed_report(); report.checks[1] = {std::wstring(windows_privileged_checks[1]), false, false,
         L"native_operation_failed", stage, windows_privileged_native_code(reply.GetNamedString(L"code"))};

@@ -687,6 +687,13 @@ test("shipping and test archives preserve executable modes while failure diagnos
   }
 })
 
+const windowsNativeDiagnostics = JSON.stringify({
+  checks: WINDOWS_NATIVE_CHECKS.privileged,
+  reasons: WINDOWS_NATIVE_REASONS,
+  stages: WINDOWS_NATIVE_STAGES,
+  codes: WINDOWS_NATIVE_CODES,
+})
+
 test("native summaries expose failed and skipped closed rows in job logs without native payloads", () => {
   const reports = {
     "mac-build": ["computer-darwin-core.json", "computer-darwin-privileged.json"],
@@ -700,7 +707,7 @@ test("native summaries expose failed and skipped closed rows in job logs without
     )!
     expect(summary.if).toBe("${{ always() }}")
     expect(summary["timeout-minutes"]).toBe(2)
-    const source = /^node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+    const source = /(?:^|\n)node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
     expect(source).toBeString()
     const temporary = mkdtempSync(path.join(tmpdir(), "vector-native-summary-"))
     const output = path.join(temporary, "summary.md")
@@ -718,7 +725,13 @@ test("native summaries expose failed and skipped closed rows in job logs without
       const result = spawnSync("node", ["--input-type=module", "-e", source!], {
         encoding: "utf8",
         timeout: 10_000,
-        env: { ...process.env, RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: output, WINDOWS_PROTOCOL: "true" },
+        env: {
+          ...process.env,
+          RUNNER_TEMP: temporary,
+          GITHUB_STEP_SUMMARY: output,
+          WINDOWS_PROTOCOL: "true",
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS: windowsNativeDiagnostics,
+        },
       })
       expect(result.error).toBeUndefined()
       expect(result.status, result.stderr).toBe(0)
@@ -729,6 +742,153 @@ test("native summaries expose failed and skipped closed rows in job logs without
           `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
         )
       expect(result.stdout).not.toMatch(/PRIVATE|image|stderr|unit:|\"checks\"/)
+    } finally {
+      rmSync(temporary, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows x64 and ARM64 helper summaries log closed failed stages and codes without native payloads", () => {
+  const loader = String(
+    steps(record(record(main.document.jobs)["computer-helper-windows-units"])).find(
+      (step) => step.name === "Summarize x64 native diagnostic rows",
+    )!.run,
+  ).split("\n")[0]!
+  const code = /--eval '([^']+)'/.exec(loader)?.[1]
+  expect(code).toBeString()
+  const loaded = spawnSync(process.execPath, ["--no-env-file", "--eval", code!], {
+    cwd: path.resolve(import.meta.dir, ".."),
+    encoding: "utf8",
+    timeout: 30_000,
+  })
+  expect(loaded.status, loaded.stderr).toBe(0)
+  expect(JSON.parse(loaded.stdout)).toEqual(JSON.parse(windowsNativeDiagnostics))
+  const reports = {
+    "windows-build": {
+      isolated: "Run explicitly isolated Windows scenarios",
+      summary: "Summarize Windows protocol readiness",
+      files: ["computer-win32-core.json", "computer-win32-privileged.json"],
+    },
+    "windows-arm64-test": {
+      isolated: "Run explicitly isolated ARM64 scenarios",
+      summary: "Summarize ARM64 protocol readiness",
+      files: ["computer-win32-arm64.json", "computer-win32-arm64-privileged.json"],
+    },
+  }
+  for (const [name, report] of Object.entries(reports)) {
+    const current = steps(job(name))
+    const summary = current.find((step) => step.name === report.summary)!
+    expect(current.indexOf(summary)).toBeGreaterThan(current.findIndex((step) => step.name === report.isolated))
+    expect(summary.if).toBe("${{ always() }}")
+    expect(summary["timeout-minutes"]).toBe(2)
+    expect(summary["continue-on-error"]).toBeUndefined()
+    expect(summary.shell).toBe("bash")
+    // The same closed vocabulary as the x64 diagnostic job; a failed load must not fail this gating step.
+    expect(String(summary.run).split("\n").slice(0, 2)).toEqual([
+      `${loader} || VECTOR_WINDOWS_NATIVE_DIAGNOSTICS=""`,
+      "export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS",
+    ])
+    const source = /\nnode --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+    expect(source).toBeString()
+    const temporary = mkdtempSync(path.join(tmpdir(), "vector-helper-diagnostic-summary-"))
+    const output = path.join(temporary, "summary.md")
+    const run = (diagnostics: string) => {
+      rmSync(output, { force: true })
+      const result = spawnSync("node", ["--input-type=module", "-e", source!], {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          RUNNER_TEMP: temporary,
+          GITHUB_STEP_SUMMARY: output,
+          WINDOWS_PROTOCOL: "true",
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS: diagnostics,
+        },
+      })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toBe("")
+      expect(result.stdout).toBe(readFileSync(output, "utf8"))
+      return result.stdout
+    }
+    const privileged = report.files[1]!
+    const rows = (stage: string) =>
+      `: passed=1, failed=1, skipped=1\n- FAILED privileged.apps-running-target: native_operation_failed${stage}\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`
+    try {
+      const diagnostic = { stage: "apps-list-reply", nativeCode: "no_ui_tree" }
+      for (const file of report.files)
+        writeFileSync(
+          path.join(temporary, file),
+          JSON.stringify({
+            checks: [
+              { name: "unit", status: "passed", stdout: "PRIVATE UNIT OUTPUT", ...diagnostic },
+              {
+                name: "privileged.apps-running-target",
+                status: "failed",
+                reason: "native_operation_failed",
+                ...diagnostic,
+              },
+              {
+                name: "privileged.secure-field-refusal",
+                status: "skipped",
+                reason: "noninteractive_desktop",
+                ...diagnostic,
+              },
+            ],
+            image: "PRIVATE SCREENSHOT",
+            stderr: "PRIVATE NATIVE ERROR",
+          }),
+        )
+      writeFileSync(path.join(temporary, "unrelated.json"), JSON.stringify({ text: "PRIVATE UNRELATED FILE" }))
+      const printed = run(windowsNativeDiagnostics)
+      for (const file of report.files)
+        expect(printed).toContain(
+          `\n${file}${rows(file === privileged ? " [stage=apps-list-reply, nativeCode=no_ui_tree]" : "")}`,
+        )
+      expect(printed.match(/\[stage=/g)).toHaveLength(1)
+      expect(printed).not.toMatch(/PRIVATE|image|stderr|unit:|unavailable|\"checks\"/)
+
+      for (const diagnostics of ["", "{}", "PRIVATE NOT JSON"]) {
+        const fallback = run(diagnostics)
+        expect(fallback).toStartWith(
+          "\nStage diagnostics unavailable: the closed Windows native vocabulary did not load.\n",
+        )
+        for (const file of report.files) expect(fallback).toContain(`\n${file}${rows("")}`)
+        expect(fallback).not.toMatch(/PRIVATE|stage=|nativeCode=/)
+      }
+
+      const invalid = [
+        { stage: "PRIVATE WINDOW TITLE", nativeCode: "no_ui_tree" },
+        { stage: diagnostic.stage, nativeCode: "PRIVATE NATIVE ERROR" },
+        { stage: diagnostic.stage },
+        { nativeCode: "no_ui_tree" },
+        { stage: null, nativeCode: "no_ui_tree" },
+        { stage: diagnostic.stage, nativeCode: ["no_ui_tree"] },
+      ]
+      writeFileSync(
+        path.join(temporary, privileged),
+        JSON.stringify({
+          checks: [
+            ...invalid.map((value) => ({
+              name: "privileged.apps-running-target",
+              status: "failed",
+              reason: "native_operation_failed",
+              ...value,
+            })),
+            {
+              name: "privileged.apps-running-target",
+              status: "passed",
+              reason: "native_operation_failed",
+              ...diagnostic,
+            },
+            { name: "privileged", status: "failed", reason: "native_operation_failed", ...diagnostic },
+            { name: "unit", status: "failed", reason: "native_operation_failed", ...diagnostic },
+            { name: "privileged.unknown-check", status: "failed", reason: "native_operation_failed", ...diagnostic },
+            { name: "privileged.apps-running-target", status: "failed", reason: "native_failure", ...diagnostic },
+          ],
+        }),
+      )
+      expect(run(windowsNativeDiagnostics)).not.toMatch(/PRIVATE|stage=|nativeCode=/)
     } finally {
       rmSync(temporary, { recursive: true, force: true })
     }
