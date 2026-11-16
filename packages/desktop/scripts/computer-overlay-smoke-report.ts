@@ -812,6 +812,68 @@ export function parseComputerSmokeNativeDiagnostic(line: string, platform?: stri
   }
 }
 
+export const COMPUTER_SMOKE_STOP_EFFECT_MARK = "computer-smoke-stop-effect "
+/**
+ * Observation only, installed beside the unchanged trusted-click listener before a Windows native Stop.
+ * It records which trusted left-button half of a Stop click reached the banner page. It never answers
+ * the click, gates the proof or changes a check.
+ */
+export const COMPUTER_SMOKE_STOP_EFFECT_LISTENER =
+  "(() => { const effect = { down: false, up: false }; const stop = (event) => event.isTrusted === true && event.button === 0 && Boolean(event.target?.closest?.('button[data-action=stop]')); document.addEventListener('mousedown', (event) => { if (stop(event)) effect.down = true }, { capture: true }); document.addEventListener('mouseup', (event) => { if (stop(event)) effect.up = true }, { capture: true }); window.__computerSmokeStopEffect = effect })()"
+/** Reads the press, release and existing trusted-click flags, or null when the listener never installed. */
+export const COMPUTER_SMOKE_STOP_EFFECT_PROBE =
+  "(() => { const effect = window.__computerSmokeStopEffect; return effect ? [effect.down === true, effect.up === true, window.__computerSmokeTrustedStop === true] : null })()"
+/**
+ * After a failed Windows native Stop: whether the controller saw its cancel, and whether the page saw the
+ * trusted Stop press, release and click. `page` is false when the flags could not be read, and then the
+ * three page flags are false. It is a location for the next investigation, never a pass, skip or retry.
+ */
+export type ComputerSmokeStopEffect = {
+  protocol: 1
+  cancel: boolean
+  page: boolean
+  down: boolean
+  up: boolean
+  click: boolean
+}
+export function computerSmokeStopEffect(cancel: boolean, page: unknown): ComputerSmokeStopEffect {
+  const flags =
+    Array.isArray(page) && page.length === 3 && page.every((value) => typeof value === "boolean") ? page : undefined
+  return {
+    protocol: 1,
+    cancel,
+    page: flags !== undefined,
+    down: flags?.[0] ?? false,
+    up: flags?.[1] ?? false,
+    click: flags?.[2] ?? false,
+  }
+}
+export function parseComputerSmokeStopEffect(line: string): ComputerSmokeStopEffect {
+  if (!line.startsWith(COMPUTER_SMOKE_STOP_EFFECT_MARK) || line.length > 256)
+    throw new Error("The Stop effect receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_STOP_EFFECT_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "cancel", "page", "down", "up", "click"]) ||
+    value.protocol !== 1 ||
+    typeof value.cancel !== "boolean" ||
+    typeof value.page !== "boolean" ||
+    typeof value.down !== "boolean" ||
+    typeof value.up !== "boolean" ||
+    typeof value.click !== "boolean" ||
+    (!value.page && (value.down || value.up || value.click))
+  )
+    throw new Error("The Stop effect receipt is invalid.")
+  return {
+    protocol: 1,
+    cancel: value.cancel,
+    page: value.page,
+    down: value.down,
+    up: value.up,
+    click: value.click,
+  }
+}
+
 export const COMPUTER_SMOKE_CONTROLLER_STEPS = [
   "underlay",
   "stop-acquire",
