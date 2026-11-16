@@ -21,6 +21,11 @@ import {
   COMPUTER_SMOKE_DRIVER_NATIVE_CODES,
   COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES,
   COMPUTER_SMOKE_DRIVER_REASONS,
+  COMPUTER_SMOKE_DRIVER_UIA_ACTORS,
+  COMPUTER_SMOKE_DRIVER_UIA_CALLS,
+  COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES,
+  COMPUTER_SMOKE_DRIVER_UIA_HRESULTS,
+  COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS,
   COMPUTER_SMOKE_NATIVE_REASONS,
   computerSmokeDriverFailure,
   computerSmokeMoveProbe,
@@ -450,6 +455,131 @@ test("Windows driver failure receipts name only a closed stage and cause on an u
   ).toThrow()
 })
 
+test("Windows Stop UIA lookup failures carry only closed lookup, actor, expiry and HRESULT facts", () => {
+  const line = (value: unknown) => COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value)
+  const frame = { id: 1, protocol: 1, check: "native-os-stop", ok: false, reason: "native_failure" }
+  const located = { stage: "uia-root-element", cause: "core_failure:no_ui_tree" }
+  const longest = (values: readonly string[]) =>
+    values.reduce((left, right) => (right.length > left.length ? right : left))
+  const result = {
+    protocol: 1,
+    kind: "result",
+    phase: "exit",
+    stop: { ok: false, reason: "native_failure" },
+    exitCode: 1,
+  }
+  const facts = COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS.flatMap((lookup) =>
+    COMPUTER_SMOKE_DRIVER_UIA_CALLS.flatMap((call) =>
+      COMPUTER_SMOKE_DRIVER_UIA_ACTORS.flatMap((actor) =>
+        COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES.flatMap((expiry) =>
+          COMPUTER_SMOKE_DRIVER_UIA_HRESULTS.map((hresult) => ({ lookup, call, actor, expiry, hresult })),
+        ),
+      ),
+    ),
+  )
+  expect(facts).toHaveLength(192)
+  for (const uia of facts) {
+    // A healthy actor never expired a ticket.
+    if (uia.actor === "healthy" && uia.expiry !== "none") {
+      expect(() => computerSmokeDriverFailure({ ...frame, ...located, uia })).toThrow()
+      expect(() =>
+        parseComputerSmokeNativeDiagnostic(line({ ...result, stop: { ...result.stop, ...located, uia } }), "win32"),
+      ).toThrow()
+      continue
+    }
+    expect(computerSmokeDriverFailure({ ...frame, ...located, uia })).toEqual({ ...located, uia })
+    expect(parseComputerSmokeDriverResultFrame({ ...frame, ...located, uia }, "win32")).toEqual({ ...located, uia })
+    // The longest stage and cause still fit the receipt bound, through both the Electron smoke and the parent.
+    const stop = {
+      ...result.stop,
+      stage: longest(COMPUTER_SMOKE_DRIVER_STAGES),
+      cause: longest(COMPUTER_SMOKE_DRIVER_CAUSES),
+      uia,
+    }
+    const emitted =
+      COMPUTER_SMOKE_NATIVE_MARK +
+      JSON.stringify(parseComputerSmokeNativeDiagnostic(line({ ...result, stop }), "win32"))
+    expect(emitted.length).toBeLessThanOrEqual(512)
+    expect(parseComputerSmokeNativeDiagnostic(emitted, "win32")).toEqual({ ...result, stop })
+  }
+  const valid = { lookup: "first", call: "root", actor: "retired", expiry: "caller-wait", hresult: "unobserved" }
+  for (const uia of [
+    undefined,
+    null,
+    "first",
+    [],
+    {},
+    { ...valid, lookup: undefined },
+    { ...valid, call: undefined },
+    { ...valid, actor: undefined },
+    { ...valid, expiry: undefined },
+    { ...valid, hresult: undefined },
+    { ...valid, lookup: "second" },
+    { ...valid, call: "focus" },
+    { ...valid, actor: "available" },
+    { ...valid, expiry: "caller_wait" },
+    { ...valid, expiry: "worker" },
+    { ...valid, hresult: "0x80070005" },
+    { ...valid, hresult: "-2147024891" },
+    { ...valid, hresult: "none" },
+    { ...valid, hresult: "hresult:timeout" },
+    { ...valid, remainingMs: 3 },
+    { ...valid, path: "PRIVATE" },
+    { ...valid, actor: "healthy" },
+  ]) {
+    if (uia === undefined) continue
+    expect(() => computerSmokeDriverFailure({ ...frame, ...located, uia })).toThrow()
+    expect(() =>
+      parseComputerSmokeNativeDiagnostic(line({ ...result, stop: { ...result.stop, ...located, uia } }), "win32"),
+    ).toThrow()
+  }
+  // The facts never stand alone, never ride on a pass, skip or capture, and never reach a non-win32 receiver.
+  for (const patch of [
+    { uia: valid },
+    { uia: valid, stage: "uia-root-element" },
+    { uia: valid, cause: "core_failure:no_ui_tree" },
+    { ...located, uia: valid, ok: true, reason: undefined },
+    { ...located, uia: valid, skipped: true, reason: "noninteractive_desktop" },
+    { ...located, uia: valid, reason: "parent_invalid" },
+  ]) {
+    expect(() => computerSmokeDriverFailure({ ...frame, ...patch })).toThrow()
+    expect(() =>
+      parseComputerSmokeNativeDiagnostic(line({ ...result, stop: { ...result.stop, ...patch } }), "win32"),
+    ).toThrow()
+  }
+  expect(() =>
+    parseComputerSmokeNativeDiagnostic(
+      line({ ...result, capture: { ok: false, reason: "native_failure", ...located, uia: valid } }),
+      "win32",
+    ),
+  ).toThrow()
+  for (const platform of ["darwin", "linux", undefined]) {
+    expect(() =>
+      parseComputerSmokeNativeDiagnostic(
+        line({ ...result, stop: { ...result.stop, ...located, uia: valid } }),
+        platform,
+      ),
+    ).toThrow()
+    if (platform)
+      expect(() => parseComputerSmokeDriverResultFrame({ ...frame, ...located, uia: valid }, platform)).toThrow()
+  }
+  // Receipts cannot change report rows or exit expectations.
+  const failed = report("win32")
+  failed.checks[16] = { name: "native-os-stop", ok: false, reason: "native_proof_invalid" }
+  failed.checks[17] = { name: "native-capture-exclusion", ok: false, reason: "native_proof_invalid" }
+  const stdout =
+    line({ ...result, stop: { ...result.stop, ...located, uia: valid } }) +
+    "\n" +
+    COMPUTER_SMOKE_MARK +
+    JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 0 }),
+  ).toThrow()
+})
+
 test("only a win32 driver result frame may carry the closed failure location", () => {
   const frame = { id: 1, protocol: 1, check: "native-os-stop", ok: false, reason: "native_failure" }
   const located = { ...frame, stage: "files", cause: "std_exception" }
@@ -498,6 +628,9 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
   for (const [source, name, expected] of [
     [driver, "overlay_driver_stages", COMPUTER_SMOKE_DRIVER_STAGES],
     [driver, "overlay_driver_hresult_classes", COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES],
+    [driver, "overlay_driver_lookups", COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS],
+    [driver, "overlay_driver_uia_calls", COMPUTER_SMOKE_DRIVER_UIA_CALLS],
+    [driver, "overlay_driver_uia_actors", COMPUTER_SMOKE_DRIVER_UIA_ACTORS],
     [privileged, "windows_privileged_native_codes", COMPUTER_SMOKE_DRIVER_NATIVE_CODES],
   ] as const) {
     const declaration = source.match(new RegExp(`${name}\\s*\\{([^}]+)\\};`))?.[1]
@@ -538,6 +671,33 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
       COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-actor-com-expired") + 1,
     ),
   ).toEqual(names.slice(1).map((name) => `uia-${name}`))
+  // The expiry side is written by uia_native.h, and the HRESULT fact reuses the cause buckets plus unobserved.
+  const expiries = uia.match(/windows_uia_expiries\s*\{([^}]+)\};/)?.[1]
+  expect([...(expiries ?? "").matchAll(/L"([^"]+)"/g)].map((match) => match[1])).toEqual([
+    ...COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES,
+  ])
+  expect(
+    uia
+      .match(/enum class WindowsUiaExpiry : uint8_t \{([^}]+)\};/)?.[1]
+      ?.split(",")
+      .map((name) => name.trim().replaceAll("_", "-")),
+  ).toEqual([...COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES])
+  expect(
+    driver
+      .match(/enum class OverlayDriverLookup : uint8_t \{([^}]+)\};/)?.[1]
+      ?.split(",")
+      .map((name) => name.trim()),
+  ).toEqual([...COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS])
+  expect(
+    driver
+      .match(/enum class OverlayDriverUiaCall : uint8_t \{([^}]+)\};/)?.[1]
+      ?.split(",")
+      .map((name) => name.trim()),
+  ).toEqual([...COMPUTER_SMOKE_DRIVER_UIA_CALLS])
+  expect(COMPUTER_SMOKE_DRIVER_UIA_HRESULTS).toEqual(["unobserved", ...COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES])
+  expect(await readFile(path.join(native, "overlay_driver.cpp"), "utf8")).toContain(
+    'overlay_driver_hresult_class(static_cast<HRESULT>(*value.status)) : std::wstring_view{L"unobserved"}',
+  )
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).toHaveLength(40)
   expect(new Set(COMPUTER_SMOKE_DRIVER_CAUSES).size).toBe(40)
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).toContain("core_failure:unknown")
