@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { sandboxProbeTarget } from "../../script/sandbox-probe-target"
 import { sandboxBunUndici } from "../../script/sandbox-bun-undici"
+import { sandboxBunEsprima } from "../../script/sandbox-bun-esprima"
 import { tmpdir } from "../fixture/fixture"
 
 test("each sandbox artifact selects the actual matching Core SQLite adapter", async () => {
@@ -62,6 +63,36 @@ test("the Bun sandbox preserves and can import the installed Undici wrapper with
   expect(JSON.parse(stdout)).toEqual({ agent: "function", dispatcher: "function", same: true })
 }, 30_000)
 
+test("the Bun sandbox keeps no aliased esprima require for plain Bun to auto-install", async () => {
+  await using temporary = await tmpdir()
+  const build = await Bun.build({
+    ...sandboxProbeTarget("bun"),
+    entrypoints: [fileURLToPath(new URL("../fixture/sandbox-yaml-import.ts", import.meta.url))],
+    outdir: temporary.path,
+    format: "esm",
+    plugins: [sandboxBunEsprima],
+  })
+  expect(build.success).toBe(true)
+  const entry = build.outputs.find((value) => value.kind === "entry-point")
+  expect(entry).toBeDefined()
+  const text = await entry!.text()
+  expect(text).toContain("js-yaml/lib/js-yaml/type/js/function.js")
+  expect(text).not.toContain('"esprima"')
+  // --no-install keeps a regression from reaching the registry; the text check above is what proves the plugin.
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", entry!.path], {
+    cwd: temporary.path,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(stdout)).toEqual({ name: "probe" })
+}, 30_000)
+
 test("the existing Bun cell executes its installed Bun artifact while host assertions remain on Node", async () => {
   const workflow = await Bun.file(
     fileURLToPath(new URL("../../../../.github/workflows/vector-at-mention.yml", import.meta.url)),
@@ -69,7 +100,9 @@ test("the existing Bun cell executes its installed Bun artifact while host asser
   expect(workflow).toContain(
     'install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe-bun.mjs" /opt/vector-sandbox-probe-bun.mjs',
   )
-  expect(workflow).toContain("vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe-bun.mjs")
+  expect(workflow).toContain(
+    "vector github sandbox run -- /opt/vector-probe-bun --no-install /opt/vector-sandbox-probe-bun.mjs",
+  )
   expect(workflow).toContain("node /opt/vector-sandbox-probe.mjs --assert")
   expect(workflow).toContain("runtime: bun")
 })

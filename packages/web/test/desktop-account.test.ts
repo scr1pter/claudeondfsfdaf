@@ -10,6 +10,7 @@ import {
   verifyDeletionGrant,
   verifyDesktopToken,
 } from "../../../api/_lib/cli-token"
+import { TOMBSTONE_KEEP_MS } from "../../../api/_lib/codium-tombstone"
 import {
   cliSignInCallback,
   cliSignInCancel,
@@ -65,10 +66,11 @@ const upstream = Bun.serve({
     const parts = ((await request.json()) as (string | number)[]).map(String)
     const grantKey = parts[1]?.startsWith("vector:deletion-grant:")
     // This sign-in fixture has no connected jobs, repository bindings or Brain uploads. Model only their empty
-    // indexes, plus the permanent connector closure mark; keep expiring sign-in/grant assertions below unchanged.
+    // indexes, plus the connector closure mark, which expires with Codium's tombstone; keep expiring sign-in/grant
+    // assertions below unchanged.
     if (parts[1]?.startsWith("vector:everywhere:") || parts[1]?.startsWith("vector:cloud-agents:")) {
       if (parts[0] === "SET") {
-        expect(parts).toEqual(["SET", `vector:everywhere:closed:${user.id}`, "closed"])
+        expect(parts).toEqual(["SET", `vector:everywhere:closed:${user.id}`, "closed", "PX", String(TOMBSTONE_KEEP_MS)])
         records.set(parts[1], parts[2])
         erasureSteps.push("everywhere")
         return Response.json({ result: "OK" })
