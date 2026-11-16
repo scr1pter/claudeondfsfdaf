@@ -1337,9 +1337,12 @@ export async function downloadRedirect(id: string, options: SessionOptions = {})
 
 /**
  * §4.4 keeps a frozen plan's disks, and a lost dispute's, with no download, and an account being deleted downloads
- * nothing. A session's packed files are a copy of its disk, so they follow the same rule, whatever the session.
+ * nothing. A session's packed files are a copy of its disk, so they follow the same rule, whatever the session. The
+ * tombstone is read first: a deletion sets it before the stored snapshot says closing, and the link route has no
+ * caller check, so a link given before the deletion would otherwise still lead to the files in that window.
  */
 async function requireFilesAllowed(account: string, fetcher: typeof fetch) {
+  await requireAccountOpen(account, fetcher)
   const snapshot = await readSnapshot(account, fetcher)
   const access = hostedDownloadAccess(snapshot)
   if (access === "frozen") throw new ApiError(403, "HOSTED_FROZEN", "The cloud computer is on hold for this account.")

@@ -6367,10 +6367,15 @@ These are pointers only; nothing is fixed here.
 
 - CI0 ("Codium finish: CI0 lane dispatch inputs", For the lead):
   - switch the dispatch base to empty once main contains #33, before `release-finish` is deleted;
+    16 Nov 2026: the condition is met. origin/main is `b362fdf6`, which contains #33, so every Vector Codium dispatch
+    from `codium-finish` now leaves `base` empty and compares with origin/main. The `release-finish` branch is left
+    alone: deleting branches is not this lane's call;
   - confirm the Windows run of the "dispatch's inputs reach the picker only as step environment" compliance case in the
     end-of-lane test.yml.
 - TB ("Codium finish: Track B receipts and P4 closings", For the lead):
   - item 1 is closed on this branch by `31ddb43b`, but the same change is still needed on `release-finish`;
+    16 Nov 2026: superseded. Main's `9be63d68` (`api/_lib/cloud-agents-epoch.ts`) is the one copy; `bc8cad48` drops
+    `31ddb43b`. See the Lead ruling under round three;
   - item 2: `prompt.test.ts` on Linux;
   - item 3: the engine (linux) shard step limits;
   - item 4: the app `memory-*-model` suites, which no visible log shows;
@@ -7129,3 +7134,30 @@ Files touched in this round:
 Edits to `api/_lib/model-plan-*.ts`: none. No new setting, route, schema field or client change. A computer's deletion
 can now answer 503 when the media bucket cannot be reached and one of its sessions has packed files. No screen offers
 the deletion yet; the app's `hostedErrorText` shows the server's message for any refusal.
+
+## Codium finish: lane PR fixes, codium-finish lane (16 Nov 2026)
+
+The last review before the lane's PR into main, on `a6288d72` (main `b362fdf6` merged in by `bc8cad48`). Five
+non-blocking findings; none rejected.
+
+- **Download links while the account is being deleted (`api/_lib/hosted-sessions.ts`).** `requireFilesAllowed` read
+  only the stored snapshot. An account deletion sets the tombstone before codium-erase reaches its hosted step, so the
+  snapshot may not say closing yet, and `downloadRedirect` has no caller check: a link given before the deletion still
+  led to the packed files in that window. `requireFilesAllowed` now calls `requireAccountOpen` first, so
+  `requestDownload` and the link route both answer 409 `MODEL_PLAN_ACCOUNT_CLOSING` once the tombstone exists. New
+  assertions in `test/hosted-sessions-api.test.ts` "no link is given or followed while frozen, after a lost dispute or
+  while closing": tombstone set, a snapshot that still downloads (ended canceled), the link given before it; both
+  answer 409. With the new call removed, only that case fails.
+- **PR3, O4 and O6 (download-only retention before a confirmed upload).** No code change in this lane, as the finding
+  says. They are listed as listing gates for `computer` in the lane PR's description, citing
+  `owner-actions/hosted-computer.md` "Download-only starts (H1a)": before listing, move the retention charge to the
+  first confirmed upload (or release it when no signed beat arrives), and answer a definitive HEAD mismatch with pack
+  or upload.
+- **Lane status, For the lead: CI0 item 1 and TB item 1.** Each has a dated line: the dispatch base is now empty (main
+  contains #33), and TB item 1 points to the Lead ruling under round three.
+- **TB item 5, the four review-memory MISS lines.** 0f6fce89 and 225905e2 are ancestors of origin/main and of HEAD.
+  The post-push Vector Codium run of the merged branch is recorded in a dated line below once it has run.
+
+Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeout 30000`): `hosted-sessions-api.test.ts`
+59 pass, 0 fail, 1 skip; `hosted-copy.test.ts` 7/0; `account-delete.test.ts` 38 pass, 0 fail, 1 skip;
+`hosted-lifecycle.test.ts` 23/0. The full `bun turbo typecheck --concurrency=2` ran before the push.

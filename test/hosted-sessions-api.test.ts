@@ -1237,6 +1237,12 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     w.setSnapshot({ state: "ended", reason: "canceled" })
     expect((await action(w, session.id, "download")).status).toBe(200)
     expect((await follow()).status).toBe(302)
+    // A deletion's tombstone refuses both before the stored snapshot says closing, the link given before it included.
+    await markAccountDeleting(ACCOUNT_ID, w.fakes.clock.now, w.fakes.clock.now + DAY, w.fetcher)
+    const tombstoned = await action(w, session.id, "download")
+    expect([tombstoned.status, tombstoned.body.error?.code]).toEqual([409, "MODEL_PLAN_ACCOUNT_CLOSING"])
+    const linked = await follow()
+    expect([linked.status, linked.body.error?.code]).toEqual([409, "MODEL_PLAN_ACCOUNT_CLOSING"])
 
     // A job session's packed files follow the same rule.
     const live = await hostedWorld(ledger)
