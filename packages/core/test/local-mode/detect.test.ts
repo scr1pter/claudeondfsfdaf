@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { LocalDetect } from "../../src/local-mode/detect"
 import { LocalPolicy } from "../../src/local-mode/policy"
+import { LocalProbe } from "../../src/local-mode/probe"
 import { LocalServers } from "../fixture/local-servers/serve"
 import { NetworkGuard } from "../lib/network-guard"
 
@@ -56,6 +57,26 @@ describe("Find servers", () => {
     const started = performance.now()
     expect(await LocalDetect.detect({ ports: [silent.port ?? 0] })).toEqual([])
     expect(performance.now() - started).toBeLessThan(2_000)
+  })
+
+  test("keeps its short wait: an Ollama server slower than 400 ms to say its version is not found", async () => {
+    const version = (await LocalServers.load("ollama")).interactions.find((item) =>
+      item.request.url.endsWith("/api/version"),
+    )!
+    const slow = await LocalServers.serve("ollama", {
+      routes: {
+        "GET /api/version": async () => {
+          await Bun.sleep(LocalProbe.IDENTIFY_TIMEOUT.loopback + 200)
+          return new Response(version.response.body, {
+            status: version.response.status,
+            headers: version.response.headers,
+          })
+        },
+      },
+    })
+    fakes.push(slow)
+    // With the long wait for one address, this server would be found.
+    expect(await LocalDetect.detect({ ports: [slow.port] })).toEqual([])
   })
 
   test("lists a server that answers on both loopback addresses once, at 127.0.0.1", async () => {

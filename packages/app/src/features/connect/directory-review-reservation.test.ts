@@ -1,11 +1,94 @@
 import { expect, test } from "bun:test"
+import type { Connect } from "@vectordevai/schema/connect"
+import { createVectorClient } from "@vectordevai/sdk/v2/client"
+import { createConnectClient } from "./client"
 import { createDirectoryReviewController } from "./directory-review-controller"
 import { createDirectoryReviewReservation } from "./directory-review-reservation"
+import { reviewRun } from "./test-fixture"
 
 const key = "opaque-workspace-scope"
 const body = { target: { kind: "branch" as const, base: "a".repeat(40) }, background: true }
 const first = "0196aa50-50d0-4f17-9c1d-85eff018e829"
 const second = "0196aa50-50d0-4f17-9c1d-85eff018e830"
+const target = { workspaceID: "workspace", directory: "/workspace/fixture", base: body.target.base }
+const consumed = {
+  code: "consumed" as const,
+  message: "This review start did not complete and no review ran. Start a new review.",
+}
+const pending = {
+  code: "pending" as const,
+  message: "This review start is not confirmed yet. Retry it shortly; a retry never starts a second review.",
+}
+
+function started(): Connect.Run {
+  const fixture = reviewRun()
+  if (fixture.request.action !== "review") throw new Error("The fixture must be a review.")
+  return {
+    ...fixture,
+    request: {
+      ...fixture.request,
+      directory: target.directory,
+      requester: { kind: "user" },
+      target: body.target,
+      background: true,
+    },
+    status: "running",
+    result: undefined,
+  }
+}
+
+/** A fake engine behind the real SDK: each review POST takes the next answer in order. */
+function engine(answers: ("lost" | "run" | { status: number; body: unknown })[]) {
+  const bodies: unknown[] = []
+  const state = { admitted: false }
+  const client = createConnectClient(
+    createVectorClient({
+      baseUrl: "http://engine.test",
+      directory: target.directory,
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname
+        if (path === "/experimental/connect/runs") return Response.json(state.admitted ? [started()] : [])
+        if (path !== "/experimental/connect/review") return Response.json(started())
+        bodies.push(await request.json())
+        const answer = answers.shift()
+        if (answer === undefined) throw new Error("The fixture expected no further review POST.")
+        if (answer === "lost") throw new TypeError("The POST response was lost")
+        if (answer !== "run") return Response.json(answer.body, { status: answer.status })
+        state.admitted = true
+        return Response.json(started())
+      },
+    }),
+  )
+  return { client, bodies }
+}
+
+function review(
+  reservation: ReturnType<typeof createDirectoryReviewReservation>,
+  client: ReturnType<typeof createConnectClient>,
+  start = () => client.directoryReview(reservation.request()),
+) {
+  const events = { invalidate: (): void => undefined }
+  const controller = createDirectoryReviewController({
+    target,
+    enabled: true,
+    current: () => true,
+    admission: reservation,
+    changed() {},
+    subscribe: (notify) => {
+      events.invalidate = notify
+      return () => {}
+    },
+    transport: {
+      runs: (signal) => client.runs(undefined, signal),
+      get: (id, signal) => client.get(id, undefined, signal),
+      start,
+      pending: async () => [],
+      reply: async () => {},
+      cancel: async () => {},
+    },
+  })
+  return { controller, events }
+}
 
 function fixture() {
   const values = new Map<string, string>()
@@ -98,4 +181,168 @@ test("unconfirmed markers cannot be replaced or retargeted, including after remo
   f.storage.setItem(key, JSON.stringify({ requestKey: first, target: { kind: "staged" }, background: true }))
   expect(() => f.make()).toThrow("does not match this workspace")
   expect(f.minted()).toBe(1)
+})
+
+test("a consumed answer clears the saved key, and only a click mints and sends a new one", async () => {
+  const f = fixture()
+  const reservation = f.make()
+  const e = engine(["lost", { status: 400, body: consumed }, "run"])
+  const { controller, events } = review(reservation, e.client)
+  try {
+    await controller.refresh()
+    await controller.start()
+    await controller.start(true)
+    expect(e.bodies).toEqual([
+      { requestKey: first, ...body },
+      { requestKey: first, ...body },
+    ])
+    expect(f.storage.getItem(key)).toBeNull()
+    expect(reservation.pending()).toBe(false)
+    expect(controller.state.admissionUncertain).toBe(false)
+    expect(controller.state.admissionAnswer).toEqual(consumed)
+    expect(f.minted()).toBe(1)
+    events.invalidate()
+    await controller.refresh()
+    await controller.start(true)
+    expect(e.bodies).toHaveLength(2)
+    expect(f.minted()).toBe(1)
+    await controller.start()
+    expect(e.bodies).toEqual([
+      { requestKey: first, ...body },
+      { requestKey: first, ...body },
+      { requestKey: second, ...body },
+    ])
+    expect(f.minted()).toBe(2)
+    expect(f.storage.getItem(key)).toBeNull()
+    expect(controller.state.admissionAnswer).toBeUndefined()
+    expect(controller.state.run?.status).toBe("running")
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("a pending answer keeps the same saved key for an explicit retry that replays the bound run", async () => {
+  const f = fixture()
+  const reservation = f.make()
+  const e = engine(["lost", { status: 400, body: pending }, "run"])
+  const { controller, events } = review(reservation, e.client)
+  try {
+    await controller.refresh()
+    await controller.start()
+    const raw = f.storage.getItem(key)
+    await controller.start(true)
+    expect(f.storage.getItem(key)).toBe(raw)
+    expect(controller.state.admissionUncertain).toBe(true)
+    expect(controller.state.admissionAnswer).toEqual(pending)
+    events.invalidate()
+    await controller.refresh()
+    await controller.start()
+    expect(e.bodies).toHaveLength(2)
+    await controller.start(true)
+    expect(f.storage.getItem(key)).toBeNull()
+    expect(e.bodies).toEqual([
+      { requestKey: first, ...body },
+      { requestKey: first, ...body },
+      { requestKey: first, ...body },
+    ])
+    expect(f.minted()).toBe(1)
+    expect(controller.state.admissionUncertain).toBe(false)
+    expect(controller.state.admissionAnswer).toBeUndefined()
+    expect(controller.state.run?.status).toBe("running")
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("a consumed answer never clears a marker another view replaced", async () => {
+  const f = fixture()
+  const reservation = f.make()
+  const replaced = JSON.stringify({ requestKey: second, ...body })
+  const e = engine(["lost", { status: 400, body: consumed }])
+  const attempts = { count: 0 }
+  const { controller } = review(reservation, e.client, () => {
+    if (++attempts.count === 2) f.storage.setItem(key, replaced)
+    return e.client.directoryReview(reservation.request())
+  })
+  try {
+    await controller.refresh()
+    await controller.start()
+    await controller.start(true)
+    expect(f.storage.getItem(key)).toBe(replaced)
+    expect(controller.state.admissionUncertain).toBe(true)
+    expect(controller.state.admissionAnswer).toEqual(consumed)
+    await controller.start()
+    await controller.start(true)
+    expect(e.bodies).toEqual([
+      { requestKey: first, ...body },
+      { requestKey: first, ...body },
+    ])
+    expect(f.storage.getItem(key)).toBe(replaced)
+    expect(controller.state.error).toContain("cannot be tracked safely")
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("discard removes only the exact captured request, and the next hold mints a new key", () => {
+  const f = fixture()
+  const empty = f.make()
+  empty.discard()
+  expect(empty.pending()).toBe(false)
+  expect(f.minted()).toBe(0)
+  const reservation = f.make()
+  reservation.hold(false)
+  reservation.discard()
+  expect(f.storage.getItem(key)).toBeNull()
+  expect(reservation.pending()).toBe(false)
+  expect(() => reservation.request()).toThrow("not saved")
+  expect(() => reservation.hold(true)).toThrow("original review request")
+  reservation.hold(false)
+  expect(reservation.request()).toEqual({ requestKey: second, ...body })
+  expect(f.minted()).toBe(2)
+  const other = JSON.stringify({ requestKey: first, ...body })
+  f.storage.setItem(key, other)
+  expect(() => reservation.discard()).toThrow("changed")
+  expect(f.storage.getItem(key)).toBe(other)
+})
+
+test("a consumed answer after another view cleared the same key lets this view start a new review", async () => {
+  const f = fixture()
+  const e = engine(["lost", { status: 400, body: consumed }, { status: 400, body: consumed }, "run"])
+  const original = f.make()
+  const a = review(original, e.client)
+  try {
+    await a.controller.refresh()
+    await a.controller.start()
+    const remounted = f.make()
+    const b = review(remounted, e.client)
+    try {
+      await b.controller.refresh()
+      expect(b.controller.state.admissionUncertain).toBe(true)
+      await Promise.all([a.controller.start(true), b.controller.start(true)])
+      expect(e.bodies).toEqual([
+        { requestKey: first, ...body },
+        { requestKey: first, ...body },
+        { requestKey: first, ...body },
+      ])
+      expect(f.storage.getItem(key)).toBeNull()
+      for (const view of [a, b]) {
+        expect(view.controller.state.admissionUncertain).toBe(false)
+        expect(view.controller.state.admissionAnswer).toEqual(consumed)
+      }
+      expect(original.pending()).toBe(false)
+      expect(remounted.pending()).toBe(false)
+      expect(f.minted()).toBe(1)
+      await b.controller.start()
+      expect(e.bodies).toHaveLength(4)
+      expect(e.bodies[3]).toEqual({ requestKey: second, ...body })
+      expect(f.minted()).toBe(2)
+      expect(f.storage.getItem(key)).toBeNull()
+      expect(b.controller.state.run?.status).toBe("running")
+    } finally {
+      b.controller.dispose()
+    }
+  } finally {
+    a.controller.dispose()
+  }
 })

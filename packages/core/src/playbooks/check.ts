@@ -123,9 +123,10 @@ export function validate(input: {
   walk(document, "", 0)
   if (issues.length) return { ok: false, issues }
   const workflow = WorkflowSpec.parse(document, { source: "saved" })
-  if (!workflow.ok) issues.push(...workflow.issues)
-  else if (workflow.spec.stages.some((stage) => "workflow" in stage && !Playbooks.validName(stage.workflow)))
+  if (!workflow.ok) return { ok: false, issues: workflow.issues }
+  if (workflow.spec.stages.some((stage) => "workflow" in stage && !Playbooks.validName(stage.workflow)))
     issues.push({ path: "/stages", message: "A Vector Playbook may nest only other personal Vector Playbooks." })
+  issues.push(...connectIssues(workflow.spec))
   if (issues.length) return { ok: false, issues }
   return { ok: true, name: input.name, commands: [...commands].sort(), files: [...files].sort() }
 }
@@ -199,4 +200,20 @@ function command(text: string, path: string, issues: Issue[], commands: Set<stri
 // JSON Pointer escaping, so a path names exactly one place.
 function pointer(key: string) {
   return key.replace(/~/g, "~0").replace(/\//g, "~1")
+}
+
+// A playbook runs in the repository of whoever installs it, and this check has no member manifest to read an action's
+// effects from, so a connect stage may only be a VectorScope review, whose only effect is read. A fix writes code, so it
+// is an agent stage after the review. Running a connect stage stays held at run time (engine orchestration/runner.ts).
+function connectIssues(spec: WorkflowSpec.Spec) {
+  return spec.stages.flatMap((stage, index) =>
+    "connect" in stage && (stage.connect.to !== "vectorscope" || stage.connect.action !== "review")
+      ? [
+          {
+            path: `/stages/${index}/connect`,
+            message: "A Vector Playbook may only review with VectorScope; fixes are separate agent stages.",
+          },
+        ]
+      : [],
+  )
 }

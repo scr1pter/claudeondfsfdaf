@@ -2,16 +2,48 @@ name: Vector cloud workspaces
 
 on:
   workflow_dispatch:
+  # push and pull_request share one paths list; keep them identical.
+  push:
+    branches: [main]
+    paths:
+      - "packages/cloud-workspaces/**"
+      - "packages/web/src/components/workspaces/**"
+      - "packages/web/src/components/marketing/account/**"
+      - "packages/web/src/components/marketing/download/**"
+      - "packages/web/src/lib/cloud-workspaces-client*"
+      - "packages/web/src/pages/workspaces.astro"
+      - "packages/web/src/pages/account.astro"
+      - "packages/web/test/account-page.test.ts"
+      - "packages/web/test/cloud-workspaces-page.test.ts"
+      - "packages/web/astro.config.mjs"
+      - "api/**"
+      - "test/cloud-workspaces-api.test.ts"
+      - "test/cloud-workspaces-node.test.ts"
+      - "test/account-delete-api.test.ts"
+      - "test/account-delete.test.ts"
+      - "test/site-publication.test.ts"
+      - "script/prune-vector-site.mjs"
+      - "bun.lock"
+      - ".github/workflows/vector-workspaces.yml"
   pull_request:
     paths:
       - "packages/cloud-workspaces/**"
       - "packages/web/src/components/workspaces/**"
+      - "packages/web/src/components/marketing/account/**"
+      - "packages/web/src/components/marketing/download/**"
       - "packages/web/src/lib/cloud-workspaces-client*"
       - "packages/web/src/pages/workspaces.astro"
+      - "packages/web/src/pages/account.astro"
+      - "packages/web/test/account-page.test.ts"
+      - "packages/web/test/cloud-workspaces-page.test.ts"
       - "packages/web/astro.config.mjs"
       - "api/**"
       - "test/cloud-workspaces-api.test.ts"
+      - "test/cloud-workspaces-node.test.ts"
+      - "test/account-delete-api.test.ts"
       - "test/account-delete.test.ts"
+      - "test/site-publication.test.ts"
+      - "script/prune-vector-site.mjs"
       - "bun.lock"
       - ".github/workflows/vector-workspaces.yml"
 
@@ -19,7 +51,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: vector-workspaces-${{ github.ref }}
+  # Every run on main keeps its own group, so a cancelled check never marks main's history; branches and pull
+  # requests cancel their stale runs. Both format() results are non-empty, so the && / || idiom is safe here.
+  group: ${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -45,12 +79,25 @@ jobs:
       - name: Browser client contracts
         working-directory: packages/web
         run: bun test src/lib/cloud-workspaces-client.test.ts --timeout 30000
+      # Each page test registers its own Bun.plugin to compile its React island, so they never share a process. Both
+      # always run and report; the step fails if either fails.
+      - name: Website page tests
+        working-directory: packages/web
+        run: |
+          status=0
+          bun test test/cloud-workspaces-page.test.ts --timeout 30000 || status=1
+          bun test test/account-page.test.ts --timeout 30000 || status=1
+          exit $status
       - name: Workspace typecheck
         working-directory: packages/cloud-workspaces
         run: bun typecheck
       - name: Website typecheck
         working-directory: packages/web
         run: bun typecheck
+      # typecheck.yml's matrix (app, cloud, desktop, engine) does not cover api/; the root tsconfig.json includes only api/**.
+      - name: Typecheck hosted API
+        working-directory: packages/engine
+        run: bun typecheck --project ../../tsconfig.json
       - name: Build the actual website and retain its public workspace route
         run: bun --cwd packages/web build && node script/prune-vector-site.mjs
       - name: Install the isolated browser fixture

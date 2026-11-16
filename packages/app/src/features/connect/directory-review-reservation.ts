@@ -27,6 +27,13 @@ export function createDirectoryReviewReservation(input: {
   }
   // Capture a retained request when remounting too, before history or another view can change its marker.
   let retained = read()
+  // Only the exact request this view captured is cleared; a marker another view wrote stays.
+  const clear = () => {
+    if (!retained || input.storage.getItem(input.key) !== retained.raw)
+      throw new Error("The saved review request changed.")
+    input.storage.removeItem(input.key)
+    retained = undefined
+  }
   return {
     pending: () => {
       try {
@@ -56,11 +63,15 @@ export function createDirectoryReviewReservation(input: {
       if (!retained) throw new Error("The review request was not saved before admission.")
       return retained.input
     },
-    confirm: () => {
-      if (!retained || input.storage.getItem(input.key) !== retained.raw)
-        throw new Error("The saved review request changed.")
-      input.storage.removeItem(input.key)
-      retained = undefined
+    confirm: clear,
+    /** The engine answered `consumed` for this exact request: no review ran, and the next hold(false) mints a new key. */
+    discard: () => {
+      // Another view in this tab already confirmed or discarded the marker, so nothing is left to protect.
+      if (input.storage.getItem(input.key) === null) {
+        retained = undefined
+        return
+      }
+      clear()
     },
   }
 }

@@ -128,3 +128,77 @@ The first fixture repair run identified one further test-harness mismatch: Redis
 For the workspace retry case, an initial attempt to use `revokeAccountTokens` directly correctly stopped at `revoke`: this billing fixture deliberately lacks Upstash's path-style REST endpoint. Reusing its existing durable-marker helper instead made the complete account-deletion file pass; the separate real revocation tests remain intact.
 
 Exact-source hosted checks remain required after integration; queued, skipped and superseded checks are not passes. The earlier scope UI/Vite configuration failure was superseded by a successful `57f6bf0c1` UI run. Its Vercel commit status also became successful at 18:05:26 UTC; that receipt does not qualify later source revisions.
+
+## 2026-11-16: Windows ripgrep install and native PR coverage plan
+
+Branch `ci-install-retry` from `3ab7858e`. Both problems are in the CI harness; no product code, test assertion
+threshold, timeout budget or feature flag changes.
+
+### Chocolatey ripgrep install
+
+Mechanism. The three Windows x64 steps that installed ripgrep (test.yml `unit` "Install ripgrep (Windows)",
+`engine-windows` "Install ripgrep" in all 12 shards, windows-containment.yml `native` "Install native ripgrep") ran an
+unpinned `choco install ripgrep`. Chocolatey makes one request to its community V2 feed and does not retry. In job
+133556510297 (PR #40, run 43940493286) the feed answered 504 at 20:03:24; choco printed "Unable to find package
+'ripgrep'" and "Chocolatey installed 0/0 packages." and exited 0, so the step's own `$LASTEXITCODE` check did not fire
+and the step died later on "Cannot find path ...\lib\ripgrep\tools". Job 133557296076 (PR #38) shows the same sequence
+with a 503. The step never continued without rg, but it named the wrong cause and one feed blip cost a full re-run.
+
+Change. New composite action `.github/actions/install-ripgrep-windows` downloads the official ripgrep 15.2.0 release
+zip from github.com (which every job already needs for checkout) with
+`curl.exe --fail --retry 6 --retry-all-errors --max-time 60 --retry-max-time 180` and no `--retry-delay`, so the
+exponential backoff stays. `--retry-all-errors` also retries a permanent 404 until the budget ends; the final error
+names the URL. The worst case is under about 4.5 minutes, about 272 s: curl checks the 180 s budget only before its
+backoff sleep, so an attempt that fails just before 180 s can be followed by one last backoff of up to 32 s (the sixth
+retry) and one more full 60 s attempt. That stays inside the engine shards' 5-minute step limit with about 30 s left for
+pwsh startup, hashing, `Expand-Archive` and `rg --version`; an overrun still fails the step loudly. The step timeouts
+are unchanged. The zip's SHA-256 is compared with the release's published value
+(x64 `71b2fef8…aafc5`, ARM64 `e4abca10…5360f`; no job uses ARM64 yet, so that branch has not run in CI), the archive is
+expanded under `RUNNER_TEMP`, `rg --version` must report `ripgrep 15.2.0`, and only then is the native folder appended
+to `GITHUB_PATH`. Every failure throws; there is no Chocolatey fallback. The three steps keep their names, their
+conditions and their timeouts (10, 5, 10 minutes). windows-containment.yml now also runs when the action changes.
+`packages/cloud/src/workflow-compliance.test.ts` pins this from the local files only: no workflow runs
+`choco install ripgrep`, each of the three steps uses the action, and the action keeps its pinned version and hashes,
+the curl exit check right after the download, the hash comparison and the version check before the one `GITHUB_PATH`
+write.
+
+Not changed: the `unit` (windows) job's "Run desktop computer-use tests" step still runs after a failed install
+because of its own condition; the job still goes red. A release download that fails after all retries is a new failure
+signature and should be triaged, not re-run blindly. Whether to drop "Chocolatey or ripgrep 504" from the known-flake
+list is the lead's decision.
+
+### computer-helper plan changed-path filter
+
+Mechanism. The plan job (computer-helper.yml) runs on ubuntu-24.04, which has no ripgrep, and its pull_request branch
+ran `if rg -q '<filter>' changed-paths; then extended=true; fi` under `set -euo pipefail`. Bash does not apply errexit
+to an `if` condition, so exit 127 read as "no match": job 133587777165 (run 43940493286 attempt 2) logged
+"line 24: rg: command not found", set extended=false and succeeded. mac-test and windows-arm64-test, gated on
+`extended == 'true'`, were therefore skipped on every PR since 5a52aa04 added the check (for example
+windows-arm64-test 133587780175 on PR #40; also PR runs 43829091585, 43871132549, 43940516400 and 43869650678). They ran
+only after a merge to main, where extended=true is set without the filter (main push run 43930210165 passed them).
+
+Change. The plan now requires a 40-hex base SHA, runs the identical POSIX ERE filter through `grep -qE` (which ships
+with the image), treats exit 0 as extended, 1 as narrow and anything else as an `::error::` that fails the plan, and
+writes the decision and changed-path count to the step summary. `packages/desktop/scripts/computer-workflow.test.ts`
+now extracts the filter from the grep call, refuses any `rg` command in the plan, and runs the plan step's real script
+in Bash against a temporary local Git repository: a native change gives extended=true, a docs change false, a shadowing
+`rg` function is never called, a grep that exits 2 fails the plan with `::error::`, and a missing or unknown base SHA
+fails. Against main's `if rg -q` text the new cases fail (checked locally by reverting just that block).
+
+Expected cost: PRs touching native, computer or Hands paths, test.yml, computer-helper.yml, bun.lock or package.json
+now run the two macOS mac-test jobs and windows-arm64-test again, as designed. Failures there are real until shown
+otherwise, not flakes.
+
+### Validation
+
+Linux, Bun 1.3.14, frozen install with scripts disabled. One file at a time through the serial lock:
+
+- `packages/desktop`: `scripts/computer-workflow.test.ts` 34 pass, 0 fail; `scripts/computer-overlay-workflow.test.ts`
+  6 pass; `scripts/computer-release-workflow.test.ts` 9 pass; `bun typecheck` exit 0.
+- `packages/cloud`: `src/workflow-compliance.test.ts` 54 pass, 0 fail; `bun typecheck` exit 0. Removing the curl exit
+  check from the action makes the new guard fail.
+
+The PowerShell action, the GitHub release download and the Windows and macOS jobs cannot run here. CI must show, on the
+fix revision: the three Windows install steps print `ripgrep 15.2.0` and the following steps find `rg`; the plan job
+on a PR that touches test.yml reports extended=true in its summary; and mac-test (macos-15-intel, macos-26) and
+windows-arm64-test run and pass on that PR.

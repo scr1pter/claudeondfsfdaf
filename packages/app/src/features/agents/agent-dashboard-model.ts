@@ -60,8 +60,9 @@ export function directoryReviewTarget(
     /[\u0000-\u001f\u007f]/.test(agent.isolatedPath)
   )
     return undefined
-  if (!agent.baseCommit || !/^[a-f0-9]{7,64}$/i.test(agent.baseCommit)) return undefined
-  return { workspaceID: agent.id, directory: agent.isolatedPath, base: agent.baseCommit }
+  // A SHA-1 commit id, sent lowercase: the engine's private Git view reads no longer ids.
+  if (!agent.baseCommit || !/^[a-f0-9]{7,40}$/i.test(agent.baseCommit)) return undefined
+  return { workspaceID: agent.id, directory: agent.isolatedPath, base: agent.baseCommit.toLowerCase() }
 }
 
 const RUNNING: DashboardAgentStatus[] = ["queued", "planning", "editing", "running commands", "testing"]

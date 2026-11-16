@@ -310,7 +310,7 @@ if (process.argv[2] === "--module-load-check") {
         holder.pendingRunToken() === undefined &&
         holder.providerKeys().DEEPSEEK_KEY === markers[4])
   if (!channel) throw new Error("The probe could not receive its private credential channel")
-  // The account starts from the sandbox's own skeleton, never the runner image's /etc/skel and its toolchains.
+  // The home is created empty, never from the runner image's /etc/skel and its toolchains, with an agent-owned .config.
   const config = await fs.lstat(path.join(process.env.HOME!, ".config"))
   if (
     (await fs.readdir(process.env.HOME!)).some((name) =>
@@ -319,7 +319,7 @@ if (process.argv[2] === "--module-load-check") {
     !config.isDirectory() ||
     config.uid !== process.getuid?.()
   )
-    throw new Error("The agent home was not created from the sandbox's own skeleton")
+    throw new Error("The agent home was not created empty with its own .config")
   const toolProcess = await probeToolProcesses()
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const scanner = ProcessIsolation.launch("/bin/bash", [

@@ -1,6 +1,6 @@
 import { expect, test, type Route } from "@playwright/test"
 import { reviewRun } from "../../src/features/connect/test-fixture"
-import { assistantMessage, directory, rootID, setup, userMessage } from "../utils/multiagent"
+import { assistantMessage, child, directory, openTasks, rootID, setup, task, userMessage } from "../utils/multiagent"
 
 function reply(route: Route, body: unknown, status = 200) {
   const headers = {
@@ -508,4 +508,198 @@ test("closing Connected tools during the save-confirmation owner read cannot sav
   await (await response).finished()
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
   expect(app.capture.config).toEqual([])
+})
+
+const vectorscopeMember = {
+  id: "vectorscope",
+  kind: "agent",
+  title: "VectorScope",
+  summary: "Review selected changes.",
+  owner: "vectorscope",
+  place: "local",
+  sendsTo: "this-computer",
+  state: "ready",
+  reach: "connect",
+  actions: [{ id: "review", title: "Review", effects: ["read"], background: true, result: "review" }],
+}
+
+/** A review of the root conversation still going, or the same run once it was cancelled. */
+function rootRun(id: string, cancelled = false) {
+  const fixture = reviewRun()
+  const request = { ...fixture.request, id, directory, requester: { kind: "user", sessionID: rootID } }
+  if (cancelled)
+    return {
+      ...fixture,
+      id,
+      request,
+      result: { ...fixture.result!, state: "cancelled", verdict: undefined, summary: "The review was cancelled." },
+      time: { created: 4, started: 5, ended: 6 },
+    }
+  return {
+    ...fixture,
+    id,
+    request,
+    status: "running",
+    result: undefined,
+    progress: { message: "Reviewing src/example.ts", at: 5 },
+    time: { created: 4, started: 5 },
+  }
+}
+
+test("the Tasks pane lists the conversation's connected runs, cancels a running one and never applies a fix", async ({
+  page,
+}) => {
+  const fixture = reviewRun()
+  const finished = {
+    ...fixture,
+    request: { ...fixture.request, directory, requester: { kind: "user", sessionID: rootID } },
+  }
+  const app = await setup(page, { capabilities: { connections: true } })
+  let cancelled = false
+  let mode: "owner" | "hold" | "guest" = "owner"
+  let reads = 0
+  // A held read waits for the answer it is released with.
+  const held: ((answer: "owner" | "guest") => void)[] = []
+  const cancels: (string | null)[] = []
+  const writes: string[] = []
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, async (route) => {
+    const request = route.request()
+    if (request.method() === "OPTIONS") return reply(route, [])
+    const url = new URL(request.url())
+    if (url.pathname === "/experimental/connect/runs/cr_running/cancel" && request.method() === "POST") {
+      cancels.push(url.searchParams.get("sessionID"))
+      cancelled = true
+      return reply(route, true)
+    }
+    if (request.method() === "POST") writes.push(url.pathname)
+    if (url.pathname === "/experimental/connect") return reply(route, [vectorscopeMember])
+    if (url.pathname !== "/experimental/connect/runs") return reply(route, [])
+    if (url.searchParams.get("sessionID") !== rootID) return reply(route, [])
+    reads++
+    const answer = mode === "hold" ? await new Promise<"owner" | "guest">((resolve) => held.push(resolve)) : mode
+    if (answer === "guest") return reply(route, { message: "This operation requires the server owner" }, 403)
+    return reply(route, [rootRun("cr_running", cancelled), finished])
+  })
+  await app.open()
+  const panel = await openTasks(page)
+  const section = panel.locator('[data-component="connect-task-rows"]')
+  const rows = section.getByRole("listitem")
+  await expect(rows).toHaveCount(2)
+  const running = rows.nth(0)
+  await expect(running).toContainText("VectorScope · Review")
+  await expect(running).toContainText("Running")
+  await expect(running).toContainText("Reviewing src/example.ts")
+  await expect(running).toContainText("Sends code to: This computer")
+  await expect(running.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(1)
+  const done = rows.nth(1)
+  await expect(done).toContainText("Partial")
+  await expect(done).toContainText("Incomplete review")
+  await expect(done).toContainText("Code sent to: This computer")
+  await expect(done).toContainText("Usage unavailable")
+  await expect(done.getByRole("button")).toHaveCount(0)
+  await expect(section.getByRole("button", { name: /fix/i })).toHaveCount(0)
+  await expect(section).not.toContainText(fixture.result!.findings[0].body)
+
+  // Reads follow events and reconnects only: nothing polls, and another conversation's events are ignored.
+  await page.waitForTimeout(500)
+  const settled = reads
+  await page.waitForTimeout(1500)
+  expect(reads).toBe(settled)
+  await app.send("connect.run.updated", { sessionID: "ses_other_conversation", run: finished })
+  await page.waitForTimeout(1000)
+  expect(reads).toBe(settled)
+  await app.send("connect.run.updated", { sessionID: rootID, run: finished })
+  await expect.poll(() => reads).toBe(settled + 1)
+
+  await running.getByRole("button", { name: "Cancel", exact: true }).click()
+  await expect.poll(() => cancels).toEqual([rootID])
+  await expect(rows.nth(0)).toContainText("Cancelled")
+  await expect(section.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
+
+  // An authority change hides the rows at once, while the fresh read is still held, and a read started before it
+  // can never bring them back.
+  mode = "hold"
+  await app.send("connect.run.updated", { sessionID: rootID, run: finished })
+  await expect.poll(() => held.length).toBe(1)
+  await app.send("global.disposed", {}, "global")
+  await expect.poll(() => held.length).toBeGreaterThanOrEqual(2)
+  await expect(section).toHaveCount(0)
+  const [stale, ...fresh] = held.splice(0)
+  mode = "guest"
+  const refused = page.waitForResponse(
+    (response) => response.status() === 403 && new URL(response.url()).pathname === "/experimental/connect/runs",
+  )
+  fresh.forEach((release) => release("guest"))
+  await refused
+  stale("owner")
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  await expect(section).toHaveCount(0)
+
+  // After a refusal the pane makes no further owner reads until authority changes.
+  await page.waitForTimeout(500)
+  const blocked = reads
+  await app.send("connect.run.updated", { sessionID: rootID, run: finished })
+  await app.send("connect.run.updated", { sessionID: rootID, run: finished })
+  await page.waitForTimeout(1200)
+  expect(reads).toBe(blocked)
+
+  mode = "hold"
+  await app.send("server.connected", {}, "global")
+  await expect.poll(() => held.length).toBeGreaterThanOrEqual(1)
+  await expect(section).toHaveCount(0)
+  mode = "owner"
+  held.splice(0).forEach((release) => release("owner"))
+  await expect(rows).toHaveCount(2)
+
+  mode = "guest"
+  await app.send("connect.run.updated", { sessionID: rootID, run: finished })
+  await expect(section).toHaveCount(0)
+  expect(writes).toEqual([])
+  expect(
+    app.capture.session.filter(
+      (request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)(?:\?|$)/.test(request.path),
+    ),
+  ).toEqual([])
+  expect(app.capture.config).toEqual([])
+})
+
+test("connected runs scroll in their own box below a long task list, so the last Cancel stays reachable", async ({
+  page,
+}) => {
+  const ids = Array.from({ length: 14 }, (_, index) => `ses_bulk_${index}`)
+  const tasks = ids.map((id, index) => task({ id, title: `Bulk task ${index}` }))
+  const app = await setup(page, {
+    capabilities: { connections: true, backgroundSubagents: true },
+    sessions: ids.map((id, index) => child(id, `Bulk task ${index} (@general subagent)`)),
+    status: Object.fromEntries([rootID, ...ids].map((id) => [id, { type: "busy" }])),
+    taskList: () => ({ tasks, truncated: false }),
+  })
+  const runs = Array.from({ length: 10 }, (_, index) => rootRun(`cr_bulk_${index}`))
+  const cancels: string[] = []
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, (route) => {
+    const url = new URL(route.request().url())
+    if (route.request().method() === "POST" && url.pathname.endsWith("/cancel")) {
+      cancels.push(url.pathname)
+      return reply(route, true)
+    }
+    if (url.pathname === "/experimental/connect") return reply(route, [vectorscopeMember])
+    return reply(route, url.pathname === "/experimental/connect/runs" ? runs : [])
+  })
+  await app.open()
+  const panel = await openTasks(page)
+  await expect(panel.locator("article.vector-bg-tasks-card")).not.toHaveCount(0)
+  const section = panel.locator('[data-component="connect-task-rows"]')
+  await expect(section.getByRole("listitem")).toHaveCount(10)
+  const last = section.getByRole("listitem").nth(9).getByRole("button", { name: "Cancel", exact: true })
+  await last.scrollIntoViewIfNeeded()
+  await expect(last).toBeInViewport()
+  // The section scrolled itself; the pane, its header and the task list stayed where they were.
+  expect(await panel.evaluate((element) => element.scrollTop)).toBe(0)
+  expect(await section.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  const pane = (await panel.boundingBox())!
+  const box = (await section.boundingBox())!
+  expect(box.y + box.height).toBeLessThanOrEqual(pane.y + pane.height + 1)
+  expect((await panel.locator(".vector-bg-tasks-list").boundingBox())!.height).toBeGreaterThan(0)
+  await last.click()
+  await expect.poll(() => cancels).toEqual(["/experimental/connect/runs/cr_bulk_9/cancel"])
 })

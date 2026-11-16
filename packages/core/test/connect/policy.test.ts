@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Connect } from "@vectordevai/schema/connect"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { ConnectPolicy } from "../../src/connect/policy"
 import { Wildcard } from "../../src/util/wildcard"
 import type { PermissionV1 } from "../../src/v1/permission"
@@ -37,10 +38,11 @@ const decodeConsent = Schema.decodeUnknownSync(Connect.Consent)
 const decodeSendsTo = Schema.decodeUnknownSync(Connect.SendsTo)
 
 describe("effects and the narrowing check", () => {
-  test("read maps to read and write to edit; nothing else is accepted", () => {
+  test("read maps to read, write to edit and cloud to connect_cloud; nothing else is accepted", () => {
     expect(ConnectPolicy.basePermission("read")).toBe("read")
     expect(ConnectPolicy.basePermission("write")).toBe("edit")
-    for (const effect of ["network", "run", "post", "screen", "cloud", "constructor", "toString", ""])
+    expect(ConnectPolicy.basePermission("cloud")).toBe("connect_cloud")
+    for (const effect of ["network", "run", "post", "screen", "constructor", "toString", ""])
       expect(ConnectPolicy.basePermission(effect)).toBeUndefined()
   })
 
@@ -76,6 +78,65 @@ describe("effects and the narrowing check", () => {
 
     const allowed = ConnectPolicy.admit({ effects: ["write"], ruleset: buildRules, consents })
     expect(allowed.ok).toBe(true)
+    expect(asked).toBe(1)
+  })
+
+  test("cloud is accepted only for an action declared when connect started, and both sides must agree", () => {
+    const declared = { pattern: "hosted.review" }
+    const undeclared = ConnectPolicy.narrowing({ effects: ["read", "cloud"], ruleset: buildRules })
+    expect(undeclared.ok).toBe(false)
+    if (!undeclared.ok) expect(undeclared.refusal.code).toBe("effect")
+    expect(ConnectPolicy.narrowing({ effects: ["read", "cloud"], ruleset: buildRules, cloud: declared })).toEqual({
+      ok: true,
+      value: ["read", "connect_cloud"],
+    })
+    // A declared action that describes itself without `cloud` would start on read alone, so it is refused.
+    const silent = ConnectPolicy.narrowing({ effects: ["read"], ruleset: buildRules, cloud: declared })
+    expect(silent.ok).toBe(false)
+    if (!silent.ok) expect(silent.refusal.code).toBe("effect")
+
+    // A deny refuses before any question, blanket or for this action's own pattern; another action's deny does not.
+    for (const pattern of ["*", "hosted.review"]) {
+      const denied = ConnectPolicy.narrowing({
+        effects: ["read", "cloud"],
+        ruleset: [...buildRules, { permission: "connect_cloud", pattern, action: "deny" }],
+        patterns: ["src/a.ts"],
+        cloud: declared,
+      })
+      expect(denied.ok).toBe(false)
+      if (!denied.ok) {
+        expect(denied.refusal.code).toBe("permission")
+        expect(denied.refusal.message).toContain("connect_cloud")
+      }
+    }
+    expect(
+      ConnectPolicy.narrowing({
+        effects: ["read", "cloud"],
+        ruleset: [...buildRules, { permission: "connect_cloud", pattern: "other.review", action: "deny" }],
+        cloud: declared,
+      }).ok,
+    ).toBe(true)
+    // An allow only passes narrowing; the question is still asked (requiresApproval).
+    expect(
+      ConnectPolicy.narrowing({
+        effects: ["read", "cloud"],
+        ruleset: [...buildRules, { permission: "connect_cloud", pattern: "*", action: "allow" }],
+        cloud: declared,
+      }).ok,
+    ).toBe(true)
+
+    let asked = 0
+    const consents = () => {
+      asked++
+      return [
+        ConnectPolicy.cloudConsent({ member: "Hosted", pattern: "hosted.review", destination: "Vector's test cloud" }),
+      ]
+    }
+    expect(ConnectPolicy.admit({ effects: ["read", "cloud"], ruleset: buildRules, consents }).ok).toBe(false)
+    expect(asked).toBe(0)
+    expect(ConnectPolicy.admit({ effects: ["read", "cloud"], ruleset: buildRules, cloud: declared, consents }).ok).toBe(
+      true,
+    )
     expect(asked).toBe(1)
   })
 
@@ -211,6 +272,35 @@ describe("consents", () => {
     expect(ConnectPolicy.CONSENTS.connect_model.asked).toBe("once-per-request")
     expect(ConnectPolicy.CONSENTS.connect_write.asked).toBe("every-time")
     expect(ConnectPolicy.CONSENTS.connect_write.saveable).toBe(false)
+    expect(ConnectPolicy.CONSENTS.connect_cloud).toMatchObject({ default: "ask", asked: "every-time", saveable: false })
+  })
+
+  test("the connect_cloud consent names the destination and never offers Always", () => {
+    const consent = decodeConsent(
+      ConnectPolicy.cloudConsent({ member: "Hosted", pattern: "hosted.review", destination: "Vector's test cloud" }),
+    )
+    expect(consent.permission).toBe("connect_cloud")
+    expect(consent.always).toEqual([])
+    expect(consent.patterns).toEqual(["hosted.review"])
+    expect(consent.destination).toBe("Vector's test cloud")
+    expect(consent.message).toContain("Vector's test cloud")
+    expect(consent.message).toContain("Hosted")
+    expect(PermissionPolicy.requiresApproval(consent.permission, consent.always, consent.patterns)).toBe(true)
+    expect(PermissionPolicy.canAlwaysApprove(consent.permission, consent.always, consent.patterns)).toBe(false)
+
+    const long = decodeConsent(
+      ConnectPolicy.cloudConsent({ member: "m".repeat(500), pattern: "hosted.review", destination: "d".repeat(500) }),
+    )
+    expect(long.destination).toHaveLength(200)
+    expect(long.message).toContain(long.destination!)
+    expect(long.message.length).toBeLessThanOrEqual(Connect.MAX_SUMMARY)
+
+    // A cut at 199 UTF-16 units would fall inside the emoji's surrogate pair, so the cut drops the whole pair.
+    const paired = decodeConsent(
+      ConnectPolicy.cloudConsent({ member: "Hosted", pattern: "hosted.review", destination: `${"d".repeat(198)}😀x` }),
+    )
+    expect(paired.destination).toBe(`${"d".repeat(198)}…`)
+    expect(paired.message).toContain(paired.destination!)
   })
 })
 
@@ -250,7 +340,17 @@ describe("place and where code goes", () => {
       "ready",
     )
     expect(ConnectPolicy.localGate({ local: true, place: "local" }).state).toBe("ready")
+    // A member with a cloud action is off whole under Vector Local, whatever its web setting.
+    expect(
+      ConnectPolicy.localGate({ local: false, place: "local", sendsTo: "this-computer", effects: ["read", "cloud"] })
+        .state,
+    ).toBe("ready")
+    expect(
+      ConnectPolicy.localGate({ local: true, place: "local", sendsTo: "this-computer", effects: ["read", "write"] })
+        .state,
+    ).toBe("ready")
     for (const gate of [
+      ConnectPolicy.localGate({ local: true, place: "local", sendsTo: "this-computer", effects: ["read", "cloud"] }),
       ConnectPolicy.localGate({ local: true, place: "vector-cloud" }),
       ConnectPolicy.localGate({ local: true, place: "your-cloud" }),
       ConnectPolicy.localGate({ local: true, place: "local", sendsTo: "provider:anthropic" }),

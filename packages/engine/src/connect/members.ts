@@ -8,7 +8,11 @@ import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 // The hub gathers the sources (its adapters, the agents, the skills, the saved workflows, MCP status, the tool ids
 // in the HTTP view, and a few facts about this directory) and this file turns them into one list. Nothing here keeps
 // a copy, calls a model or reaches the network. Members that already have a tool are listed with that tool as their
-// way in; only members with no tool take hand-offs through connect (VectorScope, through its adapter).
+// way in; only members with no tool take hand-offs through connect (VectorScope, through its adapter). Hands is listed
+// by its own list-only adapter, with its tool as its way in, and the GitHub agent by its own list-only adapter
+// (connect/adapters/github-agent.ts) from this repository's workflow file, with nothing to reach. In a Vector cloud
+// workspace (CW-24) what runs in this engine runs on Vector's servers, so its members read `vector-cloud` (`located`)
+// before Vector Local applies.
 
 type MemberInput = Connect.Member
 
@@ -39,7 +43,10 @@ export type McpSource =
   | { readonly status: "needs_client_registration"; readonly error: string }
 
 export interface Sources {
-  /** What each adapter's `describe()` returned. They come first, so an adapter's member wins over any other source. */
+  /**
+   * What each adapter's `describe()` returned. They come first, so an adapter's member wins over any other source. One
+   * reached through a tool follows `tools` (`registered`).
+   */
   readonly adapters: readonly Connect.Member[]
   readonly agents: readonly AgentSource[]
   readonly skills: readonly { readonly name: string; readonly description?: string }[]
@@ -49,12 +56,15 @@ export interface Sources {
   readonly remoteMcp?: ReadonlySet<string>
   /** `ToolRegistry.ids()`, in the HTTP view only. Without it, members reached through a tool are left out. */
   readonly tools?: readonly string[]
-  /** Whether this repository has the GitHub agent's workflow file. */
-  readonly githubAgent?: boolean
   /** Desktop work going now for a session, from DesktopTasks. */
   readonly desktop?: { readonly workspaces: number; readonly swarm: number }
   /** Vector Local is on. */
   readonly local: boolean
+  /**
+   * The engine runs in a Vector cloud workspace (RuntimeFlags.cloudWorkspace). Only the hub sets it, from the engine's
+   * own flags; never from a request.
+   */
+  readonly cloudWorkspace?: boolean
 }
 
 /** Hidden helper sessions Vector already names (core session/helper.ts), with how each is reached. */
@@ -102,7 +112,7 @@ export const HELPERS = {
 
 /**
  * Tools listed under their own member, so the plain tool list does not repeat them, and connect's own tool, which is
- * how members are reached rather than a member.
+ * how members are reached rather than a member. `computer` is listed by the Hands adapter (connect/adapters/hands.ts).
  */
 const NAMED_TOOLS = new Set(["research", "browser", "computer", "vector_cloud", "task", "workflow", "skill", "connect"])
 
@@ -111,13 +121,14 @@ const decode = Schema.decodeUnknownOption(Connect.Member)
 /**
  * The list, in a fixed order: adapters, the agents, the helpers, the desktop's own work, the members reached through
  * a tool, skills, saved workflows and MCP servers. With Vector Local on, a member that is otherwise ready but runs in
- * a cloud or sends code past this computer and the listed model servers reads "off"; an MCP server keeps MCP's own
- * status, because MCP applies Vector Local to its servers itself. Each id appears once (the first source wins), and a
- * member the schema does not accept is left out.
+ * a cloud, sends code past this computer and the listed model servers, or has a `cloud` action reads "off"; an MCP
+ * server keeps MCP's own status, because MCP applies Vector Local to its servers itself. In a cloud workspace each
+ * member in this engine reads `vector-cloud` first, so Vector Local then reads it as running on Vector's servers. Each
+ * id appears once (the first source wins), and a member the schema does not accept is left out.
  */
 export function compose(sources: Sources): Connect.Member[] {
   const candidates: MemberInput[] = [
-    ...sources.adapters,
+    ...sources.adapters.flatMap((member) => registered(member, sources.tools)),
     ...sources.agents.filter((agent) => !agent.hidden).map(agentMember),
     ...helperMembers(sources),
     ...desktopMembers(sources),
@@ -127,22 +138,49 @@ export function compose(sources: Sources): Connect.Member[] {
     ...Object.entries(sources.mcp).map(([name, status]) =>
       mcpMember(name, status, sources.remoteMcp?.has(name) === true),
     ),
-    githubAgentMember(sources.githubAgent === true),
   ]
   const seen = new Set<string>()
   return candidates.flatMap((candidate) => {
     if (seen.has(candidate.id)) return []
     seen.add(candidate.id)
-    const gated = candidate.kind === "mcp" ? candidate : gate(candidate, sources.local)
+    const here = located(candidate, sources.cloudWorkspace === true)
+    const gated = here.kind === "mcp" ? here : gate(here, sources.local)
     return Option.match(decode(gated), { onNone: () => [], onSome: (member) => [member] })
   })
 }
 
-/** Applies Vector Local to a member that is otherwise ready. */
+/**
+ * Where a member runs, for this engine. A member's `local` means "in this engine", which in a Vector cloud workspace is
+ * Vector's servers. A member in the user's own accounts or already on Vector's servers keeps its place, and `sendsTo`
+ * (the model's real destination) is never touched. The hub applies it to the list and before a hand-off is admitted.
+ */
+export function located(member: MemberInput, cloudWorkspace: boolean): MemberInput {
+  if (!cloudWorkspace || member.place !== "local") return member
+  return { ...member, place: "vector-cloud" }
+}
+
+/** Applies Vector Local to a member that is otherwise ready. One with a `cloud` action is off whole. */
 export function gate(member: MemberInput, local: boolean): MemberInput {
   if (member.state !== "ready") return member
-  const gated = ConnectPolicy.localGate({ local, place: member.place, sendsTo: member.sendsTo })
+  const gated = ConnectPolicy.localGate({
+    local,
+    place: member.place,
+    sendsTo: member.sendsTo,
+    effects: member.actions?.flatMap((action) => action.effects),
+  })
   return gated.state === "ready" ? member : { ...member, state: "off", reason: gated.reason }
+}
+
+/**
+ * An adapter's member reached through a tool (Hands, through `computer`) follows the registry as toolMembers' members
+ * do: left out without the tool ids, and not installed, with nothing to reach, when the registry does not offer its
+ * tool. Any later adapter whose `reach` is a tool id falls under this rule too.
+ */
+function registered(member: MemberInput, tools: readonly string[] | undefined): MemberInput[] {
+  if (member.reach === "connect" || member.reach === "ui" || member.reach === "none") return [member]
+  if (!tools) return []
+  if (tools.includes(member.reach)) return [member]
+  return [{ ...member, state: "not-installed", reason: "Not in this build.", reach: "none" }]
 }
 
 function agentMember(agent: AgentSource): MemberInput {
@@ -218,28 +256,6 @@ function toolMembers(sources: Sources): MemberInput[] {
       reach: "browser",
       ...offered("browser", "The browser works in the Vector desktop app."),
     },
-    has.has("computer")
-      ? {
-          id: "computer",
-          kind: "tool",
-          title: "Vector Hands",
-          summary: "The agent uses apps on this computer, with your approval.",
-          owner: "hands",
-          place: "local",
-          reach: "computer",
-          state: "ready",
-        }
-      : {
-          id: "computer",
-          kind: "tool",
-          title: "Vector Hands",
-          summary: "The agent uses apps on this computer, with your approval.",
-          owner: "hands",
-          place: "local",
-          reach: "none",
-          state: "not-installed",
-          reason: "Not in this build.",
-        },
     {
       id: "vector-cloud",
       kind: "service",
@@ -320,21 +336,6 @@ function mcpMember(name: string, source: McpSource, remote: boolean): MemberInpu
   // MCP refuses a server Vector Local does not allow with this reason, so it reads as off.
   if (source.error.startsWith("Off in Vector Local")) return { ...base, state: "off", reason: words(source.error, 500) }
   return { ...base, state: "unavailable", reason: words(source.error || "It could not connect.", 500) }
-}
-
-function githubAgentMember(installed: boolean): MemberInput {
-  const base = {
-    id: "github-agent",
-    kind: "agent" as const,
-    title: "@vector on GitHub",
-    summary: "Answers @vector on pull requests from your own GitHub Actions. Connect never posts to GitHub.",
-    owner: "vector-at-mention" as const,
-    place: "your-cloud" as const,
-    reach: "none" as const,
-  }
-  return installed
-    ? { ...base, state: "ready" }
-    : { ...base, state: "not-installed", reason: "Not set up in this repository (.github/workflows/vector.yml)." }
 }
 
 function clip(value: string, max: number) {

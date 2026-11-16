@@ -55,6 +55,7 @@ import { ComputerWatch } from "./computer-watch"
 import { limitsLine, type TaskTranslate } from "./task-limits"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { useLanguage } from "@/context/language"
+import { ConnectTaskRows } from "@/features/connect/task-rows-section"
 
 const MAX_ROWS = 12
 /** How long a first click on Merge or Discard stays armed, as the workspace controls' confirmTwice. */
@@ -573,6 +574,7 @@ function Pane(props: { tasks: BackgroundTasks }) {
           </Show>
         </div>
       </Show>
+      <ConnectTaskRows rootID={tasks.rootID()} connections={tasks.capabilities().connections} />
 
       <div class="vector-bg-tasks-sr" aria-live="polite">
         {announcement()}

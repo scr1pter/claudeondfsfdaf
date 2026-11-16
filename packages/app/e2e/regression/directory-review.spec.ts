@@ -314,6 +314,72 @@ for (const mutation of ["remove", "replace"] as const)
     expect(bodies).toHaveLength(1)
   })
 
+test("a consumed review key is cleared and only an explicit new start sends a fresh key", async ({ page }) => {
+  const app = await setup(page, { capabilities: { connections: true } })
+  await installNativeRecord(page)
+  const pending = "This review start is not confirmed yet. Retry it shortly; a retry never starts a second review."
+  const consumed = "This review start did not complete and no review ran. Start a new review."
+  const bodies: unknown[] = []
+  let admitted = false
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, async (route) => {
+    if (route.request().method() === "OPTIONS") return reply(route, [])
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith("/review")) {
+      bodies.push(route.request().postDataJSON())
+      if (bodies.length === 1) return route.abort("failed")
+      if (bodies.length === 2) return reply(route, { code: "pending", message: pending }, 400)
+      if (bodies.length === 3) return reply(route, { code: "consumed", message: consumed }, 400)
+      admitted = true
+      return reply(route, runningRun())
+    }
+    return reply(route, path.endsWith("/runs") ? (admitted ? [runningRun()] : []) : runningRun())
+  })
+  const saved = () =>
+    page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith("connect.directory-admission.")))
+  await app.open()
+  const dashboard = await openDashboard(page)
+  const card = dashboard.locator('[data-component="directory-review"]')
+  const retry = card.getByRole("button", { name: "Retry review start", exact: true })
+  await card.getByRole("button", { name: "Review with VectorScope", exact: true }).click()
+  await expect(retry).toBeEnabled()
+  await retry.click()
+  await expect(card).toContainText(pending)
+  await expect(retry).toBeEnabled()
+  expect(await saved()).toHaveLength(1)
+  await retry.click()
+  await expect(card).toContainText(consumed)
+  await expect(retry).toHaveCount(0)
+  // The label exists only once the start is no longer busy, so its own refresh has finished.
+  const fresh = card.getByRole("button", { name: "Start a new review", exact: true })
+  await expect(fresh).toBeEnabled()
+  await expect(card.getByRole("button", { name: "Review with VectorScope", exact: true })).toHaveCount(0)
+  expect(await saved()).toEqual([])
+  const refreshed = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/runs"))
+  await card.getByRole("button", { name: "Refresh review", exact: true }).click()
+  await refreshed
+  await app.send("connect.run.updated", { sessionID: ask().sessionID, run: runningRun() }, isolated)
+  await expect(card).toContainText(consumed)
+  await expect(fresh).toBeEnabled()
+  expect(bodies).toHaveLength(3)
+  expect(bodies[0]).toEqual({
+    requestKey: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+    target: { kind: "branch", base },
+    background: true,
+  })
+  expect(bodies[1]).toEqual(bodies[0])
+  expect(bodies[2]).toEqual(bodies[0])
+  await fresh.click()
+  await expect(card).toContainText("Review in progress")
+  expect(bodies).toHaveLength(4)
+  expect(bodies[3]).toEqual({
+    requestKey: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+    target: { kind: "branch", base },
+    background: true,
+  })
+  expect(bodies[3]).not.toEqual(bodies[0])
+  expect(await saved()).toEqual([])
+})
+
 test("completed Codium directory review shows canonical plan usage without manufacturing a dollar total", async ({
   page,
 }) => {

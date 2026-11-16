@@ -36,6 +36,10 @@ ip -6 route add default dev audit0
 # to the namespace's sink and remain visible in the capture; the fixture web uses Chromium's explicit host mapping.
 printf 'nameserver 198.18.0.53\noptions attempts:1 timeout:1\n' > "$output/resolv.conf"
 mount --bind "$output/resolv.conf" /etc/resolv.conf
+# sudo resolves this machine's own host name. Hosted runners do not always list it in /etc/hosts, and the lookup then
+# leaks to the DNS sink as harness traffic before the workload starts. A private hosts file maps only that one name.
+{ cat /etc/hosts; printf '127.0.1.1 %s\n' "$(hostname)"; } > "$output/hosts"
+mount --bind "$output/hosts" /etc/hosts
 printf '{"isolated":true,"namespace":"%s","parent":"%s","externalInterface":false}\n' \
   "$(readlink /proc/self/ns/net)" "$parent_network" > "$output/isolation.json"
 ip -j address show > "$output/interfaces.json"

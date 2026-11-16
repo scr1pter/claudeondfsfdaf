@@ -239,6 +239,8 @@ Keep H's `create` signature and its `beforeSpawn` parameter (H :113, 199-203).
 
 Keep H's `McpComputerPolicy` import, the `reservedName` checks (H :516, :1155) and BI's `localTransport` import. Drop the now-unused `const sdk` in this block only. Not checked: whether an isolation refusal inside `localTransport` (`Effect.promise` turns it into a defect) ends up as a "failed" status. A `tryPromise` that maps to a failed status would be cleaner.
 
+**Answered (HF-2, 2026-11-15).** It does, so no code was changed and the `tryPromise` was not adopted. `localTransport` (`engine/mcp/stdio.ts:13`) runs `ProcessIsolation.launch` inside `Effect.promise` (`mcp/index.ts:489`), so a launch-floor refusal is a defect inside `connectLocal`. `MCP.create`'s `Effect.catchCause` (`:553-559`) re-interrupts a cause that holds only interrupts and turns every other cause into `{ status: "failed", error: message }`. `packages/engine/test/mcp/computer-policy-isolation.test.ts` proves this by running `packages/engine/test/fixture/mcp-required-isolation.ts` in its own process after `requireIsolation()`. A server whose configured environment sets a native loader variable ends, at startup and again after `connect`, as a failed status carrying the launch floor's own message, with no client, no tools and no marker file. On Linux that refusal comes from the loader-environment guard, which `ProcessIsolation.launch` applies before its platform check. While `ProcessIsolation.FLOOR` is false, Linux plans an allowed command plainly and never reaches `assertBinary`, so the literal REFUSAL variant of the same fixture runs only on the Windows engine shard. That Windows result is still pending.
+
 **`engine/tool/shell.ts`:** keep all five imports. Nothing else conflicts, and the order is already right.
 
 **`desktop/ipc.ts`, `desktop/ipc-security.test.ts`:** keep both sides' registrations, imports and tests. Also add `&& !isComputerOverlay(window)` to Codium's `remote-changed` and `vault-changed` broadcasts (desktop/remote-runtime.ts:25-26, desktop/vault-runtime.ts:31-32, on `codium` and BI). Those files are not conflicted, so this must be done deliberately.
@@ -299,9 +301,9 @@ A useful trick: `requireIsolation()` cannot be reset, but off Linux `launch` **a
 | S6-2 | **The beforeSpawn recheck runs before the owned spawn:** wrap `ChildProcessSpawner` in a test layer that appends `"spawn"` and records whether `OwnedProcess.options(command)` is defined. The `beforeSpawn` appends `"recheck"`. Expect `["recheck", "spawn"]` and owned set. Windows variant: inside `beforeSpawn`, assert `store.forParent(root.id)` is empty, which proves the hook runs before `background.start` and so before the holder starts. | test.yml, POSIX and Windows |
 | S6-3 | **A waiting recheck leaves no durable row:** while `beforeSpawn` blocks on a deferred, `store.forParent` and `shells.list` are both `[]`. After it proceeds, one row with a PID and `cleanup: "pending"` exists. | test.yml |
 | S6-4 | Interrupting the start fiber while `beforeSpawn` waits starts no process, writes no row and releases the slot. | test.yml |
-| S6-5 | The recheck runs before the isolation plan, for background shells, foreground shells, PTY and MCP. In an off-Linux child fixture with `requireIsolation()`, a dying `beforeSpawn` (or a refusing `McpComputerPolicy`) yields its own message, not REFUSAL, and starts nothing. | test.yml macOS (and Windows) |
+| S6-5 | The recheck runs before the isolation plan, for background shells, foreground shells, PTY and MCP. In an off-Linux child fixture with `requireIsolation()`, a dying `beforeSpawn` (or a refusing `McpComputerPolicy`) yields its own message, not REFUSAL, and starts nothing. Added in HF-2 for PTY and MCP; the shell halves remain with the spawn test lanes. The PTY half is `packages/core/test/pty/pty-required-isolation.test.ts`, which runs on Linux only because every PTY suite skips Windows. The MCP half is the policy case of `packages/engine/test/mcp/computer-policy-isolation.test.ts`, which runs on the Linux and Windows engine shards. On Linux the refusal that decides the order is the launch floor's loader-environment guard. | test.yml Linux unit (PTY); Linux and Windows engine shards (MCP); shells: spawn test lanes. Planned as test.yml macOS (and Windows), but test.yml has no macOS unit or engine lane |
 | S6-6 | Hands' PTY ordering test (H pty-session.test.ts) and terminal mocks (H packages/engine/test/tool/terminal.test.ts:151, 1338) pass unchanged. | test.yml |
-| S6-7 | The MCP computer policy judges the configured command: a denied `[cmd, ...args]` is refused while isolation is required, and the refusal text is the policy's, not bwrap's argv or REFUSAL. No transport or process is created. | sandbox lane (Linux) or a child fixture off Linux |
+| S6-7 | The MCP computer policy judges the configured command: a denied `[cmd, ...args]` is refused while isolation is required, and the refusal text is the policy's, not bwrap's argv or REFUSAL. No transport or process is created. Added in HF-2 as a child fixture, `packages/engine/test/fixture/mcp-required-isolation.ts`, run by `packages/engine/test/mcp/computer-policy-isolation.test.ts` on the Linux and Windows engine shards. The status error equals the policy's text, and no client or marker exists. With a loader environment the launch floor refuses on every host, so that variant decides the order on Linux; the inherited-environment variant decides it only on Windows (pending). The child uses no module mock, so it cannot see a transport being constructed; `computer-policy.test.ts`'s fake transport keeps covering that. | test.yml Linux and Windows engine shards (child fixture). Planned as the sandbox lane (Linux) or a child fixture off Linux |
 | S6-8 | `ipc-security.test.ts` keeps both new tests. A new test checks that `remote-changed` and `vault-changed` are not sent to a registered computer overlay. | test.yml |
 | S6-9 | If the optional second recheck is added: a refusal there leaves no process. On Windows the suspended payload is stopped with proof. The row ends failed with `cleanup: "confirmed"`, the slot is released, and the tool error carries the original refusal. | test.yml, POSIX and Windows |
 
@@ -322,3 +324,277 @@ A useful trick: `requireIsolation()` cannot be reset, but off Linux `launch` **a
 2. **Native lane:** delegate (`OwnedProcess.delegate`) or refuse owned commands under a native plan until qualification? Either is safe. The delegate is the end state.
 3. **BI lane:** can background shells run in a hosted GitHub run? If yes, decide what happens to #26's `ps`-based check when the engine's `/proc` is empty (C9). Today it fails closed and holds the slot. Refusing background shells while `ProcessIsolation.required()` is the simplest option.
 4. **Outside this review's scope, noted while reading:** the legacy shell wrap joins argv with spaces, `[file, ...args].join(" ")` (BI core/process-isolation.ts:79; NS :306). The shell tool passes no args, so it is harmless there. A future caller with `shell: true` and arguments would lose its quoting.
+
+---
+
+**Hands lane note (HF-8, 2026-11-16).** These files were re-read at `ef9f809d`: `core/src/pty.ts`, `core/src/process-isolation.ts`, `engine/src/mcp/index.ts`, `engine/src/mcp/stdio.ts`, `engine/src/tool/shell.ts`, `engine/src/task/shells.ts`, `desktop/src/main/ipc.ts`, `renderer-status.ts`, `remote-runtime.ts` and `vault-runtime.ts`. Each is identical at `0ee486e3`, at the `hands-finish` head and at `main` `b362fdf6`.
+
+- C5 to C8 are resolved at `0ee486e3`. C5: `core/pty.ts:240` runs `beforeSpawn`, `:241` plans with `ProcessIsolation.launch` and `:242` spawns. C6: `engine/mcp/index.ts:486-488` refuses on the configured `[cmd, ...args]` before `localTransport` (`:489-490`). C7: `engine/tool/shell.ts` keeps both sides' imports (`:37-40`) and runs `beforeSpawn` (`:1999`) right before `spawner.spawn` (`:2000`). C8: `desktop/src/main/renderer-status.ts:15` leaves out the computer overlay, and `remote-runtime.ts:26` and `vault-runtime.ts:32` broadcast through it.
+- The §4.2 "Not checked" item is answered by the "Answered (HF-2, 2026-11-15)" paragraph under §4.2: `MCP.create`'s `Effect.catchCause` (`engine/mcp/index.ts:553-559`) turns an isolation refusal inside `localTransport` into a failed status. HF-2's `packages/engine/test/mcp/computer-policy-isolation.test.ts`, which runs `packages/engine/test/fixture/mcp-required-isolation.ts`, pins it. No MCP code changed.
+- S6-5's PTY and MCP halves and S6-7 were added by HF-2, as the S6-5 and S6-7 rows above say: `packages/core/test/pty/pty-required-isolation.test.ts` for PTY, which skips Windows like every PTY suite, so in CI, where `test.yml`'s `unit` job has only Linux and Windows hosts (`:547-559` after the `c8ab4d87` merge of `main`), it runs on Linux only, and `computer-policy-isolation.test.ts` for MCP. Its Windows engine-shard branch, which expects the literal REFUSAL, has not run yet.
+- The shell halves of S6-5 remain with the spawn test lanes. On Windows `ShellJobs.isolationRefusal` (`engine/task/shells.ts:96`, called at `:464`) refuses before the recheck, so S6-5's wording does not hold there as written.
+
+## Addendum, 15 November 2026: C9, SPAWN-1 and SPAWN-2 at the native-qualify head (NQ-2)
+
+This is a dated addendum, and nothing above it was edited. The citations are at the
+`native-qualify` lane head. The code they cite is unchanged since `597dbcc9`, which is
+based on `release-finish` `0ee486e3`. The path shorthand is the same as above. The
+evidence and the §6 Q3 reasoning are in
+[`native-qualify-notes.md`](native-qualify-notes.md#nq-2-15-november-2026), NQ-2.
+
+**Superseded, not edited:** three sentences above say that the hosted engine has an empty
+`/proc`:
+
+- Summary item 6, line 26: "where `/proc` is empty";
+- the §1 build-integrate "Engine sandbox" bullet, line 58: "runs under bwrap with an empty,
+  read-only `/proc`";
+- C9, line 133: "In hosted GitHub runs the engine runs with an empty, read-only `/proc`",
+  with the "not checked" note on background shells.
+
+The lines below replace them for the code as it stands now.
+
+**C9 is not reachable.**
+
+- Only `ProcessIsolation.engineArguments` mounts the empty `/proc`
+  (`core/process-isolation.ts:215-245`, with `--tmpfs /proc --remount-ro /proc` at
+  `:228-231`).
+- `engineLaunch` uses it only when its `floor` argument is true
+  (`engine/cli/cmd/github.sandbox.ts:629-643`). Otherwise it returns the plain sudo argv
+  (`:639-640`).
+- The hosted caller passes `native || ProcessIsolation.FLOOR` (`:798`):
+  - `FLOOR` is the literal `false` (`core/process-isolation.ts:26`);
+  - `native` is `GithubIsolation.enabled()` (`github.sandbox.ts:669`,
+    `engine/cli/cmd/github.isolation.ts:872-875`), which returns the literal `false` in
+    `engine/cli/cmd/github.isolation-build.ts:2`; the core literal is
+    `core/process-isolation/build.ts:2`.
+- So every shipped hosted engine sees the host `/proc`. The sandbox probe reads it
+  (`packages/engine/test/fixture/sandbox-probe.ts:26-27`, `64`), and the `/bin/ps` call in
+  `groupEmpty` works there (`core/owned-process.ts:74-96`, `/bin/ps` at `:79-82`).
+- The native CI build does get the empty `/proc`, but it refuses an owned command before
+  any process exists (`core/cross-spawn-spawner.ts:405-411`). So there is no owned group
+  there, and no `groupEmpty` call.
+
+**When C9 could come back:** only if FLOOR is enabled (owner-gated), or if a native build
+ever routes an owned command through `OwnedProcess.track`. Adopting the §4.4
+`OwnedProcess.delegate` would not bring it back, because a delegate never signals and
+never calls `groupEmpty`.
+
+`groupEmpty` is deliberately unchanged.
+
+**SPAWN-2** (the PR #33 review's copy of C9) has the same status. It is not reachable at
+the lane head, it returns only under the two conditions above, and no code change is made.
+
+**SPAWN-1, POSIX half, is covered.** The new
+`packages/engine/test/task/shell-required-isolation-posix-owned.test.ts` runs only on Linux and
+is skipped explicitly elsewhere; CI runs it in the Linux engine shard of `test.yml`. Its
+child process calls `requireIsolation()` and runs an owned background command through
+`ShellJobs`. That command is a shell plus two sleepers, all ignoring SIGTERM. FLOOR is
+false, so `decide` returns the plain command (`core/process-isolation.ts:326`). The plain
+owned process group is therefore the only signaler (`core/owned-process.ts:63-70`, `track`
+`:112-163`). The test asserts:
+
+- the sleepers' parent and process group are the leader;
+- `stop` returns stopped;
+- the row says `cleanup: "confirmed"`;
+- the stop took at least the 3 s grace and less than grace plus kill (6 s);
+- each sleeper has ended: on a GitHub-hosted runner, whose PID 1 reaps, it must be gone
+  (`ESRCH`) within 2 s; elsewhere a zombie already reparented away from the leader is
+  also accepted;
+- the slot is released while seven other commands still run.
+
+Two local mutations make it fail: removing the fixture's TERM trap, and signalling only
+the leader in `owned-process.ts`.
+
+This is not S4-2 as written. S4-2 expects `handle.pid` to be bwrap and a `setsid` canary
+that does not survive, and both need the FLOOR. Without it a `setsid` grandchild leaves
+the group (`engine/task/shells.ts:31`). That is a pre-existing limit, recorded and not
+asserted.
+
+**SPAWN-1, native half, is not covered yet.** The refusal at
+`core/cross-spawn-spawner.ts:411` cannot be tested from source, because the build literal
+is false. It belongs to an `owned` refusal scenario in the native-shell fixture (NQ-6 or
+NQ-7). By code reading, that refusal fires inside the job's `run`
+(`engine/task/shells.ts:630`), after `background.start` has written the durable row
+(`:695`). So the scenario should expect a row that ends with cleanup `"confirmed"`. That
+differs from the Windows S4-3 contract, where no row is written.
+
+**C10, S4-5 and SPAWN-3.** C10 is implemented: before `spawn`, the canceller of an owned
+command runs `owned.stop` (`core/cross-spawn-spawner.ts:508`). S4-5 (its test) and SPAWN-3
+belong to the review-fixes lane.
+
+**§6 Q3.** From code reading, background shells are reachable in a hosted legacy
+`@vector` run on Linux; the reasoning is in the lane notes. Whether to offer them is a
+product decision that stays with the owner. Until it is made, uncertain cleanup keeps
+failing closed: the row is failed and the slot stays held. §6 Q2 (delegate or refuse)
+also stays open.
+
+## Addendum, 15 November 2026: §4 principle 5 inventory (NQ-4)
+
+This is a dated addendum, and nothing above it was edited. The citations are at the
+`native-qualify` lane head `f05f9916`.
+
+Principle 5 ("every spawn site consults the isolation floor") now has a mechanical guard,
+`packages/engine/test/spawn-inventory.test.ts`. It lists the 31 core and engine source
+files that can start a process directly, each with a stance and a reason, and fails on any
+new file that reaches a spawner and on any stale entry. Stances: launch 6, pty-backend 2,
+required-refusal 2, fixed-helper 5, type-only 2, windows-holder 1, runner 4, cli 2,
+plugin-host 1, url-opener 5, re-export 1.
+
+Principle 5 holds for the 6 `launch` and 2 `pty-backend` entries only. The other 23 are
+listed exceptions with their reasons (fixed system helpers, the CI job's own controllers,
+a person's own commands, URL openers and similar). `launch` means that a site routes every
+process through the ProcessIsolation launch decision and starts only what it returns.
+While FLOOR and the native build are off, that is the command unchanged, or a refusal off
+Linux under required isolation; no site is isolated today.
+
+What the test asserts beyond the list:
+
+- each launch site calls `ProcessIsolation.launch` or `commandPlan`, starts
+  `isolated.file` with `isolated.args` and no shell of its own, and makes no other start
+  that the textual check can see: no other call through a name bound from a process
+  module, no member call on an inline `require` or `import()` of one, and no Bun or Effect
+  platform spawner. One exemption is listed, the Windows `killGroup` taskkill at
+  `core/cross-spawn-spawner.ts:523`. A start through an alias beyond the check's patterns
+  is not seen; the notes list those limits;
+- `directory-identity.ts` and `read-only-git.ts` refuse while
+  `ProcessIsolation.required()`;
+- the PTY backends load only through `core/pty.ts`, which runs the launch decision first;
+- the Windows holder loads only through ShellJobs, which still asks `isolationRefusal`
+  (the C2 guard; SPAWN-3 adds the holder's own guard in the review-fixes lane);
+- the MCP SDK's stdio transport is constructed only in `engine/mcp/stdio.ts`;
+- only `core/cross-spawn-spawner.ts` builds Effect's `ChildProcessSpawner` service, so the
+  Effect `ChildProcess` users spawn through it.
+
+§4.3's list (PTY, MCP stdio, `util/process.ts`, untrusted Git, the bundle Git helper and
+OCR) matches the `launch` and `pty-backend` stances; the inventory adds the Effect spawner
+itself. The test does not cover spawns inside dependencies, other packages, scripts or the
+Python native entry. The table, the findings (including the Windows taskkill follow-up
+for the review-fixes lane and `pty/process.ts`'s `ps` for the Hands lane) and the search
+model are in [`native-qualify-notes.md`](native-qualify-notes.md#nq-4-15-november-2026),
+NQ-4.
+
+## Addendum, 15 November 2026: lane-end status at the native-qualify head (NQ-8)
+
+This is a dated addendum, and nothing above it was edited. The citations are at the
+`native-qualify` lane head `ce5e5605` and use repository-relative paths.
+
+`git diff 0ee486e3 ce5e5605` is empty for every production file cited here:
+
+- `packages/core/src/owned-process.ts`
+- `packages/core/src/cross-spawn-spawner.ts`
+- `packages/core/src/process-isolation.ts`
+- `packages/core/src/process-isolation/build.ts`
+- `packages/engine/src/cli/cmd/github.sandbox.ts`
+- `packages/engine/src/cli/cmd/github.isolation-build.ts`
+- `packages/engine/src/task/shells.ts`
+- `packages/engine/src/tool/shell/windows-process.ts`
+- `packages/engine/src/effect/runtime-flags.ts`
+- `packages/engine/src/tool/shell.ts`
+
+The native evidence is in
+[`native-isolation-status.md`](native-isolation-status.md#native-qualification-lane-end-15-november-2026),
+and the package log and decisions are in
+[`native-qualify-notes.md`](native-qualify-notes.md#nq-8-15-november-2026), NQ-8.
+
+**C9:** not reachable at `0ee486e3` (the NQ-2 addendum above), and unchanged at
+`ce5e5605`.
+
+- New since NQ-2: run 43697711119 (job `132761821581`) shows that Bun `-e 0` aborts on
+  the hosted image under the engine sandbox's empty read-only `/proc` segment, and starts
+  under its own PID namespace procfs.
+- If the `/proc` decision adopts that procfs, `ps` in `groupEmpty` would see only the
+  engine's PID namespace (`packages/core/src/owned-process.ts:74-96`, `/bin/ps` at
+  `:80`). C9 must then be checked again.
+- **SPAWN-2** has the same status.
+- The PR #33 follow-up list on `origin/review-fixes` (`1433d105`,
+  `docs/vector/build/v2-notes/v2-complete-plan.md` §4.5) still tracks SPAWN-2 as
+  "Remains", and says `/bin/ps` fails under the hosted sandbox's empty `/proc`. That
+  contradicts the NQ-2 addendum. It is a lead item, and that file is not edited here.
+
+**§6 Q3:** NQ-2's code-reading answer stands. Background shells are reachable in a hosted
+legacy `@vector` run on Linux:
+
+- `backgroundSubagents` is on by default (`packages/engine/src/effect/runtime-flags.ts:35`);
+- `isolationRefusal` refuses on Windows only (`packages/engine/src/task/shells.ts:96-97`,
+  called in start admission at `:464`);
+- a durable lease is still required (`shells.ts:469`);
+- the shell tool takes `ShellJobs` when the build provides it
+  (`packages/engine/src/tool/shell.ts:1905`).
+
+Whether to offer them is the owner's product decision. Until it is made, uncertain cleanup
+fails closed.
+
+**S4-2: reframed.** FLOOR is false, so `decide` returns the plain command
+(`packages/core/src/process-isolation.ts:26`, `:326`).
+
+- Owned cleanup of the plain group under `required()` is covered by
+  `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts:187`. That test has
+  NQ-2's local passes only: `test.yml` has no run on `native-qualify`.
+- Two more POSIX S4-2 tests exist only on `origin/review-fixes`, in `fa5a5639`, not merged
+  here:
+  - a floor-on case in `packages/core/test/process/owned-process.test.ts`
+    (`ProcessIsolation.decide` with the floor on, a bwrap leader and a `setsid` canary);
+  - a 136-line `packages/engine/test/task/shell-required-isolation-posix.test.ts`, the path
+    NQ-2's 286-line file had until review round two renamed it (lane notes, D106), so the
+    two files no longer collide.
+  This addendum makes no CI claim for either test.
+- The `setsid` escape from the plain group is pre-existing
+  (`packages/engine/src/task/shells.ts:31`).
+
+**S4-3:** exists, at `packages/engine/test/task/shell-required-isolation.test.ts:50`
+(the refusal is asserted at `:43` and the marker at `:46`). No claim about a hosted result
+is made here.
+
+**S4-5 and SPAWN-3:** not on `origin/release-finish` `cf2373c4`, so both stay open in the
+review-fixes lane.
+
+- The candidate commits are on `origin/review-fixes` `1433d105`, not merged:
+  - `8562dd7a`: the `WindowsProcess.start` guard, at
+    `packages/engine/src/tool/shell/windows-process.ts:154-156` there;
+  - `d6a54241` and `c8b97625`: S4-5, at
+    `packages/core/test/effect/cross-spawn-spawner.test.ts:627` there.
+- No CI claim is made for them.
+- C10's canceller exists (`packages/core/src/cross-spawn-spawner.ts:508`). By `c8b97625`'s
+  pending in-place note, S4-5 is met by `acquireRelease`'s release, and no test reaches the
+  canceller through `spawnCommand`.
+
+**SPAWN-1:**
+
+- The POSIX half is covered by NQ-2's test, as above.
+- The native half is open:
+  - there is no `owned` case (`CASES` at
+    `packages/engine/test/fixture/native-shell-payload.ts:17-28`);
+  - the refusal at `packages/core/src/cross-spawn-spawner.ts:411` is untested on CI.
+
+**S10 tests:**
+
+- **S10-1:** open. Under the refusal no owned native command exists, and step 16 of
+  43697711119 ran no case (`case` is null).
+- **S10-2:** the refuse option applies, but it is open because no scenario exists.
+  - By code reading, the refusal fires inside the job's `run` (`shells.ts:630`) after
+    `background.start` has written the row (`:695`).
+  - So the scenario must expect a row that ends with cleanup `"confirmed"`.
+  - By code reading, `ShellJobs.start` itself fails with the refusal. It awaits `ready`
+    (`shells.ts:762`). `ready` fails with the spawn error, which is wrapped as "Vector
+    could not start the command: ..." (`:632`), re-raised by `run` (`:682`) and passed to
+    `ready` (`:690`). `start` then re-raises it as a defect (`:766`). Its `onError`
+    cancels the row (`:765`), and `cleanup` releases the slot (`:527-530`, the release at
+    `:529`). The scenario must assert all three, as well as cleanup `"confirmed"`.
+- **S10-3:** open; it was never reached.
+- **S10-4:** open until `test.yml` runs after the merge. Its parts:
+  - S4-2 as above, and S4-3 exists;
+  - S6-2 is covered in part by `packages/engine/test/task/shells.test.ts:369`, whose first
+    recheck sees no job row (`:389`). Its §5 spawner-layer form (a recorded
+    `["recheck", "spawn"]` with ownership set) is not present;
+  - legacy isolation cannot be exercised while FLOOR is false, apart from the unmerged
+    `fa5a5639` floor-on `decide` case above.
+
+**§6 Q2:** delegate versus refuse is still the native lane's or the owner's call.
+
+- Refuse is in force (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at
+  `:411`).
+- `packages/core/src/owned-process.ts` has no `delegate`.
+- Owned groups use `OwnedProcess.track` (`cross-spawn-spawner.ts:456`).
+
+Both native build switches and FLOOR stay false; no production activation is authorized
+by this addendum.

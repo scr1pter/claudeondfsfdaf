@@ -155,7 +155,7 @@ function ComputerApprovals(props: { remote: PhoneRemote; computer: ComputerView 
   )
 }
 
-function PermissionCard(props: {
+export function PermissionCard(props: {
   remote: PhoneRemote
   computer: string
   request: PermissionView

@@ -47,6 +47,10 @@ import {
   computerSmokeControllerReady,
   computerSmokeHeartbeat,
   COMPUTER_SMOKE_TRANSPARENCY_PROBE,
+  COMPUTER_SMOKE_STOP_EFFECT_MARK,
+  COMPUTER_SMOKE_STOP_EFFECT_LISTENER,
+  COMPUTER_SMOKE_STOP_EFFECT_PROBE,
+  computerSmokeStopEffect,
   computerSmokeTransparentBackground,
   type ComputerSmokePhase,
   type ComputerSmokeLastPhase,
@@ -780,6 +784,11 @@ async function controllerChecks() {
     await banner.webContents.executeJavaScript(
       "window.__computerSmokeTrustedStop = false; document.addEventListener('click', event => { if (event.isTrusted && event.button === 0 && event.target?.closest('button[data-action=stop]')) window.__computerSmokeTrustedStop = true }, {capture:true})",
     )
+    // Diagnostic only: a failure to install these flags never fails or gates the proof.
+    if (platform === "win32")
+      await Promise.resolve()
+        .then(() => banner.webContents.executeJavaScript(COMPUTER_SMOKE_STOP_EFFECT_LISTENER))
+        .catch(() => undefined)
     controllerStep("native-proof")
     const proof = await runComputerNativeOverlayProof({
       root,
@@ -792,6 +801,23 @@ async function controllerChecks() {
     })
     if (proof.stop.skipped) skip("native-os-stop", proof.stop.reason)
     else {
+      if (!proof.stop.ok && platform === "win32") {
+        // Diagnostic only: after a failed Stop, report whether its trusted click reached the page and the
+        // controller. A release can land as the driver exits, so wait briefly first. The checks are unchanged.
+        const cancelled = () => fixture.acknowledged.filter((op) => op === "cancel").length > before
+        const page = () =>
+          Promise.resolve()
+            .then(() =>
+              banner.isDestroyed() ? null : banner.webContents.executeJavaScript(COMPUTER_SMOKE_STOP_EFFECT_PROBE),
+            )
+            .catch(() => null)
+        await until(async () => cancelled() || computerSmokeStopEffect(false, await page()).click, 500).catch(
+          () => undefined,
+        )
+        process.stdout.write(
+          COMPUTER_SMOKE_STOP_EFFECT_MARK + JSON.stringify(computerSmokeStopEffect(cancelled(), await page())) + "\n",
+        )
+      }
       require(proof.stop.ok)
       await until(
         async () =>

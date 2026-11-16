@@ -19,6 +19,7 @@ import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { Instruction } from "@/session/instruction"
 import { NpmTest } from "../fake/npm"
+import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { testEffect } from "../lib/effect"
@@ -41,7 +42,7 @@ const it = testEffect(
       [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
       [Npm.node, NpmTest.noop],
     ],
-  ),
+  ).pipe(Layer.provide(noSweep)),
 )
 afterEach(async () => {
   await disposeAllInstances()

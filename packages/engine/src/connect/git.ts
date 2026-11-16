@@ -9,7 +9,6 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
 
 const MAX = 64 * 1024 * 1024
-const DIFF = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/"]
 const NAMES = ["--name-only", "--no-renames", "--no-ext-diff", "--no-relative", "-z"]
 const same = (left: readonly string[], right: readonly string[]) =>
   left.length === right.length && left.every((part, index) => part === right[index])
@@ -24,17 +23,38 @@ function requireRead(condition: unknown): asserts condition {
   if (!condition) throw refusal()
 }
 
-type Field = "directory" | "gitDirectory" | "commonDirectory" | "branch" | "shallow" | "prefix"
-type Query = ReadOnlyGit.Read | { readonly kind: "metadata"; readonly field: Field }
+type Field = "directory" | "gitDirectory" | "commonDirectory" | "branch" | "prefix"
+// Only the reads connect's own checks make, a branch review's base by name included. A collector read (status, a
+// context diff, an added-file diff, a size or existence check, grep, roots, history, subjects or blame) has no variant
+// here, so query() cannot return one. The default branch is read only by defaultBranch(), never from argv.
+type Query =
+  | Extract<
+      ReadOnlyGit.Read,
+      { readonly kind: "resolve" | "reference" | "merge-base" | "untracked" | "batch-files" | "tree" }
+    >
+  | {
+      readonly kind: "diff"
+      readonly from: string
+      readonly to?: string
+      readonly cached?: boolean
+      readonly names: true
+    }
+  | { readonly kind: "object"; readonly revision: string; readonly file?: string; readonly action: "blob" }
+  | { readonly kind: "metadata"; readonly field: Field }
 
-function object(value: string, action: "blob" | "size" | "exists" | "commit-exists"): ReadOnlyGit.Read {
+function object(value: string): Query {
   const found = /^(HEAD|[0-9a-f]{40})?:([^\x00\r\n]+)$/.exec(value)
-  if (found) return { kind: "object", revision: found[1] || "index", file: found[2]!.replace(/^(\.\/)+/, ""), action }
+  if (found)
+    return { kind: "object", revision: found[1] || "index", file: found[2]!.replace(/^(\.\/)+/, ""), action: "blob" }
   requireRead(value === "HEAD" || /^[0-9a-f]{40}$/.test(value))
-  return { kind: "object", revision: value, action }
+  return { kind: "object", revision: value, action: "blob" }
 }
 
-/** Translate only the fixed read shapes used by the legacy review collector; nothing is executed from raw argv. */
+/**
+ * Translate only the fixed reads connect's own checks emit (changes, drifted, ledOutAt, stateFile, commitOf with a
+ * branch review's base by name or commit, mergeBase and plan's settings read); VectorScope's collector reads through
+ * its own ReviewGit view. Nothing runs from raw argv.
+ */
 function query(args: readonly string[], stdin?: Buffer): Query {
   requireRead(args.length > 0 && args.length <= 512)
   if (same(args, ["cat-file", "--batch", "--follow-symlinks"])) {
@@ -54,30 +74,23 @@ function query(args: readonly string[], stdin?: Buffer): Query {
     ["--absolute-git-dir", "gitDirectory"],
     ["--git-dir", "gitDirectory"],
     ["--git-common-dir", "commonDirectory"],
-    ["--is-shallow-repository", "shallow"],
     ["--show-prefix", "prefix"],
   ])
   if (args.length === 2 && args[0] === "rev-parse" && metadata.has(args[1]!))
     return { kind: "metadata", field: metadata.get(args[1]!)! }
   if (same(args, ["symbolic-ref", "--quiet", "--short", "HEAD"])) return { kind: "metadata", field: "branch" }
-  for (const options of [
-    ["--verify", "--quiet", "--end-of-options"],
-    ["--verify", "--end-of-options"],
-  ]) {
-    const rest = prefix(args, ["rev-parse", ...options])
-    if (rest?.length === 1 && rest[0]!.endsWith("^{commit}"))
-      return { kind: "resolve", revision: rest[0]!.slice(0, -9) }
+  const rest = prefix(args, ["rev-parse", "--verify", "--quiet", "--end-of-options"])
+  if (rest?.length === 1 && rest[0]!.endsWith("^{commit}")) {
+    const revision = rest[0]!.slice(0, -9)
+    requireRead(revision !== "" && !revision.startsWith("-"))
+    // HEAD and 7 to 40 hex digits of either case are object ids. Core's resolve checks the spelling as given against
+    // refs before it lowercases, so a short id never answers through a ref. Any other spelling is a name for core to
+    // validate.
+    if (revision === "HEAD" || /^[0-9a-f]{7,40}$/i.test(revision)) return { kind: "resolve", revision }
+    return { kind: "reference", name: revision }
   }
   if (args[0] === "merge-base" && args.length === 3) return { kind: "merge-base", left: args[1]!, right: args[2]! }
-  if (args[0] === "cat-file" && args.length === 3 && ["blob", "-s", "-e"].includes(args[1]!)) {
-    const action = args[1] === "blob" ? "blob" : args[1] === "-s" ? "size" : "exists"
-    if (action === "exists" && args[2]!.endsWith("^{commit}")) return object(args[2]!.slice(0, -9), "commit-exists")
-    return object(args[2]!, action)
-  }
-  if (args.length === 4 && args[0] === "status" && args[1] === "--porcelain" && args[3] === "--no-renames") {
-    requireRead(args[2] === "--untracked-files=normal" || args[2] === "--untracked-files=no")
-    return { kind: "status", untracked: args[2] === "--untracked-files=no" ? "no" : "normal" }
-  }
+  if (args[0] === "cat-file" && args.length === 3 && args[1] === "blob") return object(args[2]!)
   if (same(args, ["ls-files", "--others", "--exclude-standard", "-z"])) return { kind: "untracked" }
   if (same(args, ["ls-files", "--others", "-z", "--", ":(icase).vector", ":(icase).gitattributes"]))
     return { kind: "untracked", ignoredSettings: true }
@@ -86,45 +99,6 @@ function query(args: readonly string[], stdin?: Buffer): Query {
     if (tail?.length === 2 && tail[1] === "--") return { kind: "diff", from: tail[0]!, cached, names: true }
     if (!cached && tail?.length === 3 && tail[2] === "--")
       return { kind: "diff", from: tail[0]!, to: tail[1]!, names: true }
-  }
-  for (const context of [3, 20]) {
-    const tail = prefix(args, ["diff", ...DIFF, "--find-renames", `--unified=${context}`])
-    if (!tail) continue
-    if (tail.length === 2 && tail[1] === "--") return { kind: "diff", from: tail[0]!, context }
-    if (tail.length === 3 && tail[0] === "--cached" && tail[2] === "--")
-      return { kind: "diff", from: tail[1]!, cached: true, context }
-    if (tail.length === 2) return { kind: "diff", from: tail[0]!, to: tail[1]!, context }
-    if (tail.length >= 3 && tail[2] === "--")
-      return { kind: "diff", from: tail[0]!, to: tail[1]!, context, files: tail.slice(3) }
-  }
-  const added = prefix(args, ["diff", "--no-index", ...DIFF, "--unified=3", "--", "/dev/null"])
-  if (added?.length === 1) return { kind: "added-diff", file: added[0]! }
-  const grep = prefix(args, ["grep", "-n", "-w", "-F", "-I", "--no-color", "--full-name", "-z", "-e"])
-  if (grep && grep.length >= 4 && grep[2] === "--" && grep[3] === ".") {
-    const magic = ":(exclude,glob)"
-    requireRead(grep.slice(4).every((item) => item.startsWith(magic)))
-    return {
-      kind: "grep",
-      symbol: grep[0]!,
-      revision: grep[1]!,
-      excludes: grep.slice(4).map((item) => item.slice(magic.length)),
-    }
-  }
-  if (args.length === 3 && same(args.slice(0, 2), ["rev-list", "--max-parents=0"]))
-    return { kind: "roots", revision: args[2]! }
-  const history = prefix(args, ["log", "-n", "5", "--no-color", "--date=short", "--format=%h %an %ad %s"])
-  if (history?.length === 3 && history[1] === "--") return { kind: "history", revision: history[0]!, file: history[2]! }
-  const subjects = prefix(args, ["log", "--no-color", "-n", "50", "--format=%s"])
-  if (subjects?.length === 1) {
-    const range = /^(HEAD|[0-9a-f]{40})\.\.(HEAD|[0-9a-f]{40})$/.exec(subjects[0]!)
-    requireRead(range)
-    return { kind: "subjects", from: range[1]!, to: range[2]! }
-  }
-  const blame = prefix(args, ["blame", "--porcelain", "--root", "--no-textconv", "-L"])
-  if (blame?.length === 4 && blame[2] === "--") {
-    const range = /^([1-9]\d*),([1-9]\d*)$/.exec(blame[0]!)
-    requireRead(range)
-    return { kind: "blame", first: Number(range[1]), last: Number(range[2]), revision: blame[1]!, file: blame[3]! }
   }
   if (args.length === 5 && args[0] === "ls-tree" && args[1] === "-z" && args[3] === "--")
     return { kind: "tree", revision: args[2]!, file: args[4]! }
@@ -189,6 +163,27 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
   }
   const fail = () => Effect.die(block())
   const cwd = (directory: string) => active() && (directory === repository.directory || directory === admitted)
+  // Refs are live, so one view answers a name, and the default branch, as it first did: every check 1 pass of one
+  // review then compares the range the review got.
+  const pinned = new Map<string, { readonly code: number; readonly bytes: Buffer }>()
+  const read = (operation: ReadOnlyGit.Read) =>
+    Effect.gen(function* () {
+      const key =
+        operation.kind === "reference"
+          ? "reference " + operation.name
+          : operation.kind === "default-branch"
+            ? "default-branch"
+            : undefined
+      const kept = key === undefined ? undefined : pinned.get(key)
+      // Connect's own reads use a few spellings. A caller that keeps naming new ones fails closed instead.
+      if (key !== undefined && kept === undefined && pinned.size >= 64) return yield* fail()
+      const result =
+        kept ??
+        (yield* Effect.tryPromise({ try: () => repository.read(operation), catch: () => block() }).pipe(Effect.orDie))
+      if (!active()) return yield* fail()
+      if (key !== undefined) pinned.set(key, result)
+      return result
+    })
   const output = (code: number, bytes: Buffer, bound = MAX): Git.Result => ({
     exitCode: code,
     stdout: bytes.subarray(0, bound),
@@ -236,19 +231,14 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
         const value =
           mapped.field === "prefix"
             ? path.relative(repository.directory, options.cwd).replaceAll("\\", "/")
-            : mapped.field === "shallow"
-              ? String(repository.shallow)
-              : repository[mapped.field]
+            : repository[mapped.field]
         return output(
           value === undefined ? 1 : 0,
           Buffer.from(value === undefined ? "" : value + (mapped.field === "prefix" && value ? "/\n" : "\n")),
           options.maxOutputBytes,
         )
       }
-      const result = yield* Effect.tryPromise({ try: () => repository.read(mapped), catch: () => block() }).pipe(
-        Effect.orDie,
-      )
-      if (!active()) return yield* fail()
+      const result = yield* read(mapped)
       return output(result.code, result.bytes, options.maxOutputBytes)
     })
   const check = () =>
@@ -278,7 +268,18 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
               (directory === repository.directory ? "" : "/"),
           )
         : fail(),
-    defaultBranch: fail,
+    // Only origin/HEAD, read in the private view; no ordinary-Git fallback to other remotes, init.defaultBranch or
+    // main/master. mergeBase() then tries origin/<name> before <name>, both in this view.
+    defaultBranch: (directory) =>
+      Effect.gen(function* () {
+        if (blocked || !cwd(directory)) return yield* fail()
+        const result = yield* read({ kind: "default-branch" })
+        if (result.code === 1 && result.bytes.byteLength === 0) return undefined
+        const ref =
+          result.code === 0 ? /^refs\/remotes\/(origin\/[^\n]+)\n$/.exec(result.bytes.toString("utf8"))?.[1] : undefined
+        if (!ref) return yield* fail()
+        return { name: ref.slice("origin/".length), ref } satisfies Git.Base
+      }),
     hasHead: (directory) => (cwd(directory) ? Effect.succeed(true) : fail()),
     mergeBase: (directory, base, head = "HEAD") =>
       run(["merge-base", base, head], { cwd: directory }).pipe(
@@ -300,6 +301,19 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
   return { git, check, failed: () => blocked }
 }
 
+/** VectorScope's member reason and a review's refusal when an instance's worktree is reached through a link. */
+export const LINKED = "Open this project through its real folder path to use connected reviews."
+
+/**
+ * Whether each folder is its own real path. Connect never resolves a link to read at the folder behind it: read rules
+ * match paths as written, so admitting the resolved folder would widen them. Rejects when a folder is missing.
+ */
+export async function canonical(...folders: string[]) {
+  return (await Promise.all(folders.map(async (folder) => (await realpath(folder)) === path.resolve(folder)))).every(
+    Boolean,
+  )
+}
+
 /** Only the admitted instance or the hub's live verified-task capability supplies the root. */
 export const use = <A, E, R>(
   directory: string,
@@ -317,6 +331,10 @@ export const use = <A, E, R>(
       try: async () => {
         const admitted = await realpath(directory)
         requireRead(admitted === path.resolve(directory))
+        // An instance loads at its real folder, so a folder that is a link now was swapped since and gets the generic
+        // refusal. Its worktree may be kept as written (a task worktree under a linked data folder), which core refuses
+        // below; say why first. The hub's verified task root keeps the generic refusal.
+        if (!placed && !(await canonical(root))) throw new Connect.Refusal({ code: "unavailable", message: LINKED })
         requireRead(active())
         const metadata = await ReadOnlyGit.metadataHead(root)
         if (placed)
@@ -338,7 +356,7 @@ export const use = <A, E, R>(
         }
         return { repository, selected: selected(repository, admitted, active) }
       },
-      catch: () => refusal(),
+      catch: (error) => (error instanceof Connect.Refusal ? error : refusal()),
     })
     return yield* Effect.acquireUseRelease(
       acquire,

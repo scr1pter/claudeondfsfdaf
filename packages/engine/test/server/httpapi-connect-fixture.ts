@@ -47,6 +47,7 @@ import {
   workspaceRoutingLayer,
 } from "@/server/routes/instance/httpapi/middleware/workspace-routing"
 import { connectConsentMember } from "../fixture/connect-consent-member"
+import { noSweep } from "../fixture/connect-sweep"
 
 export const graph = AppNodeBuilderV1.build(
   LayerNode.group([
@@ -76,7 +77,7 @@ export const graph = AppNodeBuilderV1.build(
     PtyTicket.node,
   ]),
   [[ConnectHub.node, ConnectHub.nodeWith([connectConsentMember])]],
-)
+).pipe(Layer.provide(noSweep))
 
 // Only the member is synthetic. These are the actual registered groups, handlers, middleware and owner state
 // machine; the production assembly is exercised separately against its honest platform/model refusals.

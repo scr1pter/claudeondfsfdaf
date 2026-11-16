@@ -1,0 +1,786 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-windows-continuation",
+  "datePacific": "2026-11-16",
+  "branch": "hands-finish",
+  "parentRevision": "d9d5afaf66f288076c2c3fc3e001538f92206464",
+  "startRevision": "272ccb6d0ee33f07d6c14394e41b7eddd73ad9e5",
+  "fixRevision": "ef9f809d9e86ec332a9ae837c54a29d475917d34",
+  "testedRevision": "d9d5afaf66f288076c2c3fc3e001538f92206464",
+  "testedRevisionNote": "A workflow_dispatch takes a branch, and hands-finish was at d9d5afaf for both dispatches. git diff ef9f809d d9d5afaf -- . ':!docs' is empty: the HF-6, HF-7 and HF-8 commits after the fix are docs only, so the native sources, native tests and workflows the runs built are those of ef9f809d. Review round two's uncommitted worktree changes (two test files and docs) are not in these runs; neither test file is built or run by windows-build or windows-arm64-test.",
+  "helperVersion": "1.0.15",
+  "windowsSourceDigest": "not observed: 'Expose the verified source digest' (windows-build step 21) was skipped in run 1 after its staged Stop failed, and in run 2 it wrote the digest only to a step output; the manifests are inside artifacts that were not downloaded",
+  "countOrder": "passed / failed / skipped",
+  "stageSource": "Stages and nativeCodes of failed rows are read from the x64 and ARM64 summary lines added in 289af6bb ([stage=..., nativeCode=...]). The vocabulary loaded in every summary recorded here. No x64 isolated row failed; the ARM64 run 2 failures carry printed stages.",
+  "archiveAccess": "No report archive was downloaded. Archive bytes and SHA-256 read 'not downloaded'; the API size_in_bytes is recorded as apiSizeInBytes and is not an archive hash.",
+  "continueOnError": "computer-helper.yml:718 and :956 continue on error while privileged-required is false. No x64 isolated step threw. The ARM64 isolated step 10 in run 2 threw \"The isolated ARM64 scenarios failed or were required but skipped.\" and concluded success; its failed rows are recorded as failures.",
+  "rootCause": "HF-5 (hands-progress.md HF-5 section, deviation HF-5 point 1): apps-running-target failed at apps-list-reply / paused when a Dispatcher pause cancellation, most likely the first native-detection loss of the uncalibrated scope, cancelled row 1's in-flight apps.list. Physical takeover is excluded by the HF-4 rows, which strongly supports but does not prove it. The hosted-runner trigger of the detection loss is not identified.",
+  "fix": "ef9f809d: NativeScenario::settle_input_detection forces the uncalibrated scope's only possible verdict through UserInputService::setup_reset after row 0 is marked passed and before run(1), and waits at most 1,000 ms (10 ms poll) for the pause; a missing pause fails row 0 with deadline_exceeded at input-settle-context, input-settle-session or input-settle-verdict. Only the isolated self-test's row ordering changed; the Dispatcher, WindowService and UserInputService are unchanged.",
+  "hf5Runs": [
+    {
+      "ordinal": 1,
+      "run": 43861728207,
+      "attempt": 1,
+      "event": "workflow_dispatch",
+      "headRevision": "d9d5afaf66f288076c2c3fc3e001538f92206464",
+      "createdAtUtc": "2026-11-16T11:53:48Z",
+      "completedAtUtc": "2026-11-16T12:29:26Z",
+      "conclusion": "failure",
+      "windowsBuildJob": 133286255135,
+      "windowsBuildConclusion": "failure",
+      "windowsArm64TestJob": 133298125231,
+      "windowsArm64TestConclusion": "skipped",
+      "windowsBuildSteps": {
+        "build": {
+          "step": 9,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:16:23Z",
+          "completedAtUtc": "2026-11-16T12:25:43Z"
+        },
+        "units": {
+          "step": 10,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:25:43Z",
+          "completedAtUtc": "2026-11-16T12:25:47Z"
+        },
+        "core": {
+          "step": 11,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:25:47Z",
+          "completedAtUtc": "2026-11-16T12:26:01Z"
+        },
+        "isolated": {
+          "step": 12,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:26:01Z",
+          "completedAtUtc": "2026-11-16T12:26:20Z"
+        },
+        "summary": {
+          "step": 13,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:26:20Z",
+          "completedAtUtc": "2026-11-16T12:26:20Z"
+        },
+        "overlay": {
+          "step": 15,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:26:24Z",
+          "completedAtUtc": "2026-11-16T12:26:37Z"
+        },
+        "stageBuild": {
+          "step": 17,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T12:26:37Z",
+          "completedAtUtc": "2026-11-16T12:29:03Z"
+        },
+        "stop": {
+          "step": 18,
+          "conclusion": "failure",
+          "startedAtUtc": "2026-11-16T12:29:03Z",
+          "completedAtUtc": "2026-11-16T12:29:21Z"
+        },
+        "digest": {
+          "step": 21,
+          "conclusion": "skipped"
+        },
+        "reports": {
+          "step": 25,
+          "conclusion": "success"
+        }
+      },
+      "x64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 37,
+          "failed": 0,
+          "skipped": 11
+        },
+        "failedRows": [],
+        "skippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "native-skip"
+          },
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "appsRunningTarget": "passed",
+        "physicalTakeoverSkips": [],
+        "inputSettleOrPausedStages": [],
+        "countLines": {
+          "core": "2026-11-16T12:26:00.9522142Z Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-core.json",
+          "isolated": "2026-11-16T12:26:19.8965685Z Computer helper checks: 37 passed, 11 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-privileged.json"
+        },
+        "stageVocabulary": "loaded",
+        "isolatedStep": {
+          "step": 12,
+          "threw": false,
+          "conclusion": "success"
+        }
+      },
+      "arm64": "not run: windows-arm64-test was skipped because windows-build concluded failure (computer-helper.yml:874-875)",
+      "stagedStop": {
+        "step": 18,
+        "stepConclusion": "failure",
+        "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":false,\"reason\":\"cleanup_failed\",\"stage\":\"observe-up\",\"cause\":\"driver_failure\"},\"exitCode\":1}",
+        "timestampUtc": "2026-11-16T12:29:20.9289020Z",
+        "ok": false,
+        "reason": "cleanup_failed",
+        "stage": "observe-up",
+        "cause": "driver_failure",
+        "exitCode": 1
+      },
+      "nativeOsStopObservations": [
+        "\"name\":\"native-os-stop\",\"ok\":false,\"skipped\":true,\"reason\":\"native_harness_unavailable\"}",
+        "\"name\":\"native-os-stop\",\"ok\":false,\"reason\":\"native_proof_invalid\"}"
+      ],
+      "reportArtifacts": [
+        {
+          "id": 14225493055,
+          "name": "computer-helper-win32-reports-pr-d9d5afaf66f288076c2c3fc3e001538f92206464",
+          "apiSizeInBytes": 1367,
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        }
+      ]
+    },
+    {
+      "ordinal": 2,
+      "run": 43867433237,
+      "attempt": 1,
+      "event": "workflow_dispatch",
+      "headRevision": "d9d5afaf66f288076c2c3fc3e001538f92206464",
+      "createdAtUtc": "2026-11-16T12:32:04Z",
+      "completedAtUtc": "2026-11-16T14:01:30Z",
+      "conclusion": "success",
+      "windowsBuildJob": 133333996211,
+      "windowsBuildConclusion": "success",
+      "windowsArm64TestJob": 133344113676,
+      "windowsArm64TestConclusion": "success",
+      "windowsBuildSteps": {
+        "build": {
+          "step": 9,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:41:17Z",
+          "completedAtUtc": "2026-11-16T13:50:22Z"
+        },
+        "units": {
+          "step": 10,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:50:22Z",
+          "completedAtUtc": "2026-11-16T13:50:26Z"
+        },
+        "core": {
+          "step": 11,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:50:26Z",
+          "completedAtUtc": "2026-11-16T13:50:39Z"
+        },
+        "isolated": {
+          "step": 12,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:50:39Z",
+          "completedAtUtc": "2026-11-16T13:50:58Z"
+        },
+        "summary": {
+          "step": 13,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:50:58Z",
+          "completedAtUtc": "2026-11-16T13:50:59Z"
+        },
+        "overlay": {
+          "step": 15,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:51:03Z",
+          "completedAtUtc": "2026-11-16T13:51:17Z"
+        },
+        "stageBuild": {
+          "step": 17,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:51:17Z",
+          "completedAtUtc": "2026-11-16T13:53:38Z"
+        },
+        "stop": {
+          "step": 18,
+          "conclusion": "success",
+          "startedAtUtc": "2026-11-16T13:53:38Z",
+          "completedAtUtc": "2026-11-16T13:53:56Z"
+        },
+        "digest": {
+          "step": 21,
+          "conclusion": "success"
+        },
+        "reports": {
+          "step": 25,
+          "conclusion": "success"
+        }
+      },
+      "windowsArm64TestSteps": {
+        "units": {
+          "step": 8,
+          "conclusion": "success"
+        },
+        "core": {
+          "step": 9,
+          "conclusion": "success"
+        },
+        "isolated": {
+          "step": 10,
+          "conclusion": "success"
+        },
+        "summary": {
+          "step": 11,
+          "conclusion": "success"
+        }
+      },
+      "x64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 37,
+          "failed": 0,
+          "skipped": 11
+        },
+        "failedRows": [],
+        "skippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "native-skip"
+          },
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "appsRunningTarget": "passed",
+        "physicalTakeoverSkips": [],
+        "inputSettleOrPausedStages": [],
+        "countLines": {
+          "core": "2026-11-16T13:50:39.4122111Z Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-core.json",
+          "isolated": "2026-11-16T13:50:58.4674368Z Computer helper checks: 37 passed, 11 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-privileged.json"
+        },
+        "stageVocabulary": "loaded",
+        "isolatedStep": {
+          "step": 12,
+          "threw": false,
+          "conclusion": "success"
+        }
+      },
+      "arm64": {
+        "core": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "coreSkippedRows": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ],
+        "isolated": {
+          "passed": 35,
+          "failed": 3,
+          "skipped": 10
+        },
+        "failedRows": [
+          {
+            "name": "privileged",
+            "status": "failed",
+            "reason": "native-check-failed"
+          },
+          {
+            "name": "privileged.capture-affinity-exclusion",
+            "status": "failed",
+            "reason": "assertion_failed",
+            "stage": "affinity-plan-current",
+            "nativeCode": "unknown"
+          },
+          {
+            "name": "privileged.input-listener-health",
+            "status": "failed",
+            "reason": "assertion_failed",
+            "stage": "input-health-ready",
+            "nativeCode": "unknown"
+          }
+        ],
+        "skippedRows": [
+          {
+            "name": "privileged.apps-installed-target",
+            "status": "skipped",
+            "reason": "target_not_installed"
+          },
+          {
+            "name": "privileged.uia-counter-increment",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.uia-value-set-and-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.unicode-type-readback",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.input-detection-probe",
+            "status": "skipped",
+            "reason": "input_detection_unavailable"
+          },
+          {
+            "name": "privileged.hardware-user-input-pauses",
+            "status": "skipped",
+            "reason": "hardware_input_required"
+          }
+        ],
+        "appsRunningTarget": "passed",
+        "physicalTakeoverSkips": [],
+        "inputSettleOrPausedStages": [],
+        "countLines": {
+          "core": "2026-11-16T14:01:00.5080225Z Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: C:\\a\\_temp\\computer-win32-arm64.json",
+          "isolated": "2026-11-16T14:01:21.2785346Z Computer helper checks: 35 passed, 10 skipped, 3 failed. Report: C:\\a\\_temp\\computer-win32-arm64-privileged.json"
+        },
+        "stageVocabulary": "loaded",
+        "isolatedStep": {
+          "step": 10,
+          "threw": true,
+          "conclusion": "success",
+          "recordedAs": "failure",
+          "privilegedRequired": false
+        }
+      },
+      "stagedStop": {
+        "step": 18,
+        "stepConclusion": "success",
+        "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":true},\"exitCode\":0}",
+        "timestampUtc": "2026-11-16T13:53:56.2874859Z",
+        "ok": true,
+        "exitCode": 0
+      },
+      "nativeOsStopObservations": [
+        "\"name\":\"native-os-stop\",\"ok\":false,\"skipped\":true,\"reason\":\"native_harness_unavailable\"}",
+        "\"name\":\"native-os-stop\",\"ok\":true}"
+      ],
+      "reportArtifacts": [
+        {
+          "id": 14231414258,
+          "name": "computer-helper-win32-reports-pr-d9d5afaf66f288076c2c3fc3e001538f92206464",
+          "uploaderLoggedSizeInBytes": 1367,
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        },
+        {
+          "id": 14232731461,
+          "name": "computer-helper-win32-arm64-report-pr-d9d5afaf66f288076c2c3fc3e001538f92206464",
+          "uploaderLoggedSizeInBytes": 1435,
+          "archiveBytes": "not downloaded",
+          "archiveSha256": "not downloaded"
+        }
+      ]
+    }
+  ],
+  "rowComparison": {
+    "columns": [
+      "a0e5ce8e x64 (43560683817)",
+      "289af6bb x64 (43809140577)",
+      "289af6bb arm64 (43809140577)",
+      "289af6bb x64 (43813017303)",
+      "289af6bb x64 (43816713717)",
+      "HF-5 x64 (43861728207)",
+      "HF-5 x64 (43867433237)",
+      "HF-5 arm64 (43867433237)"
+    ],
+    "rows": {
+      "privileged": {
+        "a0e5ce8e x64 (43560683817)": "skipped:native-skip",
+        "289af6bb x64 (43809140577)": "failed:native-check-failed",
+        "289af6bb arm64 (43809140577)": "failed:native-check-failed",
+        "289af6bb x64 (43813017303)": "skipped:native-skip",
+        "289af6bb x64 (43816713717)": "failed:native-check-failed",
+        "HF-5 x64 (43861728207)": "skipped:native-skip",
+        "HF-5 x64 (43867433237)": "skipped:native-skip",
+        "HF-5 arm64 (43867433237)": "failed:native-check-failed"
+      },
+      "privileged.privileged-isolated-target": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "passed",
+        "289af6bb arm64 (43809140577)": "passed",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "passed",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "passed"
+      },
+      "privileged.apps-running-target": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "failed:native_operation_failed@apps-list-reply",
+        "289af6bb arm64 (43809140577)": "failed:native_operation_failed@apps-list-reply",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "failed:native_operation_failed@apps-list-reply",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "passed"
+      },
+      "privileged.apps-installed-target": {
+        "a0e5ce8e x64 (43560683817)": "skipped:target_not_installed",
+        "289af6bb x64 (43809140577)": "skipped:target_not_installed",
+        "289af6bb arm64 (43809140577)": "skipped:target_not_installed",
+        "289af6bb x64 (43813017303)": "skipped:target_not_installed",
+        "289af6bb x64 (43816713717)": "skipped:target_not_installed",
+        "HF-5 x64 (43861728207)": "skipped:target_not_installed",
+        "HF-5 x64 (43867433237)": "skipped:target_not_installed",
+        "HF-5 arm64 (43867433237)": "skipped:target_not_installed"
+      },
+      "privileged.capture-color-patch": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "passed",
+        "289af6bb arm64 (43809140577)": "failed:native_operation_failed@capture-window-worker-read",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "passed",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "passed"
+      },
+      "privileged.capture-affinity-exclusion": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "passed",
+        "289af6bb arm64 (43809140577)": "failed:native_operation_failed@capture-service",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "passed",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "failed:assertion_failed@affinity-plan-current"
+      },
+      "privileged.uia-counter-increment": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.uia-value-set-and-readback": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.secure-field-refusal": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.tagged-click-increments": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.unicode-type-readback": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.stale-capture-refusal": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.owned-input-release": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.input-detection-probe": {
+        "a0e5ce8e x64 (43560683817)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb arm64 (43809140577)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43813017303)": "skipped:input_detection_unavailable",
+        "289af6bb x64 (43816713717)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43861728207)": "skipped:input_detection_unavailable",
+        "HF-5 x64 (43867433237)": "skipped:input_detection_unavailable",
+        "HF-5 arm64 (43867433237)": "skipped:input_detection_unavailable"
+      },
+      "privileged.hardware-user-input-pauses": {
+        "a0e5ce8e x64 (43560683817)": "skipped:hardware_input_required",
+        "289af6bb x64 (43809140577)": "skipped:hardware_input_required",
+        "289af6bb arm64 (43809140577)": "skipped:hardware_input_required",
+        "289af6bb x64 (43813017303)": "skipped:hardware_input_required",
+        "289af6bb x64 (43816713717)": "skipped:hardware_input_required",
+        "HF-5 x64 (43861728207)": "skipped:hardware_input_required",
+        "HF-5 x64 (43867433237)": "skipped:hardware_input_required",
+        "HF-5 arm64 (43867433237)": "skipped:hardware_input_required"
+      },
+      "privileged.isolated-target-cleanup": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "passed",
+        "289af6bb arm64 (43809140577)": "passed",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "passed",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "passed"
+      },
+      "privileged.capture-isolated-window-worker": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "passed",
+        "289af6bb arm64 (43809140577)": "passed",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "passed",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "passed"
+      },
+      "privileged.input-listener-health": {
+        "a0e5ce8e x64 (43560683817)": "passed",
+        "289af6bb x64 (43809140577)": "passed",
+        "289af6bb arm64 (43809140577)": "failed:assertion_failed@input-health-ready",
+        "289af6bb x64 (43813017303)": "passed",
+        "289af6bb x64 (43816713717)": "passed",
+        "HF-5 x64 (43861728207)": "passed",
+        "HF-5 x64 (43867433237)": "passed",
+        "HF-5 arm64 (43867433237)": "failed:assertion_failed@input-health-ready"
+      }
+    }
+  },
+  "stopRules": {
+    "compileOrUnits": "not met: windows-build step 9 (build, both architectures) and step 10 (native units) succeeded in both runs; ARM64 step 8 (ARM64 units) succeeded in run 2",
+    "row0InputSettle": "not met: row 0 privileged-isolated-target passed in every report; no input-settle-* stage was printed",
+    "appsRunningTarget": "not met: apps-running-target passed on x64 in runs 1 and 2 and on ARM64 in run 2; no authority-paused-* stage was printed",
+    "x64Regression": "not met: privileged-isolated-target, capture-color-patch, capture-affinity-exclusion, capture-isolated-window-worker, input-listener-health and isolated-target-cleanup passed on x64 in both runs",
+    "physicalTakeover": "not met: no report skipped a row as physical_takeover",
+    "arm64NotReached": "met in run 1: its staged Stop failed cleanup_failed / observe-up / driver_failure, windows-build concluded failure and windows-arm64-test was skipped (computer-helper.yml:874-875). Report: x64 confirmed, ARM64 not reached in run 1. Run 2 reached ARM64. The lead decides whether one more dispatch is allowed only for the unreached ARM64 job.",
+    "reading": "The lane read \"Stop and report to the lead, without a third dispatch\" as governing a third dispatch, so run 2, the second of the planned pair, was dispatched after run 1 met the ARM64-not-reached condition. No run was rerun and no third dispatch was made."
+  },
+  "decisions": [
+    "HF-5 is not done. x64 apps-running-target passed in both runs and ARM64 apps-running-target passed in run 2, but run 1 never reached ARM64, and HF-5 requires both runs to pass on x64 and ARM64.",
+    "HF-5 also waits for the lead's sign-off on deviation HF-5 point 5 (no session-bound request in an unpaused phase).",
+    "No row moved to skipped or failed because of the forced pause: every x64 row matches a0e5ce8e (37/0/11) and HF-4 run 2; the ARM64 run 2 skip set equals HF-4 ARM64 run 1, and its failed rows (capture-affinity-exclusion, input-listener-health) also failed in HF-4 ARM64 run 1 and at 503418a1.",
+    "For HF-6 and the lead, no new attribution: ARM64 capture-affinity-exclusion failed assertion_failed at affinity-plan-current / unknown (privileged_self_test.cpp:442) in run 2, where HF-4 printed capture-service / stale_frame; ARM64 input-listener-health failed again at input-health-ready / unknown; ARM64 capture-color-patch passed.",
+    "For HF-7 and the lead: the x64 staged Stop failed cleanup_failed / observe-up / driver_failure in run 1 and passed in run 2. At heads that contain HF-1, observe-up has now failed in 2 of 5 baseline Stops (HF-4 run 2, HF-5 run 1), and stop-root-retired has not recurred in those 5. Cause still unidentified."
+  ],
+  "pending": [
+    "The lead's decision on one more test.yml dispatch for the ARM64 job that run 1 did not reach, and its recording.",
+    "The lead's sign-off on HF-5 point 5, recorded in the HF-5 deviation entry and the lane PR description.",
+    "HF-2's Windows engine-shard line: MCP_REQUIRED_ISOLATION_LAUNCH=refused with childElapsedMs, from a default-input test.yml dispatch or the lane PR run.",
+    "The Windows source digest at the HF-5 source, which no step printed.",
+    "Mac lock confirmation and packaging at the merged source, and every owner gate.",
+    "HF-7 (1): the next Stop failure's closed uia facts, from test.yml windows dispatches at the new source, which also re-qualify it (native units, isolated Stop, x64 and ARM64)."
+  ],
+  "hf7PhaseSample": {
+    "run": 43907070848,
+    "job": 133443621242,
+    "event": "pull_request (PR #40)",
+    "testedMerge": "66164bf9",
+    "testedMergeNote": "Merge 7078232f into 2034e1da. git diff a0e2128f 7078232f and git diff d9d5afaf 7078232f show no change under packages/desktop/native.",
+    "step": "Run actual isolated medium-token Windows overlay Stop",
+    "nativeProofAt": "2026-11-16T16:49:39.8003910Z",
+    "resultAt": "2026-11-16T16:49:41.8273728Z",
+    "stop": {
+      "ok": false,
+      "reason": "native_failure",
+      "stage": "uia-root-element",
+      "cause": "core_failure:no_ui_tree"
+    },
+    "exitCode": 1,
+    "reportRows": "native-os-stop and native-capture-exclusion native_proof_invalid; every other check passed, including window-region 4/4 and every controller step; bootstrap token route restricted.",
+    "labelSource": "hands-finish's failure_phase(available) refinement. main prints stop-root-retired for a retired actor and uia-root-element only for a healthy one.",
+    "caveat": "An observation at timeout, not proof that the sampled operation caused the delay. On a retired actor a root_element sample does not show whether ElementFromHandleBuildCache was called, and the line does not show which lookup failed or whether the actor was healthy.",
+    "comparisonStops": {
+      "read": 13,
+      "uiaRootElement": ["133443621242"],
+      "observeUp": ["133286255135"],
+      "passed": [
+        "133301760101",
+        "133327849581",
+        "133331740561",
+        "133333996211",
+        "133342281087",
+        "133353004287",
+        "133372821916",
+        "133401774621",
+        "133421895080",
+        "133430545659",
+        "133467844726"
+      ],
+      "nativeProofToResultSeconds": {
+        "failure": 2.03,
+        "passMin": 1.54,
+        "passMax": 2.35
+      }
+    },
+    "diagnosticsAdded": "Closed uia object {lookup, call, actor, expiry, hresult} beside stage and cause; expiry and root status are written into the first-write timeout snapshot before cancellation. No budget, check, outcome or product behaviour change.",
+    "status": "HF-7 (1) open, cause still unidentified. A green next run is not evidence of a fix. Fixes (a) to (c) need lead review; the lead decides whether PR #40 merges with this known intermittent."
+  }
+}
