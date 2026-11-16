@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { createWorkspaceService, type WorkspaceRuntime } from "../src/service"
 import { snapshotDigest } from "../src/docker"
 import { WorkspacePublishError, type publishWorkspaceChanges } from "../src/github"
+import { parsePublicWorkspace, type CloudWorkspace } from "../src/protocol"
 import { signWorkspaceRequest } from "../src/signing"
 import { WorkspaceStore } from "../src/store"
 
@@ -665,4 +666,84 @@ test("allocated turns are durably confirmed and an explicit retry cannot dispatc
   expect(value.state.requests.filter((request) => request.path.includes("prompt_async"))).toHaveLength(1)
   expect((await send({ ...turn, parts: [{ type: "text", text: "Changed intent" }] })).status).toBe(409)
   expect((await send({ ...turn, messageID: "msg_0123456789abABCDEFGHIJKLMN" })).status).toBe(400)
+})
+
+test("workspace answers carry the model allowance and the running lifetime only as whole percentages, rounded down", async () => {
+  const value = fixture({ modelLimit: 4 })
+  const id = await value.create()
+  const usage = async () =>
+    ((await (await value.call("/workspaces")).json()) as { workspaces: { usage: unknown }[] }).workspaces[0]!.usage
+  const admit = async () => {
+    const result = await value.model(id)
+    expect(result.status).toBe(200)
+    await result.text()
+  }
+  expect(await usage()).toEqual({ model: 0, time: 0 })
+  // A clock behind the stored running start reads 0, never a negative share that the gateway's parser would refuse.
+  value.advance(-1000)
+  const behind = (await (await value.call("/workspaces")).json()) as { workspaces: unknown[] }
+  expect(parsePublicWorkspace(behind.workspaces[0]).usage).toEqual({ model: 0, time: 0 })
+  value.advance(1000)
+  await admit()
+  expect(await usage()).toEqual({ model: 25, time: 0 })
+  value.advance(30_000)
+  expect(await usage()).toEqual({ model: 25, time: 50 })
+  value.advance(29_700)
+  await admit()
+  await admit()
+  await admit()
+  expect((await value.model(id)).status).toBe(422)
+  expect(value.state.calls).toBe(4)
+  // 99.5% of the running lifetime still reads 99, so 100 appears only once a limit is reached.
+  expect(await usage()).toEqual({ model: 100, time: 99 })
+  value.advance(1000)
+  expect(await usage()).toEqual({ model: 100, time: 100 })
+  const stopped = await (await value.call(`/workspaces/${id}/stop`, {})).text()
+  expect(JSON.parse(stopped).workspace.usage).toEqual({ model: 100, time: 0 })
+  const list = await (await value.call("/workspaces")).text()
+  expect(JSON.parse(list).workspaces[0].usage).toEqual({ model: 100, time: 0 })
+  for (const text of [stopped, list])
+    for (const key of ["modelCalls", "runningSince", "maxModelCalls", "maxCalls", "maxRunMs"])
+      expect(text).not.toContain(key)
+  await value.restart()
+  expect(await usage()).toEqual({ model: 100, time: 0 })
+})
+
+test("every workspace answer carries usage in the form the gateway's shared parser accepts", async () => {
+  const value = fixture()
+  const check = async (response: Response, usage: { model: number; time: number }) => {
+    const body = (await response.json()) as { workspace: CloudWorkspace; changes?: { digest: string } }
+    expect(body.workspace.usage).toEqual(usage)
+    expect(parsePublicWorkspace(body.workspace)).toEqual(body.workspace)
+    return body
+  }
+  const created = await value.call("/workspaces", { repository: "fixture/repository", idempotencyKey: randomUUID() })
+  expect(created.status).toBe(202)
+  const id = (await check(created, { model: 0, time: 0 })).workspace.id
+  await value.service.settle()
+  const admitted = await value.model(id)
+  expect(admitted.status).toBe(200)
+  await admitted.text()
+  value.advance(6000)
+  const running = await value.call(`/workspaces/${id}/start`, {})
+  expect(running.status).toBe(200)
+  await check(running, { model: 20, time: 10 })
+  const listed = (await (await value.call("/workspaces")).json()) as { workspaces: CloudWorkspace[] }
+  expect(listed.workspaces[0]!.usage).toEqual({ model: 20, time: 10 })
+  expect(parsePublicWorkspace(listed.workspaces[0])).toEqual(listed.workspaces[0]!)
+  await check(await value.call(`/workspaces/${id}/stop`, {}), { model: 20, time: 0 })
+  const started = await value.call(`/workspaces/${id}/start`, {})
+  expect(started.status).toBe(202)
+  await check(started, { model: 20, time: 0 })
+  await value.service.settle()
+  const review = await check(await value.call(`/workspaces/${id}/changes`, {}), { model: 20, time: 0 })
+  const publish = () =>
+    value.call(`/workspaces/${id}/publish`, {
+      digest: review.changes!.digest,
+      githubToken: "github_fixture_credential_only_publish",
+      title: "Update the README",
+    })
+  await check(await publish(), { model: 20, time: 0 })
+  await check(await publish(), { model: 20, time: 0 })
+  expect(value.state.publications).toHaveLength(1)
 })

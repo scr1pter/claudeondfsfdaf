@@ -296,6 +296,54 @@ test("public workspace decoding refuses private fields and coerced states", () =
     expect(() => parsePublicWorkspace({ ...value, ...patch })).toThrow()
 })
 
+test("public workspace usage is optional and carries only whole percentages from 0 to 100", () => {
+  const value = {
+    id,
+    repository: "vector/example",
+    branch: "main",
+    title: "Example",
+    state: "running",
+    createdAt: 100,
+    updatedAt: 101,
+    revision: 1,
+  } as const
+  for (const usage of [
+    { model: 0, time: 0 },
+    { model: 25, time: 50 },
+    { model: 100, time: 100 },
+  ]) {
+    const parsed = parsePublicWorkspace({ ...value, usage })
+    expect(parsed).toEqual({ ...value, usage })
+    expect(parsed.usage).not.toBe(usage)
+  }
+  expect("usage" in parsePublicWorkspace(value)).toBe(false)
+  expect("usage" in parsePublicWorkspace({ ...value, usage: undefined })).toBe(false)
+  for (const usage of [
+    { model: 101, time: 0 },
+    { model: 0, time: 101 },
+    { model: -1, time: 0 },
+    { model: 0, time: -1 },
+    { model: 25.5, time: 0 },
+    { model: 0, time: 0.5 },
+    { model: Number.NaN, time: 0 },
+    { model: Infinity, time: 0 },
+    { model: "25", time: 0 },
+    { model: null, time: 0 },
+    { model: 25 },
+    { time: 0 },
+    {},
+    null,
+    [25, 50],
+    25,
+    "25%",
+    true,
+    { model: 25, time: 0, modelCalls: 1 },
+    { model: 25, time: 0, runningSince: 1 },
+    { model: 25, time: 0, maxCalls: 4 },
+  ])
+    expect(() => parsePublicWorkspace({ ...value, usage })).toThrow()
+})
+
 test("host signatures bind actor, exact bytes, route, verb and current timestamp", () => {
   const input = {
     secret,
