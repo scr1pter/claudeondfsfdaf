@@ -163,6 +163,65 @@ size_t run_privileged_self_test_tests() {
       "privileged.apps-fallback-cannot-hide-an-existing-authority-origin");
   });
   test([] {
+    // HF-5: the two Dispatcher pause cancellations keep their own closed origin; the declared
+    // catalog size cannot leave an empty slot that a parity or uniqueness check would miss.
+    require(std::none_of(windows_privileged_stages.begin(), windows_privileged_stages.end(), [](std::wstring_view stage) { return stage.empty(); }),
+      "privileged.stage-catalog-has-no-empty-slot");
+    constexpr std::array<std::pair<std::wstring_view, std::wstring_view>, 2> pauses{{
+      {L"Native input detection became unavailable.", L"authority-paused-detection"},
+      {L"Physical input paused the task.", L"authority-paused-physical"}}};
+    for (const auto& [message, stage] : pauses) {
+      require(std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), stage) != windows_privileged_stages.end(),
+        "privileged.pause-origin-stages-are-closed");
+      const auto reply = response_failure(42, L"paused", std::wstring(message));
+      for (const auto capture : {std::wstring_view{}, std::wstring_view{L"capture-native-read"}})
+        require(windows_privileged_origin_stage(reply.GetNamedString(L"error"), L"apps-list-reply", capture) == stage,
+          "privileged.dispatcher-pause-cancellation-maps-to-its-own-origin");
+      auto report = passed_report(); report.checks[1] = {std::wstring(windows_privileged_checks[1]), false, false,
+        L"native_operation_failed", std::wstring(stage), windows_privileged_native_code(reply.GetNamedString(L"code"))};
+      require(report.valid() && report.exit_code() == 1, "privileged.pause-origin-row-is-a-valid-failure");
+      const auto row = report.wire().GetNamedArray(L"checks").GetObjectAt(1);
+      require(row.GetNamedString(L"stage") == stage && row.GetNamedString(L"nativeCode") == L"paused" &&
+        std::wstring(report.wire().Stringify()).find(std::wstring(message)) == std::wstring::npos,
+        "privileged.pause-origin-row-keeps-only-closed-fields");
+    }
+    require(windows_privileged_origin_stage(L"Fresh native input detection was not confirmed before admission.", L"apps-list-reply") == L"apps-list-reply",
+      "privileged.admission-refusal-keeps-its-fallback-stage");
+    for (const std::wstring_view stage : {L"input-settle-context", L"input-settle-session", L"input-settle-verdict"}) {
+      require(std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), stage) != windows_privileged_stages.end(),
+        "privileged.settle-stages-are-closed");
+      auto report = passed_report(); report.checks[0] = {std::wstring(windows_privileged_checks[0]), false, false,
+        L"deadline_exceeded", std::wstring(stage), L"unknown"};
+      require(report.valid() && report.exit_code() == 1 &&
+        report.wire().GetNamedArray(L"checks").GetObjectAt(0).GetNamedString(L"stage") == stage, "privileged.settle-failure-is-a-staged-row-zero-failure");
+    }
+  });
+  test([] {
+    // HF-5: the settle's classification once its bounded wait ends. The pause rotates the observation
+    // epoch, so any paused session is settled; only an unpaused one is compared with the begun scope.
+    ServerSession begun; begun.id = L"isolated-windows-target"; begun.run_epoch = 4; begun.observation_epoch = 7; begun.revision = uint64_t{1};
+    auto rotated = begun; rotated.paused = true; ++rotated.observation_epoch;
+    require(windows_privileged_settle_stage(true, begun, rotated).empty(), "privileged.settle-pause-is-settled-after-its-rotation");
+    require(windows_privileged_settle_stage(false, begun, rotated) == L"input-settle-context" &&
+      windows_privileged_settle_stage(true, begun, std::nullopt) == L"input-settle-context" &&
+      windows_privileged_settle_stage(false, begun, begun) == L"input-settle-context", "privileged.settle-lost-context-precedes-every-other-outcome");
+    require(windows_privileged_settle_stage(true, begun, begun) == L"input-settle-verdict", "privileged.settle-unpaused-unchanged-scope-has-no-verdict");
+    const std::array<void (*)(ServerSession&), 5> replacements{
+      [](ServerSession& value) { value.id = L"replaced"; }, [](ServerSession& value) { ++value.run_epoch; },
+      [](ServerSession& value) { ++value.observation_epoch; }, [](ServerSession& value) { value.revision = uint64_t{2}; },
+      [](ServerSession& value) { value.revision.reset(); }};
+    for (const auto change : replacements) {
+      auto moved = begun; change(moved);
+      require(windows_privileged_settle_stage(true, begun, moved) == L"input-settle-session", "privileged.settle-replaced-scope-is-its-own-outcome");
+      moved.paused = true;
+      require(windows_privileged_settle_stage(true, begun, moved).empty(), "privileged.settle-paused-replaced-scope-is-settled");
+    }
+    auto replaced = begun; ++replaced.run_epoch;
+    for (const auto& stage : {windows_privileged_settle_stage(false, begun, begun), windows_privileged_settle_stage(true, begun, replaced), windows_privileged_settle_stage(true, begun, begun)})
+      require(std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), std::wstring_view{stage}) != windows_privileged_stages.end(),
+        "privileged.settle-outcomes-are-closed-stages");
+  });
+  test([] {
     const WindowsPrivilegedCheck failed{std::wstring(windows_privileged_checks[3]), false, false,
       L"native_operation_failed", L"window-capture-reply", L"capture_unavailable"};
     for (size_t variation = 0; variation < 7; ++variation) {

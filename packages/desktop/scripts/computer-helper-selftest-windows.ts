@@ -309,6 +309,11 @@ export const WINDOWS_NATIVE_STAGES = [
   "input-health-context",
   "input-health-target",
   "input-health-ready",
+  "authority-paused-detection",
+  "authority-paused-physical",
+  "input-settle-context",
+  "input-settle-session",
+  "input-settle-verdict",
 ] as const
 export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
 export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]
