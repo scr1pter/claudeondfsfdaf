@@ -350,6 +350,34 @@ describe("Brain Vault memory routes", () => {
     expect((await ok(await at(b.path, "GET", "/memory/skills"))).skills).toEqual([])
   }, 240_000)
 
+  test("a skill longer than a part by itself gets a part of its own, and every part still restores", async () => {
+    await using a = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
+    await using b = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
+    // 20 paths of about 80,000 characters: one skill of about 1.6 million, past SKILLS_CHARS and under IMPORT_CHARS.
+    const paths = Array.from({ length: 20 }, (_, index) => `src/${"deep-folder-name/".repeat(4_700)}file-${index}.ts`)
+    await importSkills(a.path, [
+      { name: "learned-short-a" },
+      { name: "learned-oversize", paths },
+      { name: "learned-short-b" },
+    ])
+    const files = (await backupOf(a.path, await projectOf(a.path))).filter((file) => file.section === "skills")
+    const parts = files.map((file) =>
+      (JSON.parse(file.text) as { skills: { skill: { name: string } }[] }).skills.map((item) => item.skill.name),
+    )
+    expect(parts.flat().toSorted()).toEqual(["learned-oversize", "learned-short-a", "learned-short-b"])
+    const oversize = parts.findIndex((names) => names.includes("learned-oversize"))
+    expect(parts[oversize]).toEqual(["learned-oversize"])
+    expect(files[oversize]!.text.length).toBeGreaterThan(SKILLS_CHARS)
+    expect(files[oversize]!.text.length).toBeLessThanOrEqual(IMPORT_CHARS)
+    for (const [index, file] of files.entries())
+      if (index !== oversize) expect(file.text.length).toBeLessThanOrEqual(SKILLS_CHARS)
+
+    const restored = []
+    for (const file of files) restored.push(await restoreInto(b.path, await projectOf(b.path), file))
+    expect(restored.reduce((sum, item) => sum + item.restored, 0)).toBe(3)
+    expect(restored.reduce((sum, item) => sum + item.refused, 0)).toBe(0)
+  }, 120_000)
+
   test("learned skills and workflow insights restore into another repository as proposals to review, keeping privacy and seeding no learner stats (B10)", async () => {
     await using a = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })
     await using b = await tmpdir({ git: true, trusted: true, config: { formatter: false, lsp: false } })

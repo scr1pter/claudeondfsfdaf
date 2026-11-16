@@ -54,6 +54,7 @@ import {
   readEntitlement,
   readModelPlanAccount,
   withCodiumLease,
+  type PoolHold,
 } from "./model-plan-account.js"
 import { stripeMode } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
@@ -83,11 +84,14 @@ import { persistentStore } from "./persistent-store.js"
  * plan (`holdPool`'s final path, HOLD's final fence) or from the current period after a move to a plan without a
  * computer; it is never renewed, and it reserves no plan hours (that period has none), only its own minutes.
  *
- * Other charges. Snapshot storage and egress are charged nightly (WP A53 measures them), and an ended plan's disk
- * retention is charged once per computer, by its first download-only start, to the final period, shortened to what
- * that period can still cover after the block's hold. They accrue before anything could hold them, so they are
- * charged as debits of their own; each is a few cents a day. The egress of a download-only session's upload is not
- * charged (it is set against the computer's next nightly egress reading, hosted-crons.ts): Vector pays it.
+ * Other charges. Snapshot storage and egress are charged nightly (WP A53 measures them). They accrue before anything
+ * could hold them, so they are charged as debits of their own; each is a few cents a day. An ended plan's disk
+ * retention is charged once per computer and kept window, by its first download-only start, to the period that start's
+ * block is held from, shortened to what that period can still cover after the block's hold. It is taken up front at a
+ * known moment, so it is held like a block (`holdPool`, the final path for an ended plan) and settled at once at its
+ * hold: two computers' retentions charged together never take more than the pool has (M2). The egress of a
+ * download-only session's upload is not charged (it is set against the computer's next nightly egress reading,
+ * hosted-crons.ts): Vector pays it.
  *
  * True-up. Once the provider's actual cost of a charge is known (the nightly job), the charge can be lowered to that
  * cost plus the markup, never below the cost itself, and never raised: the pool's debit is lowered in place and the
@@ -102,8 +106,11 @@ import { persistentStore } from "./persistent-store.js"
  * well inside the carry true-up's retry window; it carries no run id, so the run ceiling and the run's pool binding are
  * about model requests only (a session's model requests carry their run through ADMIT); compute never counts against
  * the Brain share; and the daily share is checked before each hold (see `openBlock`). A download-only block holds the
- * same 20-minute worst case through `holdPool`'s final path, one per session, never renewed. Only
- * `MODEL_PLAN_RENEWING` from `holdPool` is worth retrying.
+ * same 20-minute worst case through `holdPool`'s final path, one per session, never renewed. A disk's retention holds
+ * exactly its charge for a few minutes and settles it at once at that amount, with no run, and is checked against the
+ * daily share before its hold, against the snapshot its start decided with, as that start's block is. Only
+ * `MODEL_PLAN_RENEWING` from `holdPool` is worth retrying: both producers retry it (a block through its caller, the
+ * retention by sizing its days again).
  */
 
 const DAY_MS = 86_400_000
@@ -901,14 +908,22 @@ export async function chargeNightly(
 }
 
 /**
- * The disk retention after a plan ends (§4.4: kept for download, then deleted), paid once from the final period: the
- * account's last key, whatever its state. `days` are granted while that period can still cover them, at the storage
- * rate for `gb`; fewer when it cannot. Returns the days granted and when the disk must be deleted. Charged once per
- * computer and period: asking again answers the first grant.
+ * The disk retention after a plan ends (§4.4: kept for download, then deleted), paid once from the period a
+ * download-only start's block is held from: the account's last key, whatever its state, through `holdPool`'s final
+ * path (`final`, an ended plan's final period), or the current period after a move to a plan without a computer.
+ * `days` are granted while that period can still cover them, at the storage rate for `gb`; fewer when it cannot. The
+ * charge is held like any pool charge and settled at once at its hold (M2, M3: `holdRetention`), so retentions of two
+ * computers charged at the same moment, or beside model requests and blocks, never take more than the pool has.
+ * `snapshot` is the one the start decided with (the one `final` comes from): the daily share is checked against it
+ * before the hold, and a day that cannot fit the charge refuses (429 `MODEL_PLAN_DAILY_LIMIT`) with nothing charged.
+ * Returns the days granted; the disk's deletion date is `due`, the account's `hosted:disk-due` that names the kept
+ * window, set once at the plan change. Charged once per computer and kept window (`hr-<computer>-<due>`): asking again
+ * answers the first grant, whichever period a later start is held from (a renewal, or a return to a plan without a
+ * computer, inside the window charges nothing more).
  */
 export async function chargeRetention(
   account: string,
-  input: { computer: string; gb: number; days: number },
+  input: { computer: string; gb: number; days: number; final: boolean; snapshot: EntitlementSnapshot; due: number },
   options: LedgerOptions = {},
 ) {
   const fetcher = options.fetcher ?? fetch
@@ -918,25 +933,82 @@ export async function chargeRetention(
     !Number.isFinite(input.gb) ||
     input.gb < 0 ||
     !Number.isSafeInteger(input.days) ||
-    input.days < 0
+    input.days < 0 ||
+    !Number.isSafeInteger(input.due) ||
+    input.due <= 0
   )
     throw new ApiError(400, "HOSTED_REQUEST", "This cloud computer charge is not valid.")
   const record = await readModelPlanAccount(account, fetcher)
   const key = record?.key
-  const now = clock()
-  if (!record || record.closing || !key) return { days: 0, until: now }
-  const ref = `hr-${input.computer}-${key.subscription}-${key.start}`
+  if (!record || record.closing || !key) return { days: 0 }
+  const ref = `hr-${input.computer}-${input.due}`
   const existing = await readLine(account, ref, options)
-  if (existing) return { days: existing.units, until: existing.occurredAt + existing.units * DAY_MS }
+  if (existing) return { days: existing.units }
+  const now = clock()
+  const held = await holdRetention(account, key, input, options)
+  const charge = storageCharge(input.gb * held.days)
+  // The hold was placed for exactly this charge, so the debit never exceeds it.
+  if (held.hold) await held.hold.settle(microToUsd(charge.chargedMicro), ref)
+  const line = await recordLine(
+    account,
+    {
+      ref,
+      kind: "retention",
+      units: held.days,
+      ...charge,
+      occurredAt: now,
+      periodStart: key.start * 1000,
+      periodEnd: key.end * 1000,
+    },
+    options,
+  )
+  return { days: line.units }
+}
+
+/** A retention's hold is settled right after it is placed; one left by a crash in between lapses after this. */
+const RETENTION_HOLD_MS = 5 * 60_000
+
+/**
+ * Holds a retention's charge for as many of `input.days` as its period's pool can still cover. The days are sized from
+ * the pool's available figure, read first, and the charge must fit the day's share (A17's producer rule, checked as the
+ * block is). HOLD then decides atomically. A charge that took part of the pool in between makes it refuse (`monthly`),
+ * and one that settled in between makes its fence refuse (`stale`: the settle rewrote the account record the
+ * credential was read with). Either may be another computer's retention, a block or a model request, and either way
+ * the days are sized once more from a fresh read. A second `monthly` refusal grants none: the disk stays kept at
+ * Vector's cost (H1a R3). A second `stale` refusal is the start's 503 to try again. The storage charge rounds up per
+ * GB-day, so the charge for fewer days never exceeds that many days at the one-day charge.
+ */
+async function holdRetention(
+  account: string,
+  key: { hash: string; creditsMicro?: number; carry?: { micro: number } },
+  input: { gb: number; days: number; final: boolean; snapshot: EntitlementSnapshot },
+  options: LedgerOptions,
+  tries = 2,
+): Promise<{ days: number; hold?: PoolHold }> {
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
   const perDay = storageCharge(input.gb).chargedMicro
-  let days = input.days
-  if (perDay > 0) {
-    const available = await finalPoolAvailable(account, key, now, fetcher)
-    days = Math.max(0, Math.min(input.days, Math.floor(available / perDay)))
+  if (perDay <= 0) return { days: input.days }
+  const available = await finalPoolAvailable(account, key, clock(), fetcher)
+  const days = Math.max(0, Math.min(input.days, Math.floor(available / perDay)))
+  if (days === 0) return { days }
+  const chargeMicro = storageCharge(input.gb * days).chargedMicro
+  await requireDailyRoom(account, input.snapshot, chargeMicro, fetcher, clock())
+  const hold = await holdPool(account, microToUsd(chargeMicro), RETENTION_HOLD_MS, "hosted", {
+    fetcher,
+    ...(input.final ? { final: true as const } : {}),
+    ...(options.clock ? { clock: options.clock } : {}),
+  }).catch((error: unknown) => {
+    if (!(error instanceof ApiError)) throw error
+    if (error.code === "MODEL_PLAN_EXHAUSTED" || (error.code === "MODEL_PLAN_RENEWING" && tries > 1)) return undefined
+    throw error
+  })
+  if (!hold) return tries > 1 ? holdRetention(account, key, input, options, tries - 1) : { days: 0 }
+  if (hold.pool !== key.hash) {
+    await hold.release().catch(() => undefined)
+    throw unavailable()
   }
-  const charge = storageCharge(input.gb * days)
-  const line = await chargeOnce(account, { ref, kind: "retention", units: days, ...charge, occurredAt: now }, options)
-  return { days: line.units, until: line.occurredAt + line.units * DAY_MS }
+  return { days, hold }
 }
 
 /** What the account's final period could still pay: credits and carry less its model spend, debits and live holds. */

@@ -144,7 +144,9 @@ start", R2-R4):
 - the retention: charged at the first download start, after the block's hold, so a tight final period grants fewer
   paid days while the disk stays kept the whole window (the first deletion date stands); a start that fails after the
   hold keeps its retention charge; after a move to a plan without a cloud computer it is charged to the current plan's
-  period;
+  period. 16 Nov 2026 (codium-finish lane, phase review round three): it is charged once per computer and kept window,
+  named by the disk's deletion date, so a later start in the same window held from another period (after a renewal,
+  or after an ended plan came back on a plan without a cloud computer) charges nothing more for it;
 - which ended plans may download: today canceled and uncollected renewals (`payment_failed`, `action_required`,
   `payment_pending`) may; refunded, lost-dispute, fraud-warning and Vector-ended plans may not;
 - before listing, confirm with OpenRouter that a key that expired and was switched off can still be read (its usage)
@@ -163,6 +165,19 @@ start", R2-R4):
   each computer's hostd last reported in a signed heartbeat), and the image floor below does not apply to download-only
   starts. Whether a download start should be refused or not charged below the signed-beat floor is still yours; H2a
   does neither.
+  16 Nov 2026 (codium-finish lane, phase review PR3): this is a listing gate for `computer`. A download-only start
+  can still be charged its block and the retention and leave no files. That happens with a disk made before signed
+  heartbeats (above), and with an upload whose size check never matches, which the server never asks for again
+  (`codium-deviations.md` "Codium finish: H1 computer", O4 and O6). Before `computer` is listed, a server package
+  should charge the retention only once the first upload is confirmed, or give it back when no signed beat arrives
+  during the block. It should also answer a definite mismatch with a new pack or upload. The retention is now held
+  and settled from the same pool as the block (M2), and that does not change this gate;
+- computers above a live plan's cap (16 Nov 2026, codium-finish lane, phase review PR1; `codium-deviations.md` R13):
+  after a move to a plan with fewer computers, the computers above the new plan's count keep their disks only as long
+  as the provider keeps them, which is the disk days of the plan that last ran them. Nothing offers their files: a
+  download-only start is refused while the plan includes a cloud computer, no kept offer shows, and the server sets no
+  deletion date for them. Yours to decide: whether those files should be downloadable, with what deletion date, and
+  who pays the block and the retention.
 
 **The screens (H1c).** Once `computer` is listed, a customer whose plan ended (or no longer includes a cloud computer)
 and whose disks are still kept sees, on the desktop's bar and the phone's Cloud computer page, "Your cloud
@@ -287,7 +302,8 @@ no floor, and nothing changes.
   screen says why. If starts stop after you set it, check the value first.
 - Nothing rebuilds a computer on its own. The person rebuilds one by deleting its disk (`POST /api/hosted/computers
   {computer, action: "erase"}`); no screen offers that yet, and the API's erase has no confirmation step of its own, so
-  the confirmation belongs to that future screen. On a live plan a below-floor computer's files are kept only by not
+  the confirmation belongs to that future screen. Since 16 Nov 2026 that deletion also deletes the packed files of the
+  computer's sessions, so no download link leads to them afterwards; the confirmation should say so. On a live plan a below-floor computer's files are kept only by not
   deleting it: a live plan that includes a computer cannot start a download-only session. `GET /api/hosted/computers`
   marks `rebuild: true` only on an included computer of a plan that has not ended, where a job start checks it; an
   ended plan's kept disks and computers the plan no longer includes are never marked, because their files can only be

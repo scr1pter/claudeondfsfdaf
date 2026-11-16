@@ -927,7 +927,8 @@ async function upload(w: HostedWorld, id: string, bytes = 8192) {
 
 describe("download-only starts for an ended plan's kept disk (H1a)", () => {
   const NAME = () => computerName(ACCOUNT_ID, 1)
-  const RETENTION = () => `hr-${NAME()}-sub_renewing-${P1.start}`
+  /** The retention line of computer 1's kept window, named by the disk's deletion date. */
+  const RETENTION = (w: HostedWorld) => `hr-${NAME()}-${w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)}`
   const rows = async () => (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
 
   test("an ended plan inside the window starts one; the computer is asked only to pack and upload, never a job", async () => {
@@ -965,7 +966,7 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     const booted = await beat(w, session.id, { booted: true })
     expect(booted.body.job).toBeUndefined()
     // The retention of the kept disk is charged to the final period, once (§4.4; WP A51's chargeRetention).
-    expect(await readLine(ACCOUNT_ID, RETENTION(), w.options)).toMatchObject({
+    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toMatchObject({
       kind: "retention",
       units: Hosted.ENDED_DISK_DAYS,
       periodStart: P1.start * 1000,
@@ -1038,7 +1039,7 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     const second = await startDownload(w)
     expect(second.status).toBe(201)
     const retention = (await rows()).filter((row) => row.kind === "retention")
-    expect(retention.map((row) => row.ref)).toEqual([RETENTION()])
+    expect(retention.map((row) => row.ref)).toEqual([RETENTION(w)])
     expect((await rows()).filter((row) => row.kind === "block").map((row) => row.ref)).toContain(`hb-${first.id}-0`)
   })
 
@@ -1141,7 +1142,7 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     const answer = await startDownload(w)
     expect(answer.status).toBe(503)
     const added = (await rows()).filter((row) => !before.has(row.ref))
-    expect(added.filter((row) => row.kind === "retention").map((row) => row.ref)).toEqual([RETENTION()])
+    expect(added.filter((row) => row.kind === "retention").map((row) => row.ref)).toEqual([RETENTION(w)])
     const blocks = added.filter((row) => row.kind === "block")
     expect(blocks).toHaveLength(1)
     expect(blocks[0]!.units).toBe(0)
@@ -1197,7 +1198,7 @@ describe("download-only starts for an ended plan's kept disk (H1a)", () => {
     const running = JSON.parse(w.fakes.store.hash(hostedRunningKey(ACCOUNT_ID)).get(session.id)!)
     expect(running).toMatchObject({ block: 0, pool: SEEDED, epoch: to.meterEpoch, periodEnd: to.periodEnd })
     expect(w.fakes.clock.now).toBeLessThan(P1.end * 1000)
-    expect(await readLine(ACCOUNT_ID, RETENTION(), w.options)).toMatchObject({
+    expect(await readLine(ACCOUNT_ID, RETENTION(w), w.options)).toMatchObject({
       kind: "retention",
       units: Hosted.ENDED_DISK_DAYS,
       periodStart: P1.start * 1000,

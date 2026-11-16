@@ -295,8 +295,16 @@ describe("DNS-over-HTTPS lookups", () => {
     const padded = doh({ A: { ...answer, pad: "\u00e9".repeat(40_000) }, AAAA: { Status: 0 } })
     expect(await resolvePublic("status.vector-fixture.com", padded.fetch)).toEqual({ kind: "error" })
 
-    // 1 MiB in 1 KiB chunks. A stream with no buffer ahead (highWaterMark 0) is pulled once per read, so 64 pulls
-    // reach 64 KiB and the rest is cancelled unread.
+    // An answer of exactly 64 KiB is read to its end and used; one byte more is a failed lookup.
+    const exactly = (bytes: number) => {
+      const body = JSON.stringify({ ...answer, pad: "" })
+      return doh({ A: { ...answer, pad: " ".repeat(bytes - body.length) }, AAAA: { Status: 0 } })
+    }
+    expect(await resolvePublic("status.vector-fixture.com", exactly(64 * 1024).fetch)).toMatchObject({ kind: "public" })
+    expect(await resolvePublic("status.vector-fixture.com", exactly(64 * 1024 + 1).fetch)).toEqual({ kind: "error" })
+
+    // 1 MiB in 1 KiB chunks. A stream with no buffer ahead (highWaterMark 0) is pulled once per read, so 65 pulls
+    // pass 64 KiB and the rest is cancelled unread.
     const stream = { pulled: 0, cancelled: 0 }
     const endless = new ReadableStream<Uint8Array>(
       {
@@ -313,7 +321,7 @@ describe("DNS-over-HTTPS lookups", () => {
     )
     const large = doh({ A: new Response(endless), AAAA: { Status: 0 } })
     expect(await resolvePublic("status.vector-fixture.com", large.fetch)).toEqual({ kind: "error" })
-    expect(stream).toEqual({ pulled: 64, cancelled: 1 })
+    expect(stream).toEqual({ pulled: 65, cancelled: 1 })
 
     // One 0xff byte, which UTF-8 never has, in place of the note's "~".
     const json = new TextEncoder().encode(JSON.stringify({ ...answer, note: "~" }))

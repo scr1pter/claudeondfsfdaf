@@ -18,6 +18,7 @@ import {
 } from "./hosted-ledger.js"
 import {
   COMPUTER_PREFIX,
+  MAX_COMPUTERS,
   accountComputerPrefix,
   computerName,
   eraseAccountComputers,
@@ -63,6 +64,8 @@ import {
   hostedSuspendKey,
   hostedSuspendedKey,
   hostedTrueUpKey,
+  hostedUsageKey,
+  markArchivesErased,
   readBeat,
   readLeases,
   readModelRequest,
@@ -404,8 +407,6 @@ async function fairUse(
 export const hostedRosterKey = () => codiumKey("hosted", "roster")
 /** The nightly job's cached figures per account (HASH account → JSON), read by the budget answer. */
 export const hostedBudgetKey = () => codiumKey("hosted", "budget")
-/** The nightly job's last provider readings per computer (HASH name → JSON). */
-export const hostedUsageKey = () => codiumKey("hosted", "usage")
 
 function liveHosted(snapshot: EntitlementSnapshot | undefined) {
   return Boolean(snapshot && snapshot.caps.hosted && LIVE_PLAN_STATES.has(snapshot.state))
@@ -484,6 +485,17 @@ async function liveSessions(account: string, fetcher: typeof fetch) {
   return found
 }
 
+/**
+ * H1a's egress waiver and upload count of every computer number the account could have had, not only those still in
+ * `hosted:computers:<account>`: a number the set no longer holds may still have left both (P5).
+ */
+function downloadKeys(account: string) {
+  return Array.from({ length: MAX_COMPUTERS }, (_, index) => index + 1).flatMap((computer) => [
+    hostedDownloadEgressKey(account, computer),
+    hostedDownloadUploadedKey(account, computer),
+  ])
+}
+
 async function accountComputers(account: string, fetcher: typeof fetch) {
   const members = await store(["SMEMBERS", hostedComputersKey(account)], fetcher)
   return (Array.isArray(members) ? members : [])
@@ -522,11 +534,8 @@ export async function eraseAccountHosted(account: string, options: SessionOption
   for (const computer of await accountComputers(account, fetcher)) {
     await store(["HDEL", hostedNamesKey(), computerName(account, computer)], fetcher)
     await store(["HDEL", hostedUsageKey(), computerName(account, computer)], fetcher)
-    await store(
-      ["DEL", hostedDownloadEgressKey(account, computer), hostedDownloadUploadedKey(account, computer)],
-      fetcher,
-    )
   }
+  await store(["DEL", ...downloadKeys(account)], fetcher)
   await store(
     [
       "DEL",
@@ -597,21 +606,19 @@ export async function runHostedNightly(options: CronOptions = {}): Promise<Night
       }
       await eraseAccountComputers(account, { ...(provider ? { provider } : {}), fetcher, clock })
       // The packed files are a copy of the disks: they go with them (§4.4 "then deleted", H1a), so no download link
-      // answers after the date. Their session records stay until they lapse, and their links then answer 410.
+      // answers after the date. Their session records stay until they lapse: a link given before answers 410.
       const listed = await store(["ZRANGE", hostedSessionsKey(account), 0, -1], fetcher)
-      await eraseSessionArchives(
-        account,
-        (Array.isArray(listed) ? listed : []).filter((id): id is string => typeof id === "string"),
-        { fetcher, clock },
-      )
+      const ids = (Array.isArray(listed) ? listed : []).filter((id): id is string => typeof id === "string")
+      await eraseSessionArchives(account, ids, { fetcher, clock })
+      // Each record whose files were packed says they are gone, before the date is forgotten below: from then on
+      // `requestDownload` has no date to compare, and gives no new link to files that no longer exist. A record that
+      // lapsed (its own TTL) after the read has nothing left to mark: it is skipped, not the whole account failed.
+      await markArchivesErased(ids, started, { fetcher, clock })
       for (const computer of await accountComputers(account, fetcher)) {
         await store(["HDEL", hostedNamesKey(), computerName(account, computer)], fetcher)
         await store(["HDEL", hostedUsageKey(), computerName(account, computer)], fetcher)
-        await store(
-          ["DEL", hostedDownloadEgressKey(account, computer), hostedDownloadUploadedKey(account, computer)],
-          fetcher,
-        )
       }
+      await store(["DEL", ...downloadKeys(account)], fetcher)
       // The computers' reported image generations go with them (H2a).
       await store(["DEL", hostedComputersKey(account), hostedGenerationKey(account)], fetcher)
       await store(["ZREM", hostedDiskDueKey(), account], fetcher)

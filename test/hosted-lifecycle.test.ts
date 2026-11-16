@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import type { EntitlementSnapshot } from "../packages/schema/src/codium-entitlements"
 import { Hosted } from "../packages/schema/src/hosted"
-import { codiumKey } from "../api/_lib/codium-keys"
 import { hosted, PROVISIONERS } from "../api/_lib/codium-provisioners"
 import type { TransitionCause } from "../api/_lib/codium-provision"
 import {
@@ -13,6 +12,7 @@ import {
 import { applyHostedTransition, hostedRosterKey, reapHostedSessions, runHostedNightly } from "../api/_lib/hosted-crons"
 import { hostedAccount, hostedRunningKey, readLine } from "../api/_lib/hosted-ledger"
 import { computerName } from "../api/_lib/hosted-provider"
+import { mintDownloadToken } from "../api/_lib/hosted-tokens"
 import { HOSTED_DISK_GB_MAX } from "../api/_lib/hosted-rates"
 import {
   hostedDiskDueKey,
@@ -21,6 +21,7 @@ import {
   hostedGenerationKey,
   hostedSessionKey,
   hostedSessionsKey,
+  hostedUsageKey,
   readSessionRecord,
 } from "../api/_lib/hosted-sessions"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
@@ -172,10 +173,9 @@ describe("§4.4's cloud computer row", () => {
     expect(w.fakes.store.hash(hostedRosterKey()).has(ACCOUNT_ID)).toBe(false)
     const due = w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)!
     expect(due).toBe(w.fakes.clock.now + Hosted.ENDED_DISK_DAYS * DAY)
-    // The end itself charges nothing for keeping it: the first download-only start of the computer does (H1a).
-    const key = w.fakes.store.get(codiumKey("account", ACCOUNT_ID))!
-    const start = (JSON.parse(key) as { key: { start: number } }).key.start
-    expect(await readLine(ACCOUNT_ID, `hr-${NAME()}-sub_renewing-${start}`, w.options)).toBeUndefined()
+    // The end itself charges nothing for keeping it: the first download-only start of the computer does (H1a), once
+    // for the window this date names.
+    expect(await readLine(ACCOUNT_ID, `hr-${NAME()}-${due}`, w.options)).toBeUndefined()
     const rows = (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
     expect(rows.some((row) => row.kind === "retention")).toBe(false)
     // Again (the sweep's catch-up) changes nothing: one charge, the first date.
@@ -412,12 +412,138 @@ describe("download-only starts in §4.4's row (H1a)", () => {
     expect(w.provider.computers.size).toBe(0)
     expect(w.fakes.store.get(hostedDownloadUploadedKey(ACCOUNT_ID, 1))).toBeUndefined()
     expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBeUndefined()
-    // The record outlives the files for the drift check and the true-up; a link to them now leads nowhere.
+    // The record outlives the files for the drift check and the true-up. It says they are gone, so once the date is
+    // forgotten no new link is given (phase review), and a link given before leads nowhere.
+    expect(w.fakes.store.zset(hostedDiskDueKey()).has(ACCOUNT_ID)).toBe(false)
+    expect((await state(w, session.id)).download).toMatchObject({
+      readyAt: expect.any(Number),
+      erasedAt: expect.any(Number),
+    })
     const late = await ask()
-    expect(late.status).toBe(200)
-    const followed = await follow(late.body.url)
+    expect(late.status).toBe(410)
+    expect(late.body.error).toMatchObject({
+      code: "HOSTED_DOWNLOAD_UNAVAILABLE",
+      message: "This session's files are no longer kept.",
+    })
+    const earlier = mintDownloadToken({ session: session.id, now: w.fakes.clock.now })
+    const followed = await follow(`https://vectordev.ai/?t=${earlier.token}`)
     expect(followed.status).toBe(410)
     expect(followed.body.error.code).toBe("HOSTED_DOWNLOAD_UNAVAILABLE")
+  })
+
+  test("a session record that lapses while the deletion pass marks it is skipped; the account is still deleted", async () => {
+    const w = await hostedWorld(ledger)
+    const due = (await endedWithDisk(w))!
+    const { session, key } = await uploaded(w, 4096)
+    await reapHostedSessions(w.options)
+    const record = hostedSessionKey(session.id)
+    let erased = false
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.host === R2_HOST && init?.method === "DELETE") {
+        w.bucket.delete(decodeURIComponent(url.pathname.split("/").slice(2).join("/")))
+        erased = true
+        return new Response(null, { status: 204 })
+      }
+      const answer = await w.fetcher(input, init)
+      // The record lapses (its own TTL) right after the pass read it to mark, before the mark is written.
+      if (erased && init?.body === JSON.stringify(["GET", record])) {
+        erased = false
+        w.fakes.store.data.delete(record)
+      }
+      return answer
+    }) as typeof fetch
+    w.advance(due - w.fakes.clock.now + MINUTE)
+    expect(await runHostedNightly({ ...w.options, fetcher })).toMatchObject({ deleted: 1, failed: 0 })
+    expect(w.fakes.store.get(record)).toBeUndefined()
+    expect(w.bucket.has(key)).toBe(false)
+    expect(w.provider.computers.size).toBe(0)
+    expect(w.fakes.store.zset(hostedDiskDueKey()).has(ACCOUNT_ID)).toBe(false)
+  })
+
+  test("erasing a computer drops its download waiver: one made again under its number pays its own egress (P5)", async () => {
+    const w = await hostedWorld(ledger)
+    const deleted: string[] = []
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.host === R2_HOST && init?.method === "DELETE") {
+        const key = decodeURIComponent(url.pathname.split("/").slice(2).join("/"))
+        deleted.push(key)
+        w.bucket.delete(key)
+        return new Response(null, { status: 204 })
+      }
+      return w.fetcher(input, init)
+    }) as typeof fetch
+    const options = { ...w.options, fetcher }
+    const job = await running(w)
+    await invoke((request, response) => handleHostedSessionAction(request, response, "stop", w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: {},
+      query: { id: job.id },
+    })
+    // A move to a plan without a cloud computer: computer 1's disk is kept for download from the current period.
+    await transition(w, { plan: "vector-50" }, "downgrade")
+    const bytes = 4_000_000_000
+    const { session, key } = await uploaded(w, bytes)
+    await reapHostedSessions(w.options)
+    expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBe(String(bytes))
+    expect(w.fakes.store.get(hostedDownloadUploadedKey(ACCOUNT_ID, 1))).toBe(String(bytes))
+    const ask = () =>
+      invoke((request, response) => handleHostedSessionAction(request, response, "download", options), {
+        method: "POST",
+        authorization: w.desktopToken(),
+        body: {},
+        query: { id: session.id },
+      })
+    const link = await ask()
+    expect(link.status).toBe(200)
+    w.fakes.store.hash(hostedUsageKey()).set(NAME(), JSON.stringify({ egressBytes: 0 }))
+    const erased = await invoke((request, response) => handleHostedComputers(request, response, options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: { computer: 1, action: "erase" },
+    })
+    expect(erased.status).toBe(200)
+    expect(w.provider.computers.has(NAME())).toBe(false)
+    expect(w.fakes.store.get(hostedDownloadEgressKey(ACCOUNT_ID, 1))).toBeUndefined()
+    expect(w.fakes.store.get(hostedDownloadUploadedKey(ACCOUNT_ID, 1))).toBeUndefined()
+    expect(w.fakes.store.hash(hostedUsageKey()).has(NAME())).toBe(false)
+    // The packed files are a copy of the disk: they go with it, and the record says so, so no new link is given while
+    // the disk's date still stands and a link given before leads nowhere (as after the nightly deletion).
+    expect(deleted).toEqual([key])
+    expect(w.bucket.has(key)).toBe(false)
+    expect((await state(w, session.id)).download).toMatchObject({
+      readyAt: expect.any(Number),
+      erasedAt: w.fakes.clock.now,
+    })
+    expect(w.fakes.store.zset(hostedDiskDueKey()).has(ACCOUNT_ID)).toBe(true)
+    const late = await ask()
+    expect(late.status).toBe(410)
+    expect(late.body.error).toMatchObject({
+      code: "HOSTED_DOWNLOAD_UNAVAILABLE",
+      message: "This session's files are no longer kept.",
+    })
+    const followed = await invoke(
+      (request, response) => handleHostedSessionAction(request, response, "download", options),
+      { method: "GET", query: { id: session.id, t: new URL(link.body.url).searchParams.get("t")! } },
+    )
+    expect(followed.status).toBe(410)
+    // The subscriber moves back to a plan with a computer, and the next session makes computer 1 again.
+    await transition(w, { plan: "vector-100" }, "upgrade")
+    const again = await running(w)
+    expect(again.computer).toBe(1)
+    await invoke((request, response) => handleHostedSessionAction(request, response, "stop", w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: {},
+      query: { id: again.id },
+    })
+    w.provider.computers.get(NAME())!.egressBytes += 3_000_000_000
+    expect((await runHostedNightly(w.options)).charged).toBe(1)
+    // All of the new computer's egress is charged: none of it is set against the erased disk's upload.
+    const lines = (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
+    expect(lines.filter((row) => row.kind === "egress").map((row) => row.units)).toEqual([3])
   })
 
   test("a download-only start is not held to the image floor, so the files stay downloadable (H2a)", async () => {

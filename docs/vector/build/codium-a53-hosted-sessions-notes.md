@@ -164,6 +164,12 @@ plan still allows it, and the nightly deletion now erases the packed files with 
 `codium-deviations.md` "Codium finish: H1 download-only start (15 Nov 2026)". Not built: the computer side (H1b), the
 image rebuild (owner) and any client surface.
 
+16 Nov 2026 (Codium finish, phase review round three). The H1a status above changed in two places. The retention is
+charged once per computer and kept window (`hr-<computer>-<due>`), not once per computer and period (PR18).
+`eraseHostedComputer` now deletes the packed files of the computer's sessions and marks their records
+(`download.erasedAt`), as the nightly deletion does, and deletes its `hosted:usage` reading (PR16). See
+`codium-deviations.md` "Codium finish: phase review fixes, round three, codium-finish lane (16 Nov 2026)".
+
 **Status, 15 Nov 2026 (Codium finish, H1b).** The computer side of the download-only start is built
 (`packages/hosted-computer/src/daemon.ts`). Once an answer says `mode: "download"` before any job started, hostd starts
 no agent, browser or recorder and writes no viewer state. It packs and uploads the disk when asked, drops its copy after

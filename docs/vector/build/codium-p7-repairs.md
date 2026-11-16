@@ -211,6 +211,12 @@ searched for vault, backup and restore lines:
       cases ("9 passed"). typecheck.yml run 43715522956 passed. In vector-hosted-ci.yml run 43715921854, Hosted tests
       job 132817317859 ends "Hosted: 147/147 test files passed". See `codium-deviations.md` "Lane status (15 Nov 2026,
       codium-finish)".
+    - 16 Nov 2026 (codium-finish lane, phase review round two, PR13): "files of at most 1,500,000 characters" holds
+      for every file but one with a single skill longer than that, which gets a file of its own. Such a file restores
+      while it fits in `IMPORT_CHARS`; past it only that file is refused. `restorable`'s comment now says so, and
+      `engine/test/server/memory-vault.test.ts` "a skill longer than a part by itself gets a part of its own, and every
+      part still restores" pins it. See `codium-deviations.md` "Codium finish: phase review fixes, round two,
+      codium-finish lane (16 Nov 2026)".
 - **R45-11. The GitHub backend.** Confirmed. The privacy check is unauthenticated with `redirect: "manual"`, and only a
   404 or `private: true` passes (core `github.ts:60-87`); it runs before every push (`:182`). git runs with
   `untrustedChildEnvironment(process.env)`, which drops `VECTOR_*_TOKEN`, `_KEY`, `_SECRET` and `_PASSWORD`
@@ -696,6 +702,12 @@ planning probes in `plan/`). Nothing here boots the engine.
   lookup and check.ts's exact-8-KiB-then-stall page is judged without a ninth read); check.test.ts "a 5xx HTML page is read
   only to its first 8 KiB, and the rest is cancelled", "…of exactly 8 KiB that then stalls is judged at once" and
   "…whose body stalls past the timeout fails as a timeout" (these three pass on HEAD and pin the swap).
+- 16 Nov 2026 (codium-finish lane, phase review round two, PR12): "An answer of 64 KiB or more ... is a failed lookup"
+  no longer holds. `ssrf.ts`'s lookup now reads with `readPrefix(response.body, 64 * 1024 + 1)` (`:206`), as
+  `index.ts:46` does, so an answer of exactly 65,536 bytes is used and one of 65,537 or more is a failed lookup. The
+  ssrf case above now also checks both sizes, and its 1 MiB stream is pulled 65 times, then cancelled once.
+  `readPrefix` and `test/bytes.test.ts`'s exact-limit case are unchanged. See `codium-deviations.md` "Codium finish:
+  phase review fixes, round two, codium-finish lane (16 Nov 2026)".
 
 **R46-2. Confirmed: a failed lookup of one address kind was ignored when the other kind answered public.**
 - Cause: `resolvePublic` returned public (`ssrf.ts:177-181`) before its error rule (`:184`). That contradicts the

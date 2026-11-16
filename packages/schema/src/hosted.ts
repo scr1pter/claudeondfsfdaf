@@ -74,6 +74,8 @@ export const ERROR_CODES = {
   HOSTED_SESSION_ENDED: 409,
   HOSTED_TAKEOVER_REQUIRED: 409,
   HOSTED_RUN_REFUSED: 403,
+  // 409 for a start or a request that cannot be served; 410 once a session's packed files are gone (their disk's date
+  // passed, or they were deleted with the disk), both when the person asks for them and on the download link.
   HOSTED_DOWNLOAD_UNAVAILABLE: 409,
   // Done by Morning (WP A55).
   HOSTED_JOB_NOT_FOUND: 404,

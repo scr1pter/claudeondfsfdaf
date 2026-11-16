@@ -201,8 +201,9 @@ async function lookup(host: string, type: "A" | "AAAA", fetcher: Fetcher, timeou
       await response.body?.cancel().catch(() => {})
       return { kind: "error" }
     }
-    // Counted in bytes as it arrives: a longer answer, or one that is not UTF-8, is a failed lookup.
-    const read = await readPrefix(response.body, 64 * 1024)
+    // Counted in bytes as it arrives: an answer longer than 64 KiB, or one that is not UTF-8, is a failed lookup. It is
+    // read to the limit and one byte more, so an answer of exactly 64 KiB is seen to end.
+    const read = await readPrefix(response.body, 64 * 1024 + 1)
     const text = read?.complete ? fromUtf8(read.bytes) : undefined
     if (text === undefined) return { kind: "error" }
     const answer = JSON.parse(text) as { Status?: unknown; TC?: unknown; Answer?: unknown }

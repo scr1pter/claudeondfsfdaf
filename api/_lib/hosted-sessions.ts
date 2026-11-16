@@ -72,7 +72,8 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  * §4.4): `mode: "download"`. Each gets no job, browser, live view, take-over or recording; its heartbeat answers ask
  * only to pack and upload the disk; it lasts one block, held like any block from the plan's final period; its run
  * token is refused at chat and /models (S3). The first start for a computer charges that disk's retention to the final
- * period, once (`chargeRetention`), and Vector pays at most one archive's worth of each computer's uploads.
+ * period, once per kept window (`chargeRetention`), and Vector pays at most one archive's worth of each computer's
+ * uploads.
  *
  * Image floor (H2a). Each computer keeps the image generation its daemon last reported in a signed heartbeat, for as
  * long as the provider keeps its disk after that beat. With `VECTOR_HOSTED_MIN_GENERATION` set, a job start passes over
@@ -104,7 +105,8 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  *   egress charge has not set against its reading yet (H1a: Vector pays that upload, up to `ARCHIVE_MAX_BYTES` per
  *   computer and kept window);
  * - `hosted:download-uploaded:<account>:<n>`  every byte download-only sessions uploaded from computer n, kept until
- *   its disk's deletion date (the bound on what Vector pays);
+ *   its disk's deletion date (the bound on what Vector pays); both deleted with the computer (`eraseHostedComputer`)
+ *   and, for every number an account could have, with its disks and on account deletion (hosted-crons.ts);
  * - `hosted:recent`              ZSET of accounts by their last session activity (the drift check's list).
  */
 
@@ -150,6 +152,8 @@ export const hostedViewerKey = (jti: string) => codiumKey("hosted", "viewer", jt
 export const hostedComputersKey = (account: string) => codiumKey("hosted", "computers", account)
 export const hostedGenerationKey = (account: string) => codiumKey("hosted", "generation", account)
 export const hostedNamesKey = () => codiumKey("hosted", "names")
+/** The nightly job's last provider readings per computer (HASH name → JSON); deleted with the computer. */
+export const hostedUsageKey = () => codiumKey("hosted", "usage")
 export const hostedSuspendKey = (account: string) => codiumKey("hosted", "suspend", account)
 export const hostedSuspendedKey = () => codiumKey("hosted", "suspended")
 export const hostedEgressKey = (account: string, day: string) => codiumKey("hosted", "egress", account, day)
@@ -167,6 +171,11 @@ const Download = Schema.Struct({
   requestedAt: Schema.Number,
   readyAt: Schema.optional(Schema.Number),
   bytes: Schema.optional(Schema.Number),
+  /**
+   * When the packed files were deleted with the disk: by the nightly deletion pass (§4.4) or with the computer
+   * (`eraseHostedComputer`). No link is given or followed after it.
+   */
+  erasedAt: Schema.optional(Schema.Number),
 })
 const SessionRecord = Schema.Struct({
   v: Schema.Literal(1),
@@ -624,23 +633,25 @@ export async function startHostedSession(
     await abandonSession(record, fetcher, clock).catch(() => undefined)
     throw error
   }
-  return launchSession(
-    record,
-    { jobMinutes: start.jobMinutes, diskDays: diskDays(start.caps), download: false },
-    options,
-  )
+  return launchSession(record, { jobMinutes: start.jobMinutes, diskDays: diskDays(start.caps) }, options)
 }
 
 /**
  * The second half of a start, for both kinds of session: the first block's hold (`openBlock`), the record's times, the
  * computer's lease, its run token, creating or resuming the computer and the boot step. A download-only start (H1a)
  * holds its block from the plan's final period and, once the hold is placed and before the provider is asked, charges
- * the computer's kept disk to that period (`chargeRetention`: once per computer and period, shortened to what is left
- * after the block's hold). Anything that fails after the hold gives it back (or charges only what the computer ran).
+ * the computer's kept disk to that period (`chargeRetention`: once per computer and kept window, `due` being the
+ * window's deletion date, held and settled from the same pool, `final` saying whether that is the ended plan's final
+ * period, checked against the daily share of the snapshot the start decided with, and shortened to what is left after
+ * the block's hold). Anything that fails after the hold gives it back (or charges only what the computer ran).
  */
 async function launchSession(
   record: SessionRecord,
-  launch: { jobMinutes: number; diskDays: number; download: boolean },
+  launch: {
+    jobMinutes: number
+    diskDays: number
+    download?: { final: boolean; snapshot: EntitlementSnapshot; due: number }
+  },
   options: SessionOptions,
 ): Promise<Hosted.SessionView> {
   const fetcher = options.fetcher ?? fetch
@@ -685,7 +696,14 @@ async function launchSession(
     if (launch.download)
       await chargeRetention(
         account,
-        { computer: computerName(account, record.computer), gb: HOSTED_DISK_GB_MAX, days: Hosted.ENDED_DISK_DAYS },
+        {
+          computer: computerName(account, record.computer),
+          gb: HOSTED_DISK_GB_MAX,
+          days: Hosted.ENDED_DISK_DAYS,
+          final: launch.download.final,
+          snapshot: launch.download.snapshot,
+          due: launch.download.due,
+        },
         { fetcher, clock },
       )
   } catch (error) {
@@ -826,11 +844,7 @@ export async function startHostedDownload(
     await abandonSession(record, fetcher, clock).catch(() => undefined)
     throw error
   }
-  return launchSession(
-    record,
-    { jobMinutes: BLOCK_MINUTES, diskDays: days, download: true },
-    options,
-  )
+  return launchSession(record, { jobMinutes: BLOCK_MINUTES, diskDays: days, download: { ...plan, due } }, options)
 }
 
 /** When the account's computers' disks are to be deleted (§4.4), or undefined when no date is set. */
@@ -1194,7 +1208,6 @@ export function archiveKey(account: string, id: string) {
  */
 export async function eraseSessionArchives(account: string, ids: readonly string[], options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
-  const clock = options.clock ?? Date.now
   const signed = await store(["SMEMBERS", hostedArchivesKey(account)], fetcher)
   const sessions = new Set((Array.isArray(signed) ? signed : []).map(String))
   for (const id of ids) {
@@ -1202,8 +1215,15 @@ export async function eraseSessionArchives(account: string, ids: readonly string
     const record = await readSessionRecord(id, fetcher)
     if (record?.account === account && record.download) sessions.add(id)
   }
+  return deleteArchives(account, [...sessions], options)
+}
+
+/** Deletes exactly these sessions' packed files from the media bucket; 2xx or 404 each, or it throws. */
+async function deleteArchives(account: string, ids: readonly string[], options: SessionOptions) {
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
   let erased = 0
-  for (const id of sessions) {
+  for (const id of ids) {
     if (!Hosted.SESSION_ID.test(id)) continue
     // Files may be in the bucket: the deletion waits until it can reach it.
     if (!r2Configured("media")) throw unavailable()
@@ -1213,6 +1233,28 @@ export async function eraseSessionArchives(account: string, ids: readonly string
     erased++
   }
   return erased
+}
+
+/**
+ * Marks each of `ids` whose files were packed (`download.erasedAt`) once its packed files went with the disk: from then
+ * on `requestDownload` gives no new link for it and `downloadRedirect` follows none, with or without a deletion date. A
+ * record that lapsed (its own TTL) in between has nothing left to mark and is skipped; any other failure throws.
+ */
+export async function markArchivesErased(ids: readonly string[], at: number, options: SessionOptions = {}) {
+  const fetcher = options.fetcher ?? fetch
+  for (const id of ids)
+    if ((await readSessionRecord(id, fetcher))?.download?.readyAt !== undefined)
+      await updateSessionRecord(
+        id,
+        (value) =>
+          value.download && value.download.erasedAt === undefined
+            ? { ...value, download: { ...value.download, erasedAt: at } }
+            : undefined,
+        options,
+      ).catch((error: unknown) => {
+        if (error instanceof ApiError && error.statusCode === 404) return undefined
+        throw error
+      })
 }
 
 function publicOrigin() {
@@ -1229,9 +1271,12 @@ function publicOrigin() {
  * (`{ready: false}`) and the person asks again. An ended session whose files were never packed has none to give. A
  * download-only session (H1a) asked for its files when it started, so it answers `{ready: false}` from its start. While
  * the account's disks have a deletion date (§4.4), no link outlives it, and none is given once it passed: the nightly
- * pass deletes the packed files with the disks. No link is given, and none leads anywhere, while the plan's disks are
- * kept with no download (`requireFilesAllowed`). A link also leads nowhere once the media bucket's own rule removed the
- * packed files (owner-actions/hosted-computer.md); the person then asks a running session again.
+ * pass deletes the packed files with the disks and marks each record whose files it deleted (`download.erasedAt`)
+ * before it forgets the date, so none is given after that either. Deleting a computer (`eraseHostedComputer`) deletes
+ * and marks its sessions' packed files the same way. No link is given, and none leads anywhere, while the plan's
+ * disks are kept with no download (`requireFilesAllowed`). A link also leads nowhere once the media bucket's own rule
+ * removed the packed files (owner-actions/hosted-computer.md); the person then asks a running session again. Files
+ * that are gone answer 410 `HOSTED_DOWNLOAD_UNAVAILABLE` here and on the link; a request that cannot be served, 409.
  */
 export async function requestDownload(account: string, id: unknown, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1242,7 +1287,7 @@ export async function requestDownload(account: string, id: unknown, options: Ses
   const now = clock()
   if (record.download?.readyAt !== undefined) {
     const due = await readDiskDue(account, fetcher)
-    if (due !== undefined && due <= now)
+    if (record.download.erasedAt !== undefined || (due !== undefined && due <= now))
       throw new ApiError(410, "HOSTED_DOWNLOAD_UNAVAILABLE", "This session's files are no longer kept.")
     const link = mintDownloadToken({ session: record.id, now, ...(due !== undefined ? { until: due } : {}) })
     return {
@@ -1269,6 +1314,8 @@ export async function downloadRedirect(id: string, options: SessionOptions = {})
   const record = await readSessionRecord(id, fetcher)
   if (!record || record.download?.readyAt === undefined) throw notFound()
   await requireFilesAllowed(record.account, fetcher)
+  if (record.download.erasedAt !== undefined)
+    throw new ApiError(410, "HOSTED_DOWNLOAD_UNAVAILABLE", "This session's files are no longer kept.")
   const key = archiveKey(record.account, id)
   const head = presignR2("media", { method: "HEAD", key, expiresIn: 60, now: clock() })
   const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
@@ -1811,7 +1858,9 @@ export const hostedDiskDueKey = () => codiumKey("hosted", "disk-due")
 /**
  * The person deletes one of their computers and its saved disk. Refused while a session runs on it. This is also the
  * only rebuild of a computer below the image floor (H2a): its reported generation goes with it, and the next start
- * makes it again from the base snapshot. Nothing deletes a disk for the floor on its own.
+ * makes it again from the base snapshot. Nothing deletes a disk for the floor on its own. The packed files of its
+ * sessions are copies of the disk, so they go with it as the nightly deletion's do (§4.4, `runHostedNightly`), before
+ * the computer leaves the account's list: a bucket that cannot be reached fails the deletion, which is asked again.
  */
 export async function eraseHostedComputer(account: string, computer: unknown, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1822,10 +1871,26 @@ export async function eraseHostedComputer(account: string, computer: unknown, op
   if (leases.has(computer))
     throw new ApiError(409, "HOSTED_SESSION_RUNNING", "A session is running on this computer. Stop it first.")
   const result = await destroyHostedComputer(account, computer, options)
+  // A record that lapsed (its own TTL) can give no link, so its packed files are left to the bucket's own rule.
+  const listed = await store(["ZRANGE", hostedSessionsKey(account), 0, -1], fetcher)
+  const packed: string[] = []
+  for (const id of Array.isArray(listed) ? listed : []) {
+    const record = typeof id === "string" ? await readSessionRecord(id, fetcher) : undefined
+    if (record?.account === account && record.computer === computer && record.download) packed.push(record.id)
+  }
+  await deleteArchives(account, packed, { fetcher, clock })
+  await markArchivesErased(packed, clock(), { fetcher, clock })
   const name = computerName(account, computer)
   await store(["HDEL", hostedGenerationKey(account), computer], fetcher)
+  // H1a's egress waiver and upload count are this disk's: a computer made again under the number starts with neither,
+  // and nothing named by the account outlives the computer (P5), its last provider reading included.
+  await store(
+    ["DEL", hostedDownloadEgressKey(account, computer), hostedDownloadUploadedKey(account, computer)],
+    fetcher,
+  )
   await store(["SREM", hostedComputersKey(account), computer], fetcher)
   await store(["HDEL", hostedNamesKey(), name], fetcher)
+  await store(["HDEL", hostedUsageKey(), name], fetcher)
   return { computer, deleted: result === "deleted" }
 }
 

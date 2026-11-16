@@ -3190,6 +3190,20 @@ These are for `31ddb43b`, the fix(api) commit named in the dated line above, rea
 This closes For the lead item 1 on `codium-finish`. The same two-file change is still needed on `release-finish`, and
 the lead decides that.
 
+16 Nov 2026, For the lead item 1 corrected (codium-finish lane, phase review finding PR7, blocking). Item 1 says the
+cycle's files belong to the GitHub-agent lane, that the lead assigns the fix and that this package does not fix it.
+That stopped being true on this branch: the codium-finish lane's own agent fixed it, without a lead assignment, in
+the separate fix(api) commit `31ddb43b` (committed as `Vector <bot@vectordev.ai>`, between TB and F6). That commit
+edits a brain-transport runtime file, `api/_lib/cloud-agents-run-token.ts` (`:57`, the epoch claim's filter), and
+`test/api-module-loading.test.ts`, which the lane rule says to record and not fix. The edit stays in place: reverting
+it without a replacement brings back "Codium: 119/120". When fetched on 16 Nov 2026, neither origin/release-finish
+(`0f034957`) nor origin/brain-transport (`09a6387a`) has the change: both still pass `METER_EPOCH_PATTERN` to
+`Schema.isPattern` at module top level (`:57`), and origin/main (`58f85edc`) has neither module. The lead must decide
+before this lane's PR. One option is to accept the cross-lane edit explicitly. The other is to have the brain-transport
+or PR #33 lane land the same two-file change, and then keep one copy when main is merged into `codium-finish`, so the
+two branches do not diverge or conflict in `cloud-agents-run-token.ts`. Until `release-finish` carries it, item 1 stays
+open under "Lane status (15 Nov 2026, codium-finish)", For the lead, and in the phase review section (16 Nov 2026).
+
 ## Codium finish: F6 cost kind on read (15 Nov 2026)
 
 - **Why.** P4 finding F6 (`codium-p4-repairs.md`, the F6 paragraph; not Everywhere's F6 in `v2-master-prompt.md`), the
@@ -5192,6 +5206,36 @@ For `ae7280f8` (this section's commit), read from the runs' jobs and logs:
 - vector-hosted-ci.yml run 43747724868: all 12 jobs passed; Hosted tests job 132914610646 ends "Hosted: 150/150 test
   files passed", and its Cloud computer image (Docker) job 132914610309 passed.
 
+16 Nov 2026 (codium-finish lane, phase review finding PR6). The line numbers in this section are as of `ae7280f8`,
+the section's commit. `hosted-sessions.ts` has changed since then. At `bd3cc7ad`:
+
+- `startHostedDownload` is at `:758` (cited as `:682`);
+- `launchSession` is at `:641` (cited as `:566`), and its `chargeRetention` call at `:686` (cited as `:611`);
+- `requireFilesAllowed` is at `:1295` (cited as `:1210`).
+
+The phase review fixes move them a few lines further. In `hosted-crons.ts`, `reapDownload` is at `:348` (cited as
+`:347`) and the waiver's prefix read at `:732` (cited as `:729`). The `hosted-ledger.ts`, `hosted-entitlement.ts` and
+`hosted-api.ts` lines still match. Use the function names to find the code.
+
+That review also changed three readings; "Codium finish: phase review fixes, codium-finish lane (16 Nov 2026)" records
+them:
+
+- R3's retention is now held and settled at its hold (M2, PR9);
+- R11's "none is given after it" now also holds after the nightly pass (PR2);
+- R13, new there, covers computers above a live plan's cap (PR1).
+
+16 Nov 2026 (codium-finish lane, phase review round three). Two of this section's readings changed; "Codium finish:
+phase review fixes, round three, codium-finish lane (16 Nov 2026)" records them:
+
+- R3: the retention is charged once per computer and kept window, not once per computer and period. Its ref is now
+  `hr-<computer>-<due>`, where `due` is the disk's deletion date (`hosted:disk-due`), not
+  `hr-<computer>-<subscription>-<start>`. A second start in the same window after a renewal, or after an ended plan
+  came back on a plan without a computer, no longer charges another `ENDED_DISK_DAYS` (PR18, R18).
+- `HOSTED_DOWNLOAD_UNAVAILABLE` answers 409 for a start or a request that cannot be served and 410 for packed files
+  that are gone, on the person's request (`requestDownload`) and on the download link (`downloadRedirect`) alike. This
+  is A53's reading ("410 once the files are gone"); `Hosted.ERROR_CODES` keeps 409 and its comment now names both
+  (PR17, R20).
+
 ## Codium finish: H1 computer (15 Nov 2026)
 
 Package H1b, the computer half of H1 (the section above is the server half): hostd reads H1a's `mode: "download"`
@@ -6448,3 +6492,625 @@ keys or providers.
 
 Edits to `api/_lib/model-plan-*.ts`: none. No MODEL-PLANS.md change (no new setting). No code, test, workflow, flag or
 setting changed.
+
+16 Nov 2026 (codium-finish lane, phase review). The phase review of the lane's packages adds four items to "What stays
+open" and "For the lead" above. They are recorded in the next section:
+
+- PR1, computers above a live plan's cap: a reading and an owner question;
+- PR3, the charged download that can produce nothing: a listing gate for `computer`;
+- PR5, the restore tally kept in three places: a lead follow-up;
+- PR7, the cross-lane run-token fix: a lead decision before the PR (TB For the lead item 1 is corrected there).
+
+## Codium finish: phase review fixes, codium-finish lane (16 Nov 2026)
+
+A fix round for the phase review of the lane's packages, built on `codium-finish` `bd3cc7ad` (equal to
+origin/codium-finish; PR #33 unmerged: origin/main `58f85edc`, origin/release-finish `0f034957`). Scratch is under
+`/tmp/vector-v2/codium/review-fix/`. This step does not commit. The commit step commits, typechecks, pushes and
+dispatches, and adds its run ids in a dated line after the runs.
+
+Each finding below has an id, says whether reading the code confirmed it, and cites file:line in the worktree after
+these fixes unless a line says otherwise.
+
+### Findings
+
+- **PR1 (non-blocking): computers above a live plan's cap cannot be downloaded.** Confirmed; no code change; recorded
+  as reading R13 below and as an owner question in `owner-actions/hosted-computer.md`.
+  - `hostedDownloadAccess` answers `live` whenever `snapshot.caps.hosted` is set (`api/_lib/hosted-entitlement.ts:124`).
+  - `requireHostedDownload` then refuses with "Your plan includes the cloud computer. Start a session and ask for its
+    files." (`:145`).
+  - A session claims only computers 1 to `caps.computers` (CLAIM's upper bound).
+  - `applyHostedTransition` sets no date while `liveHosted(to)` (`api/_lib/hosted-crons.ts:434-463`), and `keptDisks`
+    offers nothing for `live` (`api/_lib/hosted-sessions.ts:1760`).
+  - Not built: per-computer access needs a deletion date that §4.4 does not name (a retention day count is the
+    owner's), a payer for the block and the retention (R2 and R3), and changes to `startHostedDownload`, `keptDisks`
+    and the transition.
+- **PR2 (non-blocking): a link after the nightly deletion pass.** Confirmed and fixed, the finding's first option.
+  - The deletion pass in `runHostedNightly` now marks every session record whose files were packed
+    (`download.erasedAt`, `api/_lib/hosted-sessions.ts:172`; `api/_lib/hosted-crons.ts:613-624`). It does this after
+    the archives are erased and before the date is forgotten. A record that lapsed is skipped.
+  - `requestDownload` (`hosted-sessions.ts:1255`) and `downloadRedirect` (`:1282`) answer 410
+    `HOSTED_DOWNLOAD_UNAVAILABLE` "This session's files are no longer kept." when the mark is set. `downloadRedirect`
+    then does not ask the bucket.
+  - The doc comment (`:1235-1245`) now says so. The session view still carries `readyAt`, so no schema or client
+    changed. The client copy "Its link works until ..." now follows only a link the server gave, and no such link
+    outlives the date. What a client shows for this 410 was not re-read here.
+  - Regression: `test/hosted-lifecycle.test.ts` "at the date the disks and their packed files are deleted; the
+    download link answers 404 or 410" (`:375`). After the pass, the late ask now answers 410; before the fix it
+    answered 200 with a link. The record carries `erasedAt`, and a link minted for the session leads to 410. Two
+    mutations each failed the case: dropping the check, and dropping the mark.
+- **PR3 (non-blocking): a download-only start can be charged and produce nothing.** Confirmed; no code change; kept as
+  a listing gate for `computer` (`owner-actions/hosted-computer.md`, "Download-only starts (H1a)").
+  - `launchSession` charges the retention (`hosted-sessions.ts:690`) before the computer has shown it can run
+    download mode.
+  - O6: a disk from before signed heartbeats is refused on every beat.
+  - O4: a HEAD that never matches is never asked again.
+  - H2a's `hosted:generation:<account>` holds signed beats only, so a disk that never reported a generation cannot be
+    told apart from a new one.
+  - PR9 makes the retention a held charge, but it is still taken before any upload.
+  - Before listing:
+    - charge the retention only once the first upload is confirmed, or give it back when no signed beat arrives in the
+      block;
+    - answer a definitive HEAD mismatch with `pack` or `upload` (O4).
+  - Not built here. It moves the charge into the heartbeat's upload confirmation, which needs either a hold that
+    outlives the block or a later unheld debit, and an unheld debit brings back PR9's M2 race. O4 is a server and
+    schema change. H1b's F3 reading stands: the minutes the computer ran are charged (M8).
+- **PR4 and PR7 (non-blocking and blocking): `31ddb43b` edits another lane's file.** Confirmed. Not reverted, because
+  reverting without a replacement brings back "Codium: 119/120".
+  - The commit edits `api/_lib/cloud-agents-run-token.ts:57`, a brain-transport file, and
+    `test/api-module-loading.test.ts`.
+  - The TB section's For the lead item 1 said this lane would not fix it. A dated correction line now follows the
+    section's `31ddb43b` receipts. It says the codium-finish lane's agent made the fix itself, that release-finish and
+    brain-transport still need it, and what the lead must decide.
+  - Checked on 16 Nov 2026: origin/release-finish `0f034957` and origin/brain-transport `09a6387a` still have
+    `Schema.isPattern(METER_EPOCH_PATTERN)` at `:57`.
+- **PR5 (non-blocking): the restore tally and its wording exist three times.** Confirmed; not changed in this round;
+  handed to the lead.
+  - The three copies are `packages/engine/src/cli/cmd/vault.ts:481` and `:515`,
+    `packages/desktop/src/main/vault-backup.ts:570-584` and
+    `packages/app/src/components/settings-v2/memory-backup-model.ts:87-100`.
+  - Why not here: a shared module needs a browser-safe core vault entry, and the app imports no core vault module
+    today. That would change the exports and an import direction across core, app, desktop and engine.
+  - Why no shared table test either: the desktop's tally runs inline in the restore IPC handler, which stops a
+    file's parts at its first unreadable part, so a test can reach it only once it is extracted.
+  - Both options are a package of their own.
+- **PR6 (non-blocking): drifted line citations in the H1 record.** Confirmed. A dated line at the end of "Codium
+  finish: H1 download-only start" says the numbers are as of `ae7280f8` and gives the current ones. The original text
+  is unchanged.
+- **PR8 (non-blocking): the H1a waiver keys outlive an erased computer.** Confirmed in part and fixed.
+  - `eraseHostedComputer` now deletes `hosted:download-egress:<account>:<n>` and
+    `hosted:download-uploaded:<account>:<n>` with the computer (`hosted-sessions.ts:1839-1844`).
+  - `eraseAccountHosted` and the nightly deletion pass delete both keys for every number from 1 to `MAX_COMPUTERS`
+    (`downloadKeys`, `hosted-crons.ts:492`, used at `:538` and `:629`), not only for the numbers still in the set.
+  - Not confirmed: "keeps keys named by its account id until they expire" after a whole account deletion. The last
+    erase part, `eraseAccountKeys` (`api/_lib/codium-erase.ts:191`), deletes every key whose name carries the account
+    id, these two included.
+  - What was confirmed:
+    - the cloud computer's own part (the `hosted` provisioner on `closing`, and a deletion whose later parts are
+      pending) left them;
+    - the waiver offset the egress of a computer made again under the same number.
+  - Regressions:
+    - `test/account-delete.test.ts` `seedEverything` (`:429-436`) seeds both keys for computers 1 and 2, and 2 is a
+      number the set no longer holds. "Worker outage" (`:1241`) reads the store after the computer part ran and
+      before the sweep; it failed with the old set-only delete.
+    - `test/hosted-lifecycle.test.ts` "erasing a computer drops its download waiver: one made again under its number
+      pays its own egress (P5)" (`:435`) moves to a plan without a computer, uploads 4 GB, erases computer 1, moves
+      back and makes computer 1 again. The new computer's 3 GB of egress is all charged. Without the delete in
+      `eraseHostedComputer` the case failed.
+- **PR9 (non-blocking): the retention's M2 race.** Confirmed and fixed with the finding's second option (reading R14
+  below).
+  - `chargeRetention` (`api/_lib/hosted-ledger.ts:920`) sizes the days from `finalPoolAvailable`. `holdRetention`
+    (`:972`) then holds exactly that charge with `holdPool(account, usd, RETENTION_HOLD_MS, "hosted", {final})`, and
+    `PoolHold.settle` settles it at once at that amount.
+  - A `monthly` refusal sizes the days once more from what is left. A second refusal grants none, and the disk is
+    kept at Vector's cost (R3).
+  - A hold whose pool is not the key that was read is given back and refused (503). `launchSession` then closes the
+    block at its start, and nothing is charged.
+  - `final` comes from `startHostedDownload`'s plan answer (`download: {final}` on `launchSession`'s input), so the
+    retention is held from the same kind of period as the block.
+  - The ledger header and the `test/codium-pool.test.ts` "A51 obligation" tripwire now list the second producer
+    (`hosted-ledger.ts: holdPool(` twice). The tripwire's comment is its review.
+  - Regression: `test/hosted-ledger.test.ts` "two computers' retentions charged at the same moment never take more
+    than the final period has (M2)" (`:841`). Two concurrent `chargeRetention` calls on computers 1 and 2 run against
+    0.66 available. They grant 14 and 6 days, with debits of 440,132 and 188,628 micro-dollars, 628,760 in all. With
+    the old logic both granted 14 days (880,264) and the case failed.
+  - The existing retention case now also checks that the debit is applied and nothing is left held.
+  - Not built: a start-level case with two concurrent download starts. It needs an ended three-computer plan with two
+    kept disks. The race is inside `chargeRetention`, which the ledger case drives directly.
+
+### Readings
+
+- **R13 (H1a addendum), computers above a live plan's cap.** After a move to a plan with fewer computers (Ultra's
+  three to Max's one), computers 2 and 3 keep their disks only as long as the provider keeps them: a stopped
+  computer's disk lasts the `diskDays` of the session that last ran it (`hosted-provider.ts:289`, `retentionMs`). The
+  server sets no date for them, offers no download-only start (409, whose advice cannot work for them) and shows no
+  kept offer. Their files can be fetched only by moving back to a plan that includes them. Owner question, no
+  amounts: whether such a computer should be downloadable, with what deletion date and who pays its block and
+  retention. If yes, the build is to treat a number above `caps.computers` as `current` in a per-computer access
+  check, set a date for those disks at the transition, and let `keptDisks` offer them.
+- **R14 (H1a R3 addendum), the retention under M2.** The retention is taken up front at a known moment, so the A51
+  reason for an unheld debit (a charge that accrues before anything could hold it) does not apply. It is now held
+  through the pool's common HOLD, the same held set, fence and available figure as blocks and model requests (M2,
+  M3), and never settled above its hold. The days are still sized from the period's available figure. The hold only
+  makes that figure binding, so R3's outcomes stand: fewer paid days when the period is tight, the first deletion
+  date, and a failed start keeping its line. `RETENTION_HOLD_MS` (5 minutes) bounds a hold that a crash leaves
+  between hold and settle; it then lapses with nothing charged, and the next start charges again. The daily share is
+  not checked for it, as it was not for the unheld debit this replaces: it is a once-per-computer charge at a plan's
+  end, not daily use. The owner may add the check.
+- **R15, the erase mark.** `download.erasedAt` is written only by the nightly deletion pass, on records that had
+  packed files. Account deletion deletes the records instead. A record keeps its other fields, so the drift check and
+  the true-up still read it.
+
+### Disagreements
+
+- PR8, in part: a whole account deletion did not leave the keys, because the last part sweeps them. The fix still
+  makes the cloud computer's part complete on its own, as P5's part list expects.
+- PR5: not done in this round, for the reasons above.
+- PR1 and PR3: recorded as an owner question and a listing gate, not built, as each finding allows.
+- PR9: the regression drives `chargeRetention` directly instead of two full starts.
+
+### For the lead
+
+1. PR4 and PR7: decide on `31ddb43b` before this lane's PR. Either accept the cross-lane edit explicitly, or have the
+   brain-transport or PR #33 lane land the same two-file change and keep one copy when main is merged in. TB item 1
+   stays open until release-finish carries it.
+2. PR5: a follow-up package for the restore tally. It can be a browser-safe core module next to `Vault.SECTIONS`
+   that the engine, desktop and app import, or a shared table test once the desktop's tally is extracted.
+3. PR1 and PR3 are the owner's (owner-actions). No new defect was found in another lane's file in this round.
+
+### Ran locally
+
+All runs went through `vector-serial`, one file at a time from `test/` with `--timeout 30000`, after the last code
+edit:
+
+| Test file | Pass | Fail | Skip |
+| --- | --- | --- | --- |
+| `hosted-ledger.test.ts` | 32 | 0 | 1 |
+| `hosted-sessions-api.test.ts` | 59 | 0 | 1 |
+| `hosted-lifecycle.test.ts` | 22 | 0 | 0 |
+| `account-delete.test.ts` | 37 | 0 | 1 |
+| `codium-pool.test.ts` | 29 | 0 | 0 |
+| `hosted-reaper.test.ts` | 26 | 0 | 0 |
+| `hosted-provider.test.ts` | 39 | 0 | 0 |
+| `hosted-jobs.test.ts` | 32 | 0 | 1 |
+| `hosted-clients.test.ts` | 12 | 0 | 0 |
+| `hosted-internal.test.ts` | 12 | 0 | 0 |
+| `hosted-copy.test.ts` | 6 | 0 | 0 |
+| `api-module-loading.test.ts` | 2 | 0 | 0 |
+
+Five mutations each failed their case and were then restored from saved copies:
+
+- the old retention logic;
+- no delete in `eraseHostedComputer`;
+- no `erasedAt` check;
+- no `erasedAt` mark;
+- the old set-only delete in `eraseAccountHosted`.
+
+Typechecks were clean: `packages/engine` `bun typecheck --project ../../tsconfig.json` (api and test),
+`packages/web` `bun typecheck`, and the full `bun turbo typecheck --concurrency=2` (27 of 27 tasks, 20 cached).
+
+`git diff --check` was clean. `packages/engine` `test/compliance/upstream-free.test.ts`, which scans every tracked
+file's working-tree text, gave 11 pass and 1 fail. The scan case passed. The failure is the known non-hermetic `:148`
+case (TB For the lead item 7), which reads this machine's provider environment.
+
+Formatting: `prettier --write` ran on `api/_lib/hosted-ledger.ts` and `test/hosted-ledger.test.ts`, and `--check` on
+`test/codium-pool.test.ts`; all three were formatted at HEAD. `hosted-sessions.ts`, `hosted-crons.ts`,
+`hosted-lifecycle.test.ts` and `account-delete.test.ts` were not formatted at HEAD, so only the added lines were
+wrapped.
+
+### Only in CI
+
+- The Valkey cases: `codium-pool.test.ts`'s HOLD on real Lua, the ledger's script case and the sessions CLAIM case.
+- The Postgres ledger, where the new M2 case's lines come from the real SQL.
+- vector-hosted-ci.yml's Hosted tests.
+- This step's own Vector Codium, typecheck.yml and vector-hosted-ci.yml dispatches, which run after the lead's
+  commit.
+
+Files touched:
+
+- `api/_lib/hosted-ledger.ts`, `api/_lib/hosted-sessions.ts`, `api/_lib/hosted-crons.ts`;
+- `test/hosted-ledger.test.ts`, `test/hosted-lifecycle.test.ts`, `test/account-delete.test.ts`,
+  `test/codium-pool.test.ts`;
+- `docs/vector/build/codium-deviations.md`, `docs/vector/owner-actions/hosted-computer.md`,
+  `docs/vector/MODEL-PLANS.md`.
+
+Edits to `api/_lib/model-plan-*.ts`: none. `hosted-ledger.ts` imports the `PoolHold` type from
+`model-plan-account.ts` and does not change that file. No new setting.
+
+16 Nov 2026 (codium-finish lane, phase review round two). The second review round changed three things this section
+says. They are recorded in the next section:
+
+- PR9 and R14: the retention is now checked against the daily share before its hold, and a `stale` refusal of its hold
+  is sized again too, not only a `monthly` one. R14's sentences "The daily share is not checked for it" and "The owner
+  may add the check" no longer hold (R16 and R17 there).
+- PR2: "A record that lapsed is skipped" now also holds for a record that lapses between the pass's read and its
+  write (PR11 there).
+- Line numbers moved: `chargeRetention` is at `hosted-ledger.ts:922` (cited as `:920`), `holdRetention` at `:977`
+  (cited as `:972`), and the marking loop at `hosted-crons.ts:616-628` (cited as `:613-624`).
+
+## Codium finish: phase review fixes, round two, codium-finish lane (16 Nov 2026)
+
+The second round of the phase review, on the first round's fixes. It is built on `codium-finish` `bd3cc7ad` with the
+first round's uncommitted changes in the worktree; neither round is committed. Scratch is under
+`/tmp/vector-v2/codium/review-fix2/`. This step does not commit. The commit step commits both rounds, typechecks,
+pushes and dispatches, and adds its run ids in a dated line after the runs.
+
+Each finding below has an id (continuing the first round's PR1 to PR9), says whether reading the code confirmed it,
+and cites file:line in the worktree after these fixes.
+
+### Findings
+
+- **PR7 again (blocking, listed twice in this round): `31ddb43b` edits brain-transport's
+  `api/_lib/cloud-agents-run-token.ts:57` and `test/api-module-loading.test.ts`.** Confirmed; no lane change, as both
+  entries say. The lead decides before the lane's PR. One option is to accept the cross-lane edit explicitly. The other
+  is to have the brain-transport or PR #33 lane land the same two-file change and keep one copy when main is merged in.
+  - Kept open: TB For the lead item 1 under "Lane status (15 Nov 2026, codium-finish)" (with its dated correction after
+    the `31ddb43b` receipts), and item 1 of the first round's For the lead.
+  - Not re-fetched in this round. The first round's fetch (origin/release-finish `0f034957`, origin/brain-transport
+    `09a6387a`, both still without the change) is the last reading.
+- **PR10 (non-blocking): a retention whose hold meets another's settle is refused, not sized again.** Confirmed and
+  fixed.
+  - `PoolHold.settle` runs `applyPoolDebits`, whose `convergeKey` rewrites the account record with the key's new limit
+    (`api/_lib/model-plan-account.ts:2340-2349`).
+  - HOLD's final fence compares the stored record with the one `finalPoolCredential` read and answers `stale`
+    (`api/_lib/codium-pool.ts:253`), which `placeHold` throws as 503 `MODEL_PLAN_RENEWING` (`:463`).
+  - `holdRetention` now treats that refusal like a `monthly` one while a try is left: it reads the available figure
+    and the credential again and sizes the days once more (`api/_lib/hosted-ledger.ts:997-1001`). On the last try the
+    503 goes to the start, which fails with nothing charged and is tried again. The bound stays two tries.
+  - Regression: `test/hosted-ledger.test.ts` "a retention whose credential another retention's settle made stale is
+    sized again, not refused (M2)" (`:874`). A fetcher gate holds computer 2's HOLD after its reads. Computer 1's
+    retention then holds and settles (14 days), and the case checks that the account record changed. Released,
+    computer 2 is granted 6 days from the 0.22 left, with debits of 140 and 60 GB-days and nothing left held. With the
+    retry removed, the case failed with `MODEL_PLAN_RENEWING`.
+- **PR11 (non-blocking): a record that lapses during the marking loop fails the whole account for the night.**
+  Confirmed and fixed with the finding's first option.
+  - `updateSessionRecord` throws 404 `HOSTED_SESSION_NOT_FOUND` when the record is gone (`api/_lib/hosted-sessions.ts:291`).
+  - The loop now catches that 404 for that id only and goes on (`api/_lib/hosted-crons.ts:616-628`). Every other error
+    still fails the account, which stays due.
+  - Regression: `test/hosted-lifecycle.test.ts` "a session record that lapses while the deletion pass marks it is
+    skipped; the account is still deleted" (`:435`). The fetcher deletes the record right after the pass's read, once
+    the archive was erased. The pass answers `deleted: 1, failed: 0`, and the computers, the packed files and the due
+    entry are gone. Without the catch, the case failed (`deleted: 0, failed: 1`).
+- **PR12 (non-blocking): a DNS-over-HTTPS answer of exactly 64 KiB read as a failed lookup.** Confirmed and fixed with
+  the finding's first option.
+  - `lookup` reads to 64 KiB and one byte more and requires `complete`, as `index.ts:46` does for internal bodies
+    (`packages/ops-worker/src/ssrf.ts:206`). The comment now says "an answer longer than 64 KiB".
+  - Regression: `packages/ops-worker/test/ssrf.test.ts` "an answer is read only to 64 KiB ..." (new lines from `:298`).
+    An answer of exactly 65,536 bytes resolves `public` and one of 65,537 is `error`. The 1 KiB-chunk stream is now
+    pulled 65 times, not 64, then cancelled once. With the old limit, the exactly-64-KiB answer failed.
+  - R46-1's record says "An answer of 64 KiB or more ... is a failed lookup". A dated line under R46-1 in
+    `codium-p7-repairs.md` now says that changed. The a46 notes' "at most 64 KiB" still holds.
+- **PR13 (non-blocking): `restorable`'s comment promises every part stays under SKILLS_CHARS.** Confirmed in part;
+  fixed with the finding's second option (the comment, and a regression for one oversize skill).
+  - Confirmed: a single skill longer than SKILLS_CHARS becomes a part above it (`packages/engine/src/brain/vault-memory.ts:105`).
+  - Not confirmed: "the whole skills file of that repository is refused". The loop never adds a skill to a part
+    already past the limit, and never adds another to the oversize one, so that skill is alone in its part. Only that
+    part can be refused, and only past IMPORT_CHARS (`packages/engine/src/server/routes/instance/httpapi/groups/memory.ts:276`).
+  - The comment (`vault-memory.ts:95-104`) now says a skill longer than SKILLS_CHARS gets a part of its own. It
+    restores while that part fits in IMPORT_CHARS, and past it only that part is refused.
+  - This also corrects "Codium finish: B10 acceptance (15 Nov 2026)", whose edge case says such a skill's restore
+    "would count it unreadable". It does not while its part fits in IMPORT_CHARS, as the regression shows.
+  - Regression: `packages/engine/test/server/memory-vault.test.ts` "a skill longer than a part by itself gets a part of
+    its own, and every part still restores" (`:353`). One skill of about 1.6 million characters (20 paths of about
+    80,000) is imported between two short ones. Its part holds it alone and is longer than SKILLS_CHARS and no longer
+    than IMPORT_CHARS. The other parts stay under SKILLS_CHARS, and all three skills restore into another repository
+    with nothing refused.
+- **PR14 (non-blocking, two entries): the A51 notes still describe the unheld debit.** Confirmed. A dated 16 Nov 2026
+  line follows the "Nightly and retention" bullet of `codium-a51-hosted-core-notes.md` (`:51`); the bullet is
+  unchanged. The line names the input `{computer, gb, days, final, snapshot}` and the daily check. It also names the
+  hold `holdPool(…, RETENTION_HOLD_MS, "hosted", {final})` settled at once, the second try on `monthly` or `stale`,
+  and the tripwire's second reviewed producer. It cites PR9, R14 and this section.
+- **PR15 (non-blocking): the retention skipped the A17 producer rule's daily share.** Confirmed; fixed with the
+  finding's option (a).
+  - The rule is `codium-a17-admission-notes.md:328-339` ("Before a producer calls `holdPool` it must enforce the
+    shared day ..."). `openBlock` checks it for the block in the same start (`hosted-ledger.ts:404`).
+  - `holdRetention` now calls `requireDailyRoom(account, input.snapshot, chargeMicro, …)` before its hold
+    (`hosted-ledger.ts:992`). It checks today's spend, the block's live hold included, plus the retention against the
+    day's share. A day that cannot fit it refuses with 429 `MODEL_PLAN_DAILY_LIMIT` (retry tomorrow) before anything is
+    held. `launchSession` then closes the block at its start, and nothing is charged.
+  - `chargeRetention` takes the snapshot as input (`:922`). `startHostedDownload` passes its `requireHostedDownload`
+    answer, `{snapshot, final}`, as `launchSession`'s `download` (`hosted-sessions.ts:842`). `launchSession` passes
+    both on (`:697-698`).
+  - The ledger header, `chargeRetention`'s and `launchSession`'s comments, the `codium-pool.test.ts` tripwire comment
+    and MODEL-PLANS.md now say so.
+  - Regression: `test/hosted-ledger.test.ts` "a retention the day's share cannot fit refuses with nothing charged, as
+    the start's block would (A17)" (`:908`). With 19 of Max's 19.20 a day held from the final period, the retention
+    is refused with 429 `MODEL_PLAN_DAILY_LIMIT`: no `hr-` debit, no line, and only the earlier hold held. Once that
+    hold is given back, the same retention is granted 14 days. With the call removed, the case failed.
+  - Since (a) was built, no exception line was added to `codium-a17-admission-notes.md`.
+
+### Readings
+
+- **R16 (R14 amended), the retention and the daily share.** The retention now meets A17's producer rule as the block
+  does: it is checked before its hold, and not atomically with it. The check reads the day as status counts it, and a
+  model request admitted in between can pass it by at most the retention (the same gap `requireDailyRoom`'s comment
+  names for a block). The day is checked against the start's snapshot, the one `final` comes from. `openBlock` reads
+  the plan again for the block a moment later and does not return it, so the two checks use two reads of the same
+  plan. A day that cannot fit the retention refuses the start rather than paying fewer days: R3's "fewer days" stays
+  for the period's available figure only, because a day's refusal lifts the next day.
+- **R17 (R14 amended), the retention's second try.** A `stale` refusal says nothing about money, so on the last try it
+  is not "grant none" as a `monthly` refusal is. It is the start's 503 `MODEL_PLAN_RENEWING`, and the start is tried
+  again. With three computers' retentions charged at once, two settles inside one start's window can still give that
+  start a 503. The bound stays two, as the finding asks.
+
+### Disagreements
+
+- PR13: "the whole skills file of that repository is refused" is not what the code does (above). The fix is the
+  finding's second option. Leaving the skill out would lose it from the backup with nothing to say so. Counting it
+  needs a new field in the backup's result, which the engine CLI, the desktop and the app each tally (PR5's three
+  copies).
+- PR15: the retention uses the start's snapshot, not the block's own read (R16).
+- PR10: a second `stale` refusal is the start's 503, not "grant none" (R17).
+
+### For the lead
+
+1. PR7 (both entries): unchanged from the first round's item 1. Decide on `31ddb43b` before this lane's PR.
+2. No defect was found in another lane's file in this round.
+
+### Ran locally
+
+All runs went through `vector-serial`, one file at a time with `--timeout 30000`, after the last code edit. Root files
+ran from `test/`, package files from their package. The engine file ran with fresh XDG roots under the scratch folder.
+
+| Test file | Pass | Fail | Skip |
+| --- | --- | --- | --- |
+| `hosted-ledger.test.ts` | 34 | 0 | 1 |
+| `hosted-lifecycle.test.ts` | 23 | 0 | 0 |
+| `hosted-sessions-api.test.ts` | 59 | 0 | 1 |
+| `codium-pool.test.ts` | 29 | 0 | 0 |
+| `account-delete.test.ts` | 37 | 0 | 1 |
+| `hosted-reaper.test.ts` | 26 | 0 | 0 |
+| `hosted-jobs.test.ts` | 32 | 0 | 1 |
+| `hosted-clients.test.ts` | 12 | 0 | 0 |
+| `hosted-internal.test.ts` | 12 | 0 | 0 |
+| `hosted-provider.test.ts` | 39 | 0 | 0 |
+| `hosted-copy.test.ts` | 6 | 0 | 0 |
+| `api-module-loading.test.ts` | 2 | 0 | 0 |
+| `packages/ops-worker` `test/ssrf.test.ts` | 12 | 0 | 0 |
+| `packages/engine` `test/server/memory-vault.test.ts` | 9 | 0 | 0 |
+
+Four mutations each failed their own case, and only that case, and were then restored from saved copies:
+
+- no `MODEL_PLAN_RENEWING` retry in `holdRetention` (the stale case failed with `MODEL_PLAN_RENEWING`);
+- no `requireDailyRoom` call in `holdRetention` (the daily case failed);
+- no 404 catch in the marking loop (the lapse case answered `deleted: 0, failed: 1`);
+- the old 64 KiB read limit (the exactly-64-KiB answer failed).
+
+Typechecks were clean: the full `bun turbo typecheck --concurrency=2` (27 of 27 tasks, 25 cached) and
+`packages/engine` `bun typecheck --project ../../tsconfig.json` (api and test). `git diff --check` was clean.
+
+`packages/engine` `test/compliance/upstream-free.test.ts` gave 11 pass and 1 fail. The scan case passed. The failure is
+the known non-hermetic `:148` case (TB For the lead item 7).
+
+Formatting: `prettier --check` passed on `api/_lib/hosted-ledger.ts`, `test/hosted-ledger.test.ts`,
+`test/codium-pool.test.ts`, `packages/ops-worker/src/ssrf.ts` and `packages/ops-worker/test/ssrf.test.ts`, all of them
+formatted at HEAD. `hosted-sessions.ts`, `hosted-crons.ts`, `hosted-lifecycle.test.ts`, `vault-memory.ts` and
+`memory-vault.test.ts` were not formatted at HEAD, so only the added lines were wrapped to 120 columns. The two test
+names longer than that stay on one line, as prettier keeps a test call's name.
+
+Not run locally: `packages/engine` `test/cli/vault.test.ts`, since `vault-memory.ts` changed only in a comment.
+
+### Only in CI
+
+- The Valkey cases: `codium-pool.test.ts`'s HOLD on real Lua, the ledger's script case and the sessions CLAIM case. The
+  new stale and daily cases run on the in-memory store only. Their HOLD fence and day count are the emulation in
+  `packages/web/test/fixture/codium-spend-emulation.ts`.
+- The Postgres ledger, where the new cases' lines come from the real SQL.
+- vector-hosted-ci.yml's Hosted tests (`packages/ops-worker`, `test/hosted-*`) and its ops Worker miniflare smoke.
+- The commit step's Vector Codium, typecheck.yml and vector-hosted-ci.yml dispatches, which run after the lead's
+  commit.
+
+Files touched in this round:
+
+- `api/_lib/hosted-ledger.ts`, `api/_lib/hosted-sessions.ts`, `api/_lib/hosted-crons.ts`;
+- `packages/ops-worker/src/ssrf.ts`, `packages/engine/src/brain/vault-memory.ts` (a comment only);
+- `test/hosted-ledger.test.ts`, `test/hosted-lifecycle.test.ts`, `test/codium-pool.test.ts` (a comment only),
+  `packages/ops-worker/test/ssrf.test.ts`, `packages/engine/test/server/memory-vault.test.ts`;
+- `docs/vector/build/codium-deviations.md`, `docs/vector/build/codium-a51-hosted-core-notes.md`,
+  `docs/vector/build/codium-p7-repairs.md` (dated lines under R45-10 and R46-1), `docs/vector/MODEL-PLANS.md`.
+
+Edits to `api/_lib/model-plan-*.ts`: none. No new setting, route, schema field or client change. A download-only start
+can now also answer 429 `MODEL_PLAN_DAILY_LIMIT` from its retention; its block's own check could already answer it, so
+what a client shows for that code was not changed or re-read.
+
+16 Nov 2026 (codium-finish lane, phase review round three). The third review round changed three things the first two
+rounds' sections say. They are recorded in the next section:
+
+- R15 ("`download.erasedAt` is written only by the nightly deletion pass"): `eraseHostedComputer` now writes it too, on
+  the records of the sessions on the computer it deletes, and deletes their packed files first (PR16, R19).
+- PR8: deleting a computer now also deletes its last provider reading (`hosted:usage`), as the nightly pass and
+  account deletion do.
+- PR9 and PR15 (`chargeRetention`): its input now also carries the kept window's deletion date (`due`), its ref names
+  that window instead of the period (PR18, R18), and it answers `{days}` only (PR19).
+
+## Codium finish: phase review fixes, round three, codium-finish lane (16 Nov 2026)
+
+The third round of the phase review, on the first two rounds' fixes. It is built on `codium-finish` `bd3cc7ad` with
+both earlier rounds' uncommitted changes in the worktree; no round is committed. Scratch is under
+`/tmp/vector-v2/codium/review-fix3/`. This step does not commit. The commit step commits all three rounds,
+typechecks, pushes and dispatches, and adds its run ids in a dated line after the runs.
+
+Each finding below has an id (continuing PR1 to PR15), says whether reading the code confirmed it, and cites file:line
+in the worktree after these fixes.
+
+### Findings
+
+- **PR16 (non-blocking): deleting a computer left its sessions' packed files.** Confirmed and fixed with the finding's
+  first option.
+  - `eraseHostedComputer` deleted the computer, its generation entry, its H1a waiver and upload keys, its set member
+    and its name. It did not delete the packed files of that computer's sessions (`archiveKey(account, id)`), and did
+    not mark their records. `requestDownload` then still gave links for any of them whose `download.readyAt` was set,
+    a download-only session's full copy of the disk included, and `downloadRedirect` still served them until the
+    bucket's own rule removed the object. The comment's "nothing named by the account outlives the computer (P5)" did
+    not hold.
+  - Now, after `destroyHostedComputer` (`api/_lib/hosted-sessions.ts:1873`), it reads the account's session ids
+    (`ZRANGE hosted:sessions:<account> 0 -1`) and keeps those whose record is the account's, names this computer and
+    has `download` (an upload is signed only once `download` is set, `:1674`). It deletes their packed files
+    (`deleteArchives`, `:1889`) and marks each record that had them ready (`markArchivesErased`, `:1890`). Only then
+    are the computer's keys, set member and name removed, so a bucket that cannot be reached fails the deletion with
+    503 while the computer is still listed, and the person asks again.
+  - The delete loop of `eraseSessionArchives` is now `deleteArchives` (`:1230`), which deletes exactly the ids it is
+    given. `eraseSessionArchives` itself could not be reused here: it also deletes every session in
+    `hosted:archives:<account>`, other computers' included.
+  - The nightly pass's marking loop is now `markArchivesErased` (`:1251`), called from `runHostedNightly`
+    (`api/_lib/hosted-crons.ts:616`) with the same 404-tolerant update. The lapse case below still passes on it.
+  - Parity, as the finding suggests: the computer's last provider reading (`hosted:usage`, HASH name → reading) is
+    deleted with it (`:1901`), as the nightly pass and `eraseAccountHosted` do. `hostedUsageKey` moved from
+    `hosted-crons.ts` to `hosted-sessions.ts` (`:156`), next to `hostedNamesKey`, because `hosted-crons.ts` imports
+    `hosted-sessions.ts` and not the other way round. Nothing else imported it.
+  - Regression: `test/hosted-lifecycle.test.ts` "erasing a computer drops its download waiver: one made again under
+    its number pays its own egress (P5)" (`:464`). A download-only session on the kept disk uploads and gets a link
+    (200). The erase then deletes exactly that object (the R2 DELETE seen), the record carries `erasedAt`, the disk's
+    date still stands, a new ask answers 410 "This session's files are no longer kept.", the earlier link answers 410,
+    and the seeded `hosted:usage` entry is gone. Two mutations each failed this case only: no archive deletion and
+    mark, and no `hosted:usage` delete.
+- **PR17 (non-blocking): `HOSTED_DOWNLOAD_UNAVAILABLE` has two statuses while the table names one.** Confirmed; the
+  finding's first option (reading R20 below).
+  - `Hosted.ERROR_CODES` declares it 409 (`packages/schema/src/hosted.ts:79`). `requestDownload` answers 410 when the
+    disk's date passed or `erasedAt` is set (`api/_lib/hosted-sessions.ts:1299`), and `downloadRedirect` answers 410
+    for `erasedAt` (`:1326`) and for a missing object (`:1332`, A54's). Every start refusal, and a request for files
+    that were never packed, answers 409.
+  - The table's comment now names both statuses (`hosted.ts:77-78`), and `requestDownload`'s doc comment says which
+    is which. The H1 section has a dated line.
+  - Pin: `test/hosted-copy.test.ts` "HOSTED_DOWNLOAD_UNAVAILABLE is the table's 409 for what cannot be served and 410
+    for files that are gone" (`:184`). A download-only session uploads and gets a link; past the disk's date a new
+    start answers the table's status (409) and the ask answers 410, both with that code; the table says 409. With
+    `requestDownload` answering 409 for gone files, the case failed.
+- **PR7 again (blocking, listed twice in this round): `31ddb43b` edits brain-transport's
+  `api/_lib/cloud-agents-run-token.ts:57` and `test/api-module-loading.test.ts`.** Confirmed; no lane change, as both
+  entries say. The lead decides before the lane's PR: either accept the cross-lane edit explicitly, or have the
+  brain-transport or PR #33 lane land the same two-file change and keep one copy when main is merged in.
+  - Read again in this round from the worktree's remote-tracking refs (not fetched): origin/release-finish `b0752dda`
+    has `Schema.isPattern(METER_EPOCH_PATTERN)` at `:52`, and origin/brain-transport `1d36447e` has it at `:57`. Neither
+    carries the change, so the branches still diverge there.
+  - Kept open: TB For the lead item 1 (with its dated correction) and item 1 of the first two rounds' For the lead.
+- **PR18 (non-blocking): one kept window could be charged twice.** Confirmed and fixed with the finding's first
+  option.
+  - The retention's ref was `hr-<computer>-<subscription>-<start>`, keyed on the pool period. `applyHostedTransition`
+    sets the disk's date once (`ZADD NX`, `hosted-crons.ts:473`) and returns early between two states without a
+    computer (`:464`). So a `current` plan whose 14-day window crossed a renewal charged another `ENDED_DISK_DAYS` at a
+    second download-only start in the new period ("Pack them again", or a new start after the first ended). An ended
+    plan already charged that came back on a plan without a computer did the same.
+  - Now the ref names the window: `hr-<computer>-<due>`, where `due` is the account's `hosted:disk-due`
+    (`api/_lib/hosted-ledger.ts:944`). `chargeRetention` takes `due` as input and refuses anything but a positive whole
+    number (`:938`). `startHostedDownload` passes the date it already read (`hosted-sessions.ts:853`), and
+    `launchSession` passes it on (`:709`). A later start in the same window answers the first grant, whichever period
+    it is held from.
+  - The ref fits `vector_hosted`'s pattern (`^h[bser]-[A-Za-z0-9_.:-]{1,197}$`) and stays one account's (the computer
+    name carries the account's prefix). `docs/vector/owner-actions/sql/hosted.sql`'s comment on refs now says
+    `hr-<computer>-<disk deletion date, ms>`; the SQL is unchanged.
+  - Regression: `test/hosted-ledger.test.ts` "a kept window is charged once even when a renewal holds the next start
+    from a new period (R3)" (`:929`). A `current` retention is charged in P1, the plan renews to P2 (a new key), and
+    the same window's second retention answers `{days: 14}` with exactly one `hr-` debit (440,132) across both pools
+    and one retention line filed under P1. A later window (another date) is charged once more. With the ref keyed on
+    the window and the period, the case failed with two 440,132 debits.
+  - Lines changed: `hosted-ledger.test.ts`'s retention cases name the window (`KEPT`, `:823`);
+    `hosted-sessions-api.test.ts`'s `RETENTION` reads the account's date (`:931`); and `hosted-lifecycle.test.ts`'s
+    ended case reads the date it already checks.
+- **PR19 (non-blocking): `chargeRetention`'s `until` was not the disk's date.** Confirmed and fixed with the finding's
+  first option: it answers `{days}` only (`hosted-ledger.ts:943`, `:946`, `:965`), and the doc comment says the disk's
+  deletion date is `due`. Its only caller ignored the result. The ledger case that compared the whole answer now
+  expects `{days: 14}`.
+
+### Readings
+
+- **R18 (R3 amended), once per kept window.** §4.4 keeps an ended plan's disks 14 days for download, and R3 charges
+  that keeping to the period the first download-only start is held from. The window is named by its deletion date,
+  which `applyHostedTransition` sets once and removes only when the plan includes a computer again (or the nightly
+  pass deletes the disks). So one window is charged once, whichever period pays it, and a new window (a later end) is
+  charged again. No line under the old ref can exist in production: the cloud computer is unlisted and
+  `VECTOR_HOSTED_PROVIDER` is unset, so no migration is needed. If one did exist, a start in its window would be
+  charged once more.
+- **R19 (R15 amended), the erase mark.** `download.erasedAt` is now written by the nightly deletion pass and by
+  `eraseHostedComputer`, on records whose packed files were ready, after those files were deleted. Account deletion
+  still deletes the records instead. A record that lapsed (its own TTL, 35 days after the session ended) can give no
+  link, so a computer's deletion cannot find that session's object and leaves it to the bucket's 2-day `hosted/` rule.
+  Account deletion still finds it through `hosted:archives:<account>`.
+- **R20 (PR17), 409 and 410.** One code, two statuses: 409 for a start or a request that cannot be served, 410 once a
+  session's packed files are gone (the disk's date passed, or they were deleted with the disk), both on the person's
+  request and on the download link. This is A53's own reading ("409 `HOSTED_DOWNLOAD_UNAVAILABLE` (410 once the files
+  are gone)", A53's error-code bullet). The two new 410 paths follow it. The table keeps one status per code, so it
+  stays 409 and its comment names both. The clients read the code and show the server's message whatever the status
+  (`packages/app/src/features/cloud/hosted/hosted-model.ts:561`, `packages/desktop/src/main/hosted-client.ts:62`), so
+  no client changes.
+
+### Disagreements
+
+- PR17: kept 410 for files that are gone rather than answering 409 on `requestDownload`, because A53 recorded that
+  reading and the link route already answers 410 for the same case.
+- PR16: `eraseSessionArchives` is not called for one computer, as the finding suggests, because it would delete every
+  signed session's files, other computers' included. The new `deleteArchives` does the same deletion for exactly the
+  computer's sessions.
+- PR18: the regression drives `chargeRetention` across a real renewal at the ledger level instead of two full
+  download-only starts.
+
+### For the lead
+
+1. PR7 (both entries): unchanged from the first two rounds' item 1. Decide on `31ddb43b` before this lane's PR.
+2. No new defect was found in another lane's file in this round.
+
+### Ran locally
+
+All runs went through `vector-serial`, one file at a time from `test/` with `--timeout 30000`, after the last code
+edit; the two files changed by formatting ran again after it.
+
+| Test file | Pass | Fail | Skip |
+| --- | --- | --- | --- |
+| `hosted-ledger.test.ts` | 35 | 0 | 1 |
+| `hosted-lifecycle.test.ts` | 23 | 0 | 0 |
+| `hosted-sessions-api.test.ts` | 59 | 0 | 1 |
+| `hosted-copy.test.ts` | 7 | 0 | 0 |
+| `account-delete.test.ts` | 37 | 0 | 1 |
+| `hosted-reaper.test.ts` | 26 | 0 | 0 |
+| `hosted-jobs.test.ts` | 32 | 0 | 1 |
+| `hosted-clients.test.ts` | 12 | 0 | 0 |
+| `hosted-internal.test.ts` | 12 | 0 | 0 |
+| `hosted-provider.test.ts` | 39 | 0 | 0 |
+| `codium-pool.test.ts` | 29 | 0 | 0 |
+| `api-module-loading.test.ts` | 2 | 0 | 0 |
+
+Four mutations each failed their own case, and were then restored from saved copies under the scratch folder:
+
+- the retention ref keyed on the window and the period (`hr-<computer>-<due>-<start>`): only the renewal case failed,
+  with two 440,132 debits. The old ref (`hr-<computer>-<subscription>-<start>`) also failed it, and the two ledger
+  cases that name the ref;
+- no archive deletion and mark in `eraseHostedComputer`: only the erase case failed;
+- no `hosted:usage` delete there: only the erase case failed, at its usage check;
+- `requestDownload` answering 409 for gone files: only the new `hosted-copy.test.ts` pin failed.
+
+Typechecks were clean: `packages/engine` `bun typecheck --project ../../tsconfig.json` (api and test; run again after
+the formatting), the full `bun turbo typecheck --concurrency=2` (27 of 27 tasks, 26 cached), and `packages/schema` and
+`packages/web` `bun typecheck`. `git diff --check` was clean.
+
+`packages/engine` `test/compliance/upstream-free.test.ts` (fresh XDG roots under `/tmp/vector-v2/codium-finish/xdg3/`)
+gave 11 pass and 1 fail. The scan case passed. The failure is the known non-hermetic `:148` case (TB For the lead item
+7).
+
+Formatting: `prettier --write` ran on `api/_lib/hosted-ledger.ts` (unchanged) and `test/hosted-ledger.test.ts`, both
+formatted at HEAD. `hosted-sessions.ts`, `hosted-crons.ts`, `packages/schema/src/hosted.ts`,
+`hosted-lifecycle.test.ts`, `hosted-sessions-api.test.ts` and `hosted-copy.test.ts` were not formatted at HEAD, so only
+the added lines were wrapped to 120 columns; test names longer than that stay on one line, as prettier keeps them.
+Prettier ran on node directly, not through `vector-serial`, which queues Bun workloads.
+
+### Only in CI
+
+- The Valkey cases (`codium-pool.test.ts`'s HOLD on real Lua, the ledger's script case and the sessions CLAIM case).
+  The new renewal case runs on the in-memory store only.
+- The Postgres ledger, where the new ref goes through the real `vector_hosted` pattern check and primary key.
+- vector-hosted-ci.yml's Hosted tests (`test/hosted-*`).
+- The commit step's Vector Codium, typecheck.yml and vector-hosted-ci.yml dispatches, which run after the lead's
+  commit.
+
+Files touched in this round:
+
+- `api/_lib/hosted-sessions.ts`, `api/_lib/hosted-crons.ts`, `api/_lib/hosted-ledger.ts`,
+  `packages/schema/src/hosted.ts` (a comment only);
+- `test/hosted-ledger.test.ts`, `test/hosted-lifecycle.test.ts`, `test/hosted-sessions-api.test.ts`,
+  `test/hosted-copy.test.ts`;
+- `docs/vector/build/codium-deviations.md` (this section, and dated lines after the H1 download-only section and after
+  round two's section), `docs/vector/build/codium-a51-hosted-core-notes.md`,
+  `docs/vector/build/codium-a53-hosted-sessions-notes.md`, `docs/vector/MODEL-PLANS.md`,
+  `docs/vector/owner-actions/hosted-computer.md`, `docs/vector/owner-actions/sql/hosted.sql` (the refs comment only).
+
+Edits to `api/_lib/model-plan-*.ts`: none. No new setting, route, schema field or client change. A computer's deletion
+can now answer 503 when the media bucket cannot be reached and one of its sessions has packed files. No screen offers
+the deletion yet; the app's `hostedErrorText` shows the server's message for any refusal.

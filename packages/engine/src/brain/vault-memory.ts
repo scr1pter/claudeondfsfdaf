@@ -95,9 +95,11 @@ export const SKILLS_CHARS = 1_500_000
 /**
  * A repository's learned skills as a backup holds them, in files a restore can each send whole (R45-10). A restore
  * reads only the skills in use or waiting for review, and never their evidence (BrainExport.skills), so archived,
- * superseded and held skills and every skill's evidence stay out. Each part keeps under SKILLS_CHARS of JSON: a skill's
- * paths have no length limit, so no count of skills alone bounds the file. Skills in use come before those waiting
- * for review, each kept in the brain's own order: a restore takes at most a repository's pending limit of proposals
+ * superseded and held skills and every skill's evidence stay out. A part holds skills up to SKILLS_CHARS of JSON: a
+ * skill's paths have no length limit, so no count of skills alone bounds the file. A skill longer than that by itself
+ * gets a part of its own, above SKILLS_CHARS: it restores while that part fits in the server's IMPORT_CHARS, and past
+ * it only that part is refused, never the skills before or after it. Skills in use come before those waiting for
+ * review, each kept in the brain's own order: a restore takes at most a repository's pending limit of proposals
  * (B10-3), so the ones it keeps are the ones the person had approved.
  */
 function restorable(skills: readonly BrainExport.Item[]) {
