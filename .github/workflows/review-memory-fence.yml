@@ -1,7 +1,31 @@
 name: Review memory history primitives
 on:
   push:
-    branches: [build-scope-wire, build-scope-joined, v2-scope, build-candidate, release-finish, v2, main]
+    branches: [main]
+    paths:
+      - .github/workflows/review-memory-fence.yml
+      - packages/core/src/review/model-attempt.ts
+      - packages/core/src/review/memory-fence*
+      - packages/core/test/review/model-attempt.test.ts
+      - packages/core/test/review/memory-fence.test.ts
+      - packages/core/src/share/archive.ts
+      - packages/core/test/share/archive-memory-fence.test.ts
+      - packages/core/src/session/execution/local.ts
+      - packages/core/src/session/history.ts
+      - packages/core/src/session/store.ts
+      - packages/core/src/session/runner/index.ts
+      - packages/core/test/session/memory-fence*.test.ts
+      - packages/engine/src/session/llm.ts
+      - packages/engine/test/session/llm-memory-fence.test.ts
+      - packages/engine/src/review/run.ts
+      - packages/engine/src/review/model.ts
+      - packages/engine/test/review/codium-scope-integration.test.ts
+      - packages/engine/test/session/llm.test.ts
+      - packages/core/src/database/migration/**
+      - packages/core/src/database/migration.gen.ts
+      - packages/core/src/database/schema.gen.ts
+      - packages/core/schema.json
+  pull_request:
     paths:
       - .github/workflows/review-memory-fence.yml
       - packages/core/src/review/model-attempt.ts

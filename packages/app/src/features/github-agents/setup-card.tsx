@@ -304,6 +304,32 @@ export function GithubAgentsSetup(props: {
               </button>
             </section>
           </Show>
+          <Show when={status.state.status?.workflow === "current" ? status.state.status : undefined}>
+            {(current) => (
+              <p>
+                <Show
+                  when={current().options?.autoReview}
+                  fallback={
+                    <>
+                      Reviews when someone comments <code>{agentHandle(current())} review</code>.
+                    </>
+                  }
+                >
+                  Reviews every pull request.
+                </Show>
+                <Show when={current().url}>
+                  {(url) => (
+                    <>
+                      {" "}
+                      <a href={url()} target="_blank" rel="noopener noreferrer">
+                        View the workflow
+                      </a>
+                    </>
+                  )}
+                </Show>
+              </p>
+            )}
+          </Show>
           <Show when={status.state.status}>
             <fieldset
               class="github-agents-grid"

@@ -56,6 +56,8 @@ function integrationTests() {
   })
   const environment = [
     "NODE_ENV",
+    "MODEL_PLANS_ENABLED",
+    "VECTOR_GITHUB_BRAIN_ENABLED",
     "KV_REST_API_URL",
     "KV_REST_API_TOKEN",
     "VECTOR_ABUSE_SECRET",
@@ -66,6 +68,8 @@ function integrationTests() {
     await redis.connect()
     Object.assign(process.env, {
       NODE_ENV: "production",
+      MODEL_PLANS_ENABLED: "true",
+      VECTOR_GITHUB_BRAIN_ENABLED: "true",
       KV_REST_API_URL: upstream.url.origin,
       KV_REST_API_TOKEN: "run-record-fixture",
       VECTOR_CLI_TOKEN_SECRET: "run-record-fixture-secret-at-least-32",

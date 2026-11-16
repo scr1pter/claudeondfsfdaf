@@ -5,6 +5,7 @@ import {
   type RepoBinding,
   type SuspendReason,
 } from "../cloud-agents-binding.js"
+import { cloudAgentsEnabled } from "../model-plan-config.js"
 
 // Structurally matches the shared A47 router without making this independently buildable lane depend on that merge.
 export type GithubWebhookEvent = { name: string; action?: string; deliveryId: string; payload: Record<string, unknown> }
@@ -38,6 +39,9 @@ export function createCloudAgentsWebhookHandler(
     id: "cloud-agents",
     events: ["repository"] as const,
     async handle(event: GithubWebhookEvent) {
+      // While the service is off no binding is created, so nothing is read or written. A binding left from an earlier
+      // on period is still checked at mint: an owner change suspends it there before any run starts.
+      if (!cloudAgentsEnabled()) return
       if (event.name !== "repository" || !["transferred", "deleted", "renamed"].includes(event.action ?? "")) return
       const repository = record(record(event.payload)?.repository)
       const repositoryId = id(repository?.id)

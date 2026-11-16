@@ -1,4 +1,5 @@
 import { ACCOUNT_ID_PATTERN, installationPlatform, type PlatformId } from "../../../packages/schema/src/everywhere.js"
+import { TOMBSTONE_KEEP_MS } from "../codium-tombstone.js"
 import { ApiError } from "../http.js"
 import { appendAudit, type AuditEvent, type ERASE_REASONS } from "./audit.js"
 import { PLACE_PATTERN, installationAuthority, linkMember, parseLinkMember, readInstall, readInstallState, type InstallRecord } from "./identity.js"
@@ -197,8 +198,10 @@ function linkAccount(raw: string | undefined): string | undefined {
  */
 export async function eraseEverywhereAccount(ctx: EraseContext, account: string): Promise<void> {
   const owner = account.toLowerCase()
-  // Permanent local tombstone precedes every read/cleanup; late writers cannot recreate any local account data.
-  await ctx.store(["SET", everywhereKeys.accountClosed(owner), "closed"])
+  // The local closed marker precedes every read/cleanup, so late writers cannot recreate any local account data. Every
+  // pass rewrites it, the follow-up pass last, and it expires with Codium's tombstone (`TOMBSTONE_KEEP_MS`), which
+  // every admission also checks: the deleted account's id is not kept past the documented tombstone retention.
+  await ctx.store(["SET", everywhereKeys.accountClosed(owner), "closed", "PX", TOMBSTONE_KEEP_MS])
   const installsKey = everywhereKeys.installs(owner)
   for (const installation of await setMembers(ctx.store, installsKey)) {
     if (!installationPlatform(installation)) continue

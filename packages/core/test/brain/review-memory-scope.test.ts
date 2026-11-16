@@ -6,7 +6,7 @@ import { EffectDrizzleSqlite } from "@vectordevai/effect-drizzle-sqlite"
 import { mkdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { and, eq, sql } from "drizzle-orm"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import reviewMemory from "../../src/brain/migration/20261216000000_review_memory"
@@ -463,7 +463,7 @@ describe("review memory physical repository namespaces", () => {
   )
 
   gitTest(
-    "invalid, missing or expired physical-scope components cannot mutate any scope during repository/session erase",
+    "invalid, missing or expired physical-scope components are purged by a repository erase and retired by a session erase",
     async () => {
       await using repos = await repositories("remote")
       for (const mode of ["negative", "fractional", "missing", "witness"] as const)
@@ -488,13 +488,36 @@ describe("review memory physical repository namespaces", () => {
               yield* setup.db.run(
                 sql`UPDATE brain_tombstone SET until = 0 WHERE norm_hash = ${`${ReviewStore.SCOPE_MARKER}${repos.b.place.scope}`}`,
               )
+            const markers = (state: Effect.Success<ReturnType<typeof snapshot>>) =>
+              state.witnesses.filter(
+                (row) => row.norm_hash === ReviewStore.MARKER || row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+              )
+            const epoch = (state: Effect.Success<ReturnType<typeof snapshot>>, repository: string) =>
+              state.epochs.find((row) => row.repository_id === repository)
             const before = yield* snapshot(setup)
-            expect(
-              Exit.isFailure(yield* Effect.exit(setup.brain.eraseSession(repos.a.place, repos.a.source.reviewID))),
-            ).toBe(true)
-            expect(yield* snapshot(setup)).toEqual(before)
-            expect(Exit.isFailure(yield* Effect.exit(setup.brain.erase(repos.a.place, "repository")))).toBe(true)
-            expect(yield* snapshot(setup)).toEqual(before)
+            expect(before.ordinary).toHaveLength(4)
+            // The user's session erase completes: that session's source witnesses go, records and scopes stay, and the
+            // shared repository epoch still advances because its own components are valid.
+            expect(yield* setup.brain.eraseSession(repos.a.place, repos.a.source.reviewID)).toBe(0)
+            const session = yield* snapshot(setup)
+            expect(session.ordinary).toHaveLength(2)
+            expect(session.entries).toEqual(before.entries)
+            expect(session.scopes).toEqual(before.scopes)
+            expect(markers(session)).toEqual(markers(before))
+            expect(epoch(session, repos.a.place.repository)!.generation).toBeGreaterThan(
+              epoch(before, repos.a.place.repository)!.generation,
+            )
+            // The repository erase purges every scope's review memory, and its epoch moves past every generation.
+            expect(yield* setup.brain.erase(repos.a.place, "repository")).toBe(4)
+            const erased = yield* snapshot(setup)
+            expect(erased).toMatchObject({ entries: [], scopes: [], ordinary: [] })
+            expect(markers(erased)).toEqual([])
+            expect(epoch(erased, ReviewStore.GLOBAL)).toEqual(epoch(session, ReviewStore.GLOBAL))
+            expect(epoch(erased, repos.a.place.repository)).toMatchObject({ enabled: false })
+            expect(epoch(erased, repos.a.place.repository)!.generation).toBeGreaterThan(
+              epoch(session, repos.a.place.repository)!.generation +
+                Math.max(...session.scopes.map((row) => (Number.isSafeInteger(row.generation) ? row.generation : 0))),
+            )
           }),
         )
     },
