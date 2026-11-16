@@ -76,8 +76,11 @@ const api = createOwnerArtifactReadApi({
   }) as typeof fetch,
   store: async (command) => {
     state.stores++
-    if (command[0] === "HGETALL") {
-      expect(command[1]).toBe(`vector:cloud-agents:run:${rid}`)
+    expect(command[0]).toBe("EVAL")
+    expect(command[2]).toBe("1")
+    // The run record is read with HGETALL inside a script, which answers a flat array on every protocol (BT09).
+    if (command[3] === `vector:cloud-agents:run:${rid}`) {
+      expect(command[1]).toBe("return redis.call('HGETALL', KEYS[1])")
       return Object.entries({
         ...record,
         account: state.foreign ? "22222222-2222-4222-8222-222222222222" : account,
@@ -88,8 +91,6 @@ const api = createOwnerArtifactReadApi({
         .filter(([key]) => state.thread !== undefined || key !== "thread")
         .flat()
     }
-    expect(command[0]).toBe("EVAL")
-    expect(command[2]).toBe("1")
     expect(command[3]).toBe("vector:cloud-agents:binding:123")
     return [Object.entries({ ...binding, generation: state.generation }).flat()]
   },

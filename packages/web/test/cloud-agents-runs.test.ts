@@ -17,6 +17,7 @@ import { liveKey, reserveRun, settleRun, usedKey } from "../../../api/_lib/cloud
 import {
   eraseCloudAgentsAccount,
   listCloudRuns,
+  ownerCloudRun,
   recordRunEnd,
   recordRunStart,
   type RunStart,
@@ -443,6 +444,32 @@ function integrationTests() {
     await expect(recordRunStart({ ...run, source: "github-comment", event: "issue_comment" })).rejects.toMatchObject({
       code: "INVALID_REQUEST",
     })
+  })
+
+  // This file's bridge forwards to Bun's RESP3 client, which answers a bare HGETALL with a map: the owner read's record
+  // lookup must not depend on the store's reply protocol (deviations, "2026-11-16 BT09"). The flat-array reply a REST
+  // store sends is covered by cloud-agents-owner-artifact.test.ts's fake store.
+  test("a completed desktop run's owner provenance reads its record through a RESP3 store client", async () => {
+    const f = await fixture()
+    const run = await f.start({
+      event: "workflow_dispatch",
+      source: "github-dispatch",
+      thread: "17",
+      trigger: { source: "desktop", purpose: "task" },
+    })
+    await expect(ownerCloudRun(f.account, run.rid)).rejects.toMatchObject({ code: "RUN_UNAVAILABLE" })
+    await f.settle(run)
+    expect(await ownerCloudRun(f.account, run.rid)).toEqual({
+      account: f.account,
+      rid: run.rid,
+      repositoryId: f.identity.repositoryId,
+      generation: f.binding.generation,
+      thread: "17",
+      runId: run.runId,
+      startedAt: run.startedAt,
+      endedAt: run.startedAt + 1000,
+    })
+    await expect(ownerCloudRun(randomUUID(), run.rid)).rejects.toMatchObject({ code: "RUN_UNAVAILABLE" })
   })
 
   test("erasure removes ledgers, codes, bindings and generation pointers while counters and another account survive", async () => {
