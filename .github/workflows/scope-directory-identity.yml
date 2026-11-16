@@ -2,7 +2,23 @@ name: VectorScope repository identity
 
 on:
   push:
-    branches: [build-scope, build-scope-witness, build-scope-owner, build-scope-joined, v2-scope, build-candidate, release-finish, v2, main]
+    branches: [main]
+    paths:
+      - .github/workflows/scope-directory-identity.yml
+      - packages/core/src/directory-identity.ts
+      - packages/core/src/read-only-git.ts
+      - packages/core/src/review/**
+      - packages/core/src/brain/review-memory.ts
+      - packages/core/test/brain/review-memory-reopen.test.ts
+      - packages/schema/src/review-memory.ts
+      - packages/schema/test/review-memory.test.ts
+      - packages/core/test/directory-identity.test.ts
+      - packages/core/test/read-only-git.test.ts
+      - packages/core/test/fixture/directory-identity.ts
+      - packages/engine/src/review/**
+      - packages/engine/test/review/**
+      - packages/engine/test/server/httpapi-review-memory.test.ts
+  pull_request:
     paths:
       - .github/workflows/scope-directory-identity.yml
       - packages/core/src/directory-identity.ts

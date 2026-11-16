@@ -727,3 +727,59 @@ test("redirects, non-JSON and oversized upstream bodies fail closed", async () =
     (await send({ body: { action: "engine", workspaceId: WORKSPACE, method: "GET", path: "/session" } })).status,
   ).toBe(503)
 })
+
+test("the host's whole-number usage passes through, a workspace without it still reads, and invalid usage is redacted", async () => {
+  const counted = { ...workspace, usage: { model: 25, time: 50 } }
+  state.override = { enabled: true, workspaces: [counted, { ...workspace, id: OTHER }] }
+  const listed = await send()
+  expect(listed.status).toBe(200)
+  expect(listed.body).toEqual({ enabled: true, workspaces: [counted, { ...workspace, id: OTHER }] })
+  for (const item of [
+    {
+      body: { action: "create", repository: "fixture/project", idempotencyKey: WORKSPACE },
+      answer: { workspace: counted },
+    },
+    { body: { action: "start", workspaceId: WORKSPACE }, answer: { workspace: counted } },
+    { body: { action: "stop", workspaceId: WORKSPACE }, answer: { workspace: counted } },
+    { body: { action: "changes", workspaceId: WORKSPACE }, answer: { workspace: counted, changes } },
+    {
+      body: {
+        action: "publish",
+        workspaceId: WORKSPACE,
+        digest: changes.digest,
+        githubToken,
+        title: "Fix the fixture",
+      },
+      answer: { workspace: counted, pullRequest },
+    },
+  ]) {
+    state.override = item.answer
+    const result = await send({ body: item.body })
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual(item.answer)
+  }
+  for (const usage of [
+    { model: 101, time: 0 },
+    { model: 0, time: -1 },
+    { model: 25.5, time: 0 },
+    { model: "25", time: 0 },
+    { model: 25 },
+    { model: 25, time: 0, modelCalls: 1 },
+    { model: 25, time: 0, runningSince: 1780000000000 },
+    [25, 50],
+    null,
+    25,
+  ]) {
+    state.override = { enabled: true, workspaces: [{ ...workspace, usage }] }
+    const result = await send()
+    expect(result.status).toBe(503)
+    expect(result.body).toEqual({
+      error: {
+        code: "WORKSPACE_SERVICE_UNAVAILABLE",
+        message: "Cloud workspaces are temporarily unavailable. Please try again.",
+      },
+    })
+  }
+  state.override = { workspace: { ...workspace, usage: { model: 25, time: 0, modelCalls: 1 } } }
+  expect((await send({ body: { action: "stop", workspaceId: WORKSPACE } })).status).toBe(503)
+})

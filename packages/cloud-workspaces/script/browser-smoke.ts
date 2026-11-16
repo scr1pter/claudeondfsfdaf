@@ -15,6 +15,10 @@ const firstReply = "Found src/index.ts in the repository."
 const secondPrompt = "Run the test suite."
 const secondReply = "The test suite passed after your approval."
 const reviewedDigest = "a".repeat(64)
+const allowanceLine = "Pilot allowance used: 40% of model requests · 35% of this run’s time"
+const pausedAllowanceLine = "Pilot allowance used: 40% of model requests"
+// The allowance shows only as percentages: no count, credit, price or minute total may render anywhere on the page.
+const countCopy = /credit|\$\d|per token|\b\d+ (?:requests|minutes)\b/i
 const publishedPullRequest = {
   url: "https://github.com/vector/example/pull/37",
   branch: "vector/workspace-095f49dd-c5a0-4d90-ad7c-36314f95d6c5",
@@ -51,6 +55,7 @@ const backend = {
         createdAt: number
         updatedAt: number
         revision: number
+        usage: { model: number; time: number }
       }
     | undefined,
   session: undefined as { id: string; title: string; time: { created: number; updated: number } } | undefined,
@@ -174,13 +179,20 @@ async function gateway(route: Route) {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       revision: 1,
+      usage: { model: 40, time: 35 },
     }
     return route.fulfill({ json: { workspace: backend.workspace } })
   }
   if (command.action === "changes") {
     expect(command.workspaceId).toBe(backend.workspace?.id)
     if (!backend.workspace) throw new Error("No fixture workspace exists to review.")
-    backend.workspace = { ...backend.workspace, state: "stopped", revision: backend.workspace.revision + 1 }
+    // As on the host, a paused workspace keeps its model share and reports no run time.
+    backend.workspace = {
+      ...backend.workspace,
+      state: "stopped",
+      revision: backend.workspace.revision + 1,
+      usage: { model: backend.workspace.usage.model, time: 0 },
+    }
     backend.reviewRequests++
     return route.fulfill({
       json: {
@@ -341,11 +353,14 @@ try {
   await page.getByLabel(/Branch or ref/).fill("main")
   await page.getByRole("button", { name: "Create workspace", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Example repository", exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(allowanceLine, { exact: true })).toBeVisible()
   await expect(page.getByLabel("Model", { exact: true })).toContainText("Fixture coding model", { timeout: 15_000 })
   await page.getByLabel("Message Vector", { exact: true }).fill(firstPrompt)
   await page.getByRole("button", { name: "Send message", exact: true }).click()
   await expect(page.getByText(firstReply, { exact: true })).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText("Inspect repository", { exact: true })).toBeVisible()
+  // innerText, not textContent, so inline hydration scripts are not scanned.
+  expect(await page.locator("body").innerText()).not.toMatch(countCopy)
   const savedURL = page.url()
   expect(new URL(savedURL).searchParams.get("workspace")).toBe("095f49dd-c5a0-4d90-ad7c-36314f95d6c5")
   expect(new URL(savedURL).searchParams.get("session")).toBe(sessionID)
@@ -359,6 +374,8 @@ try {
   const mobile = await second.newPage()
   await mobile.goto(savedURL, { waitUntil: "domcontentloaded" })
   await expect(mobile.getByText(firstReply, { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(mobile.getByText(allowanceLine, { exact: true })).toBeVisible()
+  expect(await mobile.locator("body").innerText()).not.toMatch(countCopy)
   expect(backend.promptIDs).toHaveLength(1)
   await mobile.getByLabel("Message Vector", { exact: true }).fill(secondPrompt)
   await mobile.getByRole("button", { name: "Send message", exact: true }).click()
@@ -375,6 +392,8 @@ try {
   await expect(mobile.getByLabel("Reviewed diff", { exact: true })).toContainText("+export const ready = true", {
     timeout: 15_000,
   })
+  // The exact match fails if the run's time share is still shown once the workspace is paused.
+  await expect(mobile.getByText(pausedAllowanceLine, { exact: true })).toBeVisible()
   await expect(mobile.getByRole("button", { name: "Publish draft pull request", exact: true })).toBeDisabled()
   await mobile.getByLabel("Pull request title", { exact: true }).fill("Fix the repository entry point")
   await mobile.getByLabel("GitHub access token", { exact: true }).fill("fixture_github_token_for_browser")
@@ -386,8 +405,30 @@ try {
   )
   expect(backend.reviewRequests).toBe(1)
   expect(backend.publishRequests).toBe(1)
+  expect(await mobile.locator("body").innerText()).not.toMatch(countCopy)
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await mobile.screenshot({ path: path.join(directory, "workspace-mobile-restored.png"), fullPage: true })
+
+  if (!backend.workspace) throw new Error("No fixture workspace exists to exhaust.")
+  // The host bumps the revision on every model reservation, so the fixture does too.
+  backend.workspace = {
+    ...backend.workspace,
+    revision: backend.workspace.revision + 1,
+    usage: { model: 100, time: 0 },
+  }
+  await mobile.reload({ waitUntil: "domcontentloaded" })
+  await expect(mobile.getByText(/has used 100% of its pilot model allowance/)).toBeVisible({ timeout: 15_000 })
+  await expect(mobile.getByText("Pilot allowance used: 100% of model requests", { exact: true })).toBeVisible()
+  expect(await mobile.locator("body").innerText()).not.toMatch(countCopy)
+  expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await mobile.screenshot({ path: path.join(directory, "workspace-mobile-allowance.png"), fullPage: true })
+  // The notice names the selected workspace, so it must not sit above the form for a new one.
+  await mobile
+    .getByRole("complementary", { name: "Your workspaces and chats", exact: true })
+    .getByRole("button", { name: "New workspace", exact: true })
+    .click()
+  await expect(mobile.getByRole("heading", { name: "Start with a repository.", exact: true })).toBeVisible()
+  await expect(mobile.getByText(/has used 100% of its pilot model allowance/)).toHaveCount(0)
 
   backend.mode = "disabled"
   await mobile.reload({ waitUntil: "domcontentloaded" })
@@ -428,6 +469,12 @@ try {
       "digest-bound-draft-pr-command",
       "verified-pr-response-link",
       "responsive-width",
+      "pilot-allowance-percentages",
+      "allowance-time-only-while-running",
+      "model-allowance-notice",
+      "allowance-notice-hidden-while-creating",
+      "allowance-responsive-width",
+      "no-count-credit-or-price-copy",
       "disabled-service",
       "unavailable-service",
       "signed-out-gate",
@@ -438,7 +485,7 @@ try {
     permissionReplies: backend.replies,
     reviewRequests: backend.reviewRequests,
     publishRequests: backend.publishRequests,
-    screenshots: ["workspace-desktop.png", "workspace-mobile-restored.png"],
+    screenshots: ["workspace-desktop.png", "workspace-mobile-restored.png", "workspace-mobile-allowance.png"],
   }
   await fs.writeFile(path.join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n")
   console.log(JSON.stringify(receipt))

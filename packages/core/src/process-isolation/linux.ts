@@ -9,9 +9,12 @@ export const ENTRY = `${ROOT}/entry.py`
 export const SPEC = `${ROOT}/run.json`
 export const PRIVATE = `${ROOT}/private/state.json`
 export const PYTHON = "/usr/bin/python3"
-// First supported native host: GitHubHosted Ubuntu24.04. No caller-selected temporary mount exists.
+// First supported native host: GitHubHosted Ubuntu24.04. No caller-selected temporary mount exists. The fixed
+// RUNNER_TEMP stays hidden beneath the runner home mask, whose ancestors admission requires the keeper to be able to
+// search.
 export const HOST_TEMP = "/home/runner/work/_temp"
-export const MASKS = Object.freeze(["/home/vector-agent", "/tmp", "/var/tmp", "/run", HOST_TEMP] as const)
+export const RUNNER_HOME = "/home/runner"
+export const MASKS = Object.freeze(["/home/vector-agent", "/tmp", "/var/tmp", "/run", RUNNER_HOME] as const)
 export const CONTAINERS = Object.freeze([
   "/mnt/vector-agent-sandbox",
   "/var/lib/vector-agent-sandbox",
@@ -117,7 +120,7 @@ export function parseMaskProof(value: unknown, spec: PublicSpec): MaskProof {
   requireValue(Array.isArray(value.protectedMountTargets) && value.protectedMountTargets.length <= 64)
   const protectedMountTargets = Array.from(value.protectedMountTargets, (target: unknown) => {
     canonical(target)
-    requireValue(MASKS.some((parent) => target === parent || target.startsWith(parent + "/")))
+    requireValue(masked(target))
     return target
   })
   requireValue(
@@ -139,7 +142,10 @@ export function parseMaskProof(value: unknown, spec: PublicSpec): MaskProof {
 /** An immutable engine/runtime placed under a hidden parent cannot be exposed as an exception. */
 export function assertUnmaskedRuntime(value: string) {
   canonical(value)
-  requireValue(!MASKS.some((parent) => value === parent || value.startsWith(parent + "/")))
+  requireValue(!masked(value))
+}
+function masked(value: string) {
+  return MASKS.some((parent) => value === parent || value.startsWith(parent + "/"))
 }
 function shape(value: unknown, keys: readonly string[]): asserts value is Record<string, unknown> {
   requireValue(value !== null && typeof value === "object" && !Array.isArray(value))
@@ -225,6 +231,8 @@ export function parseSpec(value: unknown): PublicSpec {
       typeof value.nonce === "string" &&
       /^[0-9a-f]{32}$/.test(value.nonce),
   )
+  // No mask may cover the published container, its binds or the broker socket.
+  requireValue(![value.container, value.stage, value.scratch, value.directory, value.socket].some(masked))
   const keeper = identity(value.keeper)
   shape(value.broker, ["pid", "start", "uid", "gid"])
   const broker = identity({ pid: value.broker.pid, start: value.broker.start })

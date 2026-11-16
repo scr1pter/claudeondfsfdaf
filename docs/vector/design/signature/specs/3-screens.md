@@ -1,6 +1,6 @@
 # Vector Signature Blend: screens spec (Vectorscope, Settings, Tasks, Search, Connected tools, Automations)
 
-Status: design spec for artboards only. Nothing is built, no repository file is touched, nothing is installed, launched or tested. Repository facts were read from the read-only checkout `/Users/aik010/.cache/vector-review-main` (origin/main `0dcbb8e2d`) and with `git show` from `origin/hands`, `origin/codium` and `origin/connected-workspace`. Written 2026-11-11; revised the same day after a review (section 12).
+Status: design spec for artboards only. Nothing is built, no repository file is touched, nothing is installed, launched or tested. Repository facts were read from the read-only checkout `~/.cache/vector-review-main` (origin/main `0dcbb8e2d`) and with `git show` from `origin/hands`, `origin/codium` and `origin/connected-workspace`. Written 2026-11-11; revised the same day after a review (section 12).
 
 This file **extends** `scratchpad/vector-blend-spec.md` (called "BLEND" below; section numbers like BLEND 4.7). It does not restart anything. The owner's screenshot of today's app (`images/4.webp`) is reference for today's look only, as the owner said: it is the same design as the app today, provided for reference. The Signature screenshot is `images/3.png`.
 

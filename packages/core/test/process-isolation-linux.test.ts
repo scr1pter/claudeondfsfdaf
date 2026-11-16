@@ -47,19 +47,51 @@ test("the first supported hosted temporary root is fixed, never selected by a ca
 })
 
 test("hidden roots never contain the installed entry, fixed broker or permitted external toolchain", () => {
-  expect(LinuxIsolation.MASKS).toEqual(["/home/vector-agent", "/tmp", "/var/tmp", "/run", "/home/runner/work/_temp"])
+  expect(LinuxIsolation.MASKS).toEqual(["/home/vector-agent", "/tmp", "/var/tmp", "/run", "/home/runner"])
+  expect(LinuxIsolation.RUNNER_HOME).toBe("/home/runner")
+  expect(LinuxIsolation.HOST_TEMP).toBe("/home/runner/work/_temp")
+  expect(LinuxIsolation.MASKS).not.toContain(LinuxIsolation.HOST_TEMP)
   expect(Object.isFrozen(LinuxIsolation.MASKS)).toBe(true)
   for (const file of [
     LinuxIsolation.ENTRY,
     "/usr/bin/python3",
     "/usr/bin/node",
     "/opt/hostedtoolcache/node/bin/node",
-    ...LinuxIsolation.CONTAINERS.map((container) => container + "/tool-namespaces/broker.sock"),
+    "/home/runnerx/bin/node",
+    "/usr/libexec/vector-native-shell/runtime/node",
+    "/usr/libexec/vector-native-shell-control/runtime/bun",
+    ...LinuxIsolation.CONTAINERS.flatMap((container) => [
+      container,
+      container + "/checkout",
+      container + "/tool-scratch",
+      container + "/tool-namespaces",
+      container + "/tool-namespaces/broker.sock",
+    ]),
   ])
     expect(() => LinuxIsolation.assertUnmaskedRuntime(file)).not.toThrow()
-  for (const root of LinuxIsolation.MASKS)
-    for (const file of [root, root + "/runtime-or-data"])
-      expect(() => LinuxIsolation.assertUnmaskedRuntime(file)).toThrow(LinuxIsolation.Unavailable)
+  // The runner home mask also hides every runtime installed beneath it, such as setup-bun's ~/.bun.
+  for (const file of [
+    "/home/runner/.bun/bin/bun",
+    "/home/runner/work/_temp/node",
+    LinuxIsolation.HOST_TEMP,
+    ...LinuxIsolation.MASKS.flatMap((root) => [root, root + "/runtime-or-data"]),
+  ])
+    expect(() => LinuxIsolation.assertUnmaskedRuntime(file)).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("every fixed container spec parses and stays outside every mask", () => {
+  // A reachability guard: parseSpec refuses a published path beneath a mask, which no fixed container reaches today.
+  for (const container of LinuxIsolation.CONTAINERS)
+    expect(() =>
+      LinuxIsolation.parseSpec({
+        ...fixture(),
+        container,
+        stage: `${container}/checkout`,
+        scratch: `${container}/tool-scratch`,
+        directory: `${container}/tool-namespaces`,
+        socket: `${container}/tool-namespaces/broker.sock`,
+      }),
+    ).not.toThrow()
 })
 
 test("a protected nested filesystem is unsupported even when its outside alias uses another device", () => {
@@ -234,6 +266,7 @@ test("v2 target evidence requires all five roots, hidden canonical paths, unique
       LinuxIsolation.Unavailable,
     )
   const targets = [
+    "/home/runner",
     "/home/runner/work/_temp",
     "/home/vector-agent",
     "/run",

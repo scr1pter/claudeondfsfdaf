@@ -21,7 +21,22 @@ import {
   verifyAssets,
   boundedFile,
   json,
+  OBSERVER_OPERATIONS,
+  PROBE_PROC,
+  ROOT,
+  observerStage,
+  probeArguments,
+  probeExit,
+  probeNodeStage,
+  probeStage,
+  runError,
+  shellCase,
+  shellFailure,
+  shellStage,
+  type ShellFailure,
+  type ShellStage,
 } from "./native-shell-payload"
+import type { GithubIsolation } from "../../src/cli/cmd/github.isolation"
 
 const execute = promisify(execFile)
 const ENV = { PATH: "/usr/bin:/bin", LC_ALL: "C" }
@@ -30,9 +45,15 @@ const ENV = { PATH: "/usr/bin:/bin", LC_ALL: "C" }
 // Actual invocation is held behind Root's independent CPython installed-profile/startup qualification gate.
 const OBSERVE = String.raw`
 import errno, fcntl, json, os, pathlib, select, signal, stat, sys
+STAGE='observer-start'
+def observer_failure(kind,error,trace):
+    try: sys.stderr.write('VECTOR_NATIVE_SHELL_OBSERVER '+json.dumps({'stage':STAGE},separators=(',',':'))+'\n'); sys.stderr.flush()
+    except BaseException: pass
+sys.excepthook=observer_failure
 ROOT='/usr/libexec/vector-native-shell'
-MASKS=('/home/vector-agent','/tmp','/var/tmp','/run','/home/runner/work/_temp')
-CANARIES=MASKS+('/home/vector-agent/.config/vector','/home/vector-agent/.local/share/vector','/home/vector-agent/.cache/vector','/home/vector-agent/tmp/vector-agent')
+MASKS=('/home/vector-agent','/tmp','/var/tmp','/run','/home/runner')
+CANARIES=MASKS+('/home/runner/work/_temp','/home/vector-agent/.config/vector','/home/vector-agent/.local/share/vector','/home/vector-agent/.cache/vector','/home/vector-agent/tmp/vector-agent')
+HOSTED=tuple(parent for parent in CANARIES if parent=='/home/runner' or parent.startswith('/home/runner/'))
 CASES=('engine','inspect','nonzero','timeout','abort','shell-pipeline','stdio','delayed','pipeline','fd-source','fd-dest','death')
 def need(ok):
     if not ok: raise RuntimeError('Fixed Shell observer refused')
@@ -130,19 +151,27 @@ def alive_engine():
     saved=engine(); value=member(saved['pid'])
     need(value and value['start']==saved['start'])
     return value
+STAGE='observer-operation'
 if operation=='controls':
     need(len(sys.argv)==3)
+    # Host DAC may deny the agent beneath the runner home, so Root proves those seeds exist before the drop.
+    STAGE='observer-controls-hosted'
+    for parent in HOSTED:
+        need(regular(parent+'/native-shell-canary-'+nonce,0,128)==b'native-shell-synthetic-canary\n')
+    STAGE='observer-controls-drop'
     os.setgroups([]); os.setresgid(gid,gid,gid); os.setresuid(uid,uid,uid)
-    for parent in CANARIES:
+    STAGE='observer-controls-agent'
+    for parent in (item for item in CANARIES if item not in HOSTED):
         fd=os.open(parent+'/native-shell-canary-'+nonce,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
         try:
             info=os.fstat(fd)
             need(stat.S_ISREG(info.st_mode) and info.st_nlink==1 and 0<info.st_size<=128)
             need(os.read(fd,129)==b'native-shell-synthetic-canary\n')
         finally: os.close(fd)
+    STAGE='observer-controls-readonly'
     fd=os.open(ROOT+'/readonly-control.txt',os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
     os.close(fd)
-    result={'readableCanaries':len(CANARIES),'dacWritableControl':True}
+    result={'readableCanaries':len(CANARIES)-len(HOSTED),'rootCanaries':len(HOSTED),'dacWritableControl':True}
 elif operation=='register':
     need(len(sys.argv)==4 and sys.argv[3].isdigit())
     value=member(int(sys.argv[3]),True); need(value)
@@ -195,6 +224,7 @@ elif operation in ('hints','counters'):
             need(all(value==b'1\n' for value in data)); result=chosen
     finally: os.close(fd)
 else: raise RuntimeError('Unknown fixed observer operation')
+STAGE='observer-output'
 output=json.dumps(result,separators=(',',':')).encode('ascii')
 need(len(output)<=262144); os.write(1,output)
 `
@@ -276,6 +306,34 @@ function identity(value: unknown): Identity {
   }
 }
 const same = (a: Identity, b: Identity) => a.pid === b.pid && a.start === b.start && a.uid === b.uid
+// Refusal bookkeeping only: the first host failure freezes its stage, and other roles report their own stage.
+const witness: ShellFailure & { frozen: boolean } = {
+  host: "host-configuration",
+  case: null,
+  operation: null,
+  observer: null,
+  driver: null,
+  run: null,
+  driverExit: null,
+  probe: null,
+  probeNode: null,
+  engine: null,
+  engineCase: null,
+  control: null,
+  frozen: false,
+}
+const at = (stage: ShellStage<"host">) => {
+  if (!witness.frozen) witness.host = stage
+}
+const driving: {
+  nonce?: string
+  stage: ShellStage<"driver">
+  run: ShellStage<"run"> | null
+  control: GithubIsolation.FailureCause | null
+} = { stage: "driver-channel", run: null, control: null }
+// The failure-only runtime probe's inputs, set from the verified manifest and spec once the host environment holds,
+// and cleared again as soon as the engine fixture reports ready, so the probe never follows an engine report.
+const probing: { target?: { runtime: string; uid: number; gid: number } } = {}
 
 async function configuration() {
   need(process.platform === "linux" && ProcessIsolation.nativeBuild().enabled)
@@ -289,6 +347,7 @@ async function configuration() {
 
 async function driver() {
   const { manifest } = await configuration()
+  driving.nonce = manifest.nonce
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of process.stdin) {
@@ -306,6 +365,7 @@ async function driver() {
     GITHUB_TOKEN: channel.githubToken,
     VECTOR_MODE: manifest.mode,
   }
+  driving.stage = "driver-secrets"
   const { GithubSecrets } = await import("../../src/cli/cmd/github.secrets")
   if (manifest.mode === "codium") {
     exact(channel, ["v", "githubToken", "runToken", "keys"])
@@ -320,14 +380,21 @@ async function driver() {
     env.DEEPSEEK_KEY = channel.keys.DEEPSEEK_KEY
   }
   const { run } = await import("../../src/cli/cmd/github.sandbox")
+  const { GithubIsolation } = await import("../../src/cli/cmd/github.isolation")
+  driving.stage = "driver-run"
   // Actual production capture/clean-env/holder wrapper; secrets exist in this JS object and stdin only.
-  const code = await run([manifest.runtimePath, ENGINE], env)
+  const code = await run([manifest.runtimePath, ENGINE], env).catch((error: unknown) => {
+    driving.run = runError(error, ProcessIsolation.REFUSAL)
+    driving.control = GithubIsolation.failureMetadata(error) ?? null
+    throw error
+  })
   process.stdout.write(PREFIX + JSON.stringify({ v: 1, event: "driver-exit", nonce: manifest.nonce, code }) + "\n")
   process.exitCode = code
 }
 
 async function main() {
   const { manifest, spec } = await configuration()
+  at("host-environment")
   need(
     process.env.GITHUB_ACTIONS === "true" &&
       process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
@@ -335,20 +402,26 @@ async function main() {
       process.env.RUNNER_TEMP === LinuxIsolation.HOST_TEMP &&
       process.env.VECTOR_MODE === manifest.mode,
   )
+  probing.target = { runtime: manifest.runtimePath, uid: spec.uid, gid: spec.gid }
   const runtime = await fs.realpath(process.execPath)
   const hostRuntime = await fs.lstat(runtime)
   need(hostRuntime.isFile() && hostRuntime.uid === 0 && hostRuntime.gid === 0 && !(hostRuntime.mode & 0o022))
   const root = async (operation: string, ...args: string[]): Promise<unknown> => {
-    need(
-      ["controls", "register", "control", "kill-engine", "snapshot", "inspect", "ack", "hints", "counters"].includes(
-        operation,
-      ),
-    )
+    need(OBSERVER_OPERATIONS.some((item) => item === operation))
     const result = await execute(
       "/usr/bin/sudo",
       ["-n", "/usr/bin/python3", "-I", "-S", "-B", "-c", OBSERVE, operation, manifest.nonce, ...args],
       { env: ENV, timeout: 5_000, maxBuffer: 262_144 },
-    )
+    ).catch((error: unknown) => {
+      // Only the observer's one fixed stage line is read from its stderr.
+      if (!witness.frozen && witness.operation === null) {
+        witness.operation = operation
+        witness.observer = observerStage(
+          typeof error === "object" && error !== null && "stderr" in error ? error.stderr : undefined,
+        )
+      }
+      throw error
+    })
     return json(Buffer.from(result.stdout))
   }
   const snapshot = async () => {
@@ -356,12 +429,22 @@ async function main() {
     need(Array.isArray(values))
     return values.map(identity)
   }
+  at("host-controls")
   const controls = await root("controls")
-  exact(controls, ["readableCanaries", "dacWritableControl"])
-  need(controls.readableCanaries === CANARY_ROOTS.length && controls.dacWritableControl === true)
+  exact(controls, ["readableCanaries", "rootCanaries", "dacWritableControl"])
+  const hosted = CANARY_ROOTS.filter(
+    (parent) => parent === LinuxIsolation.RUNNER_HOME || parent.startsWith(LinuxIsolation.RUNNER_HOME + "/"),
+  )
+  need(
+    hosted.length === 2 &&
+      controls.readableCanaries === CANARY_ROOTS.length - hosted.length &&
+      controls.rootCanaries === hosted.length &&
+      controls.dacWritableControl === true,
+  )
   const ack = async (name: string, phase: string) => {
     await root("ack", name, phase)
   }
+  at("host-driver-start")
   const random = () => randomBytes(32).toString("base64url")
   const channel = {
     v: 1,
@@ -556,12 +639,10 @@ async function main() {
       kernelVerified: true,
     })
   }
-  const handle = async (line: string) => {
-    const value = json(Buffer.from(line))
-    need(record(value))
-    const item: Record<string, unknown> = value
-    need(item.v === 1 && item.nonce === manifest.nonce && typeof item.event === "string")
+  const handle = async (item: Record<string, unknown>) => {
     if (item.event === "engine-ready") {
+      probing.target = undefined
+      at("host-engine-ready")
       exact(item, [
         "v",
         "event",
@@ -668,6 +749,7 @@ async function main() {
       return
     }
     if (item.event === "signal-control") {
+      at("host-signal-control")
       exact(item, ["v", "event", "nonce", "count"])
       need(engine && !control && item.count === 1)
       control = true
@@ -675,6 +757,7 @@ async function main() {
       return
     }
     if (item.event === "round-begin") {
+      at("host-round-begin")
       exact(item, ["v", "event", "nonce", "case"])
       need(control && engine && !current && item.case === expected[rounds])
       current = String(item.case)
@@ -695,6 +778,7 @@ async function main() {
       return
     }
     if (item.event === "round-done") {
+      at("host-round-done")
       need(current && item.case === current && manifest.family === "baseline")
       exact(item, [
         "v",
@@ -717,6 +801,7 @@ async function main() {
       return
     }
     if (item.event === "engine-summary") {
+      at("host-engine-summary")
       exact(item, ["v", "event", "nonce", "cases", "proofWritten", "signalCount", "emptyProc"])
       need(
         manifest.family === "baseline" &&
@@ -747,11 +832,40 @@ async function main() {
       return
     }
     if (item.event === "driver-exit") {
+      at("host-driver-exit")
       exact(item, ["v", "event", "nonce", "code"])
       need(driverExit === undefined && typeof item.code === "number")
       driverExit = item.code
+      witness.driverExit = item.code
       return
     }
+    // Report-only lines from the other roles. They record that role's stage and never move the host stage.
+    if (item.event === "driver-failure") {
+      exact(item, ["v", "event", "nonce", "stage", "run", "control"])
+      need(
+        witness.driver === null &&
+          shellStage("driver", item.stage) &&
+          (item.run === null || shellStage("run", item.run)),
+      )
+      const { GithubIsolation } = await import("../../src/cli/cmd/github.isolation")
+      const control =
+        item.control === null
+          ? null
+          : GithubIsolation.failureMetadata(new Error(ProcessIsolation.REFUSAL, { cause: item.control }))
+      need(control !== undefined)
+      witness.driver = item.stage
+      witness.run = item.run
+      witness.control = control
+      return
+    }
+    if (item.event === "engine-failure") {
+      exact(item, ["v", "event", "nonce", "stage", "case"])
+      need(witness.engine === null && shellStage("engine", item.stage) && (item.case === null || shellCase(item.case)))
+      witness.engine = item.stage
+      witness.engineCase = typeof item.case === "string" ? item.case : null
+      return
+    }
+    at("host-protocol")
     throw new Error("Unknown engine protocol event")
   }
   const failed = Promise.withResolvers<never>()
@@ -760,6 +874,8 @@ async function main() {
   const fail = (error: unknown) => {
     if (protocolError !== undefined) return
     protocolError = error
+    witness.case = current ?? null
+    witness.frozen = true
     child.kill("SIGTERM")
     if (engine) void root("kill-engine").catch(() => {})
     escalation = globalThis.setTimeout(() => {
@@ -789,8 +905,10 @@ async function main() {
       pending = pending.slice(end + 1)
       if (!line.startsWith(PREFIX)) continue
       need(Buffer.byteLength(line) <= 4096)
+      const value = json(Buffer.from(line.slice(PREFIX.length)))
+      need(record(value) && value.v === 1 && value.nonce === manifest.nonce && typeof value.event === "string")
       queue = queue
-        .then(() => handle(line.slice(PREFIX.length)))
+        .then(() => handle(value))
         .catch((error: unknown) => {
           fail(error)
         })
@@ -800,6 +918,7 @@ async function main() {
     try {
       receive(chunk, true)
     } catch (error) {
+      at("host-protocol")
       fail(error)
     }
   })
@@ -807,11 +926,15 @@ async function main() {
     try {
       receive(chunk, false)
     } catch (error) {
+      at("host-protocol")
       fail(error)
     }
   })
   child.stdin.on("error", fail)
-  const deadline = globalThis.setTimeout(() => fail(new Error("Cell deadline exceeded")), 180_000)
+  const deadline = globalThis.setTimeout(() => {
+    at("host-deadline")
+    fail(new Error("Cell deadline exceeded"))
+  }, 180_000)
   try {
     const ended = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       child.once("error", reject)
@@ -819,10 +942,15 @@ async function main() {
     })
     const result = await Promise.race([ended, failed.promise])
     await queue
-    need(!protocolError && pending.length === 0 && engine && control)
+    at("host-close")
+    // A role that reported its own refusal fails the cell in both families, even where the exit codes would pass.
+    need(
+      !protocolError && pending.length === 0 && engine && control && witness.engine === null && witness.driver === null,
+    )
     if (manifest.family === "baseline")
       need(summary && rounds === CASES.length && result.code === 0 && driverExit === 0)
     else need(deathSent && !summary && result.code !== 0 && driverExit !== undefined && driverExit !== 0)
+    at("host-final-snapshot")
     const now = await snapshot()
     need(!now.some((row) => same(row, engine!)))
     const retained = baseline!.filter((row) => !same(row, engine!))
@@ -844,6 +972,7 @@ async function main() {
     }
     const encoded = JSON.stringify(output)
     need(Buffer.byteLength(encoded) <= 1_048_576 && secrets.every((value) => !encoded.includes(value)))
+    at("host-receipt")
     await fs.writeFile(
       `${LinuxIsolation.HOST_TEMP}/native-shell-${manifest.runtime}-${manifest.mode}-${manifest.family}.json`,
       encoded + "\n",
@@ -851,12 +980,75 @@ async function main() {
     )
     process.stdout.write("Native Shell host witness passed before final UID sweep\n")
   } finally {
+    if (!witness.frozen) witness.case = current ?? null
     globalThis.clearTimeout(deadline)
     globalThis.clearTimeout(escalation)
   }
 }
 
-void (process.argv[2] === "driver" ? driver() : main()).catch(() => {
-  process.stderr.write("Native Shell host fixture refused\n")
-  process.exitCode = 125
-})
+/**
+ * Report-only and failure-only. When the production run() resolved a signal exit before the engine fixture reported
+ * anything, start the engine's runtime with `-e 0` under the engine sandbox's empty read-only proc and under its own
+ * PID namespace procfs, then Node under the empty proc. An engine-ready report clears the target and an engine-failure
+ * report sets witness.engine, so the probe never follows an engine report. The argv is fixed, the output is discarded,
+ * each start is bounded at 5 s, no host stage moves, and the engine is never started again.
+ */
+async function runtimeProbe() {
+  const target = probing.target
+  if (
+    !(
+      target &&
+      witness.host === "host-close" &&
+      witness.driverExit !== null &&
+      witness.driverExit > 128 &&
+      witness.engine === null &&
+      witness.driver === null &&
+      witness.case === null
+    )
+  )
+    return
+  const exit = (proc: readonly string[], runtime: string) =>
+    Promise.resolve()
+      .then(() =>
+        execute("/usr/bin/sudo", probeArguments(proc, runtime, target.uid, target.gid), {
+          env: ENV,
+          timeout: 5_000,
+          maxBuffer: 65_536,
+        }),
+      )
+      .then(() => probeExit(undefined), probeExit)
+  const empty = await exit(PROBE_PROC.empty, target.runtime)
+  witness.probe = probeStage(empty, await exit(PROBE_PROC.own, target.runtime))
+  witness.probeNode = probeNodeStage(await exit(PROBE_PROC.empty, `${ROOT}/runtime/node`))
+}
+
+const role = process.argv[2] === "driver" ? "driver" : "host"
+void (role === "driver" ? driver() : main())
+  .catch(async () => {
+    process.exitCode = 125
+    if (role === "host") {
+      // The probe cannot reject today; if it ever did, the one FAILURE line must still be written.
+      await runtimeProbe().catch(() => {})
+      process.stderr.write(shellFailure(witness) ?? "")
+    }
+    process.stderr.write("Native Shell host fixture refused\n")
+    // The driver reports its stage on the protocol channel; only Host prints the one closed witness line.
+    if (role !== "driver" || !driving.nonce) return
+    // A protocol pipe the host already closed must not turn the refusal into an uncaught EPIPE and another exit code.
+    process.stdout.on("error", () => {})
+    process.stdout.write(
+      PREFIX +
+        JSON.stringify({
+          v: 1,
+          event: "driver-failure",
+          nonce: driving.nonce,
+          stage: driving.stage,
+          run: driving.run,
+          control: driving.control,
+        }) +
+        "\n",
+    )
+  })
+  // Exit code 125 is set first, so a throw inside the async refusal handler can neither become an unhandled
+  // rejection nor change it.
+  .catch(() => {})

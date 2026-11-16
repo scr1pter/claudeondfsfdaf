@@ -6,6 +6,16 @@ import path from "node:path"
 import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
 import { GithubIsolation } from "../../src/cli/cmd/github.isolation"
 import { run, finish } from "../../src/cli/cmd/github.sandbox"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import {
+  CANARY_ROOTS,
+  FAILURE_PREFIX,
+  RUN_OPERATIONS,
+  RUN_REFUSALS,
+  runError,
+  shellFailure,
+} from "../fixture/native-shell-payload"
+import { TEMP } from "../fixture/native-shell-ci/common"
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex")
 const asset = () => ({
@@ -62,11 +72,13 @@ test("fixed mask predicate stages survive private projection without exposing ho
     "prepare-mask-run-parent-stat",
     "prepare-mask-run-parent-type",
     "prepare-mask-run-parent-owner",
-    "prepare-mask-host-temp-parent-mode",
-    "prepare-mask-host-temp-parent-canonical",
-    "prepare-mask-host-temp-target-mode",
-    "prepare-mask-host-temp-mount-present",
-    "prepare-mask-host-temp-mount-device",
+    "prepare-mask-runner-home-target-owner",
+    "prepare-mask-runner-home-parent-owner",
+    "prepare-mask-runner-home-parent-mode",
+    "prepare-mask-runner-home-parent-canonical",
+    "prepare-mask-runner-home-target-mode",
+    "prepare-mask-runner-home-mount-present",
+    "prepare-mask-runner-home-mount-device",
     "prepare-mask-aliases",
     "prepare-broker-mask-proof",
   ]) {
@@ -84,13 +96,18 @@ test("fixed mask predicate stages survive private projection without exposing ho
   }
 })
 test("mask diagnostic vocabulary rejects paths, invented predicates and wrong origins", () => {
-  const entry = { ...failureRecord(), stage: "prepare-mask-host-temp-parent-mode" }
+  const entry = { ...failureRecord(), stage: "prepare-mask-runner-home-parent-mode" }
   for (const stage of [
     "prepare-mask-guest-parent-mode",
     "prepare-mask-/home/private-parent-mode",
-    "prepare-mask-host-temp-parent-mode:0755",
-    "prepare-mask-host-temp-parent-mode\nprivate-value",
-    "prepare-mask-host-temp-parent-private",
+    "prepare-mask-/home/runner-parent-mode",
+    "prepare-mask-runner-home-parent-mode:0755",
+    "prepare-mask-runner-home-parent-mode\nprivate-value",
+    "prepare-mask-runner-home-parent-private",
+    // The removed hosted temporary mask family.
+    "prepare-mask-host-temp-parent-mode",
+    "prepare-mask-host-temp-target-mode",
+    "prepare-mask-host-temp-keeper-search",
     "prepare-mask-tmp-target-mode",
     "prepare-mask-run-target-mode",
     "prepare-mask-nested",
@@ -98,6 +115,7 @@ test("mask diagnostic vocabulary rejects paths, invented predicates and wrong or
     "prepare-mask-tmp-nested",
     "prepare-mask-var-tmp-nested",
     "prepare-mask-run-nested",
+    "prepare-mask-runner-home-nested",
     "prepare-mask-host-temp-nested",
     "prepare-mask-guest-nested",
     "prepare-mask-/run/private-nested",
@@ -204,24 +222,30 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
       "bwrap-setgroups",
       "bwrap-mount-propagation",
       "bwrap-root-tmpfs",
-        "bwrap-source",
-        "bwrap-destination",
-        ...["root", "home", "tmp", "var-tmp", "run", "host-temp", "dev", "proc", "checkout", "scratch"].map(
-          (target) => `bwrap-destination-${target}`,
-        ),
-        "bwrap-bind",
-        "bwrap-remount",
-        "bwrap-proc",
-        "bwrap-mask-tmpfs",
-        "bwrap-devpts",
-        "bwrap-pivot",
+      "bwrap-source",
+      "bwrap-destination",
+      ...["root", "home", "tmp", "var-tmp", "run", "runner-home", "dev", "proc", "checkout", "scratch"].flatMap(
+        (target) => [
+          `bwrap-destination-${target}`,
+          ...["eacces", "erofs", "enoent", "enotdir", "eloop", "eperm"].map(
+            (cause) => `bwrap-destination-${target}-${cause}`,
+          ),
+        ],
+      ),
+      "bwrap-bind",
+      "bwrap-remount",
+      "bwrap-proc",
+      "bwrap-mask-tmpfs",
+      "bwrap-devpts",
+      "bwrap-pivot",
       "bwrap-exec",
     ].flatMap((log) =>
       ["empty", "child-created", "invalid"].map((info) => `prepare-keeper-${outcome}-log-${log}-info-${info}`),
     ),
   )
-  expect(stages).toHaveLength(222)
-  expect(new Set(stages).size).toBe(222)
+  // 97 log values (37 before the errno causes plus 10 targets x 6 causes) x 2 outcomes x 3 info values.
+  expect(stages).toHaveLength(582)
+  expect(new Set(stages).size).toBe(582)
   for (const stage of stages) {
     const timeout = stage.startsWith("prepare-keeper-timeout-")
     const entry: GithubIsolation.FailureRecord = {
@@ -242,6 +266,25 @@ test("keeper startup diagnostics project the complete closed outcome, log and in
     }
     const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, entry] }
     expect(GithubIsolation.failureMetadata(new Error("private startup log and info", { cause }))).toEqual(cause)
+    // These are the vocabulary's longest labels (up to 86 characters); each crosses the host witness line whole, next
+    // to the longest runtime probe labels.
+    const line = shellFailure({
+      host: "host-close",
+      case: null,
+      operation: null,
+      observer: null,
+      driver: "driver-run",
+      run: "run-adapter",
+      driverExit: 134,
+      probe: "probe-empty-signal-own-signal",
+      probeNode: "probe-node-signal",
+      engine: null,
+      engineCase: null,
+      control: cause,
+    })
+    const parsed = line && JSON.parse(line.slice(FAILURE_PREFIX.length))
+    expect(parsed.control).toEqual(cause)
+    expect([parsed.probe, parsed.probeNode]).toEqual(["probe-empty-signal-own-signal", "probe-node-signal"])
     if (!timeout) {
       for (const exit of [0, 1, 255]) {
         const exited = { ...entry, exit }
@@ -298,6 +341,251 @@ test("keeper startup log and info vocabulary rejects unknown values and private 
   expect(projected).toEqual([entry])
   expect(JSON.stringify(projected)).not.toContain("/owner/private")
   expect(JSON.stringify(projected)).not.toContain("synthetic-private-token")
+})
+test("keeper destination errno causes decode only as a closed suffix of a fixed target", () => {
+  // The record shape of job 132529480650, with an errno-suffixed destination stage on the runner home mask.
+  const entry: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    stage: "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces-info-child-created",
+    class: "CalledProcessError",
+    errno: null,
+    exit: 1,
+  }
+  const control: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "control",
+    stage: "native-prepare",
+    exit: 125,
+  }
+  const transport: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+  }
+  expect(
+    GithubIsolation.decodeFailureRecords(Buffer.concat([failureBytes(entry), failureBytes(control)]), "prepare"),
+  ).toEqual([entry, control])
+  const cause: GithubIsolation.FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [transport, entry, control],
+  }
+  expect(GithubIsolation.failureMetadata(new Error("private keeper stderr", { cause }))).toEqual(cause)
+  for (const target of ["root", "home", "tmp", "var-tmp", "run", "runner-home", "dev", "proc", "checkout", "scratch"])
+    for (const errno of ["eacces", "erofs", "enoent", "enotdir", "eloop", "eperm"])
+      for (const outcome of ["child-exit", "timeout"]) {
+        const stage = `prepare-keeper-${outcome}-log-bwrap-destination-${target}-${errno}-info-child-created`
+        const decoded = { ...entry, stage }
+        expect(GithubIsolation.decodeFailureRecords(failureBytes(decoded), "prepare")).toEqual([decoded])
+      }
+  for (const stage of [
+    "prepare-keeper-child-exit-log-bwrap-destination-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eio-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-EACCES-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-permission-denied-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-Permission denied-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces-private-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-eacces-runner-home-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-private-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-/home/runner-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-/home/runner/work/_temp-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-bind-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-source-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-mask-tmpfs-eacces-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces-info-child-created-eacces",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home--info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces\ninfo-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-runner-home-eacces\u0000-info-child-created",
+    // The removed hosted temporary destination kind, alone and with a cause (NQ-1's observed label).
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-info-child-created",
+    "prepare-keeper-child-exit-log-bwrap-destination-host-temp-eacces-info-child-created",
+  ]) {
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+    const refused: GithubIsolation.FailureCause = {
+      v: 1,
+      event: "native-control-failure",
+      records: [transport, { ...entry, stage }],
+    }
+    expect(GithubIsolation.failureMetadata(new Error("private keeper stderr", { cause: refused }))).toBeUndefined()
+  }
+})
+test("keeper search admission stages decode only as fixed mask and checkout labels", () => {
+  // The record shape of NQ-3's hosted refusal, now on the runner home mask that replaced the hosted temporary root.
+  const entry: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    stage: "prepare-mask-runner-home-keeper-search",
+    class: "RuntimeError",
+    errno: null,
+    exit: null,
+  }
+  const control: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "control",
+    stage: "native-prepare",
+    class: "CalledProcessError",
+    exit: 125,
+  }
+  const transport: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+    exit: 1,
+  }
+  expect(
+    GithubIsolation.decodeFailureRecords(Buffer.concat([failureBytes(entry), failureBytes(control)]), "prepare"),
+  ).toEqual([entry, control])
+  const cause: GithubIsolation.FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [transport, entry, control],
+  }
+  expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause }))).toEqual(cause)
+  const stages = [
+    ...["home", "tmp", "var-tmp", "run", "runner-home"].map((mask) => `prepare-mask-${mask}-keeper-search`),
+    "prepare-keeper-search-checkout",
+  ]
+  for (const stage of stages) {
+    const decoded = { ...entry, stage }
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(decoded), "prepare")).toEqual([decoded])
+    const accepted: GithubIsolation.FailureCause = {
+      v: 1,
+      event: "native-control-failure",
+      records: [transport, decoded],
+    }
+    expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause: accepted }))).toEqual(accepted)
+    for (const origin of ["control", "client", "transport"])
+      expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...decoded, origin }), "prepare")).toEqual([])
+  }
+  for (const stage of [
+    "prepare-mask-keeper-search",
+    "prepare-mask-guest-keeper-search",
+    "prepare-mask-/home/runner-keeper-search",
+    // NQ-3's observed label: the hosted temporary mask family no longer exists.
+    "prepare-mask-host-temp-keeper-search",
+    "prepare-mask-runner-home-keeper-search-eacces",
+    "prepare-mask-runner-home-keeper-search-runner-work",
+    "prepare-mask-runner-home-keeper-search:0750",
+    "prepare-mask-runner-home-keeper-search\nprivate-value",
+    "prepare-mask-runner-home-keeper-search\u0000",
+    "prepare-mask-runner-home-keeper",
+    "prepare-mask-runner-home-search",
+    "prepare-mask-runner-home-parent-search",
+    "prepare-mask-home-keeper-search-checkout",
+    "prepare-keeper-search",
+    "prepare-keeper-search-stage",
+    "prepare-keeper-search-scratch",
+    "prepare-keeper-search-container",
+    "prepare-keeper-search-host-temp",
+    "prepare-keeper-search-checkout-eacces",
+    "Prepare-mask-runner-home-keeper-search",
+    "prepare-keeper-child-exit-log-keeper-search-info-child-created",
+  ]) {
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+    const refused: GithubIsolation.FailureCause = {
+      v: 1,
+      event: "native-control-failure",
+      records: [transport, { ...entry, stage }],
+    }
+    expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause: refused }))).toBeUndefined()
+  }
+})
+test("every fixed entry stage in the native source decodes", async () => {
+  // Guard-unit never runs this decoder, and a Python/TypeScript vocabulary mismatch drops every decoded record.
+  // test.yml also runs this file on Windows, whose checkout may add carriage returns; the line-anchored parse expects LF.
+  const source = (
+    await Bun.file(path.join(import.meta.dir, "../../../core/src/process-isolation/linux/entry.py")).text()
+  ).replaceAll("\r\n", "\n")
+  const assignments = [...source.matchAll(/_DIAGNOSTIC_STAGE = (.*)$/gm)].map((match) => match[1])
+  const literals = assignments.flatMap((value) => /^"([a-z0-9-]+)"$/.exec(value)?.[1] ?? [])
+  const steps = assignments.flatMap((value) => /^f"prepare-mask-\{label\}-([a-z-]+)"$/.exec(value)?.[1] ?? [])
+  const builders = assignments.filter((value) => value.startsWith("keeper_failure_stage("))
+  // Every assignment has one of the three closed shapes, so nothing below can pass on an empty parse.
+  expect(literals.length + steps.length + builders.length).toBe(assignments.length)
+  expect(literals).toContain("prepare-keeper-search-checkout")
+  expect(steps).toContain("keeper-search")
+  expect(builders.length).toBeGreaterThan(0)
+  // The labels dict maps each mask target expression (a string literal or RUNNER_HOME) to its fixed label.
+  const keyed = new Map(
+    [...(/^\s*labels = \{(.*)\}$/m.exec(source)?.[1] ?? "").matchAll(/([^\s,][^,]*?):"([a-z-]+)"/g)].map(
+      (match) => [match[1], match[2]] as const,
+    ),
+  )
+  const labels = [...keyed.values()]
+  expect(labels).toEqual(["home", "tmp", "var-tmp", "run", "runner-home"])
+  // Each mask step's labels come from the source as well, never from a restated rule: a step assigned directly in a
+  // loop body belongs to every mask, and one assigned in an `if/elif target == ...` branch belongs to that branch's
+  // mask only (today target-mode, for home and runner-home). Any other enclosing block leaves the step unresolved.
+  const lines = source.split("\n")
+  const product = lines.flatMap((line, index) => {
+    const step = /^\s*_DIAGNOSTIC_STAGE = f"prepare-mask-\{label\}-([a-z-]+)"$/.exec(line)?.[1]
+    if (step === undefined) return []
+    const block =
+      lines.slice(0, index).findLast((row) => row.trim() !== "" && row.search(/\S/) < line.search(/\S/)) ?? ""
+    const target = /^\s*(?:el)?if target == (.+):$/.exec(block)?.[1]
+    const owners = /^\s*for /.test(block) ? labels : [target === undefined ? undefined : keyed.get(target)]
+    return owners.map((label) => (label === undefined ? undefined : `prepare-mask-${label}-${step}`))
+  })
+  expect(lines.filter((line) => /^\s*_DIAGNOSTIC_STAGE = f"prepare-mask-/.test(line)).length).toBe(steps.length)
+  expect(product).not.toContain(undefined)
+  expect(product).toContain("prepare-mask-runner-home-keeper-search")
+  const decodes = (stage: string) => {
+    const operation = stage.startsWith("cleanup-") ? "cleanup" : "prepare"
+    const record = { ...failureRecord(), operation, stage, class: "RuntimeError" as const, errno: null, exit: null }
+    return GithubIsolation.decodeFailureRecords(failureBytes(record), operation).length === 1
+  }
+  expect(literals.filter((stage) => !decodes(stage))).toEqual([])
+  // Within this candidate set the decoder accepts exactly the source's mask product.
+  // host-temp is the removed hosted temporary mask label, so the decoder must refuse its whole family.
+  const candidates = [...labels, "guest", "host", "temp", "runner", "host-temp"].flatMap((label) =>
+    [...new Set(steps), "nested", "keeper", "search", "parent-search", "keeper-search-eacces"].map(
+      (step) => `prepare-mask-${label}-${step}`,
+    ),
+  )
+  expect(new Set<string | undefined>(candidates.filter(decodes))).toEqual(new Set(product))
+})
+test("every copy of the native mask list names the same roots in order", async () => {
+  // The Python copies cannot import LinuxIsolation. A drift would build, prove or witness a different mask geometry.
+  const read = (name: string) => Bun.file(path.join(import.meta.dir, name)).text()
+  const entry = await read("../../../core/src/process-isolation/linux/entry.py")
+  const strings = new Map(
+    [...entry.matchAll(/^([A-Z_]+) = "([^"]*)"$/gm)].map((match) => [match[1], match[2]] as const),
+  )
+  expect(strings.get("RUNNER_HOME")).toBe(LinuxIsolation.RUNNER_HOME)
+  expect(strings.has("HOST_TEMP")).toBe(false)
+  const masks = (/^MASKS = \((.*)\)$/m.exec(entry)?.[1] ?? "")
+    .split(", ")
+    .map((item) => (item.startsWith('"') ? JSON.parse(item) : strings.get(item)))
+  expect(masks).toEqual([...LinuxIsolation.MASKS])
+  const control = await read("../../src/cli/cmd/github.isolation.ts")
+  expect(JSON.parse(`[${/^\s*parents = \((.*)\)$/m.exec(control)?.[1]}]`)).toEqual([...LinuxIsolation.MASKS])
+  const host = await read("../fixture/native-shell-host.ts")
+  const tuple = (pattern: RegExp) => JSON.parse(`[${pattern.exec(host)?.[1].replaceAll("'", '"')}]`)
+  const observed = tuple(/^MASKS=\((.*)\)$/m)
+  expect(observed).toEqual([...LinuxIsolation.MASKS])
+  expect([...observed, ...tuple(/^CANARIES=MASKS\+\((.*)\)$/m)]).toEqual([...CANARY_ROOTS])
+  const home = LinuxIsolation.RUNNER_HOME
+  expect(host).toContain(
+    `HOSTED=tuple(parent for parent in CANARIES if parent=='${home}' or parent.startswith('${home}/'))`,
+  )
+  // Only the runner home and the hosted temporary root beneath it need Root's pre-drop canary read.
+  expect(CANARY_ROOTS.filter((root) => root === home || root.startsWith(home + "/"))).toEqual([
+    home,
+    LinuxIsolation.HOST_TEMP,
+  ])
+  // manage.ts seeds the canaries in the manifest branch; TEMP is the only identifier in its literal list.
+  const manage = await read("../fixture/native-shell-ci/manage.ts")
+  const manifest = manage.indexOf('if (operation === "manifest") {')
+  expect(manifest).toBeGreaterThan(-1)
+  const seeds = (/for \(const parent of \[([^\]]*)\]\)/.exec(manage.slice(manifest))?.[1] ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "")
+    .map((item) => (item === "TEMP" ? TEMP : JSON.parse(item)))
+  expect(seeds).toEqual([...CANARY_ROOTS])
 })
 test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
   const ordinary = failureRecord()
@@ -1071,4 +1359,69 @@ test("asset corruption and unsupported scope or JSON authority fail without an e
   expect(() => GithubIsolation.parseState({ ...intent, approved: true })).toThrow()
   expect(() => GithubIsolation.parseState({ ...intent, phase: "ready" })).toThrow()
   expect(f.calls).toHaveLength(0)
+})
+test("a control failure projection crosses the host witness channel unchanged and tampering refuses it", () => {
+  const record = (origin: "transport" | "control" | "client", stage: string, kind: string, exit: number | null) => ({
+    ...failureRecord(),
+    origin,
+    operation: "inspect" as const,
+    stage,
+    class: kind as GithubIsolation.FailureRecord["class"],
+    errno: null,
+    exit,
+  })
+  const cause: GithubIsolation.FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [
+      record("transport", "close", "ChildExit", 1),
+      record("control", "live-client", "CalledProcessError", 125),
+      record("client", "client-masks", "RuntimeError", null),
+    ],
+  }
+  // The driver projects the run() error; Host re-validates the decoded line through the same projection.
+  const sent = GithubIsolation.failureMetadata(new Error("refused", { cause }))
+  expect(sent).toEqual(cause)
+  const received = GithubIsolation.failureMetadata(new Error("refused", { cause: JSON.parse(JSON.stringify(sent)) }))
+  expect(received).toEqual(cause)
+  const witness = {
+    host: "host-close",
+    case: null,
+    operation: null,
+    observer: null,
+    driver: "driver-run",
+    run: "run-adapter",
+    driverExit: null,
+    probe: null,
+    probeNode: null,
+    engine: null,
+    engineCase: null,
+    control: received ?? null,
+  }
+  const line = shellFailure(witness)
+  expect(line && JSON.parse(line.slice(FAILURE_PREFIX.length)).control).toEqual(cause)
+  for (const tampered of [
+    { ...cause, message: "/home/runner/private" },
+    { ...cause, records: [cause.records[1], cause.records[0]] },
+    { ...cause, records: [...cause.records, cause.records[2], cause.records[2]] },
+    { ...cause, records: cause.records[0] },
+    { ...cause, records: [{ ...cause.records[0], stage: "unknown-stage" }] },
+    { ...cause, records: [{ ...cause.records[0], path: "/home/runner" }] },
+    { ...cause, event: "native-control-success" },
+  ])
+    expect(GithubIsolation.failureMetadata(new Error("refused", { cause: tampered }))).toBeUndefined()
+})
+test("the sandbox refusal messages the witness driver classifies exist verbatim in production", async () => {
+  const read = (name: string) => Bun.file(path.join(import.meta.dir, name)).text()
+  const sandbox = await read("../../src/cli/cmd/github.sandbox.ts")
+  const isolation = await read("../../src/cli/cmd/github.isolation.ts")
+  const core = await read("../../../core/src/process-isolation.ts")
+  expect(sandbox).toContain(`return new Error("${RUN_REFUSALS["run-refused"]}")`)
+  expect(isolation).toContain(`const REFUSAL = "${RUN_REFUSALS["run-adapter"]}"`)
+  expect(core).toContain(`throw new Error("${RUN_REFUSALS["run-engine-executable"]}")`)
+  expect(sandbox).toContain(
+    "throw new Error(`Sandbox operation ${path.basename(operation ?? file)} failed or timed out; the run is refused.`)",
+  )
+  for (const name of RUN_OPERATIONS) expect(sandbox).toContain(`"/usr/bin/${name}"`)
+  expect(runError(new Error(RUN_REFUSALS["run-refused"]), ProcessIsolation.REFUSAL)).toBe("run-refused")
 })

@@ -2,7 +2,8 @@ import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { execFile } from "node:child_process"
+import { execFile, spawnSync } from "node:child_process"
+import { readlinkSync } from "node:fs"
 import { promisify } from "node:util"
 import { Effect, Fiber, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
@@ -10,6 +11,7 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { OwnedProcess } from "@vectordevai/core/owned-process"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(CrossSpawnSpawner.node))
@@ -169,6 +171,84 @@ describe.skipIf(process.platform === "win32")("owned POSIX command groups", () =
       expect(result.drained).toBe(false)
       expect(result.error).toContain("output")
       expect(yield* Effect.promise(() => alive(pid))).toBe(true)
+    }),
+  )
+})
+
+// The legacy bubblewrap floor is held off in this build (ProcessIsolation.FLOOR), so the plan it would launch is built
+// with ProcessIsolation.decide. This runs where a usable root-owned bwrap exists (the Linux sandbox lanes) and is
+// skipped elsewhere: macOS and Windows have no bubblewrap, and some Linux runners refuse its user namespace.
+const bubblewrap = (() => {
+  if (process.platform !== "linux") return false
+  try {
+    ProcessIsolation.assertBinary()
+  } catch {
+    return false
+  }
+  return (
+    spawnSync(ProcessIsolation.BINARY, ProcessIsolation.argumentsForTool("/bin/true", [], os.tmpdir()), {
+      stdio: "ignore",
+      timeout: 10_000,
+    }).status === 0
+  )
+})()
+
+describe.skipIf(!bubblewrap)("owned POSIX command groups under the legacy bubblewrap floor", () => {
+  // Spawn review S4-2: the owner is the outermost layer and isolation sits inside it.
+  it.live("an isolated background command stays owned, and stopping it ends its whole tree", () =>
+    Effect.gen(function* () {
+      const dir = yield* directory
+      // Unique sleep durations are the canaries: a host-side scan finds them by argv, inside or outside the group.
+      const token = `${process.pid}${Math.floor(performance.now())}`
+      const canaries = () =>
+        Effect.promise(async () => {
+          const result = await execute("/bin/ps", ["-A", "-o", "pid=,stat=,args="])
+          return result.stdout
+            .split("\n")
+            .map((row) => row.trim().split(/\s+/))
+            .filter((row) => !row[1]?.startsWith("Z") && row.slice(2).join(" ").startsWith(`sleep 600.${token}`))
+            .map((row) => Number(row[0]))
+        })
+      const plan = ProcessIsolation.decide(
+        "/bin/sh",
+        ["-c", `sleep 600.${token}1 & setsid sleep 600.${token}2 & wait`],
+        { cwd: dir },
+        { guarded: true, floor: true },
+      )
+      expect(plan.file).toBe(ProcessIsolation.BINARY)
+      const spawner = yield* ChildProcessSpawner
+      const handle = yield* spawner.spawn(
+        OwnedProcess.command(ChildProcess.make(plan.file, plan.args, { cwd: dir, stdin: "ignore" }), bounds),
+      )
+      // Never leak a canary, even when an assertion below fails.
+      yield* Effect.addFinalizer(() =>
+        canaries().pipe(
+          Effect.map((pids) =>
+            pids.forEach((pid) => {
+              try {
+                process.kill(pid, "SIGKILL")
+              } catch {}
+            }),
+          ),
+        ),
+      )
+      const control = OwnedProcess.get(handle)
+      expect(control).toBeDefined()
+      // Ownership is keyed by the caller's command: the owned leader is bwrap itself, not the payload inside it.
+      expect(control?.pid).toBe(Number(handle.pid))
+      expect(readlinkSync(`/proc/${handle.pid}/exe`)).toBe(ProcessIsolation.BINARY)
+      const started = performance.now()
+      while ((yield* canaries()).length < 2) {
+        if (performance.now() - started > 5_000) throw new Error("The isolated command did not start both canaries")
+        yield* Effect.sleep("20 millis")
+      }
+      const result = yield* Effect.promise(control!.stop)
+      expect(result.terminated).toBe(true)
+      // The setsid canary left the process group, but not bwrap's PID namespace, which ends with the owned leader.
+      const deadline = performance.now() + 2_000
+      while ((yield* canaries()).length > 0 && performance.now() < deadline) yield* Effect.sleep("20 millis")
+      expect(yield* canaries()).toEqual([])
+      expect(yield* Effect.promise(() => alive(control!.pid))).toBe(false)
     }),
   )
 })

@@ -2,7 +2,7 @@ export * as DirectoryIdentityReader from "./directory-identity"
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { createHash } from "node:crypto"
-import { constants } from "node:fs"
+import { constants, readdirSync, realpathSync } from "node:fs"
 import fs, { type FileHandle } from "node:fs/promises"
 import path from "node:path"
 import { release } from "node:os"
@@ -411,7 +411,27 @@ export function packageImage(list: string, sums: string, member: string, image: 
   requireValue(digests.get(member.slice(1)) === createHash("md5").update(image).digest("hex"))
 }
 
-type Check = (() => void) & { readonly directories: Set<string> }
+// A Check belongs to one read, lease or launch and is never reused after it fails. Proofs run concurrently, so siblings
+// may still be in flight when the first one rejects; they cannot change a verdict, and every caller makes check() fail
+// once it has refused, so leftover steps stop at their next check instead of finishing the walk.
+// A realpath, an open handle and a readdir hold a descriptor while they run; lstat and stat hold none. A Check runs its
+// descriptor steps one at a time while its metadata walks stay concurrent, so a proof never needs more than one
+// spare descriptor and descriptor pressure cannot turn an unchanged runtime into a spurious refusal.
+type Check = (() => void) & {
+  readonly directories: Set<string>
+  readonly descriptor: <A>(operation: () => Promise<A>) => Promise<A>
+}
+function checker(predicate: () => void): Check {
+  let tail: Promise<unknown> = Promise.resolve()
+  return Object.assign(predicate, {
+    directories: new Set<string>(),
+    descriptor: <A>(operation: () => Promise<A>) => {
+      const result = tail.then(operation)
+      tail = result.catch(() => undefined)
+      return result
+    },
+  })
+}
 const step = async <A>(check: Check, operation: () => Promise<A>): Promise<A> => {
   check()
   const value = await operation()
@@ -420,62 +440,83 @@ const step = async <A>(check: Check, operation: () => Promise<A>): Promise<A> =>
 }
 async function immutable(file: string, check: Check) {
   requireValue(path.isAbsolute(file) && path.normalize(file) === file)
-  const directories = new Set<string>()
+  // The ancestors are independent observations, so each walk issues them together instead of one awaited lstat
+  // at a time. Every proof below still runs and must pass; only the issue order changes.
+  const [named, canonical] = await Promise.all([
+    lineage(file, check),
+    // Bun's fs.promises.realpath holds an O_PATH descriptor until it settles, so hundreds in flight exhausted a lowered
+    // limit. The synchronous call holds it only while it runs, and the queue keeps it apart from open and readdir.
+    // Awaiting each queued async realpath instead would serialize one event-loop round trip per stdlib entry.
+    // A synchronous call blocks the event loop, so a stalled filesystem holds off the hard timers and aborts until it
+    // returns; the verdict still fails closed because finish() and every later step check the deadline. That is
+    // acceptable only because every path here is fixed and local (the runtime, /etc, the loader and the libraries
+    // named by the root-owned images and cache): never route a caller-supplied path through these synchronous calls.
+    check.descriptor(async () => {
+      check()
+      return realpathSync.native(file)
+    }),
+  ])
+  for (const entry of named)
+    requireValue(entry.info.uid === 0n && (entry.info.isSymbolicLink() || (entry.info.mode & 0o022n) === 0n))
+  const [resolved, info] = await Promise.all([
+    lineage(canonical, check),
+    step(check, () => fs.stat(canonical, { bigint: true })),
+  ])
+  for (const entry of resolved)
+    requireValue(entry.info.uid === 0n && (entry.info.mode & 0o022n) === 0n && !entry.info.isSymbolicLink())
+  requireValue((info.isFile() || info.isDirectory()) && (info.mode & 0o6000n) === 0n)
+  // Publish only after BOTH ancestry walks and the leaf proof completed successfully.
+  for (const entry of [...named, ...resolved]) if (entry.info.isDirectory()) check.directories.add(entry.name)
+  return { canonical, info }
+}
+function lineage(file: string, check: Check) {
+  const names: string[] = []
   for (let current = file; ; current = path.dirname(current)) {
     // Only proven runtime DIRECTORY ancestry is reused, within this one read. Every leaf remains fresh.
     if (current !== file && check.directories.has(current)) break
-    const named = await step(check, () => fs.lstat(current, { bigint: true }))
-    requireValue(named.uid === 0n && (named.isSymbolicLink() || (named.mode & 0o022n) === 0n))
-    if (named.isDirectory()) directories.add(current)
+    names.push(current)
     if (current === "/") break
   }
-  const canonical = await step(check, () => fs.realpath(file))
-  for (let current = canonical; ; current = path.dirname(current)) {
-    if (current !== canonical && check.directories.has(current)) break
-    const info = await step(check, () => fs.lstat(current, { bigint: true }))
-    requireValue(info.uid === 0n && (info.mode & 0o022n) === 0n && !info.isSymbolicLink())
-    if (info.isDirectory()) directories.add(current)
-    if (current === "/") break
-  }
-  const info = await step(check, () => fs.stat(canonical, { bigint: true }))
-  requireValue((info.isFile() || info.isDirectory()) && (info.mode & 0o6000n) === 0n)
-  // Publish only after BOTH ancestry walks and the leaf proof completed successfully.
-  for (const directory of directories) check.directories.add(directory)
-  return { canonical, info }
+  return Promise.all(
+    names.map((name) => step(check, () => fs.lstat(name, { bigint: true })).then((info) => ({ name, info }))),
+  )
 }
 async function capturedBytes(file: string, maximum: number, check: Check) {
   const checked = await immutable(file, check)
   requireValue(checked.info.isFile() && checked.info.size <= BigInt(maximum))
-  check()
-  // A resource-producing await must enter finally even if cancellation arrived during open.
-  const handle = await fs.open(checked.canonical, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try {
+  // The handle holds its descriptor from open until close, so the whole read is one descriptor step.
+  return check.descriptor(async () => {
     check()
-    const before = await step(check, () => handle.stat({ bigint: true }))
-    const result = await step(check, () => handle.readFile())
-    const after = await step(check, () => handle.stat({ bigint: true }))
-    requireValue(
-      before.dev === checked.info.dev &&
-        before.ino === checked.info.ino &&
-        before.uid === 0n &&
-        after.uid === 0n &&
-        before.uid === after.uid &&
-        before.gid === after.gid &&
-        before.mode === after.mode &&
-        (before.mode & 0o6022n) === 0n &&
-        before.dev === after.dev &&
-        before.ino === after.ino &&
-        before.size === after.size &&
-        before.mtimeNs === after.mtimeNs &&
-        before.ctimeNs === after.ctimeNs &&
-        BigInt(result.length) === after.size &&
-        result.length <= maximum,
-    )
-    return { bytes: result, proof: { canonical: checked.canonical, info: after } }
-  } finally {
-    // Cleanup is unconditional; cancellation never skips closing a leased runtime file.
-    await handle.close()
-  }
+    // A resource-producing await must enter finally even if cancellation arrived during open.
+    const handle = await fs.open(checked.canonical, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      check()
+      const before = await step(check, () => handle.stat({ bigint: true }))
+      const result = await step(check, () => handle.readFile())
+      const after = await step(check, () => handle.stat({ bigint: true }))
+      requireValue(
+        before.dev === checked.info.dev &&
+          before.ino === checked.info.ino &&
+          before.uid === 0n &&
+          after.uid === 0n &&
+          before.uid === after.uid &&
+          before.gid === after.gid &&
+          before.mode === after.mode &&
+          (before.mode & 0o6022n) === 0n &&
+          before.dev === after.dev &&
+          before.ino === after.ino &&
+          before.size === after.size &&
+          before.mtimeNs === after.mtimeNs &&
+          before.ctimeNs === after.ctimeNs &&
+          BigInt(result.length) === after.size &&
+          result.length <= maximum,
+      )
+      return { bytes: result, proof: { canonical: checked.canonical, info: after } }
+    } finally {
+      // Cleanup is unconditional; cancellation never skips closing a leased runtime file.
+      await handle.close()
+    }
+  })
 }
 async function bytes(file: string, maximum: number, check: Check) {
   return (await capturedBytes(file, maximum, check)).bytes
@@ -501,22 +542,28 @@ export function extensionProfile(extensions: readonly string[], arch: "x64" | "a
 }
 async function getpathOverrides(file: string, check: Check) {
   // CPython3.12 Modules/getpath.py: command-line isolation cannot disable ._pth, pyvenv or build discovery.
-  await absent(file + "._pth", check)
   const directory = path.dirname(file)
-  for (const candidate of [
-    path.join(directory, "pyvenv.cfg"),
-    path.join(path.dirname(directory), "pyvenv.cfg"),
-    path.join(directory, "pybuilddir.txt"),
-    path.join(directory, "Modules/Setup.local"),
-  ])
-    await absent(candidate, check)
+  const levels: string[] = []
   for (let current = directory; ; current = path.dirname(current)) {
-    const candidate = path.join(current, "lib/python3.12")
-    if (await exists(candidate, check))
-      requireValue((await immutable(candidate, check)).canonical === "/usr/lib/python3.12")
-    await absent(path.join(current, "lib/python312.zip"), check)
+    levels.push(current)
     if (current === "/") break
   }
+  // Every candidate is an independent absence or identity proof; all of them are observed together.
+  await Promise.all([
+    ...[
+      file + "._pth",
+      path.join(directory, "pyvenv.cfg"),
+      path.join(path.dirname(directory), "pyvenv.cfg"),
+      path.join(directory, "pybuilddir.txt"),
+      path.join(directory, "Modules/Setup.local"),
+      ...levels.map((current) => path.join(current, "lib/python312.zip")),
+    ].map((candidate) => absent(candidate, check)),
+    ...levels.map(async (current) => {
+      const candidate = path.join(current, "lib/python3.12")
+      if (await exists(candidate, check))
+        requireValue((await immutable(candidate, check)).canonical === "/usr/lib/python3.12")
+    }),
+  ])
 }
 async function runtime(arch: "x64" | "arm64", check: Check) {
   check()
@@ -548,8 +595,7 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
       image,
     )
   }
-  await getpathOverrides(PYTHON, check)
-  await getpathOverrides(executable.canonical, check)
+  await Promise.all([getpathOverrides(PYTHON, check), getpathOverrides(executable.canonical, check)])
   if (await exists("/etc/ld.so.preload", check))
     requireValue((await bytes("/etc/ld.so.preload", 4096, check)).toString("utf8").trim() === "")
   const cacheImage = await capturedBytes("/etc/ld.so.cache", 8 * 1024 * 1024, check)
@@ -563,9 +609,14 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
     const current = await immutable(file, check)
     if (visited.has(current.canonical)) return
     visited.add(current.canonical)
+    // Siblings are independent proofs under an already-proven directory; walk them together.
     if (current.info.isDirectory()) {
-      for (const name of await step(check, () => fs.readdir(current.canonical)))
-        await walk(path.join(current.canonical, name), depth + 1)
+      // Synchronous for the same reason as realpath in immutable(): its descriptor is held only while it runs.
+      const names = await check.descriptor(async () => {
+        check()
+        return readdirSync(current.canonical)
+      })
+      await Promise.all(names.map((name) => walk(path.join(current.canonical, name), depth + 1)))
     } else if (/\/(?:_ctypes|_struct)\.cpython-312-(?:x86_64|aarch64)-linux-gnu\.so$/.test(current.canonical))
       extensions.push(current.canonical)
   }
@@ -578,8 +629,7 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
   const verify = async (file: string): Promise<void> => {
     check()
     // Preserve lexical AND canonical library names: either may supply getpath's dladdr-adjacent ._pth.
-    await getpathOverrides(file, check)
-    const checked = await immutable(file, check)
+    const [checked] = await Promise.all([immutable(file, check), getpathOverrides(file, check)])
     await getpathOverrides(checked.canonical, check)
     images.set(file, checked)
     if (libraries.has(checked.canonical)) return
@@ -596,24 +646,34 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
     }
     const dependency = elfDependencies(image, arch, kernel)
     if (file === PYTHON) requireValue(dependency.interpreter)
-    if (dependency.interpreter) {
-      const loader = await immutable(dependency.interpreter, check)
-      requireValue(
-        path.basename(loader.canonical) === (arch === "x64" ? "ld-linux-x86-64.so.2" : "ld-linux-aarch64.so.1") &&
-          ["/usr/lib/", "/usr/lib64/", "/lib/", "/lib64/"].some((prefix) => loader.canonical.startsWith(prefix)),
-      )
-      await verify(dependency.interpreter)
-    }
-    for (const name of dependency.needed) {
-      const candidates = cache.get(cacheName(name))
+    const candidates = dependency.needed.flatMap((name) => {
+      const found = cache.get(cacheName(name))
       // Cache lookup precedes every glibc default/hwcaps search. A usable baseline must exist; NO fallback is inferred.
-      requireValue(candidates)
-      requireValue(candidates.some((candidate) => candidate.baseline) && candidates.length <= 64)
-      for (const candidate of candidates) await verify(candidate.path)
-    }
+      requireValue(found)
+      requireValue(found.some((candidate) => candidate.baseline) && found.length <= 64)
+      return found.map((candidate) => candidate.path)
+    })
+    const interpreter = dependency.interpreter
+    // Each dependency image is an independent proof; the shared sets are only read and written synchronously.
+    await Promise.all([
+      ...(interpreter
+        ? [
+            immutable(interpreter, check).then((loader) => {
+              requireValue(
+                path.basename(loader.canonical) ===
+                  (arch === "x64" ? "ld-linux-x86-64.so.2" : "ld-linux-aarch64.so.1") &&
+                  ["/usr/lib/", "/usr/lib64/", "/lib/", "/lib64/"].some((prefix) =>
+                    loader.canonical.startsWith(prefix),
+                  ),
+              )
+              return verify(interpreter)
+            }),
+          ]
+        : []),
+      ...candidates.map((candidate) => verify(candidate)),
+    ])
   }
-  await verify(PYTHON)
-  await verify(extension)
+  await Promise.all([verify(PYTHON), verify(extension)])
   check()
   return { ...executable, images, cache: cacheImage.proof }
 }
@@ -628,60 +688,67 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return
   let closed = false
   const deadline = Math.min(expires, performance.now() + LIMIT.milliseconds - LIMIT.reap)
-  const check: Check = Object.assign(
-    () => requireValue(!closed && !signal?.aborted && Number.isFinite(deadline) && performance.now() < deadline),
-    { directories: new Set<string>() },
+  const check = checker(() =>
+    requireValue(!closed && !signal?.aborted && Number.isFinite(deadline) && performance.now() < deadline),
   )
   try {
     const proof = await runtime(process.arch === "x64" ? "x64" : "arm64", check)
     check()
     return Object.freeze({
       validate: async (expires: number, launchSignal?: AbortSignal) => {
-        const check: Check = Object.assign(
-          () =>
-            requireValue(
+        // Promise.all rejects on the first failed proof while its siblings are still in flight. Once this launch is
+        // refused, `failed` makes every leftover step fail at its next check instead of finishing the walk.
+        let failed = false
+        const check = checker(() =>
+          requireValue(
+            !failed &&
               !closed &&
-                !signal?.aborted &&
-                !launchSignal?.aborted &&
-                Number.isFinite(expires) &&
-                performance.now() < expires,
-            ),
-          { directories: new Set<string>() },
+              !signal?.aborted &&
+              !launchSignal?.aborted &&
+              Number.isFinite(expires) &&
+              performance.now() < expires,
+          ),
         )
         try {
-          const cache = await immutable("/etc/ld.so.cache", check)
-          requireValue(
-            cache.canonical === proof.cache.canonical &&
-              cache.info.dev === proof.cache.info.dev &&
-              cache.info.ino === proof.cache.info.ino &&
-              cache.info.uid === proof.cache.info.uid &&
-              cache.info.gid === proof.cache.info.gid &&
-              cache.info.mode === proof.cache.info.mode &&
-              cache.info.size === proof.cache.info.size &&
-              cache.info.mtimeNs === proof.cache.info.mtimeNs &&
-              cache.info.ctimeNs === proof.cache.info.ctimeNs,
-          )
-          // The root-owned nonwritable stdlib is trusted for this one lease. Every launch freshly checks all
-          // attested native images, both path spellings/ancestry, and CPython startup-override absence.
-          for (const [file, image] of proof.images) {
-            await getpathOverrides(file, check)
-            const current = await immutable(file, check)
-            await getpathOverrides(current.canonical, check)
-            requireValue(
-              current.canonical === image.canonical &&
-                current.info.dev === image.info.dev &&
-                current.info.ino === image.info.ino &&
-                current.info.mode === image.info.mode &&
-                current.info.size === image.info.size &&
-                current.info.mtimeNs === image.info.mtimeNs &&
-                current.info.ctimeNs === image.info.ctimeNs,
-            )
-          }
-          if (await exists("/etc/ld.so.preload", check))
-            requireValue((await bytes("/etc/ld.so.preload", 4096, check)).toString("utf8").trim() === "")
+          // The cache, every attested image and the preload file are independent proofs, so they are observed
+          // together instead of one awaited lstat at a time. Every one of them still runs fresh for this launch.
+          await Promise.all([
+            immutable("/etc/ld.so.cache", check).then((cache) =>
+              requireValue(
+                cache.canonical === proof.cache.canonical &&
+                  cache.info.dev === proof.cache.info.dev &&
+                  cache.info.ino === proof.cache.info.ino &&
+                  cache.info.uid === proof.cache.info.uid &&
+                  cache.info.gid === proof.cache.info.gid &&
+                  cache.info.mode === proof.cache.info.mode &&
+                  cache.info.size === proof.cache.info.size &&
+                  cache.info.mtimeNs === proof.cache.info.mtimeNs &&
+                  cache.info.ctimeNs === proof.cache.info.ctimeNs,
+              ),
+            ),
+            // The root-owned nonwritable stdlib is trusted for this one lease. Every launch freshly checks all
+            // attested native images, both path spellings/ancestry, and CPython startup-override absence.
+            ...[...proof.images].map(async ([file, image]) => {
+              const [current] = await Promise.all([immutable(file, check), getpathOverrides(file, check)])
+              await getpathOverrides(current.canonical, check)
+              requireValue(
+                current.canonical === image.canonical &&
+                  current.info.dev === image.info.dev &&
+                  current.info.ino === image.info.ino &&
+                  current.info.mode === image.info.mode &&
+                  current.info.size === image.info.size &&
+                  current.info.mtimeNs === image.info.mtimeNs &&
+                  current.info.ctimeNs === image.info.ctimeNs,
+              )
+            }),
+            exists("/etc/ld.so.preload", check).then(async (found) => {
+              if (found) requireValue((await bytes("/etc/ld.so.preload", 4096, check)).toString("utf8").trim() === "")
+            }),
+          ])
           check()
           return true
         } catch {
+          failed = true
           return false
         }
       },
@@ -691,6 +758,8 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
       },
     })
   } catch {
+    // No lease escapes this path, so closing stops the concurrent runtime() proofs still in flight at their next check.
+    closed = true
     return
   }
 }
@@ -703,11 +772,8 @@ export function read(handle: FileHandle, signal?: AbortSignal): Promise<Info | u
   const expires = performance.now() + LIMIT.milliseconds,
     workExpires = expires - LIMIT.reap,
     controller = new AbortController()
-  const check: Check = Object.assign(
-    () => {
-      requireValue(!signal?.aborted && !controller.signal.aborted && performance.now() < workExpires)
-    },
-    { directories: new Set<string>() },
+  const check = checker(() =>
+    requireValue(!signal?.aborted && !controller.signal.aborted && performance.now() < workExpires),
   )
   return new Promise((resolve) => {
     let settled = false

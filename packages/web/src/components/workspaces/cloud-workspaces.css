@@ -286,6 +286,9 @@
 .cw-workspace-bar p > svg {
   margin-left: 5px;
 }
+.cw-workspace-bar .cw-usage {
+  margin-top: 6px;
+}
 .cw-toolbar {
   display: flex;
   align-items: center;
