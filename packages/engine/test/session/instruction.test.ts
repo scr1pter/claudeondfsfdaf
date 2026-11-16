@@ -467,4 +467,48 @@ describe("Instruction.systemPaths global config", () => {
         }),
     ),
   )
+
+  it.live("an outward role's read brings the nearby instructions and no memory about the file", () =>
+    withFiles(
+      {
+        "src/billing/AGENTS.md": "# Billing instructions",
+        "src/billing/retry.ts": "export const attempts = 3",
+      },
+      (dir) =>
+        Effect.gen(function* () {
+          const svc = yield* Instruction.Service
+          const brain = yield* Brain.Service
+          yield* brain.propose(yield* svc.place(), {
+            kind: "lesson",
+            text: "Billing retries back off with jitter between attempts.",
+            scope: "repository",
+            origin: "user",
+            paths: ["src/billing"],
+          })
+          const file = path.join(dir, "src", "billing", "retry.ts")
+          const agents = path.join(dir, "src", "billing", "AGENTS.md")
+          const asking: Instruction.Asking = {
+            sessionID: "ses_outward_read",
+            personal: false,
+            tier: "standard",
+            exclude: new Set(),
+          }
+          // An unattended session, a Vectorscope reviewer or a research lead the build agent started: the file's
+          // nearby instructions still come, and nothing from memory comes with them.
+          const outward = yield* svc.resolve([], file, MessageID.make("msg_outward-read-1"), {
+            ...asking,
+            outward: true,
+          })
+          expect(outward.map((item) => item.filepath)).toEqual([agents])
+          expect(outward.map((item) => item.content).join("\n")).not.toContain("Vector's memory for")
+          // The same read in another message, without `outward`, brings the instructions and the lesson.
+          const owner = yield* svc.resolve([], file, MessageID.make("msg_outward-read-2"), asking)
+          expect(owner.map((item) => item.filepath)).toEqual([agents, expect.stringMatching(/^memory:/)])
+          expect(owner.map((item) => item.content).join("\n")).toContain(
+            "Vector's memory for src/billing/retry.ts (rules bind; the rest is advisory):\n",
+          )
+          expect(owner.map((item) => item.content).join("\n")).toContain("back off with jitter")
+        }),
+    ),
+  )
 })

@@ -62,6 +62,8 @@ export type Asking = {
   readonly personal: boolean
   readonly tier?: "chat" | "light" | "standard" | "thorough"
   readonly exclude: ReadonlySet<string>
+  /** A role whose output leaves the machine (section 6.4a): no memory comes with a file it reads. */
+  readonly outward?: boolean
 }
 
 function extract(messages: SessionV1.WithParts[]) {
@@ -411,17 +413,20 @@ const layer: Layer.Layer<
 
       // Memory about this file comes with it, once per session: a lesson cited from it, or the repair a repeated
       // failure needed when a file it touched is read. Scoped rules are already in the digest, so they never repeat.
+      // An outward role gets none: what comes with a file is not screened.
       const claimed = s.claims.get(messageID) ?? new Set<string>()
-      const attached = yield* brain.attach(yield* place(), {
-        file: target,
-        personal: false,
-        exclude: new Set(
-          [...already, ...claimed].flatMap((item) =>
-            item.startsWith(MEMORY_LOADED) ? [item.slice(MEMORY_LOADED.length)] : [],
-          ),
-        ),
-      })
-      if (attached.text) {
+      const attached = asking?.outward
+        ? undefined
+        : yield* brain.attach(yield* place(), {
+            file: target,
+            personal: false,
+            exclude: new Set(
+              [...already, ...claimed].flatMap((item) =>
+                item.startsWith(MEMORY_LOADED) ? [item.slice(MEMORY_LOADED.length)] : [],
+              ),
+            ),
+          })
+      if (attached?.text) {
         attached.ids.forEach((id) => claimed.add(`${MEMORY_LOADED}${id}`))
         s.claims.set(messageID, claimed)
         results.push({ filepath: `${MEMORY_LOADED}${attached.ids.join(",")}`, content: attached.text })

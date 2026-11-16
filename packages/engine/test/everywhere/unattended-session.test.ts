@@ -1,8 +1,10 @@
 import { afterEach, expect } from "bun:test"
 import { randomBytes } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Effect } from "effect"
+import { BrainPrivate } from "@vectordevai/core/brain/private"
+import { frameTask, UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { createJobId, randomId, type EverywhereJob } from "@vectordevai/schema/everywhere"
 import type { PermissionV1 } from "@vectordevai/schema/permission-v1"
@@ -10,7 +12,7 @@ import { createEverywhereEngine, unattendedRules } from "../../../desktop/src/ma
 import { Permission } from "../../src/permission"
 import { Server } from "../../src/server/server"
 import { ServerAuth } from "../../src/server/auth"
-import { taint } from "../../src/session/memory"
+import { SessionMemory, taint } from "../../src/session/memory"
 import { disposeAllInstances, tmpdir, trustWorkspace } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { TestLLMServer, reply } from "../lib/llm-server"
@@ -104,6 +106,79 @@ function spend(h: Harness, session: string) {
   }), "The actual listener has no budget snapshot", "5 seconds")
 }
 
+/** A session the owner makes with the same rules and the default agent, and no `vector.unattended` mark. */
+function plain(h: Harness, title: string) {
+  return Effect.promise(async () => {
+    const response = await h.send("/session", "POST", { title, permission: unattendedRules() })
+    expect(response.status).toBe(200)
+    const result = await response.json() as { id?: unknown; metadata?: Record<string, unknown> }
+    if (typeof result.id !== "string" || !/^ses[A-Za-z0-9_]+$/.test(result.id)) throw new Error("Invalid owner session")
+    expect(result.metadata?.[UNATTENDED_KEY]).toBeUndefined()
+    return result.id
+  })
+}
+
+/** The system messages of every model request, as one string. */
+function system(inputs: readonly Record<string, unknown>[]) {
+  return JSON.stringify(inputs.flatMap((body) => Array.isArray(body.messages)
+    ? body.messages.filter((message: unknown) => typeof message === "object" && message !== null && "role" in message && message.role === "system")
+    : []))
+}
+
+// R-M3's fixtures (EV-14): the owner's own entries, each checked against the real outward screen first.
+const TASK = "Fix the billing retry backoff in src/billing/retry.ts so failed charges wait longer between attempts."
+const SCREENED = "Keep each billing fix in its own small commit with a regression test."
+const PARTICULAR = "Move the Initech billing retry to the new queue before Q3."
+const RECALLED = "The billing retry backoff broke Initech checkout in March."
+const ATTACHED = "Retrying a Globex invoice twice charged that customer two times."
+const PERSONAL = "Personal fixture fact: the owner's badge reads cobalt-heron-quartz."
+const MEMORY_FOR = "Vector's memory for src/billing/retry.ts"
+
+/**
+ * The owner's entries as Settings writes them: a screened and a particular repository decision, pinned; a particular
+ * lesson left unpinned for recall; a particular lesson about src/billing/retry.ts, imported and approved (POST /memory
+ * takes no paths); and a pinned personal fact. Each is read back active, pinned as asked.
+ */
+function memories(h: Harness) {
+  return Effect.promise(async () => {
+    const fixtures = [["decision", SCREENED], ["decision", PARTICULAR], ["lesson", RECALLED], ["lesson", ATTACHED]] as const
+    expect(fixtures.map(([kind, text]) => BrainPrivate.screened({ kind, text }))).toEqual([true, false, false, false])
+    await mkdir(path.join(h.directory, "src", "billing"), { recursive: true })
+    await writeFile(path.join(h.directory, "src", "billing", "retry.ts"), "export const attempts = 3\n")
+    const read = async (id: string, expected: Record<string, unknown>) => {
+      const response = await h.send(`/memory/${id}`, "GET")
+      expect(response.status).toBe(200)
+      expect(((await response.json()) as { entry: unknown }).entry).toMatchObject({ status: "active", ...expected })
+    }
+    const entries = [["decision", "repository", SCREENED, true], ["decision", "repository", PARTICULAR, true],
+      ["lesson", "repository", RECALLED, false], ["fact", "personal", PERSONAL, true]] as const
+    for (const [kind, scope, text, pinned] of entries) {
+      const added = await h.send("/memory", "POST", { kind, scope, text })
+      expect(added.status).toBe(200)
+      const id = ((await added.json()) as { id: string }).id
+      if (pinned) expect((await h.send(`/memory/${id}`, "PATCH", { pinned: true })).status).toBe(200)
+      await read(id, { kind, scope, text, pinned })
+    }
+    const imported = await h.send("/memory/import", "POST", { text: `## Lessons\n- ${ATTACHED} _(repository)_\n  - paths: \`src/billing/retry.ts\`\n` })
+    expect(imported.status).toBe(200)
+    const held = ((await imported.json()) as { entries: { id: string; text: string }[] }).entries.filter((entry) => entry.text === ATTACHED)
+    expect(held).toHaveLength(1)
+    expect((await h.send(`/memory/${held[0]!.id}`, "PATCH", { action: "approve" })).status).toBe(200)
+    await read(held[0]!.id, { kind: "lesson", scope: "repository", text: ATTACHED, pinned: false, paths: ["src/billing/retry.ts"] })
+  })
+}
+
+/** Whether a session's history holds a Tier 1 recall, and the text of what its read of the file brought. */
+function heard(rows: readonly SessionV1.WithParts[]) {
+  const parts = rows.flatMap((row) => row.parts)
+  const recall = parts.find((part) => SessionMemory.recall(part) !== undefined)
+  const read = parts.find((part) => part.type === "tool" && part.tool === "read" && part.state.status === "completed")
+  return {
+    recall: recall?.type === "text" ? recall.text : undefined,
+    read: read?.type === "tool" && read.state.status === "completed" ? read.state.output : undefined,
+  }
+}
+
 it.live("the actual guest-header request excludes personal memory, retains outside taint and arms a lower budget", () => Effect.gen(function* () {
   const llm = yield* TestLLMServer
   const h = yield* harness(llm.url)
@@ -114,7 +189,8 @@ it.live("the actual guest-header request excludes personal memory, retains outsi
   expect((yield* Effect.promise(() => h.send(`/memory/${entry.id}`, "PATCH", { pinned: true }))).status).toBe(200)
 
   const job = h.job()
-  const control = yield* Effect.promise(() => h.client.create(job, unattendedRules()))
+  // The same rules and agent without the `vector.unattended` mark: the mark itself makes a session outward (R-M3).
+  const control = yield* plain(h, "Owner control")
   yield* llm.text("Owner control done.")
   const owner = yield* Effect.promise(() => h.send(`/session/${control}/message`, "POST", { model: MODEL, parts: [{ type: "text", text: "Reply with done." }] }))
   expect(owner.status).toBe(200)
@@ -184,4 +260,64 @@ it.live("a tightened budget with no earlier owner budget stops actual provider c
   expect(actualSpend.budget.usd).toBe(0.001)
   expect(actualSpend.spentUsd).toBeGreaterThan(0.001)
   expect(actualSpend).toMatchObject({ state: "stopped", reason: "cap", costKind: "priced" })
+}), 30_000)
+
+it.live("a session without the unattended mark still hears the owner's particular entries and recall, guest-marked or not", () => Effect.gen(function* () {
+  const llm = yield* TestLLMServer
+  const h = yield* harness(llm.url)
+  yield* memories(h)
+  const job = { ...h.job(), task: TASK }
+
+  // The owner's own session, the same agent and rules, prompted with the runner's framed words: the `owner` audience.
+  const owner = yield* plain(h, "Owner control")
+  yield* llm.tool("read", { filePath: path.join(h.directory, "src", "billing", "retry.ts") })
+  yield* llm.text("Owner control done.")
+  expect((yield* Effect.promise(() => h.send(`/session/${owner}/message`, "POST", { model: MODEL, parts: [{ type: "text", text: frameTask(job) }] }))).status).toBe(200)
+  const ownerSystem = system(yield* llm.inputs)
+  for (const text of ["<vector_memory>", SCREENED, PARTICULAR, PERSONAL]) expect(ownerSystem).toContain(text)
+  const ownerHeard = heard(yield* history(h, owner))
+  expect(ownerHeard.recall).toContain(RECALLED)
+  expect(ownerHeard.read).toContain(MEMORY_FOR)
+  expect(ownerHeard.read).toContain(ATTACHED)
+  yield* llm.reset
+
+  // A guest-marked session as the runner prompts it: no personal fact, but the guest mark alone screens nothing.
+  const guest = yield* plain(h, "Guest control")
+  yield* llm.text("Guest control done.")
+  yield* Effect.promise(() => h.client.prompt(guest, job, 1, MODEL))
+  const guestRows = yield* finished(h, guest)
+  const guestInputs = yield* llm.inputs
+  expect(JSON.stringify(guestInputs)).not.toContain(PERSONAL)
+  for (const text of ["<vector_memory>", SCREENED, PARTICULAR]) expect(system(guestInputs)).toContain(text)
+  expect(heard(guestRows).recall).toContain(RECALLED)
+}), 30_000)
+
+it.live("an unattended session hears only the screened digest, with no recall and no memory beside a file it reads", () => Effect.gen(function* () {
+  const llm = yield* TestLLMServer
+  const h = yield* harness(llm.url)
+  yield* memories(h)
+  const job = { ...h.job(), task: TASK }
+  const session = yield* Effect.promise(() => h.client.create(job, unattendedRules()))
+  yield* llm.tool("read", { filePath: path.join(h.directory, "src", "billing", "retry.ts") })
+  yield* llm.text("Unattended done.")
+  yield* Effect.promise(() => h.client.prompt(session, job, 1, MODEL))
+  const unattended = heard(yield* finished(h, session))
+  expect(unattended.recall).toBeUndefined()
+  // The read itself ran: what is missing is the memory that would have come with it.
+  expect(unattended.read).toContain("export const attempts = 3")
+  expect(unattended.read).not.toContain(MEMORY_FOR)
+  const inputs = yield* llm.inputs
+  for (const text of ["<vector_memory>", SCREENED]) expect(system(inputs)).toContain(text)
+  for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL]) expect(JSON.stringify(inputs)).not.toContain(text)
+  const info = (yield* Effect.promise(async () => await (await h.send(`/session/${session}`, "GET")).json())) as { metadata: Record<string, unknown> }
+  expect(info.metadata[UNATTENDED_KEY]).toMatchObject({ by: "everywhere", jid: job.jid })
+
+  // The owner prompts it later without the guest header: the mark still decides the audience.
+  yield* llm.reset
+  yield* llm.text("Still unattended.")
+  expect((yield* Effect.promise(() => h.send(`/session/${session}/message`, "POST", { model: MODEL, parts: [{ type: "text", text: TASK }] }))).status).toBe(200)
+  const later = yield* llm.inputs
+  expect(system(later)).toContain(SCREENED)
+  for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL]) expect(JSON.stringify(later)).not.toContain(text)
+  expect(heard(yield* history(h, session)).recall).toBeUndefined()
 }), 30_000)

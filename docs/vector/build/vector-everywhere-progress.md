@@ -2433,3 +2433,78 @@ Still to do by the lead: the commit (with the staging list in "Not done here" ab
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
 
 Committed as `feat(engine): expose the unattended worktree capability to the owner` (the commit gate's title, in place of the planned `feat(engine): add the owner-only unattended worktree route`), staging by path the six engine source files, the three engine test files, the five regenerated SDK files and the five lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-13 bullet and main-requests.md keep "CI pending" until then. The lead's ruling on deviation (c) (only an instance already loaded in this engine) is still asked for.
+
+## EV-14: unattended sessions hear the outward audience (2026-11-16)
+
+Package EV-14 (spec §11 R-M3; §3.11 "Laptop runs need no snapshot"; §5 E6): `audienceOf` returns `outward` for a session marked `vector.unattended`, with two stricter-only gates for outward roles beyond the brief (Tier 1 recall, and memory attached to a file a read brings). Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-14". Built in the working tree and not committed, as the task said.
+
+**Base.** `git fetch origin release-finish main everywhere-finish` (and every lane tip below): HEAD `0d9f852c` (EV-13) equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. PR #33 has merged into main: origin/release-finish is an ancestor of origin/main `33fc9fbc`, 16 commits and 19 files past the merge base `67ec3a60`. The package left main unmerged (no commit allowed here; the lead owns that merge, deviations entry's opening paragraph); none of main's 19 files is among the nine files below. Cross-lane check, `git diff --stat $(git merge-base HEAD origin/<lane>) origin/<lane>` over packages/engine/src/session/{prompt,instruction,memory}.ts, packages/engine/src/tool/read.ts, packages/engine/test/everywhere/unattended-session.test.ts, packages/core/src/everywhere/frame.ts and packages/core/src/brain/{brain,private,knowledge}.ts: empty for main `33fc9fbc`, scope-finish `a6fd38d3`, review-fixes `1433d105`, brain-transport `aa925ff8`, hands-finish `d9d5afaf`, connect-finish `a320bdbe`, codium-finish `b2537951`, workspaces-finish `e37ec1b5`, native-qualify `2677c32c` and native-finish `f141ef16`. origin/codium-track `c262f74b` touches prompt.ts and brain.ts since its old merge base `eed4bc45`, with hunks already in HEAD and away from this package's. No review-fixes or brain-transport precondition. docs/vector/build/v2-spawn-review.md read; no spawn site.
+
+**Files** (line numbers after the change):
+
+- packages/engine/src/session/prompt.ts (+21/-7): the `UNATTENDED_KEY` import (:96); `audienceOf` with `metadata` in its Pick and the mark check, docblock included (:160-180); `const audience` moved above the recall gate (:2851-2853) and the gate `audience === "owner"` with its comment (:2858-2871 after review round one, which adds one comment line; +22/-7 then). The callers at the fork (`inherit.audience`), the main loop and `briefFor` are unchanged.
+- packages/engine/src/session/instruction.ts (+15/-10): `Asking.outward` (:65-66); `resolve` skips `brain.attach` for it (:414-433).
+- packages/engine/src/tool/read.ts (+5/-1): passes `outward: ctx.extra?.outward === true` with `SessionMemory.linking(ctx)` (:342-349).
+- packages/engine/test/everywhere/unattended-session.test.ts (+139/-3; 3 tests to 5):
+  - imports (`mkdir`, `BrainPrivate`, `frameTask`, `UNATTENDED_KEY`, `SessionMemory`); helpers `plain` (:109-119), `system` (:121-126), fixture constants (:128-135), `memories` (:137-169), `heard` (:171-180);
+  - T1 (:182): its owner control is `plain(h, "Owner control")` (:193), with no `vector.unattended`; its assertions are unchanged;
+  - T4 (:265-293) "a session without the unattended mark still hears the owner's particular entries and recall, guest-marked or not": the owner's own session prompted with `frameTask(job)` gets `<vector_memory>`, SCREENED, PARTICULAR and the personal fact in its system text, a recall part holding RECALLED, and a read of src/billing/retry.ts whose output holds "Vector's memory for src/billing/retry.ts" and ATTACHED; a guest-marked plain session prompted by the real desktop client gets no personal fact, but SCREENED and PARTICULAR in its system text and a recall part holding RECALLED;
+  - T5 (:295-323) "an unattended session hears only the screened digest, with no recall and no memory beside a file it reads": a session from the real client's `create` (so marked) and `prompt` has no recall part, its read output holds the file's text and no memory line, its system text holds `<vector_memory>` and SCREENED, and no request body holds PARTICULAR, RECALLED, ATTACHED or the personal fact; GET /session/:id shows the mark; the owner's later prompt without the guest header still sends SCREENED and none of the four, and the history still has no recall part.
+  - Fixtures: each text is checked against the real `BrainPrivate.screened` first (SCREENED passes; PARTICULAR, RECALLED and ATTACHED fail), and each entry is read back with GET /memory/:id as `active` with its kind, scope, text and pin. ATTACHED is imported as Markdown with a `paths:` bullet and approved, because POST /memory takes no paths.
+- Lane docs: vector-everywhere-deviations.md (the EV-14 entry), this receipt, vector-everywhere-spec.md (dated EV-14 notes on §2's guest-mark bullet, §3.11, §5 E6, §6.4 and §11 R-M3), vector-everywhere-handoff.md (an annotation on the "Component tests" gate's R-M3 sentence, a new "Current gates" bullet and a "Left open" item). v2-finish-plan.md and v2-complete-plan.md are not lane documents and are not edited.
+- No generated file, flag, env var, dependency, lockfile, workflow, route or config changed.
+
+**Checks**, each through `vector-serial`, one file at a time from the owning package, engine tests with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev14/tmp` (logs in /tmp/vector-v2/everywhere/ev14/):
+
+| Check | Result |
+| --- | --- |
+| packages/engine test/everywhere/unattended-session.test.ts at HEAD, before any change | 3 pass, 0 fail, 73 expects (15.6 s) |
+| the same file with the change | 5 pass, 0 fail (24.4 s); after T5's reorder 5 pass (23.3 s); in the regression run 5 pass, 200 expects (24.2 s); after the final formatting change to prompt.ts 5 pass, 0 fail, 190 expects (18.9 s). The expect count varies with how often `finished` and `spend` poll; T4 and T5 take about 3 to 5 s each, under the file's 30-s timeout |
+| packages/engine test/session/memory-every-agent.test.ts (outward digest, `habitsOf` roles, root researcher, research lead, brief) | 14 pass, 0 fail, 110 expects (33.7 s) |
+| packages/engine test/session/fork.test.ts (`inherit.audience`) | 15 pass, 0 fail, 130 expects (6.8 s) |
+| packages/engine test/session/knowledge-recall.test.ts (Tier 1 recall for owner sessions) | 4 pass, 0 fail, 36 expects (13.5 s) |
+| packages/engine test/session/research-judge.test.ts | 8 pass, 0 fail, 53 expects (32.8 s) |
+| packages/engine test/session/instruction.test.ts (`resolve`, memory with a file) | 17 pass, 0 fail, 51 expects (3.8 s) |
+| packages/engine test/tool/read.test.ts | 45 pass, 0 fail, 106 expects (22.3 s) |
+| packages/engine test/server/session-metadata.test.ts | 3 pass, 0 fail, 52 expects (3.3 s) |
+| packages/engine test/server/startup-imports.test.ts (the frame.ts import on the server graph) | 1 pass, 0 fail, 3 expects (5.2 s) |
+| packages/engine test/session/prompt.test.ts (the main loop) | 157 pass, 1 skip (its existing `noLLMServer.instance.skip`), 0 fail, 710 expects (208.1 s) |
+| packages/core test/everywhere/frame.test.ts (pins `UNATTENDED_KEY`) | 18 pass, 0 fail, 465 expects |
+| `bun typecheck` in packages/engine (includes the tests) | exit 0, before and after the final formatting change |
+| prettier, by file (`semi: false`, `printWidth: 120`, the root package.json's settings) | prompt.ts, instruction.ts and read.ts conform, as at HEAD; the recall condition is on one line, as prettier wants (exactly 120 columns). unattended-session.test.ts did not conform at HEAD (428 lines of prettier diff in its hand-packed lines) and is not reformatted; its added hunks keep that style (619 lines of prettier diff now) |
+| Lines over 120 columns added | none in source; 10 in the test file, in its existing hand-packed style (longest 203, the same as HEAD's longest) |
+| `git diff` scan for personal paths and email addresses | none |
+
+`grep audienceOf packages/engine/test` finds nothing, so the regression set above stands in for it. The regression files ran before the last change to prompt.ts, which only puts the recall condition on one line (no behaviour change); unattended-session.test.ts, the engine typecheck and all six mutations ran again after it.
+
+**Mutations:** six, one source file at a time, the test file run alone, each restore's sha256 checked (/tmp/vector-v2/everywhere/ev14-mut/): all six red on their predicted assertion in round1/ (M1 again against the final test file in round2-m1/), and all six again against the final sources in round3/ (M3 and M4 anchored on the one-line recall condition). The table is in the deviations entry.
+
+**Review round one (2026-11-16).** Eight non-blocking findings; each response is in the deviations entry's "Review round one". Still in the working tree, not committed.
+
+- Files: packages/engine/test/session/instruction.test.ts (+44; 17 tests to 18), the case "an outward role's read brings the nearby instructions and no memory about the file" (:471-513), which seeds a path-anchored repository lesson with `brain.propose` and calls `Instruction.resolve` directly with `outward: true` (only the nearby src/billing/AGENTS.md comes back) and, in another message, without it (AGENTS.md and the `memory:` item holding "Vector's memory for src/billing/retry.ts"); packages/engine/src/session/prompt.ts (+1 line of comment on the recall gate, which now spans :2851-2871: it covers every outward role and points to deviations (b)); the four lane documents (deviations (a) reworded, Left open, Mutations, Coordination with the notices to scope-finish and brain-transport, Deferred verification and the new "Review round one"; spec §2's EV-14 note reworded, §5 E6 and §11 R-M3 notes extended; handoff EV-14 bullet and Left open item).
+- Base: HEAD still `0d9f852c`, equal to origin/everywhere-finish. origin/main is now `2034e1da`, 32 commits and 38 files past the merge base `67ec3a60`, none of them this package's files; still unmerged here (the lead's merge). Lane tips re-checked over this package's files plus instruction.test.ts and the four lane documents: empty for every lane (deviations entry, Coordination).
+
+| Check (each through `vector-serial`, one file at a time from packages/engine, `TMPDIR=/tmp/vector-v2/everywhere-finish/ev14/tmp`; logs in /tmp/vector-v2/everywhere/ev14/) | Result |
+| --- | --- |
+| test/session/instruction.test.ts with the new case (r2-instruction.log); no lane workflow picks this file | 18 pass, 0 fail, 56 expects (4.0 s) |
+| test/everywhere/unattended-session.test.ts after the prompt.ts comment (r2-unattended.log) | 5 pass, 0 fail, 214 expects (25.4 s) |
+| `bun typecheck` in packages/engine (r2-typecheck.log) | exit 0 |
+| prettier `--check` on prompt.ts, instruction.ts and read.ts | all conform |
+| prettier on instruction.test.ts, compared with the same at HEAD | the same 90 lines of prettier diff as at HEAD, all in the file's existing lines; the new case conforms and adds no line over 120 columns |
+| M7 and M8 on instruction.ts against the new case (ev14-mut/round4/, sha256 restore checked after each) | both red at instruction.test.ts :502 (M7: a `memory:` item beside AGENTS.md; M8: AGENTS.md missing); 17 pass, 1 fail each |
+| `git diff` scan for personal paths and email addresses | none |
+
+The other regression files in the table above were not re-run: this round changes no source line that runs (one comment in prompt.ts) and adds one test case.
+
+**Not done here (the task said not to commit):** the commit (`feat(engine): give unattended sessions the outward memory audience`, staging by path packages/engine/src/session/prompt.ts, packages/engine/src/session/instruction.ts, packages/engine/src/tool/read.ts, packages/engine/test/everywhere/unattended-session.test.ts, packages/engine/test/session/instruction.test.ts and docs/vector/build/vector-everywhere-{deviations,progress,spec,handoff}.md; the body says no generated file, flag, env var, dependency or workflow changed), the full `bun turbo typecheck` before the push, the push, and the workflow_dispatch runs of vector-everywhere.yml and typecheck.yml on everywhere-finish, whose run ids go in the next lane-docs commit; the handoff's EV-14 bullet keeps "CI pending" until then. The lead also owns merging origin/main (PR #33's merge and, now, the 32 commits after it) into this branch, adding the EV-21 precondition (deviations entry, Left open) to EV-21's brief, and forwarding the (h) notice to scope-finish and brain-transport.
+
+**Commit gate (2026-11-16).** `git fetch origin everywhere-finish release-finish main`: HEAD was still `0d9f852c` = origin/everywhere-finish, holding origin/release-finish `67ec3a60`. origin/main is `2034e1da`, 32 commits and 38 files past the merge base `67ec3a60`, none of them this package's files; it is not merged here (the lead merges main into this branch). The working tree held only this package's nine paths. Re-run at the gate, each through `vector-serial`, one file at a time from packages/engine with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev14/tmp` (logs in /tmp/vector-v2/everywhere/ev14/gate/):
+
+| Check | Result |
+| --- | --- |
+| test/everywhere/unattended-session.test.ts | 5 pass, 0 fail, 200 expects (22.6 s) |
+| test/session/instruction.test.ts | 18 pass, 0 fail, 56 expects (4.2 s) |
+| `bun typecheck` in packages/engine | exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+Committed as `feat(engine): give unattended sessions the outward memory audience`, staging by path the three engine source files, the two engine test files and the four lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-14 bullet keeps "CI pending" until then.

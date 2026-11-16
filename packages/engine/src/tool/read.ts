@@ -339,10 +339,14 @@ export const ReadTool = Tool.define<
       // Bound reviewers already carry the admitted base instructions. Nearby
       // AGENTS and repository memory are mutable ambient authority, not part of
       // that context. The requested file itself remains ordinary tool data.
+      // A role whose output leaves the machine gets no memory with the file (section 6.4a).
       const loaded =
         ctx.extra?.pinnedReviewInstructions === true
           ? []
-          : yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, SessionMemory.linking(ctx))
+          : yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, {
+              ...SessionMemory.linking(ctx),
+              outward: ctx.extra?.outward === true,
+            })
       // Lines naming what is linked to the file are saved as placeholders, rendered for each request.
       const links = loaded.flatMap((item) => (item.link ? [item.link] : []))
       const sample = yield* readSample(filepath, Number(stat.size), SAMPLE_BYTES)
