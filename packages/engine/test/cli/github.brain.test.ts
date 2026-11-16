@@ -1,19 +1,17 @@
 import { describe, expect, test } from "bun:test"
-import { createCipheriv, createHash, randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
 import { BrainUpload } from "@vectordevai/core/brain/upload"
-import type { BrainDownload } from "../../src/cli/cmd/github.cloud"
 import { GithubBrain } from "../../src/cli/cmd/github.brain"
 import { allowConversationRestore, decryptConversation, encryptConversation } from "../../src/cli/cmd/github.session"
+import { BRAIN_ACCOUNT, BRAIN_KEY, brainAad, brainSealed, brainUploaded } from "./github.agent-fixture"
 
-const ACCOUNT = "11111111-1111-4111-8111-111111111111"
 const UPLOAD_ID = `vbu_${"u".repeat(32)}`
-const BRAIN_KEY = { key: Buffer.alloc(32, 9).toString("base64url"), keyId: "b".repeat(16) }
 const expected = { repositoryId: "42", uploadId: UPLOAD_ID, publicRepository: false }
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const aad = (repositoryId = "42", generation = "3", uploadId = UPLOAD_ID) =>
-  `vector-brain-upload-v1|${ACCOUNT}|${repositoryId}|${generation}|${uploadId}`
+  brainAad({ repositoryId, generation, uploadId })
 
 // The same item shapes core's run-bundle test packs.
 const entry: BrainExport.Item = {
@@ -58,56 +56,11 @@ const pack = (publicRepository: boolean, text = entry.text) =>
     screen: async (parts) => parts.map(() => true),
   })
 
-/** What brain-download answers after the desktop's own encryption, through a fake account transport. */
-async function uploaded(bytes: Uint8Array): Promise<BrainDownload> {
-  const sha256 = digest(bytes)
-  const approvedAt = Date.now()
-  const key = randomBytes(32).toString("base64url")
-  const sealed = { nonce: "", ciphertext: "" }
-  await BrainUpload.upload({
-    repositoryId: "42",
-    selection: { bytes, sha256 },
-    approvedSha256: sha256,
-    includeBrain: true,
-    transport: async (kind, body) => {
-      if (kind === "prepare")
-        return { uploadId: UPLOAD_ID, key, aad: aad(), expiresAt: Date.now() + 60_000, publicRepository: false }
-      sealed.nonce = String(body.nonce)
-      sealed.ciphertext = String(body.ciphertext)
-      return { uploadId: UPLOAD_ID, sha256, bytes: bytes.byteLength, approvedAt }
-    },
-  })
-  return {
-    uploadId: UPLOAD_ID,
-    key,
-    aad: aad(),
-    ...sealed,
-    sha256,
-    bytes: bytes.byteLength,
-    approvedAt,
-    publicRepository: false,
-    artifactKey: BRAIN_KEY,
-  }
-}
+/** What brain-download answers after the desktop's own encryption for repository 42 (the fixture's brainUploaded). */
+const uploaded = (bytes: Uint8Array) => brainUploaded(bytes, { repositoryId: "42", uploadId: UPLOAD_ID })
 
 /** An envelope sealed directly under any authenticated data, so only the framing checks can refuse it. */
-function sealed(bytes: Uint8Array, associated: string, uploadId = UPLOAD_ID): BrainDownload {
-  const key = randomBytes(32)
-  const nonce = randomBytes(12)
-  const cipher = createCipheriv("aes-256-gcm", key, nonce)
-  cipher.setAAD(Buffer.from(associated))
-  return {
-    uploadId,
-    key: key.toString("base64url"),
-    aad: associated,
-    nonce: nonce.toString("base64url"),
-    ciphertext: Buffer.concat([cipher.update(bytes), cipher.final(), cipher.getAuthTag()]).toString("base64url"),
-    sha256: digest(bytes),
-    bytes: bytes.byteLength,
-    approvedAt: Date.now(),
-    publicRepository: false,
-  }
-}
+const sealed = (bytes: Uint8Array, associated: string, uploadId = UPLOAD_ID) => brainSealed(bytes, associated, uploadId)
 
 // Each character of a base64url string carries six bits; changing only the last one's spare low bit keeps the decoded
 // bytes and makes the text noncanonical.
@@ -171,7 +124,7 @@ describe("opening an approved Brain upload", () => {
     const bytes = (await pack(false)).bytes
     const other = `vbu_${"v".repeat(32)}`
     // One character past the desktop's 256, with every part still in place.
-    const long = `vector-brain-upload-v1|${"a".repeat(257 - aad().length + ACCOUNT.length)}|42|3|${UPLOAD_ID}`
+    const long = `vector-brain-upload-v1|${"a".repeat(257 - aad().length + BRAIN_ACCOUNT.length)}|42|3|${UPLOAD_ID}`
     expect(long).toHaveLength(257)
     expect(GithubBrain.openUpload(sealed(bytes, aad()), expected)).toBeDefined()
     const download = await uploaded(bytes)
@@ -188,7 +141,7 @@ describe("opening an approved Brain upload", () => {
       aad("43"),
       aad("42", "0"),
       aad("42", "x"),
-      `vector-brain-upload-v2|${ACCOUNT}|42|3|${UPLOAD_ID}`,
+      `vector-brain-upload-v2|${BRAIN_ACCOUNT}|42|3|${UPLOAD_ID}`,
       `${aad()}|extra`,
       long,
     ])

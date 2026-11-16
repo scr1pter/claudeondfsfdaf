@@ -1,11 +1,13 @@
 // Fakes for the agent phase's tests (V18b, V18c): an event file outside the repository, a loopback fake GitHub that
 // records every request and can list and serve a thread's saved conversations (V27) with an in-memory signed storage
 // behind its restore transport, a git origin that demands credentials and counts its hits, a vectordev.ai recorder
-// behind the cloud client's Services seam, channel holders made with createGithubSecrets, and a fake Codium gateway with
-// its catalog and run credential behind the services the provider layer reads. Nothing here assigns process.env, and no
+// behind the cloud client's Services seam, channel holders made with createGithubSecrets, a fake Codium gateway with
+// its catalog and run credential behind the services the provider layer reads, and approved Brain uploads as
+// brain-download answers them (B08), sealed by core's own desktop encryption. Nothing here assigns process.env, and no
 // request leaves this computer.
 
 import { $ } from "bun"
+import { createCipheriv, createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -14,7 +16,7 @@ import type { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModels } from "@vectordevai/core/free-models"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { ModelPlans } from "@vectordevai/core/model-plans"
-import type { Services } from "../../src/cli/cmd/github.cloud"
+import type { BrainDownload, Services } from "../../src/cli/cmd/github.cloud"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 
 export const OWNER = "octo"
@@ -43,6 +45,13 @@ export const VALUES = [CHANNEL.githubToken, CHANNEL.cliToken, CHANNEL.runToken, 
 
 /** A well-formed one-time run ticket (`vtk_` and 43 safe characters); not a real one. */
 export const TICKET_FIXTURE = `vtk_${"fixtureTicket_-".repeat(3).slice(0, 43)}`
+
+/** A well-formed Brain upload id as a dispatch's `brain_upload` input carries it (`vbu_` and 32 base64url characters). */
+export const BRAIN_UPLOAD = `vbu_${"F".repeat(16)}${"x-".repeat(8)}`
+/** The account the desktop's upload is sealed for: its id is in the authenticated data, never in a prompt or a log. */
+export const BRAIN_ACCOUNT = "11111111-1111-4111-8111-111111111111"
+/** A well-formed Brain conversation key as brain-download answers it beside the envelope (B08); not a real one. */
+export const BRAIN_KEY = { key: Buffer.alloc(32, 9).toString("base64url"), keyId: "b".repeat(16) }
 
 /** The one model the fake Codium catalog lists, so `MODEL: vector-plan` picks it. */
 export const CODIUM_MODEL = {
@@ -297,17 +306,96 @@ export function pullData(input: {
   }
 }
 
+/** The authenticated data the desktop seals an upload under (core brain/upload.ts); this repository and upload by default. */
+export function brainAad(input: { repositoryId?: string; generation?: string; uploadId?: string } = {}) {
+  return [
+    "vector-brain-upload-v1",
+    BRAIN_ACCOUNT,
+    input.repositoryId ?? REPOSITORY_ID,
+    input.generation ?? "3",
+    input.uploadId ?? BRAIN_UPLOAD,
+  ].join("|")
+}
+
+/**
+ * What brain-download answers for `bytes` after the desktop's own encryption, core's BrainUpload.upload, through a fake
+ * account transport: prepare answers the upload id, a fresh content key, the authenticated data for `repositoryId`
+ * (this repository by default) and a private repository at approval; commit keeps the sealed envelope. The answer says
+ * `publicRepository`, the visibility at the run's first download (private by default), and carries BRAIN_KEY.
+ */
+export async function brainUploaded(
+  bytes: Uint8Array,
+  options: { repositoryId?: string; uploadId?: string; publicRepository?: boolean } = {},
+): Promise<BrainDownload> {
+  // Core's Brain module graph loads only in the tests that seal an upload, not in every user of this fixture.
+  const { BrainUpload } = await import("@vectordevai/core/brain/upload")
+  const repositoryId = options.repositoryId ?? REPOSITORY_ID
+  const uploadId = options.uploadId ?? BRAIN_UPLOAD
+  const aad = brainAad({ repositoryId, uploadId })
+  const sha256 = createHash("sha256").update(bytes).digest("hex")
+  const approvedAt = Date.now()
+  const key = randomBytes(32).toString("base64url")
+  const sealed = { nonce: "", ciphertext: "" }
+  await BrainUpload.upload({
+    repositoryId,
+    selection: { bytes, sha256 },
+    approvedSha256: sha256,
+    includeBrain: true,
+    transport: async (kind, body) => {
+      if (kind === "prepare") return { uploadId, key, aad, expiresAt: Date.now() + 60_000, publicRepository: false }
+      sealed.nonce = String(body.nonce)
+      sealed.ciphertext = String(body.ciphertext)
+      return { uploadId, sha256, bytes: bytes.byteLength, approvedAt }
+    },
+  })
+  return {
+    uploadId,
+    key,
+    aad,
+    ...sealed,
+    sha256,
+    bytes: bytes.byteLength,
+    approvedAt,
+    publicRepository: options.publicRepository ?? false,
+    artifactKey: BRAIN_KEY,
+  }
+}
+
+/**
+ * An envelope sealed directly under any authenticated data, with no Brain key, so that bytes the desktop would never
+ * encrypt still authenticate and only the run's own framing, validation or decoding can refuse them.
+ */
+export function brainSealed(bytes: Uint8Array, associated = brainAad(), uploadId = BRAIN_UPLOAD): BrainDownload {
+  const key = randomBytes(32)
+  const nonce = randomBytes(12)
+  const cipher = createCipheriv("aes-256-gcm", key, nonce)
+  cipher.setAAD(Buffer.from(associated))
+  return {
+    uploadId,
+    key: key.toString("base64url"),
+    aad: associated,
+    nonce: nonce.toString("base64url"),
+    ciphertext: Buffer.concat([cipher.update(bytes), cipher.final(), cipher.getAuthTag()]).toString("base64url"),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    bytes: bytes.byteLength,
+    approvedAt: Date.now(),
+    publicRepository: false,
+  }
+}
+
 /**
  * The vectordev.ai side of the cloud client, through its Services seam: every request is recorded with its path, body
  * and authorization, and settle is accepted. A heartbeat is answered `{ok: true, stop: false}`, or with what `heartbeat`
- * returns for its body. An artifact-key request (V27) is answered by `artifactKey` when given, and `{ok: true}`
- * otherwise, which the key client reads as unavailable; it is recorded first, so an `artifactKey` that throws is an
- * outage. Every other request keeps its answer whatever `artifactKey` does. Masked values and notices are kept.
+ * returns for its body. An artifact-key request (V27) is answered by `artifactKey` when given, and a brain-download
+ * request (B08) by `brainDownload`, which also gets the request's signal; each is `{ok: true}` otherwise, which its
+ * client reads as unavailable. Both are recorded first, so an answer that throws is an outage. Every other request
+ * keeps its answer whatever they do. Masked values and notices are kept.
  */
 export function cloudRecorder(
   options: {
     heartbeat?: (body: unknown) => unknown
     artifactKey?: (body: unknown) => Response | Promise<Response>
+    brainDownload?: (body: unknown, signal: AbortSignal | undefined) => Response | Promise<Response>
   } = {},
 ) {
   const requests: { path: string; body: unknown; authorization?: string }[] = []
@@ -332,6 +420,8 @@ export function cloudRecorder(
       const pathname = new URL(request.url).pathname
       requests.push({ path: pathname, body, authorization: request.headers.get("authorization") ?? undefined })
       if (pathname === GithubAgents.ENDPOINT.artifactKey && options.artifactKey) return options.artifactKey(body)
+      if (pathname === GithubAgents.ENDPOINT.brainDownload && options.brainDownload)
+        return options.brainDownload(body, init.signal ?? undefined)
       if (!request.url.endsWith("/heartbeat")) return Response.json({ ok: true })
       return Response.json(options.heartbeat?.(body) ?? { ok: true, stop: false })
     },
@@ -387,7 +477,8 @@ export type GatewayRequest = { authorization?: string; title: boolean; action: G
  * CODIUM_MODEL only for the fixture run token. A title request is always sent on to the fake model server at `target`,
  * which answers titles itself. Every other request takes the next action from `queue`, or `sticky` once the queue is
  * empty (forward by default). A refusal is the gateway's `{error: {code, message, limit?}}` with `retry-after-ms: 1`,
- * and calls `onRefusal` first; a held request waits until its caller aborts it and resolves `held`.
+ * and calls `onRefusal` first; a held request waits until its caller aborts it and resolves `held`. Every catalog read
+ * (each provider list) calls `onCatalog` first.
  */
 export function codiumFakes() {
   const state = {
@@ -396,16 +487,20 @@ export function codiumFakes() {
     queue: [] as GatewayAction[],
     sticky: { kind: "forward" } as GatewayAction,
     onRefusal: (() => {}) as () => void,
+    onCatalog: (() => {}) as () => void,
     held: Promise.withResolvers<void>(),
     reads: [] as (string | undefined)[],
     requests: [] as GatewayRequest[],
   }
-  const reset = (input: Partial<Pick<typeof state, "codium" | "target" | "queue" | "sticky" | "onRefusal">> = {}) => {
+  const reset = (
+    input: Partial<Pick<typeof state, "codium" | "target" | "queue" | "sticky" | "onRefusal" | "onCatalog">> = {},
+  ) => {
     state.codium = input.codium ?? state.codium
     state.target = input.target ?? state.target
     state.queue = input.queue ?? []
     state.sticky = input.sticky ?? { kind: "forward" }
     state.onRefusal = input.onRefusal ?? (() => {})
+    state.onCatalog = input.onCatalog ?? (() => {})
     state.held = Promise.withResolvers<void>()
     state.reads.splice(0)
     state.requests.splice(0)
@@ -460,6 +555,7 @@ export function codiumFakes() {
           catalog: (token) =>
             Effect.sync(() => {
               state.reads.push(token)
+              state.onCatalog()
               return token === CHANNEL.runToken && state.codium
                 ? { enabled: true, models: [CODIUM_MODEL] }
                 : { enabled: false, models: [] }
@@ -493,6 +589,8 @@ export function stepEnv(input: {
   mentions?: string
   /** VECTOR_RUN_DEADLINE, epoch milliseconds as mint writes it. */
   deadline?: string
+  /** A Codium step's VECTOR_BRAIN_UPLOAD, the dispatch's `brain_upload` input: empty unless given, as on every run. */
+  brainUpload?: string
 }): Record<string, string | undefined> {
   return {
     GITHUB_ACTIONS: "true",
@@ -510,6 +608,8 @@ export function stepEnv(input: {
     MENTIONS: input.mentions ?? "/vector,/vs",
     ...(input.prompt !== undefined ? { VECTOR_PROMPT: input.prompt } : {}),
     ...(input.deadline !== undefined ? { VECTOR_RUN_DEADLINE: input.deadline } : {}),
+    // The generated Codium agent step always passes `${{ inputs.brain_upload }}`; own key has no such name.
+    ...(input.mode === "codium" ? { VECTOR_BRAIN_UPLOAD: input.brainUpload ?? "" } : {}),
   }
 }
 

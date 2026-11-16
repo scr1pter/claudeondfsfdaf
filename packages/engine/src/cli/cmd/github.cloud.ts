@@ -43,7 +43,8 @@ const Binding = z
     workflowUpdate: z.boolean(),
   })
   .strict()
-const UPLOAD = /^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/
+/** A Brain upload id as brain-download reads it from VECTOR_BRAIN_UPLOAD: `vbu_` and 32 base64url characters. */
+export const UPLOAD = /^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/
 const canonical = (value: string) => Buffer.from(value, "base64url").toString("base64url") === value
 // The same 32-byte key shape github.session.ts's keyBytes accepts, for the ordinary and the Brain conversation key.
 const Key = z
