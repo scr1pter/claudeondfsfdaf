@@ -51,6 +51,13 @@ test("fresh Node ESM callers, run tokens and readiness initialize in either impo
     "api/_lib/cloud-agents-entitlement.ts",
     "api/_lib/model-plan-models.ts",
     "api/_lib/cloud-agents-readiness.ts",
+    // The production cold-start order: the Codium routes import hosted-run, which reaches the ledger first.
+    "api/_lib/cloud-agents-ledger.ts",
+    "api/_lib/model-plan-gateway-hooks.ts",
+    "api/_lib/hosted-run.ts",
+    "api/model-plans/chat.ts",
+    "api/model-plans/estimate.ts",
+    "api/model-plans/models.ts",
   ]
   const temporary = await mkdtemp(path.join(tmpdir(), "vector-api-import-"))
   try {
