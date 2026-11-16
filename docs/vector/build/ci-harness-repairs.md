@@ -148,8 +148,11 @@ Change. New composite action `.github/actions/install-ripgrep-windows` downloads
 zip from github.com (which every job already needs for checkout) with
 `curl.exe --fail --retry 6 --retry-all-errors --max-time 60 --retry-max-time 180` and no `--retry-delay`, so the
 exponential backoff stays. `--retry-all-errors` also retries a permanent 404 until the budget ends; the final error
-names the URL. The worst case is about 240 s plus backoff (an attempt that starts just before 180 s still runs its full
-60 s), inside the engine shards' 5-minute step limit. The zip's SHA-256 is compared with the release's published value
+names the URL. The worst case is under about 4.5 minutes, about 272 s: curl checks the 180 s budget only before its
+backoff sleep, so an attempt that fails just before 180 s can be followed by one last backoff of up to 32 s (the sixth
+retry) and one more full 60 s attempt. That stays inside the engine shards' 5-minute step limit with about 30 s left for
+pwsh startup, hashing, `Expand-Archive` and `rg --version`; an overrun still fails the step loudly. The step timeouts
+are unchanged. The zip's SHA-256 is compared with the release's published value
 (x64 `71b2fef8…aafc5`, ARM64 `e4abca10…5360f`; no job uses ARM64 yet, so that branch has not run in CI), the archive is
 expanded under `RUNNER_TEMP`, `rg --version` must report `ripgrep 15.2.0`, and only then is the native folder appended
 to `GITHUB_PATH`. Every failure throws; there is no Chocolatey fallback. The three steps keep their names, their

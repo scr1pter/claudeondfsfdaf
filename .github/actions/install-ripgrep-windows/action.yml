@@ -23,8 +23,10 @@ runs:
         $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
         $zip = Join-Path $env:RUNNER_TEMP "$name.zip"
         # --retry backs off exponentially and honours Retry-After; --retry-all-errors adds connection resets (and also
-        # retries a permanent 404 until the budget ends). Worst case: an attempt that starts just before the 180 s
-        # retry budget runs its full 60 s, so about 4 minutes plus backoff, inside the engine shards' 5-minute step limit.
+        # retries a permanent 404 until the budget ends). Worst case, about 272 s: curl checks the 180 s retry budget only
+        # before its backoff sleep, so an attempt that fails just before 180 s can be followed by one last backoff of up
+        # to 32 s (the sixth retry) and one more full 60 s attempt. That leaves the engine shards' 5-minute step limit
+        # about 30 s for pwsh startup, hashing, Expand-Archive and rg --version; an overrun still fails the step.
         # Do not add --retry-delay: it turns off the backoff.
         curl.exe --fail --silent --show-error --location --connect-timeout 20 --max-time 60 --retry 6 --retry-all-errors --retry-max-time 180 --output $zip $url
         if ($LASTEXITCODE -ne 0) { throw "ripgrep $version could not be downloaded from $url after retries (curl exit $LASTEXITCODE)." }
