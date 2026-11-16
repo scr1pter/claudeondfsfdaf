@@ -27,8 +27,13 @@ test("required isolation keeps the computer policy first and ends launch-floor r
     expect(code, `${stdout}\n${stderr}`).toBe(0)
     expect(stderr).toMatch(/\b4 pass\b/)
     expect(stderr).toContain(" 0 fail")
-    // Linux plans an allowed command plainly while the bubblewrap floor is held; off Linux the floor refuses it.
-    expect(stdout).toMatch(/MCP_REQUIRED_ISOLATION_LAUNCH=(planned|refused)/)
+    // Linux plans an allowed command plainly while the bubblewrap floor is held, or refuses it without bubblewrap. Off
+    // Linux the floor must refuse it, so a floor that starts planning there fails here, not only in the log line.
+    expect(stdout).toMatch(
+      process.platform === "linux"
+        ? /MCP_REQUIRED_ISOLATION_LAUNCH=(planned|refused)/
+        : /MCP_REQUIRED_ISOLATION_LAUNCH=refused/,
+    )
     // The child's output is captured, so a passing run would otherwise leave neither its launch branch nor its elapsed
     // time in the shard log. The elapsed time shows how close a slow host comes to the 50 s kill.
     console.log(
