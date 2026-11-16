@@ -277,11 +277,15 @@ const everyKey = {
 }
 
 describe("version skew", () => {
-  test("connect and computer are the intentional top-level additions", () => {
+  test("connect, computer and everywhere are the intentional top-level additions", () => {
     expect(() => ConfigParse.schema(Released, { connect: { review: { after_run: "off" } } }, "vector.json")).toThrow()
+    expect(() => ConfigParse.schema(Released, { everywhere: { enabled: false } }, "vector.json")).toThrow()
     expect(RELEASED_TOP_LEVEL).not.toContain("computer")
+    expect(RELEASED_TOP_LEVEL).not.toContain("everywhere")
     expect(Object.keys(Released.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
-    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL, "connect", "computer"].sort())
+    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual(
+      [...RELEASED_TOP_LEVEL, "connect", "computer", "everywhere"].sort(),
+    )
   })
 
   test("computer is not a released subagent key and cannot become repository policy", () => {

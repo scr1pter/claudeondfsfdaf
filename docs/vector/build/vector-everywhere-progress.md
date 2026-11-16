@@ -1905,3 +1905,225 @@ Committed as `feat(everywhere): add the Remote relay adapter for presence
 and offers` (the brief's title, in place of the working title above); the
 push and the run ids are recorded in "EV-09 push receipts" in the follow-up
 docs commit.
+
+## EV-10: user config key `everywhere` (VE-40) (2026-11-15)
+
+Base: HEAD `735d592b` (EV-09), equal to `origin/everywhere-finish`. `git fetch origin release-finish main everywhere-finish review-fixes` found:
+
+- release-finish at `cf2373c4`, already merged here;
+- main `58f85edc`, not merged (PR #33 is not in);
+- review-fixes `1433d105`.
+
+**Precondition not met on 2026-11-15** (met on 2026-11-16; see "EV-10, 2026-11-16" below). `git merge-base --is-ancestor ce91a261 HEAD` fails, and so does the same check against origin/release-finish: PUB-2 is only on review-fixes. The package was built anyway, at the user's request to finish quickly (deviations, EV-10 (k)), and is not committed. The commit waits for ce91a261 on release-finish, or for the lead's OK given the probe below.
+
+**Merge probe.** A `git merge-tree` of the working tree, lane documents included (as a scratch commit from a temporary index; no ref moved and the real index untouched), was run against:
+
+- clean: review-fixes `1433d105`, connect-finish `539ec394`, hands-finish `bca15854`, brain-transport `a89fe7a0`, scope-finish `14a4b60f`, workspaces-finish `7ecd64a1` and native-qualify `73651efe`;
+- codium-finish `4bd146e7`: conflicts only in vector-codium.yml, packages/cloud/src/codium-ci-tests.ts and workflow-compliance.test.ts, exactly as HEAD already does.
+
+The tree merged with review-fixes has the three "Not available in Vector 1.99.112 or earlier" descriptions (computer, connect, everywhere) in both core config.ts and config.json, and `$defs.EverywhereConfig`.
+
+**Baselines before any edit.** packages/engine/script/schema.ts with fresh XDG roots (/tmp/vector-v2/everywhere-finish/ev10-xdg) wrote config.json and tui.json identical to packages/web/public (`cmp`).
+
+Files (line numbers after EV-10):
+
+- packages/core/src/v1/config/everywhere.ts (new, 76 lines): self-export (:1); `SEGMENT` and `DIRECTORY` (:14-19); `Project` `{directory, repository}`, strict (:23-30); `upTo` (:32); `Info`, strict (:34-62); `Defaults` (:66-76).
+- packages/core/src/v1/config/config.ts: the import (:25); `everywhere:` after `watcher:` (:131-134).
+- packages/engine/src/config/config.ts: `delete next.everywhere` with its comment (:96-98); `userSources` (:2125); the `dropped` entry (:2143-2145).
+- packages/engine/src/server/routes/instance/httpapi/handlers/global.ts:129-132: the guest omit.
+- packages/engine/src/server/routes/instance/httpapi/handlers/config.ts: imports (:8-10); the guest omit on GET (:36-41); the 400 on PATCH (:44-46).
+- packages/engine/test/config/subagent-config.test.ts:280-289 (version skew).
+- New packages/core/test/everywhere/config.test.ts and packages/engine/test/everywhere/config.test.ts.
+- Regenerated:
+  - packages/web/public/config.json, +117 lines, none removed;
+  - packages/sdk/openapi.json (+73), packages/sdk/js/src/gen/types.gen.ts (+26) and packages/sdk/js/src/v2/gen/types.gen.ts (+26), additions only, the same after a second run, with no untracked output left;
+  - unchanged: tui.json, workflow.json (packages/core/script/workflow-schema.ts) and packages/client (`bun run check:generated` exit 0).
+
+**Tests.** Each file was run alone through /home/user/.tools/vector-serial with `--timeout 30000` and TMPDIR=/tmp/vector-v2/everywhere-finish/ev10-tmp.
+
+- core:
+  - test/everywhere/config.test.ts: 8 pass, 105 expects (re-run after prettier: see below).
+  - test/config/computer.test.ts: 6 pass, 43 expects.
+  - test/orchestration/schema-file.test.ts: 1 pass, 1 expect.
+- engine:
+  - test/everywhere/config.test.ts: 15 pass, 63 expects.
+  - test/config/subagent-config.test.ts: 16 pass, 56 expects.
+  - test/connect/config.test.ts: 3 pass, 7 expects.
+  - test/compliance/generated-artifacts.test.ts: 2 pass, 9 expects (config.json and tui.json match the generator).
+  - test/config/company-lock.test.ts: 11 pass, 61 expects.
+  - test/server/auth-guest.test.ts: 28 pass, 271 expects.
+  - test/server/httpapi-config-secrets.test.ts: 15 pass, 299 expects.
+  - test/config/config.test.ts: 175 pass, 415 expects.
+- web:
+  - test/deployed-schemas.test.ts: 2 pass, 4 expects.
+  - test/everywhere-lane.test.ts: 13 pass, 150 expects.
+  - test/docs-config-reference.test.ts: 4 pass, 1 fail, 37 expects. The failure is pre-existing and independent of EV-10: "company computer policy samples decode and state their minimum engine version" expects "1.99.112" in the computer description (:46), which only review-fixes adds (deviations, EV-10 (l)).
+- desktop: `bun --no-env-file test` src/main/config-skew.test.ts: 2 pass, 38 expects (unchanged).
+- sdk/js: test/v1-schema.test.ts 1 pass, 2 expects; test/wire-compat.test.ts 10 pass, 24 expects.
+
+**Mutations**, each restored from a copy afterwards:
+
+- M1: the merge() drop line removed. Engine test: 4 fail (managed, VECTOR_CONFIG_CONTENT, custom directory, organization).
+- M2: the guest omit on GET /global/config removed. 1 fail (the route case).
+- M3: the PATCH /config refusal removed. 1 fail (the route case: expected 400, received 200).
+- M4: the strict `parseOptions` removed from `Info`. Core test: 2 fail (unknown keys; the core loader case).
+
+Formatting: `bun prettier --check` over the eight changed .ts files flagged the two new test files only. They were rewritten with `prettier --write`, and the re-run below is on the formatted files.
+
+**After formatting:**
+
+- Re-run: core test/everywhere/config.test.ts 8 pass, 105 expects; engine test/everywhere/config.test.ts 15 pass, 63 expects.
+- Typechecks, one at a time: core (`tsgo --noEmit`) exit 0, engine exit 0, web (`astro check`) 0 errors and 0 warnings, sdk/js exit 0.
+- `prettier --check` over the eight .ts files is clean.
+- A second probe, taken after the lane documents were written, gives the same merge results as above.
+- A re-fetch at the end found release-finish `cf2373c4`, review-fixes `1433d105` and everywhere-finish `735d592b` unchanged.
+
+### EV-10, 2026-11-16: merge of release-finish and the finish
+
+Lead ruling (2026-11-16): ce91a261 (PUB-2) is on origin/release-finish, whose head is `0f034957`. `git fetch origin release-finish main everywhere-finish` found release-finish `0f034957`, everywhere-finish `735d592b` (equal to HEAD) and main `58f85edc`, not merged. `git merge-base --is-ancestor ce91a261 origin/release-finish` succeeds.
+
+1. **Saved first.** `git diff HEAD --binary` went to /tmp/vector-v2/everywhere/ev10-before-merge.patch (42,685 bytes). The three untracked files were copied, with their paths, into /tmp/vector-v2/everywhere/ev10-untracked/. No stash and no reset.
+2. **Overlap.** Of the working tree's 16 changed or new files, three are also changed between the merge base `cf2373c4` and `0f034957`: docs/vector/build/vector-everywhere-spec.md (FIT-5), packages/core/src/v1/config/config.ts (PUB-2) and packages/web/public/config.json (PUB-2). Their hunks were saved again on their own (ev10-overlap.patch). `git merge-tree --write-tree HEAD origin/release-finish` was clean, and no untracked file exists on the incoming side.
+3. **Merge.** Only those three files were restored to HEAD with `git checkout --`. Then `git merge --no-ff origin/release-finish`, as Vector with the rules' trailers: `5d8c5c8c` "chore(everywhere): merge PR #33 head 0f034957", with no conflicts (83 files from release-finish). Not pushed: the commit step pushes. No package.json or bun.lock changed, so no install was needed.
+4. **Re-apply.** `git apply --3way` of ev10-overlap.patch applied cleanly to all three files. They were then unstaged with `git restore --staged`, so every EV-10 change stays in the working tree only. `git merge-base --is-ancestor ce91a261 HEAD` now succeeds.
+5. **docs-config-reference.test.ts** (review-fixes' rewritten version): `everywhere` joins the loop at :51 (deviations, EV-10 (l)).
+
+**Generators on the merged tree** (fresh XDG roots in /tmp/vector-v2/everywhere-finish/ev10m-xdg, output to /tmp/vector-v2/everywhere/ev10m/gen first):
+
+- packages/engine/script/schema.ts: config.json is byte-identical to the working tree's (`cmp`). It has three "Not available in Vector 1.99.112 or earlier" descriptions (computer, connect, everywhere), and `$defs.EverywhereConfig` has ten properties and `additionalProperties: false`. tui.json is identical to HEAD's. config.json is still +117 lines against HEAD, with none removed.
+- packages/core/script/workflow-schema.ts: workflow.json identical to HEAD's.
+- ./packages/sdk/js/script/build.ts (from the repo root): packages/sdk/openapi.json and both types.gen.ts are byte-identical to the files generated before the merge, because the SDK does not embed top-level config descriptions. `git status --porcelain --untracked-files=all packages/sdk` shows only those three files. dist is ignored, and the build leaves no packages/sdk/js/openapi*.json.
+- packages/client `bun run check:generated`: exit 0.
+
+**Tests on the merged tree.** Each file was run alone through /home/user/.tools/vector-serial with `--timeout 30000` and TMPDIR=/tmp/vector-v2/everywhere-finish/ev10m-tmp.
+
+- The package's own files:
+  - core test/everywhere/config.test.ts: 8 pass, 105 expects.
+  - engine test/everywhere/config.test.ts: 15 pass, 63 expects.
+  - web test/docs-config-reference.test.ts: 6 pass, 0 fail, 42 expects. That is review-fixes' version plus the `everywhere` case; before the merge, the old file failed independently of EV-10.
+- engine:
+  - test/config/subagent-config.test.ts: 16 pass, 56 expects.
+  - test/compliance/generated-artifacts.test.ts: 2 pass, 9 expects.
+  - test/connect/config.test.ts: 3 pass, 7 expects.
+  - test/config/company-lock.test.ts: 11 pass, 61 expects.
+  - test/server/auth-guest.test.ts: 28 pass, 271 expects.
+  - test/server/httpapi-config-secrets.test.ts: 15 pass, 299 expects.
+  - test/config/config.test.ts: 175 pass, 415 expects.
+- core:
+  - test/config/computer.test.ts: 6 pass, 43 expects.
+  - test/orchestration/schema-file.test.ts: 1 pass, 1 expect.
+  - test/connect/flag.test.ts (new from the merge): 2 pass, 7 expects.
+- web:
+  - test/deployed-schemas.test.ts: 2 pass, 4 expects.
+  - test/everywhere-lane.test.ts: 13 pass, 148 expects. That is 2 fewer than before the merge, because FIT-4 (review-fixes) removed the dead push triggers this test used to check. It is not EV-10's change.
+- desktop: `bun --no-env-file test` src/main/config-skew.test.ts: 2 pass, 38 expects.
+- sdk/js: test/v1-schema.test.ts 1 pass, 2 expects; test/wire-compat.test.ts 10 pass, 24 expects.
+
+**Typechecks**, one at a time on the merged tree:
+
+- core (`tsgo --noEmit`): exit 0.
+- engine: exit 0.
+- web (`astro check`): 292 files, 0 errors, 0 warnings.
+- sdk/js (`tsgo --noEmit` and the test project): exit 0.
+
+**Other checks:**
+
+- `bun prettier --check` over the nine changed .ts files (the eight above plus docs-config-reference.test.ts) is clean.
+- The lane-document additions name no home folder except the generic `/home/user/` that test/no-personal-paths.test.ts (new from the merge) allows.
+
+**Cross-lane probe, re-run.** A scratch commit of the working tree on `5d8c5c8c`, built from a temporary index (no ref moved, real index untouched), was probed with `git merge-tree --write-tree` against each lane's tip:
+
+- clean: review-fixes `1433d105`, connect-finish `3f866f30`, hands-finish `289af6bb`, scope-finish `bf25e8c5`, brain-transport `09a6387a`, workspaces-finish `098b5a1c` and native-qualify `9b0623ae`;
+- codium-finish `bd3cc7ad`: conflicts in .env.example, .github/workflows/vector-codium.yml, packages/cloud/src/codium-ci-tests.ts and packages/cloud/src/workflow-compliance.test.ts. HEAD alone gives exactly the same four, so none of them is EV-10's.
+
+**Not done here** (the brief for this step says not to commit):
+
+- the full `bun turbo typecheck` (run before the push);
+- the EV-10 commit, the push of `5d8c5c8c` plus that commit, and the CI dispatches (vector-everywhere.yml and typecheck.yml on everywhere-finish).
+
+Planned commit title: `feat(core): add the everywhere user config key`. The body names the regenerated files and their generators: config.json from packages/engine/script/schema.ts, and the SDK's openapi.json and both types.gen.ts from ./packages/sdk/js/script/build.ts. It also names the unchanged generated files (tui.json, workflow.json and packages/client/src/generated*) and notes that the SDK files will need the one regeneration v2-complete-plan §2 reserves after all lanes merge.
+
+### EV-10, 2026-11-16: review fixes (round one)
+
+Ten findings, one blocking; all taken (deviations, EV-10 (o)). Still uncommitted, on HEAD `5d8c5c8c`. `git fetch` found release-finish `0f034957` and everywhere-finish `735d592b`, both unchanged, so no merge was needed.
+
+**Code** (line numbers after this round):
+
+- Blocking, the company policy loop: packages/engine/src/config/config.ts now omits `["local", ...userOnly]` (:2377), where it omitted only `local`. `userOnly = ["everywhere"] as const` (:2128) sits beside `userSources` (:2125). merge() takes its drop from the same list (:2146).
+- packages/core/src/config/managed.ts: the test-only `useTestPolicies` (:151-157), used by read() (:189) while a test directory is set.
+- packages/core/src/v1/config/everywhere.ts: a drive-letter path keeps one separator throughout (DIRECTORY, :20-22). The comment (:16-19) now says that case and links are not normalized. 79 lines.
+- handlers/config.ts:44-48: a comment on why the PATCH /config 400 has no body.
+
+**Tests:**
+
+- packages/engine/test/everywhere/config.test.ts:
+  - the policy loop, without and beside a user block, through `ConfigManaged.useTestPolicies` (one MDM and one policy-key entry);
+  - a company lock on `everywhere`: Config.get() has no block, getGlobal() returns the user's, and Config.lockedKeys() lists it. Vector Local is restored afterwards, as company-lock.test.ts does;
+  - the desktop's own folder as a user source (VECTOR_CLIENT=desktop, VECTOR_AGENT_CONFIG_DIR outside the repository);
+  - `C:\a/b` refused by the engine's parser;
+  - the parser case uses `expect(...).toThrow(expect.objectContaining(...))` in place of a try/catch. Environment variables are restored through `setEnv` (an early return, no `else`).
+- packages/core/test/everywhere/config.test.ts: `C:\a/b` and `D:/a\b` refused, and the duplicate case's comment reworded.
+
+**Generators:**
+
+- packages/engine/script/schema.ts, with fresh XDG roots in /tmp/vector-v2/everywhere-finish/ev10r-xdg (to /tmp/vector-v2/everywhere/ev10r/gen first, then in place, byte-identical): config.json changes only in `$defs.EverywhereProject.properties.directory`'s pattern. It is still +117 lines against HEAD, none removed. tui.json is unchanged.
+- ./packages/sdk/js/script/build.ts: packages/sdk/openapi.json changes only in the same pattern line (+73 against HEAD). Both types.gen.ts are identical to the pre-merge run's (their diffs hash the same as ev10-before-merge.patch's). No untracked output is left.
+- packages/client `bun run check:generated`: exit 0.
+
+**Tests run**, each file alone through /home/user/.tools/vector-serial with `--timeout 30000`:
+
+- The package's own files:
+  - core test/everywhere/config.test.ts: 8 pass, 107 expects;
+  - engine test/everywhere/config.test.ts: 19 pass, 68 expects.
+- engine:
+  - test/compliance/generated-artifacts.test.ts: 2 pass, 9 expects;
+  - test/config/subagent-config.test.ts: 16 pass, 56 expects;
+  - test/config/company-lock.test.ts: 11 pass, 61 expects;
+  - test/config/local-policy.test.ts: 68 pass, 393 expects;
+  - test/config/company-certificates.test.ts: 1 pass, 4 expects;
+  - test/server/auth-guest.test.ts: 28 pass, 271 expects;
+  - test/server/httpapi-config-secrets.test.ts: 15 pass, 299 expects;
+  - test/config/config.test.ts: 175 pass, 415 expects;
+  - test/connect/config.test.ts: 3 pass, 7 expects.
+- core: test/config/managed.test.ts 3 pass, 19 expects; test/config/computer.test.ts 6 pass, 43 expects.
+- web: test/docs-config-reference.test.ts 6 pass, 42 expects; test/deployed-schemas.test.ts 2 pass, 4 expects; test/everywhere-lane.test.ts 13 pass, 148 expects.
+- sdk/js: test/v1-schema.test.ts 1 pass, 2 expects; test/wire-compat.test.ts 10 pass, 24 expects.
+- desktop: `bun --no-env-file test` src/main/config-skew.test.ts: 2 pass, 38 expects.
+- Root-only failures, not EV-10's: engine test/config/managed-trust.test.ts (25 pass, 1 fail: "POSIX ownership > checks the real file and every folder above it") and core test/local-mode/startup.test.ts (15 pass, 3 fail: the three "a standard user could have written" cases). This container runs as uid 0, so a file the test writes is root's and counts as trusted. With HEAD's managed.ts put back (then restored, `cmp` checked), the same four fail.
+
+**Mutations**, each restored from a copy afterwards (`cmp` checked):
+
+- M5: the policy loop back to `omit(next, ["local"])`. Engine test: 2 fail (both policy cases).
+- M1, re-run: the merge() drop entry removed. 5 fail (managed file, the lock case, VECTOR_CONFIG_CONTENT, custom directory, organization).
+- M6: `userSources` without `localConfig.user`. 1 fail (the desktop folder case).
+- M7: the drive-letter branch back to `[\\/]`. Core test: 1 fail (the projects case, on `C:\a/b`).
+
+**Typechecks**, one at a time: core exit 0; engine exit 0; web (`astro check`) 0 errors, 0 warnings; sdk/js exit 0. `bun prettier --check` over the ten changed .ts files is clean.
+
+**Cross-lane probe** (a scratch commit of the working tree on `5d8c5c8c` from a temporary index; no ref moved, real index untouched), with `git merge-tree --write-tree` against each tip:
+
+- clean: review-fixes `1433d105`, connect-finish `3f866f30`, hands-finish `289af6bb`, scope-finish `f11f8b35`, brain-transport `09a6387a`, workspaces-finish `098b5a1c` and native-qualify `9b0623ae`;
+- codium-finish `bd3cc7ad`: the same four conflicts that HEAD alone has (.env.example, vector-codium.yml, codium-ci-tests.ts, workflow-compliance.test.ts).
+- No other lane's tip changes engine config.ts, core config/managed.ts, the two handlers, core v1 config.ts or config.json against origin/release-finish. connect-finish changes packages/sdk/openapi.json, which is resolved by regenerating.
+
+**For the commit and push** (not done here):
+
+- The commit body also names the four shared files outside the §6.5 anchors and the reason (deviations, EV-10 (n)): engine config.ts merge() and the policy loop, handlers/config.ts, handlers/global.ts and core config/managed.ts.
+- Before the push, the lead confirms the §6.5 exception.
+- The regenerated files stay as listed above: config.json, openapi.json and both types.gen.ts.
+
+### EV-10, 2026-11-16: commit gate
+
+`git fetch origin release-finish main everywhere-finish` found release-finish `0f034957` (in HEAD), everywhere-finish `735d592b` (an ancestor of HEAD) and main `58f85edc` (not merged, as the lane rules say). `git merge-base --is-ancestor ce91a261 HEAD` succeeds. The working tree held only EV-10's 18 files.
+
+Re-run, each file alone through /home/user/.tools/vector-serial with `--timeout 30000` and TMPDIR=/tmp/vector-v2/everywhere/ev10-gate-tmp:
+
+- core: test/everywhere/config.test.ts 8 pass, 107 expects; test/config/managed.test.ts 3 pass, 19 expects.
+- engine: test/everywhere/config.test.ts 19 pass, 68 expects; test/config/subagent-config.test.ts 16 pass, 56 expects; test/compliance/generated-artifacts.test.ts 2 pass, 9 expects; test/server/auth-guest.test.ts 28 pass, 271 expects; test/server/httpapi-config-secrets.test.ts 15 pass, 299 expects; test/config/company-lock.test.ts 11 pass, 61 expects.
+- web: test/docs-config-reference.test.ts 6 pass, 42 expects.
+
+Generators: ./packages/sdk/js/script/build.ts, re-run with fresh XDG roots in /tmp/vector-v2/everywhere-finish/ev10-gate-xdg, left openapi.json and both types.gen.ts byte-identical (sha256 checked) and no untracked output. packages/client `bun run check:generated`: exit 0.
+
+Typechecks: core, engine, web (`astro check`, 0 errors, 0 warnings) and sdk/js, each exit 0. The full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
+
+The push and the CI run ids go in the next lane docs commit.

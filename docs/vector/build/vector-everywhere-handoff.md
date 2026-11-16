@@ -94,6 +94,7 @@ Independent review and re-review closed the five reported P1c findings; the opti
    - Phase 3 (VE-20 to VE-22, laptop route): after `codium` merges.
    - Phase 4 (VE-30 to VE-33, Actions fallback and GitHub laptop-first): after `vector-at-mention` merges, plus Codium's A59. VE-30 also adds the Actions settle transition.
    - Phase S (VE-40 to VE-44, surfaces): lands as one piece after the next large merge.
+     *2026-11-15 annotation (EV-10):* VE-40, the user config key `everywhere`, is built separately on everywhere-finish, ahead of VE-41 to VE-44. Rules for EV-17: read only GET /global/config (never Config.get(), GET /config or core's Config.entries()), treat `locked` containing `everywhere` as off, and canonicalize folders before matching a job to one. Rule for EV-21: write only through PATCH /global/config. See vector-everywhere-deviations.md, "2026-11-15, EV-10".
    - VE-50 (go-live): runs with the owner after each platform is registered.
    - *2026-11-15:* `codium` (`1ce8f5f3`) and `vector-at-mention` (`c0d10fb8`) are in this lane's base (`release-finish`, PR #33). Their merge into `main` waits for PR #33, which needs the owner's yes. The lane builds Phases 3, 4 and S on that base behind the flag; the go-live gates in spec §7, Codium's A59, R-A6/Q13 and the owner actions are unchanged.
 

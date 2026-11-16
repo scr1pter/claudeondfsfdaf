@@ -37136,6 +37136,73 @@
         "additionalProperties": false,
         "description": "Server configuration for vector serve and web commands"
       },
+      "EverywhereProject": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "An absolute folder path, at most 4096 characters, with no `.` or `..` and no trailing separator",
+            "maxLength": 4096,
+            "pattern": "^(?:(?:\\/(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+|[A-Za-z]:(?:\\\\(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+|[A-Za-z]:(?:\\/(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+|\\\\\\\\(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+(?:\\\\(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+)$"
+          },
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\/[A-Za-z0-9_.-]{1,100}$",
+            "description": "The folder's GitHub repository as owner/name"
+          }
+        },
+        "required": ["directory", "repository"],
+        "additionalProperties": false
+      },
+      "EverywhereConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_usd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 50
+          },
+          "minutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 120
+          },
+          "at_once": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 3
+          },
+          "per_day": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^[^/\\r\\n]+\\/[^\\r\\n]+$"
+          },
+          "wait_for_computer": {
+            "type": "boolean"
+          },
+          "push": {
+            "type": "boolean"
+          },
+          "stay_awake": {
+            "type": "boolean"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EverywhereProject"
+            },
+            "maxItems": 64
+          }
+        },
+        "additionalProperties": false
+      },
       "PermissionActionConfig": {
         "type": "string",
         "enum": ["ask", "allow", "deny"]
@@ -38229,6 +38296,9 @@
             },
             "additionalProperties": false
           },
+          "everywhere": {
+            "$ref": "#/components/schemas/EverywhereConfig"
+          },
           "snapshot": {
             "type": "boolean"
           },
@@ -38866,6 +38936,9 @@
               }
             },
             "additionalProperties": false
+          },
+          "everywhere": {
+            "$ref": "#/components/schemas/EverywhereConfig"
           },
           "snapshot": {
             "type": "boolean"

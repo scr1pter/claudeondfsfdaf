@@ -91,6 +91,119 @@
       ],
       "additionalProperties": false
     },
+    "EverywhereProject": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "An absolute folder path, at most 4096 characters, with no `.` or `..` and no trailing separator",
+          "allOf": [
+            {
+              "maxLength": 4096
+            },
+            {
+              "pattern": "^(?:(?:\\/(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+|[A-Za-z]:(?:\\\\(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+|[A-Za-z]:(?:\\/(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+|\\\\\\\\(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+(?:\\\\(?!\\.\\.?(?:[\\\\/]|$))[^\\\\/\\0\\r\\n]+)+)$"
+            }
+          ]
+        },
+        "repository": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\/[A-Za-z0-9_.-]{1,100}$",
+          "description": "The folder's GitHub repository as owner/name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "directory",
+        "repository"
+      ],
+      "additionalProperties": false
+    },
+    "EverywhereConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Off unless set to true (default: false)"
+        },
+        "max_usd": {
+          "type": "number",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "maximum": 50
+            }
+          ],
+          "description": "US dollars per job, above 0 and at most 50 (default: 2)"
+        },
+        "minutes": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "maximum": 120
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Minutes per job, 1–120 (default: 45)"
+        },
+        "at_once": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "maximum": 3
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Jobs at once, 1–3 (default: 1)"
+        },
+        "per_day": {
+          "type": "integer",
+          "allOf": [
+            {
+              "exclusiveMinimum": 0
+            },
+            {
+              "maximum": 100
+            }
+          ],
+          "maximum": 9007199254740991,
+          "description": "Jobs a day, 1–100 (default: 20)"
+        },
+        "model": {
+          "pattern": "^[^/\\r\\n]+\\/[^\\r\\n]+$",
+          "type": "string",
+          "description": "Model in the format of provider/model (default: your default model)"
+        },
+        "wait_for_computer": {
+          "type": "boolean",
+          "description": "Default: true"
+        },
+        "push": {
+          "type": "boolean",
+          "description": "Default: true"
+        },
+        "stay_awake": {
+          "type": "boolean",
+          "description": "Default: false"
+        },
+        "projects": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EverywhereProject"
+          },
+          "description": "Project folders, each listed once, at most 64 (default: none)"
+        }
+      },
+      "additionalProperties": false
+    },
     "PermissionActionConfig": {
       "type": "string",
       "enum": [
@@ -1527,6 +1640,10 @@
             }
           },
           "additionalProperties": false
+        },
+        "everywhere": {
+          "$ref": "#/$defs/EverywhereConfig",
+          "description": "Not available in Vector 1.99.112 or earlier, which rejects this key. Read only from your own user config: repository, company, organization and environment config cannot set it."
         },
         "snapshot": {
           "type": "boolean",

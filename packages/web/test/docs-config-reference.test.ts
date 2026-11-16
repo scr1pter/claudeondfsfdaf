@@ -48,7 +48,7 @@ async function unreleasedKeys() {
 
 test("the published schema says which top-level keys released Vector does not accept", async () => {
   const schema = await Bun.file(new URL("../public/config.json", import.meta.url)).json()
-  for (const key of ["computer", "connect"])
+  for (const key of ["computer", "connect", "everywhere"])
     expect(schema.$defs.Config.properties[key].description).toStartWith(
       "Not available in Vector 1.99.112 or earlier, which rejects this key.",
     )

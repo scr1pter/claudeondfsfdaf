@@ -796,3 +796,114 @@ Spec §8 VE-20, §3.4 steps 3, 5 and 5a, §6.1 (`presence`, `offer`, `perk`), §
 
 - After the push: vector-everywhere.yml (the adapter and lane tests, the API, schema and web typechecks), vector-hosted-ci.yml (root test/, including remote-relay-contract, remote-ticket-api and api-module-loading) and typecheck.yml, each a workflow_dispatch on everywhere-finish.
 - Real Worker presence and offers after the owner's deploy; the 10-second internal timeout on a real network; the desktop decode (EV-11); VE-50.
+
+## 2026-11-15, EV-10: the user config key `everywhere` (VE-40)
+
+Spec §8 VE-40, §6.5 rows 1, 2 and the generated row, §3.12 (desktop settings fields), §3.4 step 5a and §3.5 steps 2, 3 and 6. Line numbers are after this package. Built on 2026-11-15; finished on 2026-11-16 on top of the merge of origin/release-finish `0f034957` (merge commit `5d8c5c8c`), which brought in ce91a261 (see (k)).
+
+### What changed
+
+- **New packages/core/src/v1/config/everywhere.ts** (79 lines, self-export `ConfigEverywhereV1` on line 1). `Info` (:37) has `enabled`, `max_usd`, `minutes`, `at_once`, `per_day`, `model`, `wait_for_computer`, `push`, `stay_awake` and `projects`, every key optional. Bounds come from `COMPUTER_CAPS` (packages/schema/src/everywhere.ts:393), the same values the runner's `settingsValid` checks: `max_usd` above 0 and at most 50, `minutes` 1-120, `at_once` 1-3, `per_day` 1-100, integers through core's `PositiveInt`. `Defaults` (:69) holds what an omitted key means.
+- **packages/core/src/v1/config/config.ts**: the import at the end of the import block (:25); `everywhere: Schema.optional(ConfigEverywhereV1.Info)` right after `watcher:` (:131-134). The description starts with ce91a261's sentence, "Not available in Vector 1.99.112 or earlier, which rejects this key."
+- **packages/engine/src/config/config.ts**:
+  - `projectExecutableConfig`: a comment and `delete next.everywhere` after `delete next.computer` (:96-98). This is §6.5 row 2.
+  - merge(): `userSources` and `userOnly` (:2125-2128), and one entry in `dropped` (:2146) beside the `computer` line.
+  - The company policy loop (the MDM profile and the Windows policy key), which merges outside merge(): `omit(next, ["local", ...userOnly])` (:2377).
+  - The last two are not §6.5 anchors; see (e) and (n).
+- **packages/core/src/config/managed.ts** (a test hook, not a §6.5 anchor; see (n)): `useTestPolicies` (:151-157) and its use in read() (:189). While a test directory is set, read() returns these policies in place of none, so a test can merge MDM or policy-key text without reading the machine's own.
+- **Engine routes** (not §6.5 anchors; see (g) and (h)):
+  - handlers/global.ts:129-132: GET /global/config leaves out `everywhere` for a guest, as it does `local`.
+  - handlers/config.ts: GET /config leaves it out for a guest (:36-41). PATCH /config answers 400 for a payload with `everywhere` (:44-48).
+- **Regenerated, never hand-edited**:
+  - packages/web/public/config.json (packages/engine/script/schema.ts): `$defs.EverywhereProject`, `$defs.EverywhereConfig` (`additionalProperties: false`) and `Config.properties.everywhere`; 117 lines added and none removed.
+  - packages/sdk/openapi.json, packages/sdk/js/src/gen/types.gen.ts and packages/sdk/js/src/v2/gen/types.gen.ts (./packages/sdk/js/script/build.ts): `EverywhereProject`, `EverywhereConfig` and `everywhere?:` on `Config` and `ConfigWithLocks`; additions only. A second run changed nothing.
+  - Unchanged: tui.json, workflow.json (packages/core/script/workflow-schema.ts) and packages/client/src/generated* (`bun run check:generated` exits 0, because the client does not embed the config schema).
+- **Tests**:
+  - New packages/core/test/everywhere/config.test.ts.
+  - New packages/engine/test/everywhere/config.test.ts. It does not import packages/desktop (F5).
+  - packages/engine/test/config/subagent-config.test.ts, "version skew": now "connect, computer and everywhere are the intentional top-level additions", and it also checks that the released schema refuses `everywhere`.
+  - packages/web/test/docs-config-reference.test.ts (review-fixes' rewritten version, :51): "the published schema says which top-level keys released Vector does not accept" now also requires `everywhere`'s description to start with "Not available in Vector 1.99.112 or earlier, which rejects this key." See (l).
+
+### Deviations
+
+- **(a) Unknown keys are refused** (the brief; the critique's lenient alternative is not taken). `Info` and each project entry carry `parseOptions: {onExcessProperty: "error"}` on the struct's own annotation, which Effect applies over the caller's options. No other v1 config block does this: the engine refuses only unknown top-level keys (parse.ts `topLevelExtraKeys`).
+  - Why not lenient: the reader EV-17 will use (GET /global/config) receives the config after decoding, with unknown keys already stripped. So a reader-side check could never see a misspelled `pushh: false`, and pushing would stay on.
+  - Effects, pinned by tests:
+    1. The engine fails the whole load, naming the file. Both `getGlobal()` and `get()` exit with ConfigInvalidError, as for an out-of-range value in any block. The critique expected `getGlobal` to fall back to `{}`, but its `orElseSucceed` catches failures only, and the parser's throw is a defect. So nothing runs with the user's other settings dropped.
+    2. Core's loader (core/src/config.ts, V1 files) skips that file, its permission rules included. It already does this for any invalid value.
+  - Forward rule: a sub-key added after 2.0.0 is rejected by older engines that share the user's config folder. It therefore needs its own "Not available in Vector X or earlier" note, and the settings page (EV-21) must write only keys the running engine's schema has.
+- **(b) Defaults live in `ConfigEverywhereV1.Defaults`, not in the schema**, so a file stays as written (the ComputerConfig pattern).
+  - The values: `wait_for_computer` true (§3.4 row 7 and jobs-api.ts:215), `push` true (Q8: private repositories only), `stay_awake` false, `enabled` false, no projects. `model` has no default: absent means the user's default model.
+  - It has no reader yet. It is kept because the core test pins it against COMPUTER_CAPS and against `Info`'s keys, and because EV-17 (`RunnerSettings` from `{...Defaults, ...info}`) and EV-21 read it.
+- **(c) `model` is the string `provider/model`** (the split `parseModel` does). EV-17 turns it into `RunnerSettings.model {providerID, modelID}`.
+- **(d) `projects` entries are `{directory, repository}`, not bare folders** (critique, major, taken; the brief said "absolute directories").
+  - Why: the runner matches a job by `project.repository` (everywhere-runner.ts:151), checks the folder's remote against it (:157) and re-checks the mapping before the push (:285). If `repository` were read from the same remote, those checks could never fail. A remote rewritten after the user ticked the folder would then silently move the consent to another repository. With both recorded when the user ticks the folder, the checks compare against what the user chose (spec §3.4 step 5a names an allowed project by repository).
+  - The fields:
+    - `repository` uses REPOSITORY_PATTERN.
+    - `directory` is an absolute POSIX, drive-letter or UNC path on one line, at most 4096 characters. It refuses `.` and `..` segments, repeated or trailing separators, a bare root, and (since the 2026-11-16 review) a drive-letter path that mixes `\` and `/`.
+    - It does not fold case or resolve links. `C:\Repo` and `c:\repo`, a folder and a link to it, or two spellings of one folder on a case-insensitive disk still decode as two entries. So the schema makes each spelling unique, not each folder, and whatever matches a job to a folder canonicalizes both first (Coordination, EV-17).
+    - A spelling may appear once in a file, and a file lists at most 64 entries. The merged config can hold more (Coordination, EV-17).
+  - The 4096 and 64 limits are new numbers the contract does not give. The same repository in two folders is allowed, and the runner takes the first.
+  - `base` (the branch to start from, `RunnerSettings.projects[].base`) is not stored. EV-17 derives it from the repository's default branch at job time.
+- **(e) Only the user's own config files set it** (critique, major, option (a) taken). merge() and the company policy loop leave `everywhere` out of every source except `Global.Path.config` and `localConfig.user` (the desktop's own folder under VECTOR_CLIENT=desktop). That covers:
+  - the company's managed files, MDM and Windows policy;
+  - the well-known organization config and the Teams org config;
+  - VECTOR_CONFIG_CONTENT;
+  - a VECTOR_AGENT_CONFIG file, and a VECTOR_AGENT_CONFIG_DIR that is not the desktop's;
+  - the machine-local integration store;
+  - the user's home `.vector/` files, which GET /global/config does not read either;
+  - every repository file.
+  This holds even under a company lock, so no remote organization or company can turn on job intake or list folders on someone's computer (spec §3.12, "each one ticked by the user"). The plan's "no new trust" reasoning is withdrawn. The line sits beside the `computer` line (its mirror image) and is outside the §6.5 anchors.
+  - The policy loop merges the MDM profile and the Windows policy key after every other source, outside merge(). Before the 2026-11-16 review fix (blocking) it omitted only `local`, so those two could set the block, even under a lock. Both places now take the keys from one list, `userOnly` (:2128).
+  - Tests: one engine case per source above, plus the policy loop through `ConfigManaged.useTestPolicies` (without and beside a user block) and the desktop's own folder as a user source (VECTOR_CLIENT=desktop with VECTOR_AGENT_CONFIG_DIR outside the repository).
+- **(f) A company lock is not an off switch for the reader** (critique, major, taken: the claim is dropped).
+  - What a lock does: `locked_keys: ["everywhere"]` refuses writes (Config.lockedIn, global and repository) and keeps every source's copy out of the merged config, the company's included by (e).
+  - What it does not do: GET /global/config still returns the user's files as written, with `locked` listing `everywhere`.
+  - Rule for EV-17: treat `locked` containing `everywhere` as off. Recorded here and in the handoff, not built.
+  - Pinned by the engine case "a company lock on everywhere empties the merged block, not the global config": under a managed `{local: {lock: true, locked_keys: ["everywhere"]}}`, Config.get() has no `everywhere`, getGlobal() returns the user's block, and Config.lockedKeys() lists the key.
+- **(g) A guest never reads it.** GET /global/config and GET /config leave `everywhere` out unless the caller is the owner (RequestOwner.owner, so a forwarded guest request counts as a guest). `projects` holds absolute paths that show the user's folder layout, and the block holds the consent switch and the caps. The critique also allowed recording this as a later gate; the code was preferred.
+- **(h) PATCH /config refuses `everywhere` with 400** (critique, minor, taken). That route writes the repository's vector.json, where the block never applies and absolute folder paths do not belong. Writes go only through PATCH /global/config, which EV-21 uses.
+  - The 400 has no body, as approveTrust's has none on the same route group (review, non-blocking: the comment option was taken, not a typed error). No app, desktop or TUI code calls config.update; a typed refusal would need its own error schema and a regenerated SDK. The handler's comment says so.
+- **(i) Neutral descriptions** (critique, major, taken, under the website rule). The top-level description is the required version sentence plus where the key is read from. Field descriptions give only ranges, defaults and the path rule. They make no promise about behaviour that EV-17 has not wired (stopping jobs, limits lowering, a closed lid). config.json deploys with main, so these are the words that become public.
+- **(j) VE-40 lands ahead of the rest of Phase S**, because EV-17 and EV-21 read it. Spec §7 and handoff:96 said "one landing".
+- **(k) Built before its precondition reached this branch, finished after it did.**
+  - 2026-11-15: ce91a261 (PUB-2) was on origin/review-fixes `1433d105` only, not on origin/release-finish `cf2373c4`. The package was built in the working tree, uncommitted, at the user's request to finish quickly. A `git merge-tree` probe with review-fixes was clean, because the description uses ce91a261's exact sentence.
+  - 2026-11-16 (lead ruling): ce91a261 is on origin/release-finish `0f034957`. The uncommitted work was saved first (a binary diff and copies of the untracked files under /tmp/vector-v2/everywhere/). Only the three files the merge also touches (core config.ts, config.json, spec.md) were restored to HEAD. origin/release-finish was then merged with a merge commit, `5d8c5c8c` "chore(everywhere): merge PR #33 head 0f034957", with no conflicts, and their hunks were re-applied with `git apply --3way`, also cleanly. `git merge-base --is-ancestor ce91a261 HEAD` now succeeds.
+  - packages/engine/script/schema.ts re-run on the merged tree writes config.json byte-identical to the working tree's, and tui.json is unchanged. ./packages/sdk/js/script/build.ts re-run writes the same three SDK files, because the SDK does not embed top-level config descriptions.
+- **(l) docs-config-reference.test.ts gains `everywhere` in its rewritten form.** Before the merge, the HEAD version of the file failed independently of EV-10, and review-fixes rewrote it. On the merged tree, the loop in "the published schema says which top-level keys released Vector does not accept" is `for (const key of ["computer", "connect", "everywhere"])` (:51). `unreleasedKeys()` picks up `everywhere` from the published description with no edit, so the other two cases keep the key out of every public docs sample and both company-policy samples.
+- **(m) The version-skew test lists `everywhere` as an intentional addition.** That is a stricter check, not a looser one.
+- **(n) Extra hunks in shared files, outside the §6.5 anchors** (review, non-blocking; kept). §6.5 gives VE-40 two anchors: core config.ts's import and field, and `delete next.everywhere`. This package also touches:
+  - packages/engine/src/config/config.ts: merge() (`userSources`, `userOnly` and the `dropped` entry) and the company policy loop, so only the user's own files set the block (e);
+  - packages/engine/src/server/routes/instance/httpapi/handlers/config.ts and handlers/global.ts, so a guest never reads the block and PATCH /config refuses it (g), (h);
+  - packages/core/src/config/managed.ts: the test-only `useTestPolicies` beside `useTestDirectory`.
+  - Why: without the merge() and policy-loop rules, a company managed file, an MDM profile, a Windows policy key, an organization's well-known or Teams config, or VECTOR_CONFIG_CONTENT could set `enabled: true` and list folders.
+  - The commit body names these four files and the reason. The lead confirms the §6.5 exception before the push, so connect, hands and other lanes expect hunks beside their own `computer` and `local` lines. No other lane's branch changes engine config.ts or core config/managed.ts against origin/release-finish (checked 2026-11-16).
+- **(o) Review round one, 2026-11-16** (ten findings, one blocking): all taken. Two took the finding's cheaper option, recorded in (h) (a comment, not a typed error) and in Coordination (EV-17 dedupes and caps `projects`, rather than merge() replacing the block whole, which would add another rule to the shared merge path for a value EV-17 never reads). For the path spelling findings, both halves were taken: the separator rule in the schema, and the softened comment and (d) for case and links.
+
+### Not changed
+
+- The runner, the wiring (EV-17), the settings page (EV-21), `LAPTOP_ROUTE_WIRED`, flags, docs pages, nav, routes added and httpapi-exercise.ts (no route was added; config.get, config.update and global.config get and update spread ConfigV1.Info).
+- vector-everywhere.yml: core/src/v1/config/everywhere.ts (:25) and both test folders (:38-39) are already in its pull_request paths (line numbers after FIT-4, which came in with the merge).
+- No warning is logged when a non-user copy is dropped, as for `computer`.
+- The Teams org source has no case of its own. It goes through the same `merge(source, …)` with an `https://vectordev.ai/api/org/config` source, which is not a user source. The well-known org case covers the rule.
+
+### Coordination
+
+- **EV-17**: read GET /global/config (the user's files only). Treat `locked` containing `everywhere` as off. Build `RunnerSettings` from `{...Defaults, ...info}`. Derive `base` per project. Keep the runner's own `settingsValid`.
+  - Never read `everywhere` from core's Config.entries() (packages/core/src/config.ts loads repository and team documents and drops no `everywhere` key) or from the merged instance config (Config.get(), GET /config). Read only GET /global/config, or a reader limited to the user sources merge() uses.
+  - The merged config concatenates `projects` across the user sources (the global block and the desktop's own folder, through mergeConfigConcatArrays), so it can hold duplicates and more than 64 entries. GET /global/config reads only Global.Path.config, so a block in the desktop's own folder never reaches EV-17, and EV-21 writes none there. Dedupe and cap `projects` after reading anyway.
+  - Canonicalize each listed folder and the job's checkout (realpath, then a case-folded compare on win32 and darwin) before matching them, and do not rely on the list holding each folder once (d).
+- **EV-21**:
+  - Write only through PATCH /global/config, and only keys the engine's schema has (a).
+  - desktop config-skew.test.ts:103-170 refuses app and desktop config writes outside the 1.99.99 key baseline, so the page's write of `everywhere` needs its own skew decision.
+  - The page records `repository` when the user ticks a folder, and writes the folder picker's spelling as `directory` (d).
+- **PUB-2 interim (lead)**: if flagged keys are left out of the public schema build, `everywhere` follows `computer` and `connect`.
+- **SDK**: other lanes regenerate the same openapi.json and types.gen.ts, and v2-complete-plan §2 reserves one regeneration after all merges. Expect conflicts there, resolved by regenerating, never by hand. The commit body names every regenerated file.
+- **Cross-lane probe** (re-run on 2026-11-16 on the merged tree; see the progress receipt): clean with review-fixes, connect-finish, hands-finish, brain-transport, scope-finish, workspaces-finish and native-qualify. codium-finish conflicts in .env.example, vector-codium.yml, packages/cloud/src/codium-ci-tests.ts and workflow-compliance.test.ts. HEAD alone (without EV-10) conflicts in exactly the same four files, so none of them is EV-10's.
+
+### Deferred verification
+
+- CI after the commit and push: vector-everywhere.yml and typecheck.yml as workflow_dispatch on everywhere-finish.
+- Files no lane workflow runs: subagent-config, generated-artifacts, company-lock, local-policy, company-certificates, managed-trust, auth-guest, config.test.ts, core config/managed and local-mode/startup, docs-config-reference, deployed-schemas, config-skew, and the SDK v1-schema and wire-compat tests. They are local receipts now, and test.yml re-runs those it owns at the lane end. managed-trust and core local-mode/startup fail locally only because this container runs as root, with or without EV-10's managed.ts (progress, "EV-10, 2026-11-16: review fixes").
+- Real reads in EV-17 and EV-21.
+- The real MDM and policy-key readers (systemPolicies) are unchanged. The policy case reaches the loader's policy loop through the test hook only.

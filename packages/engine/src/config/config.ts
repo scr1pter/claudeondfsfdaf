@@ -93,6 +93,9 @@ export function projectExecutableConfig(config: Info, trusted: boolean, base: In
   // set Vector Local, so a cloned repository can neither loosen it nor turn it off.
   delete next.local
   delete next.computer
+  // Vector everywhere is this computer's own consent to take jobs started from elsewhere and the folders they may use,
+  // so a repository's config can never turn it on, add itself or change its limits, trusted or not.
+  delete next.everywhere
   // Spend limits are one overall set across every repository, so a repository's own budget.run is ignored, trusted
   // or not. Its loop switch still follows the trust rules below.
   if (next.budget?.run) {
@@ -2119,6 +2122,10 @@ const layer = Layer.effect(
         // overrides' only tightened it.
         const localConfig = localFiles()
         const localSources = new Set([Global.Path.config, ...managed.files, ...localConfig.user])
+        const userSources = new Set([Global.Path.config, ...localConfig.user])
+        // Keys only those files set, even under a company lock: Vector everywhere's block is the user's own consent to
+        // take jobs started from elsewhere. merge() and the company policy loop below leave out every other copy.
+        const userOnly = ["everywhere"] as const
         const startOverrides = new Set(["VECTOR_CONFIG_CONTENT", ...localConfig.overrides])
         const localDirectory = localConfig.desktop ?? Global.Path.config
         let repositoryLocal = false
@@ -2136,6 +2143,7 @@ const layer = Layer.effect(
             ...(input.local === undefined ? [] : ["local"]),
             // Computer policy is company-owned even without a local.lock or locked_keys entry.
             ...(input.computer === undefined || companyFiles.has(source) ? [] : ["computer"]),
+            ...(userSources.has(source) ? [] : userOnly.filter((key) => input[key] !== undefined)),
             ...kept,
           ]
           const next = dropped.length === 0 ? input : (omit(input, dropped as (keyof Info)[]) as Info)
@@ -2366,7 +2374,7 @@ const layer = Layer.effect(
             ...(next.agent && { agent: next.agent }),
           })
           if (next.research) userResearch = mergeConfig(userResearch, { research: next.research })
-          result = mergeConfigConcatArrays(result, omit(next, ["local"]))
+          result = mergeConfigConcatArrays(result, omit(next, ["local", ...userOnly]))
         }
 
         for (const [name, mode] of Object.entries(result.mode ?? {})) {

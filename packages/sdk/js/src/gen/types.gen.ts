@@ -1995,6 +1995,30 @@ export type ServerConfig = {
   cors?: Array<string>
 }
 
+export type EverywhereProject = {
+  /**
+   * An absolute folder path, at most 4096 characters, with no `.` or `..` and no trailing separator
+   */
+  directory: string
+  /**
+   * The folder's GitHub repository as owner/name
+   */
+  repository: string
+}
+
+export type EverywhereConfig = {
+  enabled?: boolean
+  max_usd?: number
+  minutes?: number
+  at_once?: number
+  per_day?: number
+  model?: string
+  wait_for_computer?: boolean
+  push?: boolean
+  stay_awake?: boolean
+  projects?: Array<EverywhereProject>
+}
+
 export type PermissionActionConfig = "ask" | "allow" | "deny"
 
 export type PermissionObjectConfig = {
@@ -2390,6 +2414,7 @@ export type ConfigWithLocks = {
   watcher?: {
     ignore?: Array<string>
   }
+  everywhere?: EverywhereConfig
   snapshot?: boolean
   plugin?: Array<
     | string
@@ -2589,6 +2614,7 @@ export type Config = {
   watcher?: {
     ignore?: Array<string>
   }
+  everywhere?: EverywhereConfig
   snapshot?: boolean
   plugin?: Array<
     | string

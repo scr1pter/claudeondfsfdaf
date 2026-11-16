@@ -794,6 +794,8 @@ Each WP fits one agent. "Tests" names the files the WP adds; each runs alone, lo
 | VE-43 | CLI (only if the owner wants it, Q11) | engine cli/cmd/everywhere.ts: `vector everywhere status`. | Shows whether this computer takes jobs and its last jobs, reading user config and the desktop's job file. | packages/engine/test/everywhere/cli.test.ts |
 | VE-44 | Docs and owner-action docs | packages/web/src/pages/docs/everywhere.astro and its docs-nav.ts entry (6.5); docs/vector/owner-actions/vector-everywhere-{github,slack,linear,jira}.md (go-live registration steps, env, then the separate listing checklists); drafts of the Slack landing, privacy and support text in docs/vector/owner-actions/ for the owner and the legal read (never an edit to legal/privacy.astro). | A copy test checks the docs promise nothing this contract refuses (no code on servers, laptop-first, history read only for the thread of a mention, a closed lid means queued, a job waits at most 2 hours); the page is listed in the docs sidebar. | packages/web/test/everywhere-docs.test.ts |
 
+*2026-11-15 note (EV-10), on the VE-40 row:* the key landed ahead of the rest of Phase S, because EV-17 and EV-21 read it. `projects` entries are `{directory, repository}`, with both recorded when the user ticks a folder, rather than bare folders. Only the user's own config files set the block: repository, company (managed files, the MDM profile and the Windows policy key), organization and environment copies are dropped. A guest never reads it, and PATCH /config refuses it. Unknown sub-keys are refused. See vector-everywhere-deviations.md, "2026-11-15, EV-10".
+
 ### Go-live
 
 | Id | Goal | Done when |
