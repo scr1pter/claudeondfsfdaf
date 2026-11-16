@@ -469,11 +469,21 @@ export async function prepare(env: Env = process.env) {
   await sudo(["/usr/bin/chown", "-h", "0:0", "--", container])
   await sudo(["/usr/bin/chmod", "0755", "--", container])
   await verifyContainer(container, true)
+  // `--create-home` copies /etc/skel, where GitHub's image keeps whole toolchains (Rust, nvm, .NET tools): cold-disk
+  // copying that outran the 120-second bound (deviations, "2026-11-16 V16 account skeleton"). The account starts from
+  // this private skeleton instead, holding only an empty .config so the agent still owns its XDG config directory.
+  const skeleton = path.join(stateDirectory(env), "skeleton")
+  await fs.mkdir(skeleton, { mode: 0o700 }).catch(() => {
+    throw refused()
+  })
+  await fs.mkdir(path.join(skeleton, ".config"), { mode: 0o700 })
   await sudo(
     [
       "/usr/sbin/useradd",
       "--user-group",
       "--create-home",
+      "--skel",
+      skeleton,
       "--home-dir",
       AGENT_HOME,
       "--shell",
