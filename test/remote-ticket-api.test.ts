@@ -17,6 +17,7 @@ import {
   syncRelayKillFlag,
 } from "../api/_lib/remote-relay"
 import {
+  cloudRunReader,
   parseTicketRequest,
   publicCloudRun,
   relayEpoch,
@@ -947,9 +948,23 @@ describe("GitHub runs", () => {
     }
   })
 
-  test("before the integration commit registers Codex's records, the list is empty and says so", async () => {
-    seed(PRO, "vector-50")
-    expect(await runs(session(PRO))).toMatchObject({ status: 200, body: { runs: [], available: false } })
+  // WP A59 (BT11): the route itself imports the registration of Codex's run records, which reads nothing while the
+  // GitHub agent service is off (cloudAgentsEnabled()). With the service on, the same reader lists the records
+  // (packages/web/test/cloud-agents-runs.test.ts, on Redis).
+  test("the route reads the registered run records; while the GitHub agent service is off they are an empty list", async () => {
+    const brain = process.env.VECTOR_GITHUB_BRAIN_ENABLED
+    delete process.env.VECTOR_GITHUB_BRAIN_ENABLED
+    try {
+      expect(cloudRunReader()).toBeFunction()
+      seed(PRO, "vector-50")
+      const answer = await runs(session(PRO))
+      expect(answer.status).toBe(200)
+      expect(answer.body).toEqual({ runs: [], available: true })
+      off("remote")
+      expect(await runs(session(PRO))).toMatchObject({ status: 503 })
+    } finally {
+      if (brain !== undefined) process.env.VECTOR_GITHUB_BRAIN_ENABLED = brain
+    }
   })
 
   test("refused without a plan that allows Remote, while Remote is off, or for a bad limit", async () => {
