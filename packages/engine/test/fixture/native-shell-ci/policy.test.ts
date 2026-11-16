@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test"
+import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { ConfigSchema } from "../../../src/config/schema"
+import { jsoncESM, relativeRequires } from "./bundle"
 import { CONTROL, ROOT, TEMP, WORKSPACE, assets, cell, controllerAction } from "./common"
 import {
   FAILURE_PREFIX,
@@ -602,4 +607,48 @@ test("the failure-only runtime probe varies only the engine sandbox's proc treat
   expect(built).toEqual([...SHELL_STAGES.probe])
   expect(probeStage("abort", "zero")).toBe("probe-empty-abort-own-zero")
   expect(probeNodeStage("abort")).toBe("probe-node-abort")
+})
+
+test("the fixture build's Node bundles embed jsonc-parser instead of requiring its files at runtime", async () => {
+  // A Node-target bundle keeps jsonc-parser's UMD require("./impl/format"), which nothing beside the installed
+  // engine.mjs satisfies, so the native Node cells refused at engine-setup. Build Config's jsonc module both ways and
+  // load each bundle from a directory with no node_modules.
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "native-shell-jsonc-"))
+  try {
+    const bundle = async (name: "umd" | "esm") => {
+      const result = await Bun.build({
+        entrypoints: [path.join(import.meta.dir, "../../../src/config/schema.ts")],
+        target: "node",
+        format: "esm",
+        plugins: name === "esm" ? [jsoncESM] : [],
+      })
+      expect(result.success).toBe(true)
+      expect(result.outputs).toHaveLength(1)
+      const text = await result.outputs[0].text()
+      const file = path.join(directory, `${name}.mjs`)
+      await Bun.write(file, text)
+      return { text, url: pathToFileURL(file).href }
+    }
+    const umd = await bundle("umd")
+    expect(relativeRequires(umd.text)).toEqual(["./impl/format", "./impl/edit", "./impl/scanner", "./impl/parser"])
+    await expect(import(umd.url)).rejects.toMatchObject({
+      code: "MODULE_NOT_FOUND",
+      message: expect.stringContaining("./impl/format"),
+    })
+    const esm = await bundle("esm")
+    expect(relativeRequires(esm.text)).toEqual([])
+    const config = '{\n  // kept\n  "model": "a",\n}\n'
+    expect(ConfigSchema.rewrite(config)).toContain('"$schema": "https://vectordev.ai/config.json"')
+    expect((await import(esm.url)).rewrite(config)).toBe(ConfigSchema.rewrite(config))
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }
+  // Only a whole relative literal is found, not a computed specifier like the one in node-gyp's bundled command loader.
+  expect(relativeRequires('__require("./" + name)(gyp, argv); __require(`./${name}`); __require("node:fs")')).toEqual(
+    [],
+  )
+  expect(relativeRequires("require2('../impl/edit'); import.meta.require( \"./x.js\" )")).toEqual([
+    "../impl/edit",
+    "./x.js",
+  ])
 })
