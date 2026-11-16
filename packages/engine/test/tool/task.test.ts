@@ -6340,16 +6340,20 @@ describe("task isolation saves", () => {
       ).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
-            const record = yield* isolation.find(child)
-            const job = yield* jobs.get(child)
-            const assignment = SubagentLifecycle.read(yield* sessions.get(child))
+            // A failed lookup must not replace the timeout, so each one falls back to "missing".
+            const record = yield* isolation.find(child).pipe(Effect.orElseSucceed(() => undefined))
+            const job = yield* jobs.get(child).pipe(Effect.orElseSucceed(() => undefined))
+            const session = yield* sessions.get(child).pipe(Effect.orElseSucceed(() => undefined))
+            const assignment = session ? SubagentLifecycle.read(session) : undefined
             const saved = record
               ? `${record.state}, attempt ${record.attempt}, settled ${record.settledAttempt ?? "none"}${record.error ? `, error ${JSON.stringify(record.error)}` : ""}`
               : "missing"
             const ran = job ? `${job.status}${job.error ? `, error ${JSON.stringify(job.error)}` : ""}` : "missing"
             const assigned = assignment
               ? `${assignment.status}, attempt ${assignment.attempt ?? "none"}${assignment.slotReason ? `, ${assignment.slotReason}` : ""}`
-              : "unreadable"
+              : session
+                ? "unreadable"
+                : "missing"
             return yield* Effect.fail(
               new Error(
                 `${error.message} (record ${saved}; job ${ran}; child ${assigned}; place ${TaskPlace.get(child) ? "set" : "none"})`,
