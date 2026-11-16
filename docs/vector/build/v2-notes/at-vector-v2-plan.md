@@ -201,7 +201,7 @@ Both journeys exist and pass in the lane at `50b4f82c2`:
 
 Remaining:
 1. The whole lane green, including the sandbox matrix. The matrix is V16's runner proof.
-2. Add the V27 cases above to the journeys, plus the V24 v3 flip. Engine journey: built in BT08a on `brain-transport` (6 cases: a Codium follow-up that continues its issue's saved conversation, own key with every save and restore seam present, the P6 scan widened and the generated file's workflow version checked; progress "BT08a"). The server journey's V27/B08 cases are BT08b.
+2. Add the V27 cases above to the journeys, plus the V24 v3 flip. Engine journey: built in BT08a on `brain-transport` (6 cases: a Codium follow-up that continues its issue's saved conversation, own key with every save and restore seam present, the P6 scan widened and the generated file's workflow version checked; progress "BT08a"). BT08b added the desktop Brain run end to end (8 cases: the App's ticket dispatch with `brain_upload` through route, mint, one brain-download, the labelled context, a Brain-key-only save and publish, and a writer's dispatch with an upload id that reads no context and saves nothing; every step now runs with the generated file's own env) and fixed the v3 publish step, which lacked `VECTOR_PROMPT` and refused every dispatched task (progress and deviations "BT08b"). The server journey's V27/B08 cases are BT09.
 3. `test.yml`, `typecheck.yml` and `verify.yml` green at the exact PR head.
 4. Update the progress doc. Done: its header names `brain-transport` since BT01. Update the PR body to match.
 

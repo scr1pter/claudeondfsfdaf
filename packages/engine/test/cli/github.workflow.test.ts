@@ -810,6 +810,8 @@ describe("workflow v3", () => {
       for (const name of ["KIND", "PR", "REF"])
         expect(publish.env![`VECTOR_ROUTE_${name}`]).toBe(`\${{ needs.route.outputs.${name.toLowerCase()} }}`)
       expect(publish.env!.VECTOR_GITHUB_AUTH).toBe(options.publishAuth ?? "github")
+      // The publisher re-derives a dispatch's route, which needs its prompt (deviations BT08b item 1).
+      expect(publish.env!.VECTOR_PROMPT).toBe("${{ inputs.prompt }}")
       expect(publish.env!.VECTOR_AGENT_STATUS).toBe(
         options.mode === "codium" ? "${{ needs.agent.outputs.status }}" : "ok",
       )

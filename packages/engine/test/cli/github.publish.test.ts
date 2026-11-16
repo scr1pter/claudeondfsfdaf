@@ -370,6 +370,38 @@ test("trusted routing rejects a checkout or thread that differs from the route j
     expect(() => publishRouting({ event: f.event, env, head: f.summary.baseSha })).toThrow()
 })
 
+// The publisher re-derives a dispatch's route from its own step's env, so the generated publish step passes the prompt
+// (deviations BT08b item 1); without it a writer's dispatch is refused after the agent did its work.
+test("trusted routing re-derives a writer's dispatch only with the prompt its publish step passes", () => {
+  const head = "a".repeat(40)
+  const env = {
+    GITHUB_REPOSITORY: REPOSITORY,
+    GITHUB_REPOSITORY_ID: "123",
+    GITHUB_RUN_ID: "42",
+    GITHUB_RUN_ATTEMPT: "1",
+    VECTOR_MODE: "own-key",
+    VECTOR_THREAD: "dispatch-42",
+    VECTOR_ROUTE_KIND: "task",
+    VECTOR_ROUTE_PR: "",
+    VECTOR_ROUTE_REF: head,
+    MENTIONS: "/vector,/vs",
+  }
+  const event = {
+    name: "workflow_dispatch",
+    payload: {
+      inputs: { mode: "task", prompt: "Fix the source" },
+      repository: { full_name: REPOSITORY, default_branch: "main" },
+      sender: { id: 7, login: "writer", type: "User" },
+    },
+  }
+  expect(publishRouting({ event, env: { ...env, VECTOR_PROMPT: "Fix the source" }, head })).toMatchObject({
+    kind: "dispatch",
+    thread: "dispatch-42",
+    baseSha: head,
+  })
+  expect(() => publishRouting({ event, env, head })).toThrow("The event does not authorize publishing.")
+})
+
 test("Windows absolute and backslash symlink targets are refused and Windows GitHub directory aliases are held back", () => {
   for (const target of ["C:/outside", "C:\\outside", "..\\outside", "\\\\server\\share"])
     expect(

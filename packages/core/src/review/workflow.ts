@@ -864,6 +864,9 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
                   VECTOR_AGENT_STATUS: codium ? "${{ needs.agent.outputs.status }}" : "ok",
                   VECTOR_RUN_ID: codium ? "${{ needs.agent.outputs.rid }}" : "",
                   VECTOR_GITHUB_AUTH: opts.publishAuth ?? "github",
+                  // The publisher re-derives the route (agentRoute), which refuses a dispatch without its prompt and
+                  // a schedule without its prompts. Env only (INV-S15), the same text the event file carries.
+                  VECTOR_PROMPT: "${{ inputs.prompt }}",
                   VECTOR_SCHEDULE_PROMPTS: schedules,
                   VECTOR_DISABLE_PROJECT_CONFIG: "1",
                   ...(opts.autoReview ? { VECTOR_REVIEW_AUTO: "1" } : {}),
