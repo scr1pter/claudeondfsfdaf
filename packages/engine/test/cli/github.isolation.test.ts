@@ -495,7 +495,10 @@ test("keeper search admission stages decode only as fixed mask and checkout labe
 })
 test("every fixed entry stage in the native source decodes", async () => {
   // Guard-unit never runs this decoder, and a Python/TypeScript vocabulary mismatch drops every decoded record.
-  const source = await Bun.file(path.join(import.meta.dir, "../../../core/src/process-isolation/linux/entry.py")).text()
+  // test.yml also runs this file on Windows, whose checkout may add carriage returns; the line-anchored parse expects LF.
+  const source = (
+    await Bun.file(path.join(import.meta.dir, "../../../core/src/process-isolation/linux/entry.py")).text()
+  ).replaceAll("\r\n", "\n")
   const assignments = [...source.matchAll(/_DIAGNOSTIC_STAGE = (.*)$/gm)].map((match) => match[1])
   const literals = assignments.flatMap((value) => /^"([a-z0-9-]+)"$/.exec(value)?.[1] ?? [])
   const steps = assignments.flatMap((value) => /^f"prepare-mask-\{label\}-([a-z-]+)"$/.exec(value)?.[1] ?? [])
@@ -528,6 +531,7 @@ test("every fixed entry stage in the native source decodes", async () => {
   })
   expect(lines.filter((line) => /^\s*_DIAGNOSTIC_STAGE = f"prepare-mask-/.test(line)).length).toBe(steps.length)
   expect(product).not.toContain(undefined)
+  expect(product).toContain("prepare-mask-runner-home-keeper-search")
   const decodes = (stage: string) => {
     const operation = stage.startsWith("cleanup-") ? "cleanup" : "prepare"
     const record = { ...failureRecord(), operation, stage, class: "RuntimeError" as const, errno: null, exit: null }

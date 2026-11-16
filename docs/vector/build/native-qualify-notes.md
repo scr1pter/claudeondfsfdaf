@@ -2918,3 +2918,38 @@ merge commit is `c9e6ebef` (`git merge --no-ff origin/main`).
   - `packages/cloud` `src/workflow-compliance.test.ts`: 53 pass, 0 fail;
   - full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
 - Both native build switches and `FLOOR` stay false.
+
+## Windows CRLF in the entry stage source test, 16 November 2026
+
+PR #35 test.yml job "engine (windows, shard 8/12)" (job 133220821371, at `47db73cd`) failed
+one test: `packages/engine/test/cli/github.isolation.test.ts:544`, "every fixed entry stage in
+the native source decodes", with `- Set {}` and `+ Received + 64`. All other 877 tests on the
+shard passed.
+
+- D107. The decoder vocabulary was right; the source parse was empty. In
+  `expect(received).toEqual(expected)` the received set is the 62 stage names the decoder
+  accepts (12 loop-wide steps for each of the five labels, plus `target-mode` for `home` and
+  `runner-home`), and the expected set is `product`, which was empty. `.gitattributes` gives
+  `packages/core/src/process-isolation/linux/entry.py` no eol attribute, so the Windows
+  checkout is CRLF. The test splits the source on `\n` and matches each line with a
+  non-multiline regex ending in `$`, which cannot match before the trailing `\r`, so all 14
+  mask-step lines missed. The `/m` parses (assignments, `labels`) and the loose line-count
+  check still worked, so no earlier guard fired. The test came in with `f05f9916`, which is
+  not on `main`.
+- Fix, the same as D82 and D86 for `policy.test.ts`: the test normalises CRLF to LF right after
+  reading `entry.py`. It also now asserts that `product` contains
+  `prepare-mask-runner-home-keeper-search`, so an empty parse fails on its own line instead of
+  passing whenever the decoder also refuses every mask stage. No assertion is removed or
+  loosened, the decoder and its vocabulary are unchanged, and `.gitattributes` is unchanged (a
+  checkout eol rule for `entry.py` stays a lead call).
+- Checks. The failing case only runs on a CRLF checkout, so it was reproduced on Linux by
+  converting `entry.py` to CRLF in the worktree and restoring it afterwards: the previous test
+  fails at `:544:67` with `- 1 / + 64`, exactly as on Windows; the fixed test passes on LF and
+  CRLF (36 pass, 0 fail each). Each through `/home/user/.tools/vector-serial`:
+  - `packages/engine` `test/cli/github.isolation.test.ts`: 36 pass, 0 fail;
+  - `packages/engine` `test/fixture/native-shell-ci/policy.test.ts`: 11 pass, 0 fail;
+  - `packages/core` `test/process-isolation-linux.test.ts`: 18 pass, 0 fail;
+  - `packages/core` `test/process-isolation-runtime.test.ts`: 11 pass, 0 fail;
+  - `bun typecheck` in `packages/engine`: exit 0; full `bun turbo typecheck --concurrency=2`:
+    27 of 27 tasks successful.
+- Both native build switches and `FLOOR` stay false.
