@@ -1,6 +1,6 @@
 # Vector Hands: unreleased preparation and owner checklist
 
-This is a review checklist, not authorization to publish installers or deploy a service. The source and native evidence ledger is [hands-progress.md](../build/hands-progress.md). Hands is unreleased. The owner will choose its release version after validation and review; keep `publishedDesktopVersion` at the actually published version until those installers are published.
+This is a review checklist, not authorization to publish installers or deploy a service. The source and native evidence ledger is [hands-progress.md](../build/hands-progress.md). [hands-current-state.md](../build/hands-current-state.md) summarizes what is done and what remains. Hands is unreleased. The owner will choose its release version after validation and review; keep `publishedDesktopVersion` at the actually published version until those installers are published.
 
 ## Reviewable release material
 
