@@ -409,78 +409,30 @@ test("Windows isolated scenario settles the uncalibrated detection verdict befor
   const native = path.join(desktopDirectory, "native/computer-helper/windows/src")
   const source = await readFile(path.join(native, "privileged_self_test.cpp"), "utf8")
   const header = await readFile(path.join(native, "privileged_self_test.h"), "utf8")
-  const server = await readFile(path.join(native, "server.cpp"), "utf8")
   // The declared size must equal the literal count, or an empty slot would pass the parity test.
   expect(Number(header.match(/std::array<std::wstring_view, (\d+)> windows_privileged_stages\{/)?.[1])).toBe(
     WINDOWS_NATIVE_STAGES.length,
   )
 
+  // Only where the settle runs and what it may not do. Its classification and the pause cancellations
+  // are exercised by privileged_self_test_tests.cpp and server_tests.cpp, and its bounded wait only by
+  // the hosted isolated runs, so this does not restate the implementation.
   const runner = source.slice(source.indexOf("WindowsPrivilegedReport run_windows_privileged_self_test("))
+  expect(source.match(/settle_input_detection\(\)/g)).toHaveLength(2)
+  // Row 0 is marked passed, then the single settle call, then row 1's apps.list.
   const order = [
-    "native = std::make_unique<NativeScenario>(initial, authority, cleanup);",
-    "report.checks[0] = {std::wstring(windows_privileged_checks[0]), true, false, {}};",
-    "native->settle_input_detection();",
-    "run(1, [&]",
-  ].map((text) => {
-    expect(runner.split(text).length - 1, text).toBe(1)
-    return runner.indexOf(text)
-  })
+    /report\.checks\[0\] = \{[^;]*\btrue, false, \{\}\};/,
+    /native->settle_input_detection\(\);/,
+    /\brun\(1, /,
+  ].map((pattern) => runner.search(pattern))
+  expect(order).not.toContain(-1)
   expect(order).toEqual([...order].sort((left, right) => left - right))
-  expect(source.split("settle_input_detection()").length - 1).toBe(2)
-  // A settle failure keeps its closed stage on row 0 instead of losing it in the outer catch.
-  expect(runner).toMatch(
-    /catch \(const ScenarioFailure& failure\) \{\s*report\.checks\[0\] = \{std::wstring\(windows_privileged_checks\[0\]\),\s*false,\s*false,\s*failure\.reason,\s*failure\.stage,\s*failure\.native_code\};\s*\}/,
-  )
-
   const settle = source.slice(source.indexOf("void settle_input_detection()"), source.indexOf("bool close() noexcept"))
-  const steps = [
-    "if (!detector_started) return;",
-    'throw ScenarioFailure{L"deadline_exceeded", L"input-settle-context", L"unknown"}',
-    "if (begun->paused) return;",
-    "state->detector->setup_reset();",
-    "while (state->available() && GetTickCount64() < deadline)",
-    "if (current->paused) return;",
-    "windows_privileged_settle_stage(state->available(), *begun, server->session_snapshot())",
-    'throw ScenarioFailure{L"deadline_exceeded", stage, L"unknown"}',
-  ].map((text) => {
-    expect(settle.split(text).length - 1, text).toBe(1)
-    return settle.indexOf(text)
-  })
-  expect(steps).toEqual([...steps].sort((left, right) => left - right))
-  // The bound and the poll period may be reformatted, not changed.
-  expect(settle.match(/GetTickCount64\(\)\s*\+\s*1000\b/g)).toHaveLength(1)
-  expect(settle.match(/GetTickCount64\(\)\s*\+/g)).toHaveLength(1)
-  expect(settle).toMatch(/sleep_for\(\s*std::chrono::milliseconds\(10\)\s*\)/)
-  expect(settle.split("setup_reset()").length - 1).toBe(1)
-  // Any pause settles, a takeover included; the three takeover skips (await_input, require_input, row 16) stay as they were.
-  expect(settle).not.toMatch(/ScenarioSkip|physical/)
-  expect(source.split('throw ScenarioSkip{L"physical_takeover"}').length - 1).toBe(3)
-  expect(settle).not.toMatch(/request\(|begin\(|receive\(|setup_start|retry|deadline\s*\+=/)
-  expect(source.split("setup_start()").length - 1).toBe(1)
-  expect(source.indexOf("setup_start()")).toBeGreaterThan(source.indexOf("run(16, [&]"))
-  // The post-deadline classification is the pure function the native group exercises.
-  const classify = source.slice(
-    source.indexOf("std::wstring windows_privileged_settle_stage("),
-    source.indexOf("std::wstring windows_privileged_origin_stage("),
+  expect(settle).not.toMatch(/ScenarioSkip|request\(|begin\(|receive\(/)
+  // No native group runs the integrated runner, so this is the only guard that a settle failure keeps its stage on row 0.
+  expect(runner).toMatch(
+    /catch \(const ScenarioFailure& failure\) \{\s*report\.checks\[0\] = \{[^;]*failure\.reason,\s*failure\.stage,\s*failure\.native_code\};\s*\}/,
   )
-  for (const stage of ["input-settle-context", "input-settle-session", "input-settle-verdict"]) {
-    expect(classify.split(`return L"${stage}";`).length - 1, stage).toBe(1)
-    expect(WINDOWS_NATIVE_STAGES).toContain(stage)
-  }
-
-  const origin = source.slice(
-    source.indexOf("std::wstring windows_privileged_origin_stage("),
-    source.indexOf("std::wstring windows_privileged_capture_diagnostic("),
-  )
-  for (const [message, stage] of [
-    ["Native input detection became unavailable.", "authority-paused-detection"],
-    ["Physical input paused the task.", "authority-paused-physical"],
-  ] as const) {
-    expect(server.split(`cancel_active(L"paused", L"${message}")`).length - 1, message).toBe(1)
-    expect(origin).toContain(`if (message == L"${message}") return L"${stage}";`)
-    expect(origin.indexOf(`L"${stage}"`)).toBeLessThan(origin.indexOf("trace_stages"))
-    expect(WINDOWS_NATIVE_STAGES).toContain(stage)
-  }
 })
 
 test("Windows channel inference verifies all test artifacts before the first helper version launch", async () => {
