@@ -31,6 +31,7 @@ The connect-finish lane has built every package up to the owner's gates (CN-01 t
 | CN-18 | `6cff8020` | feat(phone): show connected reviews and start one from Remote | CW-23c |
 | CN-19 | `34cf53cd` | feat(workspaces): allow connected tools routes through the supervisor | CW-24b |
 | CN-20 | `c60aa2d3` | docs(connect): prepare the connected tools release checklist | CW-25 prep only: release checklist, draft page text and owner actions, with Connect pinned off |
+| merge | `d359924b` | chore(connect): merge main after PR #33 | clean merge of `main` at `b362fdf6`; brings `9be63d68` and `39865a55` (deviations, "merged main after #33") |
 
 Hosted CI at `34cf53cd`: typecheck.yml 43829042870 passed; connect-app-validation.yml 43829038152 passed, 25 of 25, including CN-12's two Tasks pane cases and CN-10's consumed-key case; vector-workspaces.yml 43829053018 passed; vector-codium.yml 43829047861 failed in three `packages/web/test` files that also fail on `release-finish` at `0f034957` and that `release-finish` fixed in `9be63d68` and `39865a55`, which reach this branch only through the lead's next merge (release checklist, B6). test.yml and verify.yml have never run on this branch; both can be dispatched, and the lane PR runs them.
 
