@@ -35,8 +35,12 @@ import {
 //   the address the ticket names, offering `vector.v1` and the ticket (relay protocol.ts). A ping goes every 25 s. When
 //   the relay says a phone arrived (`peers` with `refresh`), and every four minutes while a phone stays, the ticket is
 //   refreshed in-band.
-// - The connection is kept only while Remote is on, a phone is paired or a pairing is open, and the plan allows it
-//   (the API and the relay decide that from the account's plan; nothing here grants anything, S1).
+// - The connection is kept only while Remote is on, a phone is paired, a pairing is open or a jobs subscriber wants it
+//   (R-C2), and the plan allows it (the API and the relay decide that from the account's plan; nothing here grants
+//   anything, S1).
+// - A connection kept only for Vector everywhere's jobs sends no data frames and keeps the 25-s ping. It refreshes its
+//   ticket every 12 hours, inside the relay's computerTicketMaxAgeMs, and not when another computer's phone arrives. It
+//   hands each well-formed job offer frame (kind 0x02) to the subscriber, which verifies the signature (E9).
 // - Each phone that connects opens its own encrypted channel (remote-crypto.ts). Requests go through the route
 //   allowlist (remote-routes.ts); permission answers need the phone's passkey (remote-passkey.ts).
 // - The engine's events are read and streamed only while a phone is attached and watching, at most four batches a
@@ -50,6 +54,13 @@ import {
 const API = "https://vectordev.ai/api/remote"
 const HEARTBEAT_MS = 25_000
 const REFRESH_MS = 4 * 60_000
+/** R-C2: a computer kept only for jobs refreshes twice inside the relay's computerTicketMaxAgeMs (24 h). */
+const JOBS_REFRESH_MS = 12 * 60 * 60_000
+/** The relay's internalBodyBytes: it refuses a longer job offer, so a longer 0x02 frame is not one. */
+const OFFER_BYTES = 16 * 1024
+const OFFER_PREFIX = new TextEncoder().encode("vef1.")
+/** Offers handed to the subscriber and not yet settled; the runner itself runs at most three jobs at once. */
+const OFFERS_IN_FLIGHT = 8
 const BATCH_MS = 250
 const CHUNK_BYTES = 40_000
 const EVENT_BYTES = 16_000
@@ -129,6 +140,14 @@ export type LinkDependencies = {
     request(request: EngineRequest): Promise<EngineAnswer>
     events(signal: AbortSignal): AsyncIterable<EngineEvent>
   }
+  /**
+   * R-C2: Vector everywhere's jobs. While want() is true the link connects with no phone paired, if Remote is on and
+   * an identity exists (the caller makes it, after the person's consent). A connection kept only for jobs sends no data
+   * frames and refreshes its ticket every jobsRefreshMs. Each well-formed 0x02 frame's text goes to offer() unverified,
+   * without waiting for it, while fewer than eight offers are unsettled; the subscriber checks the signature (E9).
+   * want() is read on every connection decision, so it is synchronous; one that throws counts as false.
+   */
+  jobs?: { want(): boolean; offer(text: string): unknown }
   /** The phone app's origin, exactly (VECTOR_PHONE_APP_ORIGIN). */
   origin: string
   /** This computer's name, shown on paired phones; it travels only end-to-end encrypted or in the local QR code. */
@@ -140,14 +159,21 @@ export type LinkDependencies = {
   changed?: (status: RemoteStatus) => void
   log?: (message: string, meta?: Record<string, unknown>) => void
   now?: () => number
-  timing?: Partial<{ heartbeatMs: number; refreshMs: number; batchMs: number; retryMs: number }>
+  timing?: Partial<{ heartbeatMs: number; refreshMs: number; jobsRefreshMs: number; batchMs: number; retryMs: number }>
 }
 
 type Peer = { channel: Channel; watching: boolean; events: unknown[]; failures: number; hello: boolean }
 
 export function createRemoteLink(deps: LinkDependencies) {
   const now = deps.now ?? Date.now
-  const timing = { heartbeatMs: HEARTBEAT_MS, refreshMs: REFRESH_MS, batchMs: BATCH_MS, retryMs: 1_000, ...deps.timing }
+  const timing = {
+    heartbeatMs: HEARTBEAT_MS,
+    refreshMs: REFRESH_MS,
+    jobsRefreshMs: JOBS_REFRESH_MS,
+    batchMs: BATCH_MS,
+    retryMs: 1_000,
+    ...deps.timing,
+  }
   const state: {
     identity?: RemoteIdentity
     loaded?: Promise<void>
@@ -161,6 +187,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     peers: Map<string, Peer>
     heartbeat?: ReturnType<typeof setInterval>
     refresher?: ReturnType<typeof setInterval>
+    jobsRefresher?: ReturnType<typeof setInterval>
     flusher?: ReturnType<typeof setTimeout>
     retry?: ReturnType<typeof setTimeout>
     failures: number
@@ -172,6 +199,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     filled: number
     waiting: (() => void)[]
     stopped: boolean
+    offering: number
   } = {
     online: false,
     status: "off",
@@ -185,6 +213,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     filled: now(),
     waiting: [],
     stopped: false,
+    offering: 0,
   }
 
   const turns = createRemoteTurns()
@@ -511,23 +540,36 @@ export function createRemoteLink(deps: LinkDependencies) {
         state.failures = 0
         setStatus("online")
       }
-      if (message.t === "peers" && message.refresh) await refresh()
-      syncRefresher()
+      // A computer kept only for jobs sends nothing a phone reads: another computer's phone arriving needs no ticket.
+      const asked = message.t === "peers" && message.refresh === true && !jobsOnly()
+      if (asked) await refresh()
+      syncRefresher(asked)
       updateWatching()
     }
   }
 
   // A phone arriving asks for a fresh ticket, and one is sent every four minutes while a phone stays attached, so this
   // computer's frames are never refused for a lapsed ticket.
-  const syncRefresher = () => {
-    if (state.viewers > 0 && !state.refresher) {
-      state.refresher = setInterval(() => void refresh(), timing.refreshMs)
-      return
-    }
-    if (state.viewers === 0 && state.refresher) {
+  //
+  // R-C2: a connection that jobs want and no phone's cadence covers refreshes every jobsRefreshMs instead (12 h), twice
+  // inside the relay's computerTicketMaxAgeMs, because each refresh wakes the account's Durable Object and books up to
+  // idleTailMs of awake time. Its ticket lapses in between, and the relay asks again only when its peers change, so a
+  // phone's cadence that takes over from the jobs cadence refreshes at once unless control() just did.
+  const syncRefresher = (refreshed = false) => {
+    const phones = state.viewers > 0 && !jobsOnly()
+    const jobs = state.online && !phones && jobsWanted()
+    const lapsed = phones && !state.refresher && state.jobsRefresher !== undefined && !refreshed
+    if (phones && !state.refresher) state.refresher = setInterval(() => void refresh(), timing.refreshMs)
+    if (!phones && state.refresher) {
       clearInterval(state.refresher)
       state.refresher = undefined
     }
+    if (jobs && !state.jobsRefresher) state.jobsRefresher = setInterval(() => void refresh(), timing.jobsRefreshMs)
+    if (!jobs && state.jobsRefresher) {
+      clearInterval(state.jobsRefresher)
+      state.jobsRefresher = undefined
+    }
+    if (lapsed) void refresh()
   }
 
   const refresh = async () => {
@@ -586,10 +628,27 @@ export function createRemoteLink(deps: LinkDependencies) {
     return { ticket: body.ticket, url: url.href }
   }
 
-  const wanted = () => {
-    if (state.stopped || !deps.enabled.get() || !state.identity) return false
+  const phonesWanted = () => {
+    if (!state.identity) return false
     const pairingOpen = ["waiting", "confirm"].includes(pairing.status().state)
     return state.identity.phones.length > 0 || pairingOpen
+  }
+  // want() is the caller's and is read at every connection decision, the phone path's included: one that throws counts
+  // as not wanted (fail closed, E10), so it never breaks a reconnect or a phone's cadence.
+  const jobsWanted = () => {
+    try {
+      return deps.jobs?.want() === true
+    } catch {
+      return false
+    }
+  }
+  /** Kept for jobs alone: nothing on this connection talks to a phone, so no phone's ticket cadence is needed. */
+  const jobsOnly = () => jobsWanted() && !phonesWanted()
+
+  // Jobs never make an identity here: setEnabled and startPairing do, after the person turned Remote on (R-C2).
+  const wanted = () => {
+    if (state.stopped || !deps.enabled.get() || !state.identity) return false
+    return phonesWanted() || jobsWanted()
   }
 
   const clearRetry = () => {
@@ -675,8 +734,31 @@ export function createRemoteLink(deps: LinkDependencies) {
             : undefined
     if (!bytes) return
     const frame = decodeFrame(bytes)
+    if (frame?.kind === FRAME.JOB_OFFER) return offered(frame.device, frame.ciphertext)
     if (!frame || frame.kind !== FRAME.DATA) return
     await receive(toBase64url(frame.device), frame.ciphertext.slice())
+  }
+
+  // R-C1's frame (vector-everywhere-deviations.md, EV-06 "The offer frame"): 0x02, sixteen zero device bytes, then the
+  // offer's bytes. Its form is checked on the bytes exactly as the relay checks the string: `vef1.`, then visible ASCII
+  // only, at most internalBodyBytes. The subscriber verifies the signature (E9). Anything else is dropped, and the
+  // subscriber's failure never reaches the connection. At most OFFERS_IN_FLIGHT offers wait on the subscriber at once,
+  // so a relay that floods well-formed frames queues no unbounded verifications; one more is dropped until one settles.
+  const offered = (device: Uint8Array, body: Uint8Array) => {
+    const jobs = deps.jobs
+    if (!jobs || device.some((byte) => byte !== 0)) return
+    if (body.byteLength <= OFFER_PREFIX.byteLength || body.byteLength > OFFER_BYTES) return
+    if (OFFER_PREFIX.some((byte, index) => body[index] !== byte)) return
+    if (body.some((byte) => byte < 0x21 || byte > 0x7e)) return
+    if (state.offering >= OFFERS_IN_FLIGHT) return
+    const text = new TextDecoder().decode(body)
+    state.offering += 1
+    void Promise.resolve()
+      .then(() => jobs.offer(text))
+      .catch(() => deps.log?.("remote: a job offer was not taken"))
+      .finally(() => {
+        state.offering -= 1
+      })
   }
 
   const backoff = () => Math.min(timing.retryMs * 2 ** state.failures, 5 * 60_000)
@@ -684,9 +766,11 @@ export function createRemoteLink(deps: LinkDependencies) {
   const teardown = () => {
     if (state.heartbeat) clearInterval(state.heartbeat)
     if (state.refresher) clearInterval(state.refresher)
+    if (state.jobsRefresher) clearInterval(state.jobsRefresher)
     if (state.flusher) clearTimeout(state.flusher)
     state.heartbeat = undefined
     state.refresher = undefined
+    state.jobsRefresher = undefined
     state.flusher = undefined
     state.socket = undefined
     state.online = false
@@ -758,6 +842,8 @@ export function createRemoteLink(deps: LinkDependencies) {
       return
     }
     if (!state.socket) await open()
+    // A pairing that opens or ends, a phone paired or removed, and jobs wanted or not change the ticket cadence too.
+    syncRefresher()
   }
 
   const apiPost = async (path: string) => {
@@ -780,6 +866,8 @@ export function createRemoteLink(deps: LinkDependencies) {
     start: () => evaluate(),
     /** Looks again at whether to connect: after a sign-in, or a plan change. */
     refresh: () => evaluate(),
+    /** Whether this computer takes jobs changed (R-C2): connect or close for it, and pick the ticket cadence again. */
+    jobsChanged: () => evaluate(),
     /** Signed out of Vector: the connection closes until a sign-in. */
     signedOut() {
       clearRetry()

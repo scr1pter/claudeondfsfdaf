@@ -2127,3 +2127,128 @@ Generators: ./packages/sdk/js/script/build.ts, re-run with fresh XDG roots in /t
 Typechecks: core, engine, web (`astro check`, 0 errors, 0 warnings) and sdk/js, each exit 0. The full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
 
 The push and the CI run ids go in the next lane docs commit.
+
+## EV-11: Remote link carries job offers (2026-11-16)
+
+Package EV-11 (R-C2, link side): the Remote link connects for a jobs subscriber and hands it `0x02` job offer frames. Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-11". Built in the working tree and committed at the commit gate below.
+
+**Base.** `git fetch origin release-finish main everywhere-finish`: HEAD `7146a98f` equals origin/everywhere-finish; origin/release-finish `0f034957` and origin/main `58f85edc` are both ancestors of HEAD (main through release-finish), so nothing was merged. `git merge-base --is-ancestor 411317d8 HEAD` (EV-06's frame) succeeds. No review-fixes or brain-transport precondition. Against the merge base with origin/release-finish, origin/codium-finish `bd3cc7ad` changes only remote-link.test.ts among the touched files (B09, one test inside "paired phones", +35); origin/review-fixes `1433d105` changes none of them. At the end of the package origin/release-finish had moved to `b0752dda` (nine commits after `0f034957`: engine and core test fixes, a web test and one api fix). None touches a file this package changes, and `git merge-tree` of the probe commit below with `b0752dda` is clean. It was not merged here, because merging makes a commit; the lane rule (merge release-finish when it moved) applies at the commit step, before the push.
+
+**Files** (line numbers after the change):
+
+- packages/desktop/src/main/remote-link.ts (954 lines, +84/-14): header (:38-43); `JOBS_REFRESH_MS`, `OFFER_BYTES`, `OFFER_PREFIX` (:57-61); `jobs?` (:141-148); `timing.jobsRefreshMs` (:160, default :167-174); `jobsRefresher` state (:188); control() (:539-542); syncRefresher (:547-569); `phonesWanted`, `jobsWanted`, `jobsOnly`, `wanted` (:627-640); onData's offer branch (:725); `offered()` (:730-744); teardown (:751, :755); evaluate's `syncRefresher()` (:827-828); `jobsChanged` (:851-852).
+- packages/desktop/src/main/remote-relay.fixture.ts (+11/-2): `DEVICE_BYTES` import, header line, `offer(text)`.
+- packages/desktop/src/main/remote-link.test.ts (+392/-5): imports; `setup()` options `jobs`, `log`, `timing` (:110-165); `describe("jobs (R-C2)")` (:326-699) with nine tests:
+  - J1 "an offer frame reaches the subscriber unchanged on a computer connected only for jobs" (memory relay);
+  - J2 "want() with no phone opens a computer connection and keeps it" (memory relay);
+  - J3 "want() turning false closes the connection, and turning true opens it again" (memory relay);
+  - J4 "over a simulated day, a job-only computer sends only heartbeats and refreshes at most twice" (memory relay, production timing, Bun fake timers stepped hourly);
+  - J5 "a phone paired later restores the phone's cadence, and the jobs cadence returns without it" (FakeSocket and fakePhone; covers the takeover refresh, the no-double refresh, evaluate()'s cadence change on startPairing and on unpair, and want(false) with a paired phone);
+  - J6 "a malformed offer frame is dropped, and so is any offer with no subscriber; neither throws" (16 malformed frames, the longest valid offer, and a link with no subscriber);
+  - J7 "a subscriber that throws or rejects is contained, and the log line holds no offer";
+  - J8 "jobs alone never turn Remote on or make an identity";
+  - J9 "want() decides only the connection: an offer on a phone's connection reaches the subscriber".
+- Lane docs: this entry; vector-everywhere-deviations.md (the EV-11 entry); vector-everywhere-spec.md (five dated notes: §2 after EV-09's, E9, §6.3's Codium Remote row, VE-21, R-C2); vector-everywhere-handoff.md (annotations on the EV-06 and EV-09 bullets, an EV-11 bullet, two "Left open" items).
+- No generated file, workflow, dependency, lockfile, env var or route changed.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time from packages/desktop with `bun --no-env-file test --timeout 30000`:
+
+| Check | Before | After |
+| --- | --- | --- |
+| src/main/remote-link.test.ts | 19 pass, 0 fail, 94 expects | 28 pass, 0 fail, 167 expects (nine new tests) |
+| src/main/remote-phone-app.test.ts (the fixture's other user) | 15 pass, 79 expects (planning baseline) | 15 pass, 0 fail, 79 expects |
+| src/main/remote-crypto.test.ts | | 15 pass, 0 fail, 58 expects |
+| src/main/remote-notify.test.ts | | 6 pass, 0 fail, 32 expects |
+| src/main/remote-routes.test.ts | | 15 pass, 0 fail, 116 expects |
+| remote-link.test.ts, five runs in a row after the change | | 28 pass, 0 fail, 167 expects each time |
+| `cd packages/desktop && bun typecheck` (`tsgo -b`; it excludes `src/**/*.test.ts`, covers the fixture) | | exit 0 |
+| The test file itself: `tsgo --noEmit -p` a scratch tsconfig in /tmp/vector-v2/everywhere/ev11/tc extending desktop's, `types: ["bun"]`, app's `@/*` path | | exit 0 |
+| `bun prettier --check` on the three code files | | clean |
+| No line over 120 columns in the three code files | | none |
+| `git diff` of remote-link.test.ts | | removes only the three import lines, `setup()`'s signature line and its `timing` line it replaces; no line inside an existing test |
+| No personal path or email in the diff | | none (`git diff \| grep` for /home/, /root/, @ addresses other than the bot's: none) |
+
+**Cross-lane probe.** A scratch commit `f19ba6ee` of the working tree on HEAD, built from a copy of the index (no ref moved, the real index untouched), then `git merge-tree --write-tree` against each tip: clean with review-fixes `1433d105`, connect-finish `6cff8020`, hands-finish `272ccb6d`, brain-transport `1d36447e`, scope-finish `f11f8b35`, workspaces-finish `098b5a1c` and native-qualify `9b0623ae`. codium-finish `bd3cc7ad`: remote-link.test.ts auto-merges with B09; the only conflicts are the four HEAD alone already has (.env.example, vector-codium.yml, codium-ci-tests.ts, workflow-compliance.test.ts).
+
+**Mutations** (/tmp/vector-v2/everywhere/ev11-mut/: mutations.py, run.py, results.txt). Each was applied to remote-link.ts alone, remote-link.test.ts was run alone, and the file was restored from remote-link.post.ts with its sha256 checked against post.sha after every run:
+
+| Mutation | Result | Red tests |
+| --- | --- | --- |
+| M1 `wanted()` ignores jobs | 8 fail | J1-J8 (J9 connects for a pairing and stays green) |
+| M2 no zero-device check | 1 fail | J6 |
+| M3a no `vef1.` prefix check | 1 fail | J6 |
+| M3b no visible-ASCII check | 1 fail | J6 |
+| M4 no length bound | 1 fail | J6 |
+| M5 the phone cadence ignores `jobsOnly()` | 2 fail | J4, J5 |
+| M6 `peers.refresh` refreshes a job-only link | 2 fail | J4, J5 |
+| M7 no jobs refresher | 2 fail | J4, J5 (no jobs timer, so no takeover refresh either) |
+| M8 `evaluate()` does not call `syncRefresher()` | 1 fail | J5 (startPairing and unpair change the cadence with no server message) |
+| M9 `offer()` called inline, no hand-off | 1 fail | J7 |
+| M9b hand-off without the catch | 1 fail | J7 |
+| M10 offers only while `want()` | 1 fail | J9 |
+| M11 `jobsChanged()` makes an identity | 1 fail | J8 |
+| M12 no takeover refresh | 1 fail | J5 |
+| M13 the takeover refresh ignores control()'s | 1 fail | J5 (two refreshes for one `peers.refresh`) |
+| M14 teardown keeps the jobs refresher | survives (28 pass) | none: recorded, not hidden. After a close the old timer keeps calling `refresh()`, which returns without a socket, and on reconnect it is reused instead of restarted, so the cadence counts from the first connection. No test observes it |
+| M15 the jobs cadence ignores `online` | survives (28 pass) | none: recorded. The timer would start while the socket is still opening; `refresh()` refuses a socket that is not open, and teardown clears it |
+
+**Not done here (the task said not to commit):** the commit (`feat(desktop): carry job offers on the Remote link for a jobs subscriber`, staging the three code files and the four lane docs by path, the body naming them and saying no generated file changed), the full `bun turbo typecheck --concurrency=2`, the push, and the workflow_dispatch runs of vector-hosted-ci.yml (only while no vector-codium run is in progress) and typecheck.yml on everywhere-finish. Their run ids go in the next entry. Never vector-codium.yml before PR #33 is on main.
+
+### EV-11, 2026-11-16: review fixes (round one)
+
+Seven findings, none blocking. All taken; the one on offers while `want()` is false is kept as built and recorded (deviations, EV-11 (b), (d2), (h), (j), (l)). Still uncommitted, on HEAD `7146a98f`. `git fetch origin release-finish main everywhere-finish` found everywhere-finish `7146a98f` (HEAD), main `58f85edc` (an ancestor) and release-finish `b0752dda`, nine commits past the `0f034957` in HEAD and touching no file of this package, as the package receipt above says. It is merged at the commit step, not here.
+
+**Code** (line numbers after this round; remote-link.ts is 972 lines):
+
+- packages/desktop/src/main/remote-link.ts:
+  - `OFFERS_IN_FLIGHT = 8` (:62-63) and the state's `offering` count (:202, :216). `offered()` (:742-762) drops a well-formed frame while eight offers are unsettled, counts the offer before handing it on, and releases it in a `finally` after the existing `catch`.
+  - `jobsWanted()` (:636-644) answers false when the subscriber's `want()` throws.
+  - The `jobs` JSDoc (:143-149) says both.
+- packages/desktop/src/main/remote-link.test.ts (1,189 lines; the jobs block is :326-867):
+  - J4, the simulated day, stops the link in its `finally`, before `jest.useRealTimers()`.
+  - Four new tests:
+    - J10 "the jobs cadence counts from each connection, and a close, want(false) or stop() ends it" (memory relay, production timing, fake timers stepped hourly; after J4). The relay closes the connection `TICKET_EXPIRED` at 11 h and the link reconnects after its 2-s backoff. The next refresh comes 12 h after the new mint, with none at the first connection's 12 h. `want(false)` closes, six hours pass with no mint, and `want(true)` reopens, with the first refresh again 12 h after its own mint. After `stop()`, `jest.getTimerCount()` is 0, and over a further day nothing is minted or sent.
+    - J11 "the jobs cadence starts only once the relay's hello arrives" (FakeSocket, `jobsRefreshMs` 40). With the socket unopened for 150 ms, one ticket was minted (the connect), and the status is `connecting`. Once it opens, the jobs refresh follows.
+    - J12 "a want() that throws counts as not wanted, and the phone's path keeps working" (before J9). Turning Remote on with a throwing `want()` and no phone opens nothing and reads `ready`; a pairing connects; a phone's `peers.refresh` is answered; a dropped connection is retried.
+    - J13 "at most eight offers wait on the subscriber at once; more are dropped until one settles" (before J9). Of twelve well-formed offers, the first eight reach the subscriber. One rejection (logged with the fixed line) and one resolution free two places: of three more offers, two reach it.
+- Lane docs: the deviations entry's line numbers, (b), (d2), (h), (j), (l) and its mutation table; the handoff's EV-11 bullet and two "Left open" items; this receipt.
+
+**Checks**, each through /home/user/.tools/vector-serial, one file at a time from packages/desktop with `bun --no-env-file test --timeout 30000`:
+
+| Check | Before this round | After |
+| --- | --- | --- |
+| src/main/remote-link.test.ts | 28 pass, 0 fail, 167 expects | 32 pass, 0 fail, 196 expects (four new tests), and the same in each of three more runs in a row |
+| src/main/remote-phone-app.test.ts (the fixture's other user; the fixture is unchanged this round) | 15 pass, 79 expects | 15 pass, 0 fail, 79 expects |
+| src/main/remote-crypto.test.ts, remote-notify.test.ts, remote-routes.test.ts | 15/58, 6/32, 15/116 | 15 pass 58 expects, 6 pass 32 expects, 15 pass 116 expects; 0 fail each |
+| `cd packages/desktop && bun typecheck` (`tsgo -b`) | exit 0 | exit 0 |
+| The test file itself: `bun x tsgo --noEmit -p /tmp/vector-v2/everywhere/ev11/tc/tsconfig.json` (as in the package receipt) | exit 0 | exit 0 (`jest.getTimerCount` is typed in bun-types) |
+| `bun prettier --check` on remote-link.ts, remote-link.test.ts and remote-relay.fixture.ts | clean | clean (prettier wrapped two `until(...)` lines of the new tests) |
+| No added line over 120 columns in the three code files | none | none |
+
+**Mutations** (/tmp/vector-v2/everywhere/ev11-fix/mut/: mutations.py, run.py, results.txt). All twenty-two (the first run's seventeen, M9 and M9b re-anchored on the new chain, plus M14b and M16-M19) were applied to remote-link.ts one at a time with remote-link.test.ts run alone; the file was restored from remote-link.post.ts after each run, and its sha256 matched post.sha (`03b3e364…`) at the end. None survives:
+
+- M1 11 fail (J1-J8, J10, J11, J13); M2, M3a, M3b, M4 1 fail each (J6); M5 and M6 2 fail each (J4, J5); M7 4 fail (J4, J5, J10, J11); M8 1 fail (J5); M9 and M9b 2 fail each (J7, J13); M10 1 fail (J9); M11 1 fail (J8); M12 and M13 1 fail each (J5).
+- M14 (teardown keeps the timer running) and M14b (keeps it and its handle): 1 fail each, J10. Both survived before.
+- M15 (the jobs cadence ignores `online`): 1 fail, J11. Survived before.
+- M16 (a throwing `want()` not caught): 1 fail, J12.
+- M17 (no cap), M18 (no `finally`, so a settled offer keeps its place) and M19 (`>` for `>=`): 1 fail each, J13.
+
+**Cross-lane check.** The other lanes' tips are the package receipt's (codium-finish `bd3cc7ad`, review-fixes `1433d105`, connect-finish `6cff8020`, hands-finish `272ccb6d`, brain-transport `1d36447e`, scope-finish `f11f8b35`, workspaces-finish `098b5a1c`, native-qualify `9b0623ae`). This round adds nothing to remote-link.test.ts outside the jobs block, so B09's test inside "paired phones" (now after :1069) still merges as the probe showed. origin/release-finish `b0752dda` touches no file under packages/desktop or the lane documents since the merge base.
+
+**Not done here (the task said not to commit):** as in the package receipt above. The commit stages the same seven paths. Its body adds that review round one capped offers in flight at eight and made a throwing `want()` count as false, and that no generated file changed.
+
+### EV-11, 2026-11-16: commit gate
+
+Committed as `feat(desktop): let the Remote link carry job offers for a jobs subscriber`, on HEAD `7146a98f` (origin/everywhere-finish), staging the seven paths named above by path: remote-link.ts, remote-link.test.ts, remote-relay.fixture.ts and the four lane documents. No generated file, workflow, dependency, lockfile, env var or route changed.
+
+Re-run at the gate, each through /home/user/.tools/vector-serial, one file at a time from packages/desktop with `bun --no-env-file test --timeout 30000`:
+
+| Check | Result |
+| --- | --- |
+| src/main/remote-link.test.ts | 32 pass, 0 fail, 196 expects |
+| src/main/remote-phone-app.test.ts (the fixture's other user) | 15 pass, 0 fail, 79 expects |
+| `cd packages/desktop && bun typecheck` (`tsgo -b`) | exit 0 |
+| The test file itself: `bun x tsgo --noEmit -p /tmp/vector-v2/everywhere/ev11/tc/tsconfig.json` | exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+origin/release-finish had moved to `67ec3a60` (fourteen commits past the `0f034957` in HEAD: engine, core, api, web and root test fixes, a desktop packet-capture script, vector-at-mention.yml and docs/vector/local-packet-capture.md). None touches a file this package changes. It is merged after this commit with a merge commit, before the push, as the lane rule says; the merge, the push and the CI run ids go in the next lane docs commit. vector-codium.yml is still not dispatched before PR #33 is on main.
