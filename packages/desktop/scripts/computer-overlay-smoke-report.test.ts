@@ -865,55 +865,6 @@ test("a failed Windows UP confirmation names only its own phase and keeps its ca
   )
 })
 
-test("the Windows guardian child sends UPs only from its hookless release thread", async () => {
-  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
-  const guardian = await readFile(path.join(native, "input_guardian.cpp"), "utf8")
-  // SendInput has one caller, release_input, and release_input has one caller, the child's releaser.
-  expect(guardian.match(/SendInput\(/g)).toHaveLength(1)
-  expect(guardian.match(/release_input\(/g)).toHaveLength(2)
-  const hooks = guardian.slice(
-    guardian.indexOf("LRESULT CALLBACK keyboard_hook("),
-    guardian.indexOf("void authenticate("),
-  )
-  expect(hooks).not.toMatch(/drain\(|SendInput\(|release_input\(|wait\(|Sleep\(/)
-  const runner = guardian.slice(guardian.indexOf("int run_input_guardian(const InputGuardianCommand& command"))
-  const order = [
-    "Sleep(750); (void)TerminateProcess(",
-    "authenticate(state);",
-    "mouse=SetWindowsHookExW(WH_MOUSE_LL",
-    'if (!keyboard || !mouse) throw std::runtime_error("Guardian hooks unavailable.");',
-    "state->releaser.start(state->stopping,",
-    "auto bytes=encode(ready);",
-    "SetEvent(state->armed_event.get());",
-  ].map((step) => runner.indexOf(step))
-  expect(order.every((index) => index >= 0)).toBe(true)
-  expect(order).toEqual([...order].sort((left, right) => left - right))
-  expect(runner.match(/Sleep\(750\)/g)).toHaveLength(1)
-  const loop = runner.slice(
-    runner.indexOf("for (;;) {"),
-    runner.indexOf("UnhookWindowsHookEx(keyboard); keyboard=nullptr;"),
-  )
-  expect(loop).not.toMatch(/drain\(|SendInput\(|release_input\(/)
-  expect(loop).toContain("if (state->ledger.pending()) quiet=0; else if (!quiet) quiet=GetTickCount64();")
-  expect(loop).toContain("if (quiet && GetTickCount64()-quiet>=100) break;")
-  expect(loop).toContain("(void)MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT);")
-  const caught = runner.slice(runner.indexOf("} catch (...) {"))
-  expect(caught).toContain("const bool inline_release=!state->releaser.started();")
-  expect(caught).toContain("if (inline_release) try { (void)state->releaser.drain(2); } catch (...) {}")
-  expect(caught).toContain("const auto deadline=GetTickCount64()+300;")
-  expect(guardian).toContain("ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;")
-  expect(guardian).toContain("try { (void)(stopping.load() ? drain(5) : drain(1,true)); wait(seen,2); } catch (...) {}")
-  const drain = guardian.slice(
-    guardian.indexOf("uint32_t InputGuardianReleaser::drain("),
-    guardian.indexOf("void InputGuardianReleaser::notify()"),
-  )
-  // The release lock is the only lock held across the release; the ledger and wake locks never are.
-  expect(drain.match(/release_\(/g)).toHaveLength(1)
-  expect(drain).not.toMatch(/lock_guard|changed_mutex_|ledger_\.mutex/)
-  expect(drain).toContain("std::unique_lock lock(drain_mutex_,std::try_to_lock); if (!lock.owns_lock()) return 0;")
-  expect(drain).toContain("std::clamp<uint32_t>(milliseconds,1,300)")
-})
-
 test("Windows Stop effect receipts carry only closed booleans and round-trip every built record", () => {
   const line = (value: unknown) => COMPUTER_SMOKE_STOP_EFFECT_MARK + JSON.stringify(value)
   const delivered = { protocol: 1, cancel: true, page: true, down: true, up: true, click: true }

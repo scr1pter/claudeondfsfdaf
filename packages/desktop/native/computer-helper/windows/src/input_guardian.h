@@ -125,13 +125,12 @@ class InputGuardianLedger final {
   bool is_low32_tag_candidate(uint64_t observed_tag, bool injected) const noexcept;
 };
 
-// Serializes the guardian child's UP releases. Invariant: no thread holds the ledger lock or the wake
-// lock while calling the release function (SendInput), so the hook thread can always record the UP.
+// Serializes the guardian child's UP releases. A release runs with neither the ledger lock nor the
+// wake lock held, so a hook callback on another thread can always record the UP it causes.
 class InputGuardianReleaser final {
  public:
   using Release = std::function<bool(const InputRelease&)>;
   using Callbacks = std::function<uint64_t(InputReleaseKind)>;
-  using Spawn = std::function<void(std::function<void()>)>;
   InputGuardianReleaser(InputGuardianLedger&, Release, Callbacks = {});
   // Bounded to 300 ms. Returns 0 at once while another drain holds the release lock. At most one
   // accepted UP per ticket is in flight, and only an observed DOWN is ever released.
@@ -140,13 +139,6 @@ class InputGuardianReleaser final {
   void notify() noexcept;
   uint64_t generation() const noexcept;
   void wait(uint64_t seen, uint32_t milliseconds);
-  // Starts the one release thread, which owns no hooks: retired or held-limit DOWNs until stopping,
-  // then every observed DOWN. If spawning throws, started() stays false and nothing was released.
-  // Without a spawn function the thread is detached.
-  void start(const std::atomic<bool>& stopping, Spawn spawn = {});
-  bool started() const noexcept;
-  // Tests only. The guardian child keeps its release thread until the process ends.
-  void stop() noexcept;
  private:
   InputGuardianLedger& ledger_;
   Release release_;
@@ -154,7 +146,6 @@ class InputGuardianReleaser final {
   std::mutex drain_mutex_, changed_mutex_;
   std::condition_variable changed_;
   std::atomic<uint64_t> generation_{0};
-  std::atomic<bool> started_{false}, halted_{false};
   std::array<uint64_t, 136> in_flight_{};
 };
 
