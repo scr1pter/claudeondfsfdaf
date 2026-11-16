@@ -90,6 +90,21 @@ size_t run_overlay_driver_tests() {
     }
   });
   test([] {
+    // A failed UP confirmation reports its guardian phase with the unchanged cleanup_failed reason and exit.
+    for (const auto phase : {InputGuardianPhase::lock_expired, InputGuardianPhase::budget_expired, InputGuardianPhase::inactive,
+        InputGuardianPhase::write_refused, InputGuardianPhase::read_refused, InputGuardianPhase::reply_invalid,
+        InputGuardianPhase::setup_failed, InputGuardianPhase::reply_negative_zero_budget,
+        InputGuardianPhase::reply_negative_short_budget, InputGuardianPhase::reply_negative_full_budget}) {
+      const auto stage = overlay_driver_guardian_stage(phase); require(stage.has_value(), "overlay-driver.failed-up-phase-has-a-closed-stage");
+      const auto result = overlay_driver_caught(OverlayDriverMode::stop, *stage, std::make_exception_ptr(DriverFailure{L"cleanup_failed"}));
+      const auto wire = result.wire();
+      require(!result.ok && !result.skipped && result.exit_code() == 1 && named(wire, L"reason") == L"cleanup_failed" &&
+        named(wire, L"stage") == overlay_driver_stage_name(*stage) && named(wire, L"cause") == L"driver_failure" &&
+        wire_keys(wire) == std::set<std::wstring>{L"id", L"protocol", L"check", L"ok", L"reason", L"stage", L"cause"},
+        "overlay-driver.failed-up-phase-keeps-cleanup-failed-and-exit");
+    }
+  });
+  test([] {
     for (int flags = 0; flags < 16; ++flags) {
       const LONG_PTR extended = ((flags & 1) ? static_cast<LONG_PTR>(WS_EX_NOACTIVATE) : LONG_PTR{0}) |
         ((flags & 2) ? static_cast<LONG_PTR>(WS_EX_TRANSPARENT) : LONG_PTR{0}) |
