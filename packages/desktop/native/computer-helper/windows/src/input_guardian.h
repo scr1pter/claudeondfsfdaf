@@ -136,16 +136,14 @@ class InputGuardianReleaser final {
   // Bounded to 300 ms. Returns 0 at once while another drain holds the release lock. At most one
   // accepted UP per ticket is in flight, and only an observed DOWN is ever released.
   uint32_t drain(uint32_t milliseconds, bool retired_only = false);
-  // Safe for hook callbacks: it takes the wake lock only for an instant, never across SendInput.
-  // A wake before or during a wait is not lost.
+  // Lock-free for hook callbacks. A wake that races a waiter's check costs at most its timeout.
   void notify() noexcept;
   uint64_t generation() const noexcept;
   void wait(uint64_t seen, uint32_t milliseconds);
   // Starts the one release thread, which owns no hooks: retired or held-limit DOWNs until stopping,
   // then every observed DOWN. If spawning throws, started() stays false and nothing was released.
-  // The spawn function must keep this releaser and the stopping flag alive while the thread runs;
-  // an empty one is refused.
-  void start(const std::atomic<bool>& stopping, Spawn spawn);
+  // Without a spawn function the thread is detached.
+  void start(const std::atomic<bool>& stopping, Spawn spawn = {});
   bool started() const noexcept;
   // Tests only. The guardian child keeps its release thread until the process ends.
   void stop() noexcept;

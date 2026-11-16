@@ -902,8 +902,7 @@ test("the Windows guardian child sends UPs only from its hookless release thread
   expect(caught).toContain("if (inline_release) try { (void)state->releaser.drain(2); } catch (...) {}")
   expect(caught).toContain("const auto deadline=GetTickCount64()+300;")
   expect(guardian).toContain("ledger.retire(ticket,request->down); releaser.notify(); reply.ok=true;")
-  expect(guardian).toContain("try { (void)(stopping.load() ? drain(5) : drain(1,true)); } catch (...) {}")
-  expect(guardian).toContain("try { wait(seen,2); } catch (...) { Sleep(2); }")
+  expect(guardian).toContain("try { (void)(stopping.load() ? drain(5) : drain(1,true)); wait(seen,2); } catch (...) {}")
   const drain = guardian.slice(
     guardian.indexOf("uint32_t InputGuardianReleaser::drain("),
     guardian.indexOf("void InputGuardianReleaser::notify()"),
