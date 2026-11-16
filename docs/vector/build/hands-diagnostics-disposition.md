@@ -57,3 +57,7 @@ The audit used immutable `git show`, `git grep`, `git blame -w`, `git cherry` an
 The source audit supports an explicitly documented **no-content ancestry merge** of the exact diagnostic tip after this map is integrated. The coordinator must verify that the merge changes no source tree content and keeps the modern helper, tests, measured locks and all proof requirements unchanged. That merge preserves all fifteen historical identities before branch cleanup; it is not a wholesale source merge or a request to replay old patches.
 
 Native Windows CI remains the qualification host for Windows OS behavior. Owner device calibration, OS grants, final exact-source package proof, signing and release gates retain their separate status. No native execution or additional matrix dispatch is authorized or claimed by this document.
+
+## Integrated
+
+`eddd80dc` (14 November 2026, "chore(integration): retain superseded Hands diagnostics ancestry") made the no-content ancestry merge described above. Its parents are `f37d4a24`, which added this map, and the audited tip `ead16339`; its tree `1667bc16` equals the tree of `f37d4a24`, so it changed no file. `ead16339` is an ancestor of `0ee486e3`, the `release-finish` head the `hands-finish` lane started from. Nothing from the branch is left to fold in.

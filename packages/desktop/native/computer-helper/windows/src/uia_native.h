@@ -4,6 +4,7 @@
 #include <memory>
 #include <atomic>
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,8 +37,59 @@ inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
   L"actor-current", L"actor-current-budget", L"actor-complete", L"actor-expired", L"actor-cancelled", L"actor-revoked",
   L"actor-com-uninitialized", L"actor-com-cancellation-unavailable", L"actor-com-timer-unavailable", L"actor-com-expired"
 };
-struct WindowsUiaDiagnostic { std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none}; };
+// Which side first saw an actor ticket's deadline pass, written only inside the first timeout snapshot:
+// a worker current_call() check, the worker's COM call budget after the body, or the caller's wait_until().
+// worker_current means the worker itself found the budget spent at a check under the sampled phase. Under
+// root_element the only such check precedes ElementFromHandleBuildCache, so that call was never made.
+// caller_wait means only that the worker had not finished when the caller woke, so a call may be in flight.
+enum class WindowsUiaExpiry : uint8_t { none, worker_current, worker_budget, caller_wait };
+inline constexpr std::array<std::wstring_view, 4> windows_uia_expiries{L"none", L"worker-current", L"worker-budget", L"caller-wait"};
+struct WindowsUiaDiagnostic {
+  std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none};
+  // Zero means unobserved. Bits 0-15 hold the sampled phase plus one (every sampled phase, including none,
+  // has a distinct nonzero encoding), bits 16-23 the expiry side and bits 32-63 the root lookup HRESULT
+  // seen before the snapshot (zero when none was). One compare-exchange writes all three facts together.
+  std::atomic<uint64_t> timeout_observation{0};
+  // Failure-path only: the first failing ElementFromHandleBuildCache HRESULT, written by the worker.
+  // Zero means unobserved; a failing HRESULT is never zero. Only failure_status() reads it.
+  std::atomic<int32_t> root_element_status{0};
+  // The first deadline observer samples before expiry/retirement. Late work cannot rewrite this observation.
+  void note_timeout(WindowsUiaExpiry expiry) noexcept {
+    uint64_t empty = 0;
+    const auto observed = (uint64_t{static_cast<uint32_t>(root_element_status.load(std::memory_order_relaxed))} << 32) |
+      (uint64_t{static_cast<uint8_t>(expiry)} << 16) | (uint64_t{1} + static_cast<uint64_t>(phase.load(std::memory_order_relaxed)));
+    timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed);
+  }
+  void note_root_element_status(int32_t status) noexcept {
+    int32_t empty = 0;
+    if (status) root_element_status.compare_exchange_strong(empty, status, std::memory_order_relaxed);
+  }
+  WindowsUiaPhase failure_phase(bool available) const noexcept {
+    if (available) return phase.load(std::memory_order_relaxed);
+    const auto observed = timeout_observation.load(std::memory_order_relaxed) & 0xffff;
+    if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none;
+    return static_cast<WindowsUiaPhase>(observed - 1);
+  }
+  // A healthy actor never expired a ticket. For a retired actor only the immutable snapshot is eligible.
+  WindowsUiaExpiry failure_expiry(bool available) const noexcept {
+    if (available) return WindowsUiaExpiry::none;
+    const auto observed = timeout_observation.load(std::memory_order_relaxed);
+    const auto expiry = (observed >> 16) & 0xff;
+    if (!observed || expiry >= windows_uia_expiries.size()) return WindowsUiaExpiry::none;
+    return static_cast<WindowsUiaExpiry>(expiry);
+  }
+  // A healthy actor's failed call returned before the caller saw its exception, so the live status is its
+  // own. For a retired actor, CoCancelCall can make late work fail afterwards, so only the snapshot counts.
+  std::optional<int32_t> failure_status(bool available) const noexcept {
+    const auto status = available ? root_element_status.load(std::memory_order_relaxed)
+                                  : static_cast<int32_t>(static_cast<uint32_t>(timeout_observation.load(std::memory_order_relaxed) >> 32));
+    if (!status) return {};
+    return status;
+  }
+};
 static_assert(std::atomic<WindowsUiaPhase>::is_always_lock_free);
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
+static_assert(std::atomic<int32_t>::is_always_lock_free);
 static_assert(windows_uia_phases.size() == static_cast<size_t>(WindowsUiaPhase::actor_com_expired) + 1);
 class NativeUia;
 class WindowsUiaElement final {
