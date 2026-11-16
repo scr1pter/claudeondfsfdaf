@@ -91,24 +91,24 @@ export function retire(token: Token) {
   writers.delete(token)
 }
 
+const hash = (value: string) => createHash("sha256").update(value).digest("hex")
+
 export function prefix(input: { readonly projectID: string; readonly directory: string; readonly canonical?: string }) {
-  const hash = (value: string) => createHash("sha256").update(value).digest("hex")
   return ["connect-directory", hash(input.projectID), hash(input.canonical ?? FileLock.key(input.directory))]
 }
 
 const folder = (input: { readonly projectID: string; readonly directory: string }) =>
   path.join(Global.Path.data, "storage", ...prefix(input))
 const basename = (value: string) => Schema.is(Connect.RunID)(value) && /^[A-Za-z0-9_-]+$/.test(value)
+const missing = (cause: unknown) =>
+  typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT"
 
-/** Bounded reads in the existing Storage namespace; the general Storage reader has no byte limit. */
-export const load = Effect.fn("ConnectDirectory.load")(function* (
-  input: { readonly projectID: string; readonly directory: string },
-  runID: string,
-) {
-  if (!basename(runID)) return undefined
-  const raw = yield* Effect.tryPromise(async () => {
-    const target = path.join(folder(input), `${runID}.json`)
-    if (!(await lstat(target)).isFile()) return undefined
+// A bounded receipt read: null when there is no file, undefined for a non-file, an oversized file or bad JSON.
+const bounded = (target: string) =>
+  Effect.tryPromise(async () => {
+    const leaf = await lstat(target).catch((cause: unknown) => (missing(cause) ? null : Promise.reject(cause)))
+    if (leaf === null) return null
+    if (!leaf.isFile()) return undefined
     const file = await open(target, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
     try {
       const info = await file.stat()
@@ -119,11 +119,19 @@ export const load = Effect.fn("ConnectDirectory.load")(function* (
       const result = await file.read(buffer, 0, buffer.length, 0)
       if (result.bytesRead > size) return undefined
       const text = buffer.subarray(0, result.bytesRead).toString("utf8")
-      return { value: JSON.parse(text) as unknown, digest: createHash("sha256").update(text).digest("hex") }
+      return { value: JSON.parse(text) as unknown, digest: hash(text), bytes: result.bytesRead }
     } finally {
       await file.close()
     }
   }).pipe(Effect.orElseSucceed(() => undefined))
+
+/** Bounded reads in the existing Storage namespace; the general Storage reader has no byte limit. */
+export const load = Effect.fn("ConnectDirectory.load")(function* (
+  input: { readonly projectID: string; readonly directory: string },
+  runID: string,
+) {
+  if (!basename(runID)) return undefined
+  const raw = yield* bounded(path.join(folder(input), `${runID}.json`))
   const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(Receipt)(raw?.value))
   if (
     !decoded ||
@@ -141,6 +149,54 @@ export const load = Effect.fn("ConnectDirectory.load")(function* (
   )
     return undefined
   return { ...decoded, digest: raw.digest }
+})
+
+/**
+ * What a directory run's receipt says, for the request ledger's retention. The receipt is found by the two hashes
+ * `prefix` names its folder by, so a directory that was deleted or replaced can still be settled. `gone`: the folder
+ * exists but the receipt does not. The hub writes the receipt before the request key binds, and only `prune` removes
+ * one, after it is done. `bytes` is what was read, so a caller can bound its reads.
+ */
+export interface Settled {
+  readonly kind: "done" | "open" | "gone" | "unknown"
+  readonly ended?: number
+  readonly bytes: number
+}
+
+export const settled = Effect.fn("ConnectDirectory.settled")(function* (
+  place: { readonly project: string; readonly directory: string },
+  run: { readonly runID: string; readonly anchorID: string },
+) {
+  const unknown: Settled = { kind: "unknown", bytes: 0 }
+  if (!/^[0-9a-f]{64}$/.test(place.project) || !/^[0-9a-f]{64}$/.test(place.directory) || !basename(run.runID))
+    return unknown
+  const directory = path.join(Global.Path.data, "storage", "connect-directory", place.project, place.directory)
+  const raw = yield* bounded(path.join(directory, `${run.runID}.json`))
+  if (raw === null) {
+    // Without the folder there is no evidence the receipt ever existed here: another data root, or a tampered tree.
+    const present = yield* Effect.tryPromise(() => lstat(directory)).pipe(
+      Effect.map((info) => info.isDirectory()),
+      Effect.orElseSucceed(() => false),
+    )
+    return present ? ({ kind: "gone", bytes: 0 } satisfies Settled) : unknown
+  }
+  if (!raw) return unknown
+  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(Receipt)(raw.value))
+  if (
+    !decoded ||
+    decoded.run.id !== run.runID ||
+    decoded.run.request.id !== run.runID ||
+    decoded.anchor !== run.anchorID ||
+    hash(decoded.projectID) !== place.project ||
+    hash(decoded.canonical) !== place.directory
+  )
+    return { kind: "unknown", bytes: raw.bytes } satisfies Settled
+  if (decoded.run.status !== "done") return { kind: "open", bytes: raw.bytes } satisfies Settled
+  return {
+    kind: "done",
+    ...(decoded.run.time.ended !== undefined ? { ended: decoded.run.time.ended } : {}),
+    bytes: raw.bytes,
+  } satisfies Settled
 })
 
 export const list = (input: { readonly projectID: string; readonly directory: string }, limit: number) =>
@@ -230,5 +286,5 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
     },
     catch: () => new Error({ message: "The directory review receipt could not be saved." }),
   })
-  return createHash("sha256").update(value).digest("hex")
+  return hash(value)
 })

@@ -198,7 +198,7 @@ async function startEngine(bundle: string, root: string, modelUrl: string, compu
   const configDir = path.join(userData, "config", "vector")
   const password = randomBytes(16).toString("hex")
   const environment = sidecarEnv({ home, userData, configDir, password })
-  await mkdir(home, { recursive: true })
+  await mkdir(environment.TMPDIR, { recursive: true })
   const configuration = JSON.stringify(providerConfig(modelUrl), null, 2)
   // The desktop's extra config participates in merged settings, while owner-only model identity is read by
   // Config.getGlobal from XDG_CONFIG_HOME/<namespace>. Seed both isolated sources before either can be cached.
@@ -267,6 +267,10 @@ function sidecarEnv(input: { home: string; userData: string; configDir: string; 
     HOME: input.home,
     USERPROFILE: input.home,
     VECTOR_TEST_HOME: input.home,
+    // A private temporary folder, so ConnectOwner's startup sweep sees only this run's snapshots, never the machine's.
+    TMPDIR: path.join(input.home, "tmp"),
+    TEMP: path.join(input.home, "tmp"),
+    TMP: path.join(input.home, "tmp"),
     VECTOR_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true",
     VECTOR_EXPERIMENTAL_CONNECT: "true",
     VECTOR_EXPERIMENTAL_LSP_TOOL: "true",

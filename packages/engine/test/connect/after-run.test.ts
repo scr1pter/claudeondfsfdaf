@@ -27,6 +27,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { TaskNotify } from "@/task/notify"
 import type { RunBudget } from "@vectordevai/schema/run-budget"
 import { TestConfig } from "../fixture/config"
+import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { NpmTest } from "../fake/npm"
@@ -286,7 +287,7 @@ const replacements: LayerNode.Replacements = [
   [Config.node, configured],
   [Npm.node, NpmTest.noop],
 ]
-const actual = testEffect(AppNodeBuilderV1.build(nodes, replacements))
+const actual = testEffect(AppNodeBuilderV1.build(nodes, replacements).pipe(Layer.provide(noSweep)))
 // Test-only capability injection exercises Notify's aggregation against real guard.tighten/begin. This is not
 // production lease/cancellation qualification; the protected core capability is an explicit owner prerequisite.
 const injectedLease = Layer.effect(
@@ -335,7 +336,9 @@ const observedNotify = Layer.effect(
   }),
 ).pipe(Layer.provide(AppNodeBuilderV1.build(TaskNotify.node, boundedReplacements)))
 const bounded = testEffect(
-  AppNodeBuilderV1.build(nodes, boundedReplacements.concat([[TaskNotify.node, observedNotify]])),
+  AppNodeBuilderV1.build(nodes, boundedReplacements.concat([[TaskNotify.node, observedNotify]])).pipe(
+    Layer.provide(noSweep),
+  ),
 )
 
 // A13 is held even if a future guard has the optional method. The existing injected-capability assertions below
@@ -556,7 +559,11 @@ cliIt.live(
   ({ home, llm, vector }) =>
     Effect.gen(function* () {
       const project = path.join(home, "project")
+      // The CLI starts ConnectOwner with Connect on, so on Linux, the one host where it sweeps stale snapshots, its
+      // temporary folder is one of its own.
+      const temporary = path.join(home, "tmp")
       yield* Effect.promise(() => fs.mkdir(project))
+      yield* Effect.promise(() => fs.mkdir(temporary))
       yield* Effect.promise(() => $`git init`.cwd(project).quiet())
       yield* Effect.promise(() => $`git config user.name Test`.cwd(project).quiet())
       yield* Effect.promise(() => $`git config user.email test@vector.test`.cwd(project).quiet())
@@ -592,6 +599,7 @@ cliIt.live(
           format: "json",
           timeoutMs: 45_000,
           env: {
+            ...(process.platform === "linux" ? { TMPDIR: temporary } : {}),
             VECTOR_EXPERIMENTAL_CONNECT: "true",
             VECTOR_APP_NAMESPACE: "vector",
             VECTOR_CONFIG_CONTENT: JSON.stringify({

@@ -70,3 +70,20 @@ test("auto-accept never answers a terminal the agent did not open, nor a termina
   expect(PermissionPolicy.canAutoApprove(PermissionPolicy.TERMINAL_UNSANDBOXED, platform, platform)).toBe(false)
   expect(PermissionPolicy.canAlwaysApprove(PermissionPolicy.TERMINAL_UNSANDBOXED, platform, platform)).toBe(false)
 })
+
+// Connected tools' cloud hand-off (CW-23): sending code or a screen to a Vector cloud service asks every time, so no
+// saved "Always allow", rule or client auto-accept answers it, whatever `always` and the patterns say.
+test("connect_cloud always asks and can never be approved for good", () => {
+  expect(PermissionPolicy.requiresApproval("connect_cloud")).toBe(true)
+  for (const always of [[], ["*"], ["hosted.review"]]) {
+    expect(PermissionPolicy.requiresApproval("connect_cloud", always, ["hosted.review"])).toBe(true)
+    expect(PermissionPolicy.canAutoApprove("connect_cloud", always, ["hosted.review"])).toBe(false)
+    expect(PermissionPolicy.canAlwaysApprove("connect_cloud", always, ["hosted.review"])).toBe(false)
+  }
+  expect(PermissionPolicy.requiresApproval("connect_write", [], ["src/a.ts"])).toBe(true)
+  for (const permission of ["connect", "connect_model"]) {
+    expect(PermissionPolicy.requiresApproval(permission, ["vectorscope.review"], ["vectorscope.review"])).toBe(false)
+    expect(PermissionPolicy.canAutoApprove(permission, ["vectorscope.review"], ["vectorscope.review"])).toBe(true)
+    expect(PermissionPolicy.canAlwaysApprove(permission, ["vectorscope.review"], ["vectorscope.review"])).toBe(true)
+  }
+})

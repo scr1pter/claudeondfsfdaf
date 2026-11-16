@@ -162,6 +162,15 @@ describe("the playbook publish check", () => {
     const result = check(value, name)
     return result.ok ? [] : result.issues.map((issue) => `${issue.path}: ${issue.message}`)
   }
+  const flow = (connect: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    version: 1,
+    title: "Implement and review",
+    stages: [
+      { id: "build", prompt: "Make the change, then run `bun test`." },
+      { id: "review", after: ["build"], connect, ...extra },
+      { id: "fix", after: ["review"], prompt: "Fix each blocking finding, then run `bun typecheck`." },
+    ],
+  })
 
   test("a playbook naming only allowed commands and repository files passes, and lists what it names", () => {
     const result = check(
@@ -277,5 +286,110 @@ describe("the playbook publish check", () => {
       "a b.ts",
     ])
       expect(PlaybookCheck.repositoryFile(file)).toBe(false)
+  })
+
+  test("a connect stage that reviews with VectorScope passes, and the agent fix stage after it is unaffected (CW-23d)", () => {
+    expect(check(flow({ to: "vectorscope", action: "review" }))).toEqual({
+      ok: true,
+      name: "vector-flaky-tests",
+      commands: ["bun test", "bun typecheck"],
+      files: [],
+    })
+    expect(
+      check(
+        flow(
+          {
+            to: "vectorscope",
+            action: "review",
+            input: {
+              target: { kind: "branch", base: "main" },
+              security: true,
+              budget: { maxCostUsd: 1, timeoutMinutes: 10 },
+            },
+          },
+          { title: "Review the branch", if: { path: "approved", equals: false } },
+        ),
+      ).ok,
+    ).toBe(true)
+  })
+
+  test("a connect stage that fixes, or names any other member or action, is refused at its own path", () => {
+    const refused =
+      "/stages/1/connect: A Vector Playbook may only review with VectorScope; fixes are separate agent stages."
+    expect(messages(flow({ to: "vectorscope", action: "fix" }))).toEqual([refused])
+    for (const to of [
+      "github-agent",
+      "hands",
+      "computer",
+      "mcp:vectorscope",
+      "workflow:vector-review",
+      "VectorScope",
+      "vectorscope ",
+    ])
+      expect({ to, messages: messages(flow({ to, action: "review" })) }).toEqual({ to, messages: [refused] })
+    expect(messages(flow({ to: "github-agent", action: "fix" }))).toEqual([refused])
+    // An action outside Connect.ActionID fails the saved-workflow schema first, so the connect rule never runs on it.
+    for (const action of ["deploy", "task", "Review"]) {
+      const result = check(flow({ to: "vectorscope", action }))
+      expect(result.ok).toBe(false)
+      const issues = result.ok ? [] : result.issues
+      expect(issues).toContainEqual({
+        path: "/stages/1/connect/action",
+        message: expect.stringContaining("Connect.ActionID"),
+      })
+      expect(issues.filter((issue) => issue.message.includes("may only review with VectorScope"))).toEqual([])
+    }
+    expect(
+      messages({
+        version: 1,
+        title: "Review twice",
+        stages: [
+          { id: "build", prompt: "Make the change, then run `bun test`." },
+          { id: "first", after: ["build"], connect: { to: "vectorscope", action: "review" } },
+          { id: "patch", after: ["first"], connect: { to: "vectorscope", action: "fix" } },
+          { id: "second", after: ["patch"], connect: { to: "github-agent", action: "review" } },
+          { id: "nest", after: ["second"], workflow: "my-own-flow" },
+        ],
+      }),
+    ).toEqual([
+      "/stages: A Vector Playbook may nest only other personal Vector Playbooks.",
+      "/stages/2/connect: A Vector Playbook may only review with VectorScope; fixes are separate agent stages.",
+      "/stages/3/connect: A Vector Playbook may only review with VectorScope; fixes are separate agent stages.",
+    ])
+  })
+
+  test("the secret, command and hidden-character checks still apply to a connect stage's text", () => {
+    const review = { to: "vectorscope", action: "review" }
+    expect(messages(flow(review, { title: "Then `git push`" }))).toEqual([
+      expect.stringContaining("/stages/1/title: `git push` is not a command a playbook may name."),
+    ])
+    expect(messages(flow(review, { title: "Check it!`git status`" }))[0]).toContain("runs a shell command")
+    expect(messages(flow(review, { title: "the password is hunter2-staple" }))).toEqual([
+      "/stages/1/title: A playbook never holds a secret: it names where one is kept, never its value.",
+    ])
+    expect(messages(flow(review, { title: "Use ghp_abcdefghijklmnopqrstuvwxyz0123456789" }))[0]).toContain(
+      "never holds a secret",
+    )
+    expect(messages(flow({ to: "vector\u202escope", action: "review" }))).toEqual([
+      "/stages/1/connect/to: Hidden characters (zero-width, bidirectional or tag characters) are not allowed.",
+    ])
+    const own = PlaybookCheck.validate({
+      name: "vector-flaky-tests",
+      bytes: encode(
+        flow({ ...review, input: { target: { kind: "branch", base: "fixture-only-value-0123456789abcdef" } } }),
+      ),
+      env: { VECTOR_FIXTURE_TOKEN: "fixture-only-value-0123456789abcdef" },
+    })
+    expect(own.ok ? [] : own.issues.map((issue) => issue.path)).toEqual(["/stages/1/connect/input/target/base"])
+    expect(messages(flow({ ...review, ["`git push`"]: 1 }))[0]).toStartWith(
+      "/stages/1/connect/`git push` (name): `git push` is not a command",
+    )
+    expect(messages(flow({ ...review, input: { target: { kind: "branch", base: "{{inputs.base}}" } } }))).toEqual([
+      "/stages/1/connect/input: Connected stage inputs are literal JSON; template references are unavailable.",
+    ])
+    // The text checks run before the connect rule, so a fix stage with a bad title reports only its title.
+    expect(messages(flow({ to: "vectorscope", action: "fix" }, { title: "Then `git push`" }))).toEqual([
+      expect.stringContaining("/stages/1/title: `git push` is not a command a playbook may name."),
+    ])
   })
 })

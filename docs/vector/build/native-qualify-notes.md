@@ -1855,7 +1855,9 @@ and restored the same way.
     message. It maps, in order: `LinuxIsolation.Unavailable`, an exact `RUN_REFUSALS`
     message, the exact `ProcessIsolation.REFUSAL`, the exact
     `Sandbox operation <name> failed or timed out; the run is refused.` for the five
-    names `run()` can reach, and an errno projection. That last one needs an
+    names `run()` can reach (that message now reads `timed out`, `exited <code>` or
+    `failed` in place of `failed or timed out`, with the same label; deviations V16
+    item 11), and an errno projection. That last one needs an
     allowlisted `code` and `syscall`, both strings, and gives
     `run-errno-<syscall>-<errno>`. Everything else is `run-other`. Beyond the plan:
     - `run-adapter` maps `github.isolation.ts`'s own `REFUSAL`, the message of every

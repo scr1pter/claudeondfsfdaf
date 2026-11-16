@@ -145,7 +145,7 @@ export function runError(error: unknown, isolation: string): ShellStage<"run"> {
   if (message === isolation) return "run-isolation"
   const operation = `run-operation-${
     typeof message === "string"
-      ? /^Sandbox operation ([a-z]{1,16}) failed or timed out; the run is refused\.$/.exec(message)?.[1]
+      ? /^Sandbox operation ([a-z]{1,16}) (?:timed out|exited \d{1,3}|failed); the run is refused\.$/.exec(message)?.[1]
       : undefined
   }`
   if (shellStage("run", operation)) return operation

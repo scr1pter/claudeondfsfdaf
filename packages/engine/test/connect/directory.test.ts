@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Global } from "@vectordevai/core/global"
+import { EffectFlock } from "@vectordevai/core/util/effect-flock"
 import { Npm } from "@vectordevai/core/npm"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Connect } from "@vectordevai/schema/connect"
@@ -31,6 +32,7 @@ import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { NpmTest } from "../fake/npm"
+import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { pollWithTimeout, testEffect } from "../lib/effect"
@@ -45,6 +47,7 @@ beforeEach(() => {
   script.oversized = false
   script.verdict = "clean"
   delete script.gate
+  delete hold.written
 })
 afterEach(async () => {
   await disposeAllInstances()
@@ -110,6 +113,39 @@ const adapter: ConnectAdapter.Adapter = {
     }),
 }
 
+// The real ledger, except that a test can keep a bind inside an uninterruptible region after its binding write, as an
+// interrupt landing during the ledger's own locked write does: the write finished, and the interrupt surfaces after.
+const hold: { written?: Deferred.Deferred<void> } = {}
+const holdingLedger = LayerNode.make({
+  service: ConnectDirectoryRequest.Service,
+  layer: Layer.effect(
+    ConnectDirectoryRequest.Service,
+    Effect.map(ConnectDirectoryRequest.Service, (real) =>
+      ConnectDirectoryRequest.Service.of({
+        ...real,
+        bind: (token, value, onBound) => {
+          const written = hold.written
+          if (!written) return real.bind(token, value, onBound)
+          return Effect.uninterruptible(
+            real
+              .bind(token, value, onBound)
+              .pipe(Effect.andThen(Deferred.succeed(written, undefined)), Effect.andThen(Effect.sleep("200 millis"))),
+          )
+        },
+      }),
+    ),
+  ).pipe(
+    Layer.provide(
+      ConnectDirectoryRequest.node.implementation as Layer.Layer<
+        ConnectDirectoryRequest.Service,
+        never,
+        Global.Service | EffectFlock.Service
+      >,
+    ),
+  ),
+  deps: [Global.node, EffectFlock.node],
+})
+
 const graph = (enabled: boolean) =>
   AppNodeBuilder.build(
     LayerNode.group([
@@ -128,12 +164,13 @@ const graph = (enabled: boolean) =>
     ]),
     [
       [ConnectHub.node, ConnectHub.nodeWith([adapter])],
+      [ConnectDirectoryRequest.node, holdingLedger],
       [SessionPrompt.node, Layer.mock(SessionPrompt.Service)({})],
       [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
       [Npm.node, NpmTest.noop],
       [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: enabled, experimentalEventSystem: true })],
     ],
-  )
+  ).pipe(Layer.provide(noSweep))
 const it = testEffect(graph(true))
 const off = testEffect(graph(false))
 const reviewInput = (input: Connect.ReviewInput = {}): Connect.DirectoryReviewInput => ({
@@ -468,6 +505,237 @@ it.instance(
       const done = yield* f.ended(queued.id)
       expect(done.result?.state).toBe("completed")
       expect((yield* ConnectDirectory.load(f.scope, queued.id))?.run.result).toEqual(done.result)
+    }),
+  options,
+)
+
+it.instance(
+  "an owner interrupted while its queued job awaits the binding gate never leaves that job running",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput({ background: true })
+      const admission = yield* f.requests.reserve(f.scope, input)
+      if (admission.kind !== "reserved") throw new Error("No genuine first reservation")
+      const audience = yield* SessionAudience.Service
+      const hub = yield* ConnectHub.Service
+      const anchor = yield* f.sessions.create({ internal: ConnectDirectory.INTERNAL })
+      yield* audience.fenceIsolation({ sessionID: anchor.id, actor: "owner" })
+      const token = yield* ConnectDirectory.issue({ sessionID: anchor.id, ...f.scope }, admission.claim.scope)
+      const fiber = yield* hub
+        .run({
+          request: {
+            to: "vectorscope",
+            action: "review",
+            requester: { kind: "user", agent: "build" },
+            directory: f.scope.directory,
+            target: { kind: "uncommitted" },
+            background: true,
+          },
+          call: {
+            directory: {
+              token,
+              request: admission.claim.proof,
+              bind: () => Effect.never,
+              complete: (run) => ConnectDirectory.write(token, run),
+            },
+            promptOps: {
+              cancel: () => Effect.void,
+              resolvePromptParts: () => Effect.succeed([]),
+              prompt: () => Effect.die("An unbound job must not prompt"),
+            },
+          },
+        })
+        .pipe(Effect.forkChild)
+      const job = yield* pollWithTimeout(
+        f.jobs.forParent(anchor.id).pipe(Effect.map((rows) => rows[0])),
+        "The queued directory job was not recorded",
+      )
+      yield* Fiber.interrupt(fiber)
+      const settled = yield* pollWithTimeout(
+        f.jobs
+          .forParent(anchor.id)
+          .pipe(Effect.map((rows) => rows.find((row) => row.id === job.id && row.status !== "running"))),
+        "The interrupted owner left its queued job waiting on the binding gate",
+      )
+      expect(settled.status).not.toBe("completed")
+      expect(script.calls).toBe(0)
+      expect(yield* f.permission.list()).toEqual([])
+    }),
+  options,
+)
+
+const CONSUMED = "This review start did not complete and no review ran. Start a new review."
+const writer = { pid: process.pid, start: Math.floor(performance.timeOrigin) }
+const noGrace = Effect.provideService(ConnectDirectoryRequest.Options, { graceMs: 0, writer })
+
+it.instance(
+  "an interrupted queued start is consumed on retry: its unreleased job stops and nothing new runs",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput({ background: true })
+      const admission = yield* f.requests.reserve(f.scope, input)
+      if (admission.kind !== "reserved") throw new Error("No genuine first reservation")
+      const audience = yield* SessionAudience.Service
+      const hub = yield* ConnectHub.Service
+      const anchor = yield* f.sessions.create({ internal: ConnectDirectory.INTERNAL })
+      yield* f.requests.prepare(admission.token, anchor.id)
+      yield* audience.fenceIsolation({ sessionID: anchor.id, actor: "owner" })
+      const token = yield* ConnectDirectory.issue({ sessionID: anchor.id, ...f.scope }, admission.claim.scope)
+      const fiber = yield* hub
+        .run({
+          request: {
+            to: "vectorscope",
+            action: "review",
+            requester: { kind: "user", agent: "build" },
+            directory: f.scope.directory,
+            target: { kind: "uncommitted" },
+            background: true,
+          },
+          call: {
+            directory: {
+              token,
+              request: admission.claim.proof,
+              bind: () => Effect.never,
+              complete: (run) => ConnectDirectory.write(token, run),
+            },
+            promptOps: {
+              cancel: () => Effect.void,
+              resolvePromptParts: () => Effect.succeed([]),
+              prompt: () => Effect.die("An unbound job must not prompt"),
+            },
+          },
+        })
+        .pipe(Effect.forkChild)
+      const job = yield* pollWithTimeout(
+        f.jobs.forParent(anchor.id).pipe(Effect.map((rows) => rows[0])),
+        "The queued directory job was not recorded",
+      )
+      yield* Fiber.interrupt(fiber)
+      yield* f.requests.release(admission.token)
+      const retry = yield* f.owner.directoryReview(input).pipe(Effect.flip)
+      expect(retry).toMatchObject({ code: "consumed", message: CONSUMED })
+      const folder = path.join(f.global.data, "storage", ...ConnectDirectoryRequest.prefix(admission.claim.scope))
+      const tombstone: unknown = JSON.parse(
+        yield* Effect.promise(() => fs.readFile(path.join(folder, "refused", `${input.requestKey}.json`), "utf8")),
+      )
+      expect(tombstone).toMatchObject({ reason: "abandoned", anchorID: anchor.id })
+      yield* pollWithTimeout(
+        f.jobs
+          .forParent(anchor.id)
+          .pipe(Effect.map((rows) => rows.find((row) => row.id === job.id && row.status !== "running"))),
+        "The unreleased job kept running after its key was consumed",
+      )
+      expect(script.calls).toBe(0)
+      expect(yield* f.permission.list()).toEqual([])
+      expect(
+        (yield* f.sessions.list({ internal: true, roots: true })).filter(
+          (row) => row.internal === ConnectDirectory.INTERNAL,
+        ),
+      ).toHaveLength(1)
+    }),
+  options,
+)
+
+it.instance(
+  "an owner interrupted inside the ledger's binding write keeps its bound job, and a retry replays that run",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput({ background: true })
+      const written = yield* Deferred.make<void>()
+      hold.written = written
+      const fiber = yield* f.owner.directoryReview(input).pipe(Effect.forkChild)
+      yield* Deferred.await(written)
+      yield* Fiber.interrupt(fiber)
+      delete hold.written
+      const identity = yield* ConnectDirectory.capture(f.scope.directory)
+      const folder = path.join(
+        f.global.data,
+        "storage",
+        ...ConnectDirectoryRequest.prefix({ projectID: f.scope.projectID, canonical: identity.canonical }),
+      )
+      const exists = (kind: string) =>
+        Effect.promise(() =>
+          fs.lstat(path.join(folder, kind, `${input.requestKey}.json`)).then(
+            () => true,
+            () => false,
+          ),
+        )
+      expect(yield* exists("refused")).toBe(false)
+      const binding: unknown = JSON.parse(
+        yield* Effect.promise(() => fs.readFile(path.join(folder, "bindings", `${input.requestKey}.json`), "utf8")),
+      )
+      if (!Schema.is(Schema.Struct({ runID: Connect.RunID }))(binding)) throw new Error("The binding names no run")
+      // The bound job was released, not cancelled: it reaches its consent question.
+      const ask = yield* f.pending(binding.runID)
+      const retry = yield* f.owner.directoryReview({ ...input, requestKey: input.requestKey.toUpperCase() })
+      expect(retry.id).toBe(binding.runID)
+      expect(retry.status).not.toBe("done")
+      yield* f.permission.reply({ requestID: ask.id, reply: "once" })
+      const done = yield* f.ended(binding.runID)
+      expect(done.result?.state).toBe("completed")
+      expect(script.calls).toBe(1)
+      expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
+      expect(yield* exists("refused")).toBe(false)
+    }),
+  options,
+)
+
+it.instance(
+  "a lost binding rebinds to its released job, and stays unavailable once the job's receipt is gone",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput()
+      const queued = yield* f.owner.directoryReview(input)
+      const ask = yield* f.pending(queued.id)
+      const anchorID = ask.sessionID
+      const anchor = yield* f.sessions.get(anchorID)
+      const identity = yield* ConnectDirectory.capture(f.scope.directory)
+      const folder = path.join(
+        f.global.data,
+        "storage",
+        ...ConnectDirectoryRequest.prefix({ projectID: f.scope.projectID, canonical: identity.canonical }),
+      )
+      const binding = path.join(folder, "bindings", `${input.requestKey}.json`)
+      const original = yield* Effect.promise(() => fs.readFile(binding, "utf8"))
+      expect(anchor.internal).toBe(ConnectDirectory.INTERNAL)
+      // Within the grace this process's own prepared anchor is never guessed at.
+      yield* Effect.promise(() => fs.rm(binding))
+      expect((yield* f.owner.directoryReview(input).pipe(Effect.flip)).code).toBe("pending")
+      // The in-memory job was released by its binding gate, so the key binds to it again.
+      expect((yield* f.owner.directoryReview(input).pipe(noGrace)).id).toBe(queued.id)
+      expect(yield* Effect.promise(() => fs.readFile(binding, "utf8"))).toBe(original)
+      yield* f.permission.reply({ requestID: ask.id, reply: "once" })
+      yield* f.ended(queued.id)
+      const next = yield* f.reload(queued.id, anchorID)
+      // After a reload only the durable job and its receipt speak: a started receipt is released work.
+      yield* Effect.promise(() => fs.rm(binding))
+      const replayed = yield* f.owner.directoryReview(input).pipe(noGrace, Effect.provideService(InstanceRef, next))
+      expect(replayed.id).toBe(queued.id)
+      expect(replayed.status).toBe("done")
+      // A pruned or unreadable receipt cannot show what the job did: no write, no new run.
+      yield* Effect.promise(async () => {
+        await fs.rm(binding)
+        await fs.rm(path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${queued.id}.json`))
+      })
+      const unknown = yield* f.owner
+        .directoryReview(input)
+        .pipe(noGrace, Effect.provideService(InstanceRef, next), Effect.flip)
+      expect(unknown.code).toBe("invalid")
+      for (const kind of ["bindings", "refused"])
+        expect(
+          yield* Effect.promise(() =>
+            fs.lstat(path.join(folder, kind, `${input.requestKey}.json`)).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        ).toBe(false)
+      expect(script.calls).toBe(1)
+      expect(yield* f.jobs.forParent(anchorID)).toHaveLength(1)
     }),
   options,
 )
