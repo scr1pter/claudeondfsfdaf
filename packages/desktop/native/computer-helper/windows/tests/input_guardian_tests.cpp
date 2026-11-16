@@ -682,6 +682,8 @@ size_t run_input_guardian_tests() {
     const auto ticket=reserve(ledger,mouse()); check(ledger.observe(event(ticket.release,true)),"guardian.spawn-failure-fixture-down"); ledger.retire(ticket);
     bool failed=false; try { releaser.start(stopping,[](std::function<void()>) { throw std::runtime_error("spawn"); }); } catch (const std::runtime_error&) { failed=true; }
     check(failed && !releaser.started() && releases.load()==0,"guardian.release-thread-creation-failure-fails-before-any-release");
+    bool refused=false; try { releaser.start(stopping,{}); } catch (const std::invalid_argument&) { refused=true; }
+    check(refused && !releaser.started() && releases.load()==0,"guardian.release-thread-without-a-lifetime-owning-spawn-is-refused");
     (void)releaser.drain(5);
     check(releases.load()==1,"guardian.never-started-release-thread-leaves-inline-release-available");
   });

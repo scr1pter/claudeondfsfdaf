@@ -198,21 +198,33 @@ uint32_t InputGuardianReleaser::drain(uint32_t milliseconds,bool retired_only) {
   } while (GetTickCount64()<deadline);
   const auto after=ledger_.released_count(); return static_cast<uint32_t>(std::min<uint64_t>(after-before,136));
 }
-void InputGuardianReleaser::notify() noexcept { generation_.fetch_add(1); changed_.notify_all(); }
+void InputGuardianReleaser::notify() noexcept {
+  // Taking the wake lock between the increment and the notify means a waiter is either before its
+  // predicate check (and sees the new generation) or already blocked (and is woken). No thread holds
+  // this lock across SendInput, so the hook callback waits at most for another thread's predicate check.
+  // If the lock ever failed, the wake would still arrive at the waiter's timeout.
+  generation_.fetch_add(1);
+  try { std::lock_guard lock(changed_mutex_); } catch (...) {}
+  changed_.notify_all();
+}
 uint64_t InputGuardianReleaser::generation() const noexcept { return generation_.load(); }
 void InputGuardianReleaser::wait(uint64_t seen,uint32_t milliseconds) {
   std::unique_lock lock(changed_mutex_); changed_.wait_for(lock,std::chrono::milliseconds(milliseconds),[&] { return generation_.load()!=seen; });
 }
 void InputGuardianReleaser::start(const std::atomic<bool>& stopping,Spawn spawn) {
   if (started_.load()) throw std::logic_error("Guardian release thread already started.");
+  if (!spawn) throw std::invalid_argument("Guardian release thread needs a spawn that owns its lifetime.");
   std::function<void()> body=[this,&stopping] {
     while (!halted_.load()) {
       const auto seen=generation();
-      // A failed allocation must not end the only release path; the child's fuse still bounds it.
-      try { (void)(stopping.load() ? drain(5) : drain(1,true)); wait(seen,2); } catch (...) {}
+      // A failed allocation must not end the only release path. The wait stays outside the drain's
+      // try, so a drain that throws every time still pauses about 2 ms per loop instead of spinning
+      // against the hook thread. Before Stop nothing else bounds such a loop; the fuse arms only on stop.
+      try { (void)(stopping.load() ? drain(5) : drain(1,true)); } catch (...) {}
+      try { wait(seen,2); } catch (...) { Sleep(2); }
     }
   };
-  if (spawn) spawn(std::move(body)); else std::thread(std::move(body)).detach();
+  spawn(std::move(body));
   started_.store(true);
 }
 bool InputGuardianReleaser::started() const noexcept { return started_.load(); }
