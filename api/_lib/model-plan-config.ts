@@ -252,6 +252,14 @@ export function modelPlansEnabled() {
   return process.env.MODEL_PLANS_ENABLED === "true"
 }
 
+/**
+ * The whole @vector cloud-agents service (bind codes, bindings, runs, mint, run reports and its webhook handler) stays
+ * off until both switches are explicitly on, so no binding or run state is read for write or written while it is off.
+ */
+export function cloudAgentsEnabled() {
+  return process.env.VECTOR_GITHUB_BRAIN_ENABLED === "true" && modelPlansEnabled()
+}
+
 /** Tiered definitions are an internal opt-in until A17/A18 enforce their routing and admission fields. */
 export function configuredPlanModels(options: { tiered?: boolean } = {}) {
   const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(ModelPlanModel)))(

@@ -7,12 +7,23 @@ const directory = "C:/Vector/VectorscopeLocal"
 const sessionID = "ses_vectorscope_local"
 const project = { id: "project-vectorscope-local", worktree: directory, vcs: "git", name: "Vectorscope Local" }
 const SECRETS_URL = "https://github.com/acme/app/settings/secrets/actions"
+const WORKFLOW_URL = "https://github.com/acme/app/blob/main/.github/workflows/vector.yml"
+const PULL_URL = "https://github.com/acme/app/pull/12"
+const PREVIEW_INPUT = {
+  cwd: directory,
+  mode: "own-key",
+  model: "anthropic/claude-sonnet-4-5",
+  keys: ["ANTHROPIC_API_KEY"],
+  autoReview: false,
+  share: false,
+}
 
-type AutomaticState = "available" | "installed" | "on-request" | "needs-scope"
+type Agents = { signedIn: boolean; workflow: "missing" | "current"; autoReview: boolean }
+type Calls = { status: unknown[]; preview: unknown[]; setup: unknown[]; start: unknown[] }
 
-// The panel through the desktop bridge, signed in to GitHub with no open pull requests. Automatic reviews start in the
-// given state; setting them up opens pull request #12 and leaves it pending.
-async function openVectorscope(page: Page, input: { changes?: () => unknown[]; automatic?: AutomaticState }) {
+// The panel through the desktop bridge, signed in to GitHub with no open pull requests. Its GitHub workflow card reads
+// the given repository workflow state; opening the setup pull request opens #12 and leaves it pending.
+async function openVectorscope(page: Page, input: { changes?: () => unknown[]; agents?: Partial<Agents> }) {
   await mockVectorServer(page, {
     directory,
     project,
@@ -52,66 +63,93 @@ async function openVectorscope(page: Page, input: { changes?: () => unknown[]; a
           lastProject: { local: setup.directory },
         }),
       )
-      const calls = { preview: [] as unknown[], setup: [] as unknown[], start: [] as unknown[] }
-      const state = { automatic: setup.automatic as string, signedIn: true }
+      const calls = {
+        status: [] as unknown[],
+        preview: [] as unknown[],
+        setup: [] as unknown[],
+        start: [] as unknown[],
+      }
+      const agents = { ...setup.agents }
       const secrets = [
         {
           name: "VECTOR_CLI_TOKEN",
           detail: "Signs the workflow in to your Vector account.",
           url: "https://vectordev.ai/auth/cli",
         },
-        { name: "ANTHROPIC_API_KEY", detail: "Your model provider's API key." },
+        { name: "ANTHROPIC_API_KEY", detail: "Your model provider's API key.", url: setup.secretsUrl },
       ]
+      const listed = { agents: false, scheduled: false, noSecret: false, brain: false }
       Object.defineProperty(window, "__vectorscopeCalls", { value: calls })
       Object.defineProperty(window, "api", {
         configurable: true,
         value: {
           pullRequests: {
-            status: async () =>
-              state.signedIn
-                ? { authenticated: true, configured: true, login: "mira", source: "vector", detail: "" }
-                : { authenticated: false, configured: true, detail: "Sign in to GitHub to load pull requests." },
+            status: async () => ({
+              authenticated: true,
+              configured: true,
+              login: "mira",
+              source: "vector",
+              detail: "",
+            }),
             list: async () => [],
-            autoReview: {
-              status: async () => ({
-                state: state.automatic,
+          },
+          // The same shape as e2e/fixtures/github-agents.jsx: a signed-out status carries no repository authority.
+          githubAgents: {
+            status: async (cwd: string) => {
+              calls.status.push(cwd)
+              if (!agents.signedIn)
+                return {
+                  signedIn: false,
+                  canDispatch: false,
+                  workflow: "missing",
+                  listed,
+                  bound: "not-yours-or-unknown",
+                }
+              return {
                 repo: "acme/app",
+                repositoryId: "17",
+                authorityId: "authority-mira-17",
                 defaultBranch: "main",
-                secretsUrl: setup.secretsUrl,
-                source: "vector",
-                ...(state.automatic === "installed" || state.automatic === "on-request"
-                  ? { url: "https://github.com/acme/app/blob/main/.github/workflows/vector.yml" }
+                publicRepository: false,
+                signedIn: true,
+                canDispatch: true,
+                workflow: agents.workflow,
+                listed,
+                bound: "not-yours-or-unknown",
+                ...(agents.workflow === "current"
+                  ? {
+                      options: {
+                        mode: "own-key",
+                        provider: "anthropic",
+                        model: "claude-sonnet-4-5",
+                        keys: ["ANTHROPIC_API_KEY"],
+                        autoReview: agents.autoReview,
+                        version: "1.99.113",
+                        schedules: [],
+                      },
+                      url: setup.workflowUrl,
+                      timeoutMinutes: 42,
+                    }
                   : {}),
-                ...(state.automatic === "pending" ? { url: "https://github.com/acme/app/pull/12" } : {}),
-              }),
-              preview: async (request: { model: string; keys: string[] }) => {
-                calls.preview.push(request)
-                return {
-                  path: ".github/workflows/vector.yml",
-                  content:
-                    "name: vector\n\non:\n  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n",
-                  model: request.model,
-                  monthlyUsd: 50,
-                  secrets,
-                }
-              },
-              setup: async (request: unknown) => {
-                calls.setup.push(request)
-                state.automatic = "pending"
-                return {
-                  url: "https://github.com/acme/app/pull/12",
-                  number: 12,
-                  branch: "vector-automatic-reviews",
-                  secrets,
-                  secretsUrl: setup.secretsUrl,
-                }
-              },
+              }
+            },
+            preview: async (request: unknown) => {
+              calls.preview.push(request)
+              return {
+                path: ".github/workflows/vector.yml",
+                content: "name: Vector\n\non:\n  issue_comment:\n    types: [created]\n",
+                secrets,
+              }
+            },
+            setup: async (request: unknown) => {
+              calls.setup.push(request)
+              return { url: setup.pullUrl }
             },
           },
           ci: { runs: async () => ({ ok: true, runs: [] }) },
           github: {
             auth: {
-              status: async () => ({ configured: true, authenticated: state.signedIn }),
+              status: async () => ({ configured: true, authenticated: true }),
               start: async (input?: unknown) => {
                 calls.start.push(input ?? null)
                 return { userCode: "WDJB-MJHT", verificationUri: "https://github.com/login/device", expiresIn: 900 }
@@ -123,22 +161,25 @@ async function openVectorscope(page: Page, input: { changes?: () => unknown[]; a
                   Object.defineProperty(window, "__authorizeGithub", {
                     configurable: true,
                     value: () => {
-                      state.signedIn = true
-                      state.automatic = "available"
+                      agents.signedIn = true
                       resolve({ ok: true, login: "mira" })
                     },
                   }),
                 ),
               cancel: async () => undefined,
-              logout: async () => {
-                state.signedIn = false
-              },
+              logout: async () => undefined,
             },
           },
         },
       })
     },
-    { directory, automatic: input.automatic ?? "available", secretsUrl: SECRETS_URL },
+    {
+      directory,
+      agents: { signedIn: true, workflow: "missing", autoReview: false, ...input.agents },
+      secretsUrl: SECRETS_URL,
+      workflowUrl: WORKFLOW_URL,
+      pullUrl: PULL_URL,
+    },
   )
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
@@ -148,9 +189,15 @@ async function openVectorscope(page: Page, input: { changes?: () => unknown[]; a
 }
 
 function calls(page: Page) {
-  return page.evaluate(
-    () => (window as unknown as { __vectorscopeCalls: { preview: unknown[]; setup: unknown[] } }).__vectorscopeCalls,
-  )
+  return page.evaluate(() => (window as unknown as { __vectorscopeCalls: Calls }).__vectorscopeCalls)
+}
+
+// The GitHub workflow card that replaced the automatic-reviews view, opened from the panel's sidebar.
+async function openWorkflowCard(page: Page, panel: Awaited<ReturnType<typeof openVectorscope>>) {
+  await panel.getByRole("button", { name: "GitHub workflow & runs", exact: true }).click()
+  const card = panel.locator("[data-github-agents-setup]")
+  await expect.poll(async () => (await calls(page)).status).toEqual([directory])
+  return card
 }
 
 test("Vectorscope offers a review of uncommitted changes only when there are some", async ({ page }, testInfo) => {
@@ -178,77 +225,84 @@ test("Vectorscope offers a review of uncommitted changes only when there are som
   await testInfo.attach("your-changes", { path: testInfo.outputPath("your-changes.png"), contentType: "image/png" })
 })
 
-test("Vectorscope opens the automatic-review pull request only after showing what it adds", async ({
+test("Vectorscope opens the workflow setup pull request only after showing what it adds", async ({
   page,
 }, testInfo) => {
   const panel = await openVectorscope(page, {})
+  const card = await openWorkflowCard(page, panel)
 
-  await panel.getByRole("button", { name: /Set up automatic reviews/ }).click()
-  await expect(panel).toContainText("Nothing changes in acme/app until someone merges the pull request.")
-  await expect(panel).toContainText("anthropic/claude-sonnet-4-5")
-  await expect(panel).toContainText("VECTOR_CLI_TOKEN")
-  await expect(panel).toContainText("ANTHROPIC_API_KEY")
-  expect((await calls(page)).preview).toEqual([{ model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] }])
+  await expect(card).toContainText("Preview the exact workflow before opening a pull request.")
+  await expect(card.getByLabel("Provider/model")).toHaveValue("anthropic/claude-sonnet-4-5")
+  await expect(card.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
+  await card.getByRole("button", { name: "Preview workflow", exact: true }).click()
+  await expect(card.getByRole("heading", { name: ".github/workflows/vector.yml" })).toBeVisible()
+  await expect(card.getByLabel("Workflow preview")).toContainText("issue_comment")
+  await expect(card.getByText("VECTOR_CLI_TOKEN", { exact: true }).last()).toBeVisible()
+  await expect(card.getByText("ANTHROPIC_API_KEY", { exact: true }).last()).toBeVisible()
+  await expect(card.getByRole("link", { name: "Open secrets" }).last()).toHaveAttribute("href", SECRETS_URL)
+  expect((await calls(page)).preview).toEqual([PREVIEW_INPUT])
   expect((await calls(page)).setup).toEqual([])
   await page.screenshot({ path: testInfo.outputPath("confirm.png") })
   await testInfo.attach("confirm", { path: testInfo.outputPath("confirm.png"), contentType: "image/png" })
 
-  await panel.getByRole("button", { name: "Open the pull request" }).click()
-  await expect(panel).toContainText("Pull request #12 is open.")
-  await expect(panel.getByRole("link", { name: /Open Actions secrets/ })).toHaveAttribute("href", SECRETS_URL)
+  await card.getByRole("button", { name: "Open setup pull request" }).click()
+  await expect(card.getByRole("link", { name: "Open on GitHub" })).toHaveAttribute("href", PULL_URL)
+  await expect(card).toContainText("Check and merge workflow changes before checking again.")
   expect((await calls(page)).setup).toEqual([
-    { cwd: directory, model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] },
+    { ...PREVIEW_INPUT, expectedRepositoryId: "17", authorityId: "authority-mira-17", operationId: expect.any(String) },
   ])
-  await expect(panel.getByRole("button", { name: /Automatic reviews/ })).toContainText(
-    "A pull request that turns them on is open",
-  )
+  await expect(card.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath("opened.png") })
   await testInfo.attach("opened", { path: testInfo.outputPath("opened.png"), contentType: "image/png" })
 })
 
-test("Vectorscope says automatic reviews are on instead of offering to set them up", async ({ page }) => {
-  const panel = await openVectorscope(page, { automatic: "installed" })
+test("Vectorscope says the workflow reviews every pull request instead of offering to set it up", async ({ page }) => {
+  const panel = await openVectorscope(page, { agents: { workflow: "current", autoReview: true } })
+  const card = await openWorkflowCard(page, panel)
 
-  const entry = panel.getByRole("button", { name: /Automatic reviews/ })
-  await expect(entry).toContainText("On: every pull request is reviewed")
-  await expect(panel.getByRole("button", { name: /Set up automatic reviews/ })).toHaveCount(0)
-  await entry.click()
-  await expect(panel).toContainText("Automatic reviews are set up")
-  await expect(panel.getByRole("link", { name: /View the workflow/ })).toHaveAttribute(
-    "href",
-    "https://github.com/acme/app/blob/main/.github/workflows/vector.yml",
-  )
-  await expect(panel.getByRole("button", { name: "Open the pull request" })).toHaveCount(0)
+  await expect(card).toContainText("Ready in acme/app")
+  await expect(card).toContainText("Reviews every pull request.")
+  await expect(card).not.toContainText("Reviews when someone comments")
+  await expect(card.getByRole("link", { name: "View the workflow" })).toHaveAttribute("href", WORKFLOW_URL)
+  await expect(card.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
   expect((await calls(page)).preview).toEqual([])
 })
 
-test("Vectorscope asks for GitHub's workflow permission only to set up automatic reviews", async ({ page }) => {
-  const panel = await openVectorscope(page, { automatic: "needs-scope" })
+test("Vectorscope asks for GitHub's workflow permission only to set up the workflow", async ({ page }) => {
+  const panel = await openVectorscope(page, { agents: { signedIn: false } })
+  const card = await openWorkflowCard(page, panel)
 
-  await panel.getByRole("button", { name: /needs permission to change workflows/ }).click()
-  await expect(panel).toContainText("Vector needs permission to change workflows")
+  await expect(card).toContainText("Sign in to GitHub to check your repository access.")
+  await expect(card.getByRole("button", { name: "Preview workflow", exact: true })).toBeDisabled()
   expect((await calls(page)).start).toEqual([])
-  await panel.getByRole("button", { name: "Sign in again" }).click()
-  // The sign-in that follows starts by itself and is the only one that asks for the workflow permission.
-  await expect(panel.getByText("WDJB-MJHT")).toBeVisible()
-  await expect(panel).toContainText("GitHub also asks to let Vector change workflow files")
+  await card.getByRole("button", { name: "Sign in to GitHub", exact: true }).click()
+  await expect(card).toContainText("Approve GitHub access to set up this repository's workflow.")
+  // The sign-in waits to be asked, and this one is the only one that asks for the workflow permission.
+  expect((await calls(page)).start).toEqual([])
+  await card.getByRole("button", { name: "Connect GitHub", exact: true }).click()
+  await expect(card.getByText("WDJB-MJHT")).toBeVisible()
+  await expect(card).toContainText("GitHub also asks to let Vector change workflow files")
   expect((await calls(page)).start).toEqual([{ workflow: true }])
 
-  // Once GitHub authorizes it, the view goes straight on to what setting them up adds, ready to confirm.
+  // Once GitHub authorizes it, the card checks the repository again and is ready to preview what it adds.
   await page.evaluate(() => (window as unknown as { __authorizeGithub: () => void }).__authorizeGithub())
-  await expect(panel.getByText("Show the workflow file")).toBeVisible()
-  await expect(panel.getByRole("button", { name: "Open the pull request" })).toBeEnabled()
-  expect((await calls(page)).preview).toEqual([{ model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] }])
+  await expect(card.getByRole("button", { name: "Preview workflow", exact: true })).toBeEnabled()
+  await expect(card.getByRole("button", { name: "Update GitHub permissions", exact: true })).toBeVisible()
+  expect((await calls(page)).status).toEqual([directory, directory])
+  expect((await calls(page)).start).toEqual([{ workflow: true }])
+  expect((await calls(page)).preview).toEqual([])
 })
 
-test("Vectorscope says when reviews only run on a /vector review comment", async ({ page }) => {
-  const panel = await openVectorscope(page, { automatic: "on-request" })
+test("Vectorscope says when the workflow only reviews on a /vector review comment", async ({ page }) => {
+  const panel = await openVectorscope(page, { agents: { workflow: "current", autoReview: false } })
+  const card = await openWorkflowCard(page, panel)
 
-  const entry = panel.getByRole("button", { name: /Automatic reviews/ })
-  await expect(entry).toContainText("On: when someone comments /vector review")
-  await entry.click()
-  await expect(panel).toContainText("Reviews run when someone asks")
-  await expect(panel).toContainText("choose to review every pull request")
-  await expect(panel.getByRole("button", { name: "Open the pull request" })).toHaveCount(0)
+  await expect(card).toContainText("Ready in acme/app")
+  await expect(card).toContainText("Reviews when someone comments /vector review.")
+  await expect(card).not.toContainText("Reviews every pull request")
+  await expect(card.getByRole("link", { name: "View the workflow" })).toHaveAttribute("href", WORKFLOW_URL)
+  // Reviewing every pull request stays a choice in the workflow setup below.
+  await expect(card.getByLabel("Review pull requests automatically")).not.toBeChecked()
+  await expect(card.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
   expect((await calls(page)).preview).toEqual([])
 })

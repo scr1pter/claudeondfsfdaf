@@ -40,6 +40,7 @@ import { type Scenario } from "./types"
 import { workspaceScenarios } from "./workspace-scenarios"
 import { sessionScenarios } from "./session-scenarios"
 import { reviewScenarios } from "./review-scenarios"
+import { reviewMemoryScenarios } from "./review-memory-scenarios"
 import { connectScenarios } from "./connect-scenarios"
 
 function cursor(input: Record<string, unknown>) {
@@ -80,6 +81,7 @@ function locationData(validate: (value: any) => void) {
 
 const scenarios: Scenario[] = [
   ...reviewScenarios,
+  ...reviewMemoryScenarios,
   ...workspaceScenarios,
   ...sessionScenarios,
   ...connectScenarios,

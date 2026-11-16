@@ -57,10 +57,13 @@ import { eraseAccountPushSubscriptions } from "./web-push.js"
  * Kept on purpose (P5's "pseudonymous financial ledger lines"): the hosted ledger's lines (named by an HMAC of the
  * account), the pool debits (`debits:<account>:<keyHash>`) and the spend counters keyed by the pool's hash (`held:`,
  * `day:`, `purpose:`, `model-spend:`, `model-reservations:`), which all expire with their period (A30's privacy draft
- * lists their retention); the run-token revocation mark (a security record that expires); the disabled OpenRouter keys
- * and Stripe's own records. Per-period counters keyed by the account id itself (`meter:`, `estimate:`, the cloud
- * computer's fair-use counts) are not ledger lines and are erased. The tombstone itself is kept `TOMBSTONE_KEEP_MS`
- * after the deletion finished.
+ * lists their retention); the run-token revocation mark (a security record that each follow-up pass writes again, so it
+ * lapses 100 days after the last pass, inside the tombstone's retention; that rewrite also closes any Vector Remote
+ * connection again); the disabled OpenRouter keys and Stripe's own records. Per-period counters keyed by the account
+ * id itself (`meter:`, `estimate:`, the cloud computer's fair-use counts) are not ledger lines and are erased. The
+ * tombstone itself is kept `TOMBSTONE_KEEP_MS` after the deletion finished, and so is Everywhere's closed marker
+ * (everywhereKeys.accountClosed in everywhere/keys.ts), which the last pass rewrites with that expiry so no late
+ * Everywhere writer can recreate the account's data meanwhile.
  */
 
 const MINUTE_MS = 60_000
@@ -560,6 +563,10 @@ export async function checkAccountDeletion(account: string, options: DeletionOpt
   const token = await takeDeletionLease(account, DELETION_LEASE_MS, fetcher)
   if (!token) return { state: "busy" }
   try {
+    // The cloud-agents part needs the account's revocation mark, which lapses after 100 days. A pass that keeps failing
+    // (a workspace host that never reports its erase) can outlive it, so every pass writes the mark again first; the
+    // identity is already gone, so this only renews the fence. A failed write is left to that part to report.
+    await (options.revoke ?? ((id) => revokeAccountTokens(id, fetcher)))(account).catch(() => false)
     const result = await eraseAccountData(account, {
       fetcher,
       now: clock(),

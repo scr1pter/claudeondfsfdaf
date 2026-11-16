@@ -7,7 +7,14 @@ import { createCloudAgentsApi } from "../../../api/_lib/cloud-agents-api"
 // HTTP contract coverage only. The paused same-owner replacement and actual atomic Lua are exercised against
 // disposable Redis by cloud-agents-binding.test.ts and cloud-agents-bind-api.test.ts in the required CI lane.
 const account = "11111111-1111-4111-8111-111111111111"
-const variables = ["KV_REST_API_URL", "KV_REST_API_TOKEN", "VECTOR_CLI_TOKEN_SECRET", "VECTOR_ABUSE_SECRET"]
+const variables = [
+  "KV_REST_API_URL",
+  "KV_REST_API_TOKEN",
+  "VECTOR_CLI_TOKEN_SECRET",
+  "VECTOR_ABUSE_SECRET",
+  "MODEL_PLANS_ENABLED",
+  "VECTOR_GITHUB_BRAIN_ENABLED",
+]
 const previous = Object.fromEntries(variables.map((name) => [name, process.env[name]]))
 const state: { reply: unknown; down: boolean; commands: readonly (string | number)[][] } = {
   reply: 0,
@@ -41,6 +48,8 @@ const server = createServer((request, response) => {
 const fixture = { origin: "", token: "" }
 beforeAll(async () => {
   Object.assign(process.env, {
+    MODEL_PLANS_ENABLED: "true",
+    VECTOR_GITHUB_BRAIN_ENABLED: "true",
     KV_REST_API_URL: upstream.url.origin,
     KV_REST_API_TOKEN: "unbind-http-fixture",
     VECTOR_CLI_TOKEN_SECRET: "fixture-unbind-http-secret-32-characters",

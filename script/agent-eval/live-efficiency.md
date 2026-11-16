@@ -128,7 +128,7 @@ For each attempt, compare the second prompt's first `step_finish`: input tokens,
 The original frozen evaluator was recovered on the handoff machine at:
 
 ```text
-/Users/Krishna/.codex/benchmarks/vector-codex-20261007-7deUGe/round4/diagnosis/prompt-consolidation-proposal/behavior-evaluation-v12
+~/.codex/benchmarks/vector-codex-20261007-7deUGe/round4/diagnosis/prompt-consolidation-proposal/behavior-evaluation-v12
 ```
 
 Its `scenarios.json`, `rubric-v4.json`, `execution-plan.json`, `collector.ts`, `broker.ts`, actor sources, fixtures and completed reviews are present. Preserve this directory and its referenced sibling studies/source snapshots; it is not a standalone repository command. The original candidate result remains **15/18**, against a historical baseline of **14/18**. No final-code live rerun has superseded it.

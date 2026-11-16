@@ -8,9 +8,6 @@ on:
   push:
     branches:
       - main
-      - vector-at-mention
-      - build-integrate
-      - build-github-ui
   pull_request:
     # No other workflow runs the web GitHub tests, and they load shared api/_lib modules (http, abuse, persistent-store)
     # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes

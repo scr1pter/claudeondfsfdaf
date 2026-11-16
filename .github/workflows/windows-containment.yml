@@ -1,8 +1,6 @@
 name: Windows background containment
 
 on:
-  push:
-    branches: [build-process]
   pull_request:
     paths:
       - .github/workflows/windows-containment.yml

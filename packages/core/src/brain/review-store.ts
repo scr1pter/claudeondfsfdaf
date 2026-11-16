@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import type { BrainDatabase } from "./database"
 import { ReviewWitness } from "./review-witness"
 import {
+  BrainEntryTable,
   BrainEventTable,
   BrainReviewMemoryScopeStateTable,
   BrainReviewMemoryStateTable,
@@ -495,5 +496,146 @@ export const eraseSession = Effect.fnUntraced(function* (
     else yield* advance(tx, repository, scope)
     yield* revoke(tx, repository)
   }
+  return removed.length
+})
+
+/**
+ * The fallback for a user's repository or all-memory erase whose validated eraseScope died on inconsistent review
+ * state. Nothing the user asked to forget may stay, so every review record, source, source witness, scope state and
+ * marker of those repositories is removed without validation. The content-free epochs are never reset: each affected
+ * repository's epoch (and, for all memory, the global one) is rewritten disabled and past every generation its scopes
+ * could have shown, so no captured generation becomes current again. When a corrupt or missing component hides its old
+ * value, the epoch also moves past the current time in milliseconds, which no counter reaches; an epoch that cannot
+ * advance is left past every counter and keeps refusing as stale. A corrupt global epoch outside an all-memory erase is
+ * left as it is and keeps every repository refusing as stale.
+ */
+export const purgeScope = Effect.fnUntraced(function* (tx: Handle, repositories: readonly string[] | undefined) {
+  const list = repositories ? [...repositories] : undefined
+  const scopes = yield* tx
+    .delete(BrainReviewMemoryScopeStateTable)
+    .where(list ? inArray(BrainReviewMemoryScopeStateTable.repository_id, list) : undefined)
+    .returning({
+      repository: BrainReviewMemoryScopeStateTable.repository_id,
+      generation: sql<unknown>`${BrainReviewMemoryScopeStateTable.generation}`,
+    })
+    .all()
+  const records = yield* tx
+    .delete(BrainReviewMemoryTable)
+    .where(list ? inArray(BrainReviewMemoryTable.repository_id, list) : undefined)
+    .returning({ repository: BrainReviewMemoryTable.repository_id })
+    .all()
+  const sources = yield* tx
+    .delete(BrainReviewMemorySourceTable)
+    .where(list ? inArray(BrainReviewMemorySourceTable.repository_id, list) : undefined)
+    .returning({ repository: BrainReviewMemorySourceTable.repository_id })
+    .all()
+  const markers = yield* tx
+    .delete(BrainTombstoneTable)
+    .where(
+      and(
+        or(eq(BrainTombstoneTable.norm_hash, MARKER), like(BrainTombstoneTable.norm_hash, `${SCOPE_MARKER}%`)),
+        list ? inArray(BrainTombstoneTable.repository_id, list) : undefined,
+      ),
+    )
+    .returning({ repository: BrainTombstoneTable.repository_id })
+    .all()
+  yield* tx
+    .delete(BrainEntryTable)
+    .where(
+      and(
+        sql`${BrainEntryTable.status} = ${ReviewWitness.STATUS}`,
+        list ? inArray(BrainEntryTable.repository_id, list) : undefined,
+      ),
+    )
+    .run()
+  const epochs = yield* tx
+    .select({
+      repository: BrainReviewMemoryStateTable.repository_id,
+      generation: sql<unknown>`${BrainReviewMemoryStateTable.generation}`,
+    })
+    .from(BrainReviewMemoryStateTable)
+    .where(list ? inArray(BrainReviewMemoryStateTable.repository_id, list) : undefined)
+    .all()
+  const content = [...scopes, ...records, ...sources, ...markers].map((row) => row.repository)
+  const affected = [
+    ...new Set([...(list ?? []), ...epochs.map((row) => row.repository), ...content].filter((id) => id !== GLOBAL)),
+    ...(list ? [] : [GLOBAL]),
+  ]
+  for (const repository of affected) {
+    const epoch = epochs.find((row) => row.repository === repository)
+    const seen = scopes.filter((row) => row.repository === repository).map((row) => row.generation)
+    // A repository with review rows but no epoch, or a global epoch missing beside others, has lost its old value.
+    const used =
+      repository === GLOBAL
+        ? content.length > 0 || epochs.some((row) => row.repository !== GLOBAL)
+        : content.includes(repository)
+    const known = epoch ? [epoch.generation, ...seen].every(counter) : !used
+    const floor = (epoch && counter(epoch.generation) ? epoch.generation : 0) + Math.max(0, ...seen.filter(counter)) + 1
+    const candidate = known ? floor : Math.max(floor, Date.now())
+    const generation = counter(candidate) ? candidate : Number.MAX_SAFE_INTEGER
+    yield* tx
+      .insert(BrainReviewMemoryStateTable)
+      .values({ repository_id: repository, enabled: false, generation })
+      .onConflictDoUpdate({ target: BrainReviewMemoryStateTable.repository_id, set: { enabled: false, generation } })
+      .run()
+    if (repository !== GLOBAL) yield* revoke(tx, repository)
+  }
+  return records.length
+})
+
+/**
+ * The fallback for a user's session erase whose validated eraseSession died on inconsistent review state. The
+ * session's review records and source witnesses go without validation. The repository's epoch advances when
+ * its components are valid, so a snapshot that held those records is no longer current; otherwise the repository
+ * keeps refusing as stale, and only a repository or all-memory erase rewrites it.
+ */
+export const purgeSession = Effect.fnUntraced(function* (tx: Handle, repository: string, sessionID: string) {
+  // As in eraseSession, the content-free source rows stay and lose their two witnesses, which retires them.
+  const sources = yield* tx
+    .select({
+      parent: BrainReviewMemorySourceTable.parent_marker_id,
+      review: BrainReviewMemorySourceTable.review_marker_id,
+    })
+    .from(BrainReviewMemorySourceTable)
+    .where(
+      and(
+        eq(BrainReviewMemorySourceTable.repository_id, repository),
+        or(
+          eq(BrainReviewMemorySourceTable.parent_session_id, sessionID),
+          eq(BrainReviewMemorySourceTable.review_session_id, sessionID),
+        ),
+      ),
+    )
+    .all()
+  if (sources.length)
+    yield* tx
+      .delete(BrainEntryTable)
+      .where(
+        and(
+          eq(BrainEntryTable.repository_id, repository),
+          sql`${BrainEntryTable.status} = ${ReviewWitness.STATUS}`,
+          inArray(
+            BrainEntryTable.id,
+            sources.flatMap((row) => [row.parent, row.review]),
+          ),
+        ),
+      )
+      .run()
+  const removed = yield* tx
+    .delete(BrainReviewMemoryTable)
+    .where(
+      and(
+        eq(BrainReviewMemoryTable.repository_id, repository),
+        or(
+          eq(BrainReviewMemoryTable.parent_session_id, sessionID),
+          eq(BrainReviewMemoryTable.review_session_id, sessionID),
+        ),
+      ),
+    )
+    .returning({ id: BrainReviewMemoryTable.id })
+    .all()
+  const current = yield* components(tx, repository)
+  if (current && counter(current.generation + 1)) yield* advanceEpoch(tx, repository)
+  yield* revoke(tx, repository)
   return removed.length
 })
