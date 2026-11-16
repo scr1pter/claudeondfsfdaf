@@ -886,12 +886,15 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
     const outputs = yield* Effect.promise(() => fileCommands(runner.GITHUB_OUTPUT))
     // The agent job's outputs map from the mint's file commands, as the publish job reads it through `needs`. A step
     // output the mint never wrote reads empty, as on GitHub (an at-once mint writes no rid); the mint writes only
-    // `status` and `rid` (github.cloud.ts). On own key the map is the literal `ok`.
-    const agentOutputs = resolve(
-      workflow.outputs,
-      Object.fromEntries(["status", "rid"].map((name) => [`steps.mint.outputs.${name}`, outputs[name] ?? ""])),
-    )
+    // `status` and `rid` (github.cloud.ts). Ship Desk's ticket step is skipped while vars.VECTOR_SHIP_DESK is unset, so
+    // its `capture` reads empty too (V31). On own key the map is the literal `ok`.
+    const agentOutputs = resolve(workflow.outputs, {
+      ...Object.fromEntries(["status", "rid"].map((name) => [`steps.mint.outputs.${name}`, outputs[name] ?? ""])),
+      "steps.capture.outputs.capture": "",
+    })
     expect(agentOutputs.status).toBe(status)
+    expect(Object.keys(agentOutputs)).toEqual(ownKey ? ["status"] : ["status", "rid", "capture"])
+    if (!ownKey) expect(agentOutputs.capture).toBe("")
     // The agent step after the mint's file commands, as the sandbox launcher starts the engine with it.
     const agentEnv = sandboxEnvironment(
       {
@@ -1037,6 +1040,26 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
         },
       })
     const published = yield* Effect.promise(publish)
+    // The publish job's outputs map from its file commands, as Ship Desk's capture job reads it through `needs` (V31):
+    // on Codium the pull request that carries this run's marker, on own key nothing (no run id, INV-K1). Here the jobs
+    // share one file-command file, which the mint's `status` and `rid` also fill.
+    const publishOutputs = resolve(workflow.publishOutputs, {
+      "steps.publish.outputs.pr": (yield* Effect.promise(() => fileCommands(runner.GITHUB_OUTPUT))).pr ?? "",
+    })
+    const pullRequest = "pullRequest" in published ? published.pullRequest : undefined
+    expect(publishOutputs).toEqual(ownKey ? {} : { pr: pullRequest === undefined ? "" : String(pullRequest) })
+    expect(workflow.capture === undefined).toBe(ownKey)
+    if (workflow.capture) {
+      // The capture step's env as Actions resolves it: that pull request and the ticket step's (empty) output.
+      const capture = resolve(workflow.capture, {
+        ...values(agentOutputs),
+        "needs.publish.outputs.pr": publishOutputs.pr ?? "",
+      })
+      expect({ pr: capture.VECTOR_CAPTURE_PR, ticket: capture.VECTOR_CAPTURE_TICKET }).toEqual({
+        pr: publishOutputs.pr,
+        ticket: "",
+      })
+    }
     const files = yield* Effect.promise(async () => ({
       output: await fs.readFile(runner.GITHUB_OUTPUT, "utf8"),
       environment: await fs.readFile(runner.GITHUB_ENV, "utf8"),
@@ -1116,8 +1139,9 @@ const pass = Effect.fn("AgentsJourney.pass")(function* (input: {
  * and every step that names one, carries GITHUB_WORKFLOW_VERSION, and the CLI asks no reinstall for the steps that run
  * it (prepareGithubEnvironment): the mint and agent steps on Codium, the agent step on own key. Returns the route
  * script, the dispatch inputs the file declares, the agent job's unresolved outputs map (what the publish job reads
- * through `needs.agent.outputs`), and the unresolved environment of the mint step (none on own key), the agent step and
- * the publish step, each over its job's env, as the run gives them to resolve().
+ * through `needs.agent.outputs`), the publish job's (what Ship Desk's capture job reads through `needs.publish.outputs`;
+ * none on own key), and the unresolved environment of the mint step (none on own key), the agent step, the publish step
+ * and, on Codium, the capture step, each over its job's env, as the run gives them to resolve().
  */
 function generated(ownKey: boolean, options: { handle?: string; publishAuth?: "app" } = {}) {
   const workflow = Bun.YAML.parse(
@@ -1156,11 +1180,16 @@ function generated(ownKey: boolean, options: { handle?: string; publishAuth?: "a
   const publish = workflow.jobs.publish!
   const publishStep = publish.steps.find((step) => step.run === "vector github publish")
   if (!publishStep) throw new Error("The generated file has no publish step.")
+  const capture = workflow.jobs.capture
+  const captureStep = capture?.steps.find((step) => step.run?.startsWith("vector ship capture "))
+  if (capture && !captureStep) throw new Error("The generated capture job has no capture step.")
   // The ids above make these the mint and agent steps by id, never a fallback to the job.
   return {
     script: workflow.jobs.route!.steps[0]!.with!.script!,
     inputs: Object.keys(workflow.on.workflow_dispatch.inputs),
     outputs: agent.outputs ?? {},
+    publishOutputs: publish.outputs ?? {},
+    capture: capture && captureStep ? { ...capture.env, ...captureStep.env } : undefined,
     steps: {
       mint: ownKey ? {} : { ...agent.env, ...checked[0]!.env },
       agent: { ...agent.env, ...checked.at(-1)!.env },

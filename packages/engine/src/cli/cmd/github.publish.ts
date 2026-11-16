@@ -569,6 +569,7 @@ export async function publishBundle(input: {
     !dispatchedByBot &&
     (thread?.writersOnly ?? scheduleThread?.writersOnly ?? true)
   const authority = await input.authorize(useApp)
+  let marked: number | undefined
   try {
     const git = authority.git
     const api = authority.api
@@ -686,6 +687,7 @@ export async function publishBundle(input: {
     await comment(
       `${summary.comment || "Vector published the repository changes."}\n\nhttps://github.com/${route.repository}/pull/${reused}${reason}${held}`,
     )
+    marked = rid && Number.isSafeInteger(reused) && reused > 0 ? reused : undefined
     return {
       outcome: draft ? ("draft" as const) : ("changes" as const),
       pullRequest: reused,
@@ -694,6 +696,11 @@ export async function publishBundle(input: {
     }
   } finally {
     await authority.dispose()
+    // The pull request that carries this run's marker, which Ship Desk's capture job (V31) checks out and names. It is
+    // written last, once the comment and the token's revocation succeeded, so a failed publish never starts a capture.
+    // Best effort: the pull request is published either way, and a missing output only skips the capture.
+    if (marked !== undefined && env.GITHUB_OUTPUT && path.isAbsolute(env.GITHUB_OUTPUT))
+      await fs.appendFile(env.GITHUB_OUTPUT, `pr=${marked}\n`).catch(() => undefined)
   }
 }
 

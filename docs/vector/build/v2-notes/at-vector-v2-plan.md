@@ -215,7 +215,7 @@ The v2 order is process-finish, release-coordination, codium, then @vector. I si
 
 After codium is on v2:
 - The A59 joint check on v2: allowance `27e140de9`; verifier, gateway-hook and meter registrations; real-Redis mint and admission; the final webhook registration from `d8516df3d`; cloud run reader registration: BT11 (the repository binding reader and the ops run starter remain, deviations "2026-11-16 BT11" item 8).
-- V31 (Ship Desk capture job, workflow golden) once A49 is on v2.
+- V31 (Ship Desk capture job, workflow golden) once A49 is on v2: built in BT12 on `brain-transport` (the ticket step after mint, the capture job behind `vars.VECTOR_SHIP_DESK`, publish's `pr` output; deviations "2026-11-16 BT12"). It captures nothing in production until the repository binding reader is registered (BT11 item 8) and the owner activates Ship Desk.
 
 ### What waits for the owner (never done by agents)
 
@@ -279,7 +279,7 @@ Also:
    - `test`, `verify` and `typecheck` run on the PR. The lane runs on `pull_request` (path filter).
    - Dispatch `github-compat.yml` and `github-desktop-validation.yml` with `--ref v2-vector`.
 7. V27 runtime items 1–5 with tests, then the V30 journey extension.
-8. After codium lands on v2: merge `origin/v2`, resolve `cross-spawn-spawner.ts`, run the A59 joint check, then V31.
+8. After codium lands on v2: merge `origin/v2`, resolve `cross-spawn-spawner.ts`, run the A59 joint check, then V31 (the run reader and V31 are built on `brain-transport`, BT11 and BT12).
 9. Update the progress doc (V24, V25, V27, V30 entries and the branch name), the deviations doc and the PR body.
    - After the merge, the orchestrator closes #25 as superseded.
    - Remove `github-compat.yml` before the v2 merge.

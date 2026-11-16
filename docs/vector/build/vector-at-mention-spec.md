@@ -23,7 +23,7 @@ This is the build contract for **@vector**: mentioning Vector in a GitHub issue,
 
 ### 0.1 Order
 
-32 work packages: 31 built and pushed one at a time in this order, and V31, deferred until Codium's A49 is on `main`. Every "Depends on" is satisfied by packages above it. Size is a rough estimate of agent time per package, including focused local tests but not CI waits: **S** about 1–2 h, **M** about 2–5 h, **L** about 5–10 h. Summed, the 31 packages come to roughly 90–200 agent hours, plus pre-push typechecks and CI round trips.
+32 work packages: 31 built and pushed one at a time in this order, and V31, deferred until Codium's A49 was on `main` and then built in BT12 on `brain-transport` (deviations 2026-11-16 BT12). Every "Depends on" is satisfied by packages above it. Size is a rough estimate of agent time per package, including focused local tests but not CI waits: **S** about 1–2 h, **M** about 2–5 h, **L** about 5–10 h. Summed, the 31 packages come to roughly 90–200 agent hours, plus pre-push typechecks and CI round trips.
 
 Phases: foundations (1 to 4), server (5 to 14), workflow and engine (15 to 23), apps and website (24 to 27), continuity, webhooks, docs and the mocked journey (28 to 31).
 
@@ -60,7 +60,7 @@ Phases: foundations (1 to 4), server (5 to 14), workflow and engine (15 to 23), 
 | 29 | V28 | Webhook handlers for the shared router (A47) | V05 | S |
 | 30 | V29 | Docs, website copy and the owner doc | V22, V23, V25, V26 | M |
 | 31 | V30 | End-to-end mocked journey (acceptance) | every package above | L |
-| — | V31 | Ship Desk capture job (deferred until Codium A49 is on `main`) | V14, Codium A49 | S |
+| — | V31 | Ship Desk capture job (built in BT12 on `brain-transport`, after Codium A49) | V14, Codium A49 | S |
 
 ### 0.2 Branch, commit and ownership rules
 
@@ -127,7 +127,7 @@ The owner decisions of 27 Oct (V3C §6–§7 and the task) win. Then this contra
 | The stored-data list for Codium's privacy draft (A30) | V11 |
 | The encrypted session artifact path that Codium's B08 builds on | V27 |
 | Webhook handlers for A47's router | V28 |
-| The `vector ship capture` workflow job | V31, deferred |
+| The `vector ship capture` workflow job | V31 (built in BT12) |
 
 ## 1.3 The user journey
 
@@ -260,15 +260,16 @@ Tests:
 **INV-S5. No process the model can start can read a credential.** On a GitHub-hosted runner, no process the model can start, now or later in the job, can read any of these, from its own environment, another process's `/proc/<pid>/environ` or memory, a file, or a file-command file:
 - the OIDC request pair (`ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`) and every other `ACTIONS_*` value, including `ACTIONS_RUNTIME_TOKEN`;
 - the run token, `GITHUB_TOKEN`, `GH_TOKEN`, `VECTOR_CLI_TOKEN`, `VECTOR_BIND_CODE`, `VECTOR_TICKET`;
+- on Codium with `vars.VECTOR_SHIP_DESK == '1'`, Ship Desk's capture ticket, which the ticket step writes to its own `$GITHUB_OUTPUT` file before the sandbox (V31; deviations 2026-11-16 BT12 item 11);
 - every repository secret the workflow passes (the exact names in `VECTOR_SECRET_ENV_NAMES`) and any name ending `_TOKEN`, `_KEY`, `_SECRET` or `_PASSWORD`.
 
-It also cannot gain root (no sudo entry, no Docker socket) or append to `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT` or `$GITHUB_STATE`. This holds because the model runs as a separate user in the sandbox (2.11.3, V16), the engine starts with an allowlisted environment and receives credentials over a private channel, `kernel.yama.ptrace_scope` is at least 2, and every process of the agent user is killed before the next step. **Residual risk:** a writer can still extract a run token by editing `vector.yml`; it is bounded by the token's deadline and the plan's caps.
+It also cannot gain root (no sudo entry, no Docker socket) or append to `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT` or `$GITHUB_STATE`. This holds because the model runs as a separate user in the sandbox (2.11.3, V16), the engine starts with an allowlisted environment and receives credentials over a private channel, `kernel.yama.ptrace_scope` is at least 2, and every process of the agent user is killed before the next step. **Residual risk:** a writer can still extract a run token by editing `vector.yml`; it is bounded by the token's deadline and the plan's caps. **Residual risk (V31, BT12):** Ship Desk's capture job, only with `vars.VECTOR_SHIP_DESK == '1'`, runs the pull request's own code, which the agent wrote, outside the sandbox as the runner user with the runner's sudo; INV-S5 does not cover that job. It holds only its capture ticket, but that code can reach the job's own Actions runtime credentials and its read-only `GITHUB_TOKEN` from the runner's process, so it can write cache entries in the run's cache scope (the default branch's for comment, dispatch and schedule runs), which the repository's own workflows may restore, and upload artifacts into the run. Codium's minting jobs therefore restore no cache. It could also upload an artifact named for a later attempt's bundle (`vector-run-<run_id>-<attempt>`), which a re-run's publish job downloads by name; whether GitHub would hand that publish the planted artifact depends on how it scopes artifact names across attempts and on that attempt's own agent upload, which is not verified. The capture job starts only after a successful publish, so a "Re-run failed jobs" of a failed publish never follows it, and publish validates any bundle's patch and routing (deviations 2026-11-16 BT12 item 5). A forged `vector-session-<thread>` artifact is never read as genuine (V27's authenticated codec), but as the thread's newest it hides the real saved conversation, so that follow-up starts without one (deviations 2026-11-16 BT12 item 5).
 The separate UID does not isolate the engine from its own same-UID tools. V16 therefore also requires a fresh tool PID namespace with a private `/proc` on hosted Codium and default own-key runs. The trusted launcher verifies that boundary as the agent user before marking preparation complete; a launcher-derived `VECTOR_GITHUB_TOOL_PID_NAMESPACE=pid` is captured with private-channel authority and cannot be lowered by a project environment. The shared process floor covers actual ShellTool foreground/background, MCP, LSP, formatter, utility, Git, OCR and PTY child launchers without an optional unsandboxed permission fallback. The engine itself has an empty read-only private proc mount, and filesystem tools refuse kernel paths and symlink aliases before any permission bypass; hiding proc in the kernel also closes concurrent symlink swaps to its descriptors. Missing kernel support refuses execution. The explicit own-key sudo exception in O3 and self-hosted own-key execution make no such boundary claim. Debug/inspector options and an already active Node inspector are refused before a private channel is loaded; the published CLI is a compiled Bun executable, so a Node-only command-line flag is not used as the primary protection.
 **Ship gate (2026-11-14).** The current build holds the bubblewrap floor off (`ProcessIsolation.FLOOR`; deviations, "V16 bubblewrap floor held"), because it cannot run on GitHub's `ubuntu-24.04` image. The tool PID namespace and empty engine proc above therefore describe a floor build only, and the CI probe asserts them only there. The kernel path guard, native loader refusal, separate UID, `ptrace_scope` 2 and cleanup still apply. Native isolation must meet this invariant on a hosted runner before owner step 8 or any hosted activation.
 Tests:
 
 Tests:
-- the V00 lane's `sandbox-probe` job on `ubuntu-latest` (CI only): a probe run in the sandbox in place of the engine holds the channel's values, and a child it starts scans every readable `/proc/*/environ`, tries its parent's `/proc/<pid>/mem`, reads and appends to the file-command files, tries `sudo -n true` and `docker info`, and leaves a detached process behind; the job asserts that no planted value or capability is found and that the next step is untouched (V16)
+- the V00 lane's `sandbox-probe` job on `ubuntu-latest` (CI only): a probe run in the sandbox in place of the engine holds the channel's values, and a child it starts scans every readable `/proc/*/environ`, tries its parent's `/proc/<pid>/mem`, reads and appends to the file-command files (including an earlier, unsandboxed step's `$GITHUB_OUTPUT` file, where the job planted a ticket-shaped value, as the Codium ticket step writes Ship Desk's capture ticket; V31), tries `sudo -n true` and `docker info`, and leaves a detached process behind; the job asserts that no planted value or capability is found and that the next step is untouched (V16)
 - the disposable hosted probe also runs the actual ShellTool against a same-UID Node engine-shaped target: the host PID is invisible, SIGUSR1 is denied and its inspector stays closed; a parent-owned positive control opens the inspector, and startup refuses that active debugger (V16)
 - `packages/core/test/child-environment.test.ts` › "Actions runs hide runner, GitHub, provider and named secrets from children" (V03; the filter is defence in depth for self-hosted own-key runs)
 
@@ -373,6 +374,7 @@ Tests:
 - `cloud-agents-mint-api.test.ts` › "responses pass the P6/P1 scan" (V12)
 - `packages/web/test/cloud-agents-journey.test.ts` › every case (V30 server journey; deviations 2026-11-16 BT09 item 11): every answer of the bind, mint, run, artifact-key, Brain, desktop-run and owner-read routes, the engine clients' included, carries no account, plan, email, reason, share or provenance field (`brainSha`, `brainPublic`, `ticketHash`, `triggerSource`, `jti`, `wrapped`, `envelope`), billing word, amount or currency
 - `github.publish.test.ts` › "refusal comments name no plan or billing state" (V21)
+- `packages/engine/test/cli/github.workflow.test.ts` › "Ship Desk's ticket step and capture job are Codium-only, hold only the ticket and follow publish's pull request" (V31, BT12): the ticket step discards `vector ship ticket`'s own lines. Not covered: `vector ship capture` (Codium A49's command) still prints its server's refusal text in the capture job's log, which exists only in a private repository (tickets are minted for private repositories only), so `vars.VECTOR_SHIP_DESK` must not be set on any repository until that follow-up ships (`docs/vector/owner-actions/vector-mention.md` names the gate); deviations 2026-11-16 BT12 item 4, for the lead
 
 **INV-P2. P1: no amounts.** No `/api/cloud-agents/*` response carries `$`, `usd`, `credit`, `cents` or a price. They carry seconds only inside the server, plus timestamps, counts and booleans.
 Test: the JSON scans in V10, V11 and V12.
@@ -533,7 +535,7 @@ The file must have **no imports**, so `api/` can import it as `../../packages/co
 | `WORKFLOW_VERSION` | `"3"`, written by the v3 builder. `workflow.ts`'s `GITHUB_WORKFLOW_VERSION` (what the CLI compares against) equals it since V24's flip, built in BT02 (2.11.4; deviations 2026-11-15 BT02) |
 | `MIN_CODIUM_WORKFLOW_VERSION` | `3` |
 | `MIN_AGENTS_CLI` | (added by V14) the first CLI version that carries V15–V22; set in V14 to the next CLI release's version and recorded in the progress file (section 4 step 7) |
-| `JOB` | `{ agent: "Vector agent", publish: "Vector publish", review: "Vector review", bind: "Vector bind", legacyTask: "Vector task" }` |
+| `JOB` | `{ agent: "Vector agent", publish: "Vector publish", review: "Vector review", bind: "Vector bind", capture: "Vector capture", legacyTask: "Vector task" }` (`capture`: Codium only, V31; it has no `id-token`, and the App's job check accepts no `capture` profile; deviations 2026-11-16 BT12 item 6) |
 | `AUDIENCE` | `{ mint: "https://vectordev.ai/api/cloud-agents/mint", bind: "https://vectordev.ai/api/cloud-agents/bind" }` |
 | `ENDPOINT` | `{ bindCode, bind, bindings, unbind, mint, heartbeat, settle, runs, artifactKey, brainDownload }` as `/api/cloud-agents/<kebab-name>` (`brainDownload`: deviations 2026-11-14 BT01) |
 | `COMMAND_MENTIONS` | `["/vector", "/vs"]` |
@@ -562,7 +564,7 @@ The file must have **no imports**, so `api/` can import it as `../../packages/co
 | `CONCURRENCY_RETRY_MS` | `900_000` |
 | `AT_ONCE_WAIT_MS` / `AT_ONCE_POLL_MS` | `600_000` / `30_000` |
 | `BIND_CODE_SECONDS` / `TICKET_SECONDS` | `600` / `900` |
-| `TIMEOUT_MIN` | `{ codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 }` |
+| `TIMEOUT_MIN` | `{ codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20, capture: 15 }` (`capture`: V31, BT12) |
 | `PATCH_LIMITS` | `{ bytes: 8_000_000, files: 2_000, fileBytes: 10_000_000, summaryBytes: 262_144, sessionBytes: 20_000_000 }` |
 | `RUN_LOGIN_DAYS` / `RUNS_KEPT` | `90` / `200` per account |
 | `SESSION_DAYS` / `BUNDLE_DAYS` | `7` / `1` |
@@ -1138,6 +1140,7 @@ on:
 | `route` | pre-filter `if:` (below) | `contents: read`, `issues: write`, `pull-requests: write` | `actions/github-script@v7` running `buildRouteScript(mentions, handle)`. Outputs: `kind` (`task`, `review`, `review-full`, `bind`, `control`, `none`), `pr`, `ref`, `thread`, `app` |
 | `agent` / **Vector agent** | `needs.route.outputs.kind == 'task'` | `contents: read`, `issues: read`, `pull-requests: read`, `actions: read`; Codium adds `id-token: write` | below |
 | `publish` / **Vector publish** | `always() && needs.route.outputs.kind == 'task'` | `contents: write`, `pull-requests: write`, `issues: write`; `actions: write` when autoReview; `id-token: write` only when `publishAuth` is `app` | below |
+| `capture` / **Vector capture** (Codium only, V31) | `!cancelled() && vars.VECTOR_SHIP_DESK == '1' && needs.agent.outputs.capture != '' && needs.publish.outputs.pr != ''`; needs `route`, `agent` and `publish` | `contents: read` only | below (deviations 2026-11-16 BT12) |
 | `bind` / **Vector bind** | `needs.route.outputs.kind == 'bind'` | `id-token: write` only | setup-node; Install Vector; `vector github bind` with `VECTOR_BIND_CODE: ${{ inputs.code }}` in `env:`. No checkout |
 | `review` / **Vector review** | `kind` is `review` or `review-full`; own key also on `pull_request` when autoReview | own key: as today; Codium: below | own key: as today, with version 3; Codium: below |
 
@@ -1162,9 +1165,10 @@ on:
 
 **The agent job's steps**, in order:
 1. setup-node 20.
-2. `actions/cache/restore@v4` for `~/.npm`. Restore only: never save after the agent has run.
+2. **Own key only:** `actions/cache/restore@v4` for `~/.npm`. Restore only: never save after the agent has run. Codium restores no cache: no Codium job saves one, so a restore could only hit an entry planted in the run's cache scope (deviations 2026-11-16 BT12 item 5).
 3. Install Vector (pinned).
 4. **Codium only:** `id: mint`, `run: vector github mint --purpose task`, with `VECTOR_THREAD`, `VECTOR_TICKET: ${{ inputs.ticket }}`, `VECTOR_COMMENT_ID` and `VECTOR_PR` in `env:`. It writes the run token to a private file (2.13), never to the environment.
+   **Codium only, right after it:** `id: capture`, Ship Desk's ticket (V31): `run: vector ship ticket >/dev/null 2>&1`, `if: steps.mint.outputs.status == 'ok' && vars.VECTOR_SHIP_DESK == '1'`, the agent step's `shell: env -u …` override, `continue-on-error: true`, `timeout-minutes: 2`, and no `env:`. It reads the run token from the file the mint step wrote and writes `capture=<ticket>` to `$GITHUB_OUTPUT` before any repository file is on disk; the command's own lines are discarded, because a refusal from vectordev.ai can name the plan or a billing state (INV-P1), and no failure of it stops the run (deviations 2026-11-16 BT12 items 3 and 4).
 5. Checkout of `needs.route.outputs.ref`, with `persist-credentials: false` and `fetch-depth: 0`. On Codium it runs `if: steps.mint.outputs.status == 'ok'`.
    Before sandbox preparation, a trusted hosted-only step installs the distribution's `bubblewrap` package. Preparation verifies the fixed root-owned `/usr/bin/bwrap` and actual user/PID/proc namespace support under the same no-new-privileges agent identity; installing a binary alone is not acceptance.
 6. `id: sandbox`, `run: vector github sandbox prepare`, `if: runner.environment == 'github-hosted'` (and, on Codium, the mint condition), with `VECTOR_MODE` and, on own key, `VECTOR_AGENT_SUDO: ${{ vars.VECTOR_AGENT_SUDO }}` in `env:`. As root through the runner's sudo, it:
@@ -1182,7 +1186,7 @@ on:
 9. `actions/upload-artifact@v4` of `${{ runner.temp }}/vector-out/`, name `vector-run-${{ github.run_id }}-${{ github.run_attempt }}`, `retention-days: 1`, `if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'`.
 10. **Codium only:** `actions/upload-artifact@v4` of `${{ runner.temp }}/vector-session/`, name `vector-session-${{ needs.route.outputs.thread }}`, `retention-days: 7`, `if-no-files-found: ignore`, `if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'` (V27).
 
-The agent job's outputs are `status: ${{ steps.mint.outputs.status }}` and `rid: ${{ steps.mint.outputs.rid }}`, both written by the mint step before any repository code is on disk. The agent step writes no output.
+The agent job's outputs are `status: ${{ steps.mint.outputs.status }}` and `rid: ${{ steps.mint.outputs.rid }}`, both written by the mint step before any repository code is on disk, and `capture: ${{ steps.capture.outputs.capture }}`, written by the ticket step, also before checkout (empty unless vectordev.ai minted a ticket). The agent step writes no output.
 
 **Env on the agent step** (the sandbox moves every credential into the channel and starts the engine with `SANDBOX_ENV_ALLOW` only):
 - Always: `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE`, `GITHUB_TOKEN` (read-only here), `VECTOR_DISABLE_USAGE: "1"`, `VECTOR_PURE: "1"`, `MENTIONS`, `VECTOR_THREAD`.
@@ -1195,13 +1199,20 @@ The agent job's outputs are `status: ${{ steps.mint.outputs.status }}` and `rid:
 1. setup-node 20; Install Vector (pinned, **no cache**).
 2. Checkout of `needs.route.outputs.ref` (`persist-credentials: false`, `fetch-depth: 0`).
 3. `actions/download-artifact@v4` of `vector-run-${{ github.run_id }}-${{ github.run_attempt }}` with `path: ${{ runner.temp }}/vector-bundle` (`continue-on-error: true`).
-4. `vector github publish` with `working-directory: ${{ runner.temp }}` and `env:` `VECTOR_REPO_DIR: ${{ github.workspace }}`, `VECTOR_BUNDLE_DIR: ${{ runner.temp }}/vector-bundle`, `VECTOR_ROUTE_KIND`, `VECTOR_ROUTE_PR`, `VECTOR_ROUTE_REF` and `VECTOR_THREAD` from `needs.route.outputs`, `VECTOR_AGENT_STATUS: ${{ needs.agent.outputs.status }}` (own key: the literal `ok`), `VECTOR_RUN_ID: ${{ needs.agent.outputs.rid }}`, `VECTOR_GITHUB_AUTH`, `GITHUB_TOKEN`, `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE`, `MENTIONS`, `VECTOR_PROMPT: ${{ inputs.prompt }}` (env only; the publisher re-derives a dispatch's route, which needs it; deviations 2026-11-16 BT08b item 1), `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_PURE: "1"` and `VECTOR_DISABLE_PROJECT_CONFIG: "1"`.
+4. `vector github publish` with `working-directory: ${{ runner.temp }}` and `env:` `VECTOR_REPO_DIR: ${{ github.workspace }}`, `VECTOR_BUNDLE_DIR: ${{ runner.temp }}/vector-bundle`, `VECTOR_ROUTE_KIND`, `VECTOR_ROUTE_PR`, `VECTOR_ROUTE_REF` and `VECTOR_THREAD` from `needs.route.outputs`, `VECTOR_AGENT_STATUS: ${{ needs.agent.outputs.status }}` (own key: the literal `ok`), `VECTOR_RUN_ID: ${{ needs.agent.outputs.rid }}`, `VECTOR_GITHUB_AUTH`, `GITHUB_TOKEN`, `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE`, `MENTIONS`, `VECTOR_PROMPT: ${{ inputs.prompt }}` (env only; the publisher re-derives a dispatch's route, which needs it; deviations 2026-11-16 BT08b item 1), `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_PURE: "1"` and `VECTOR_DISABLE_PROJECT_CONFIG: "1"`. On Codium the step has `id: publish`, and the job has `outputs: {pr: ${{ steps.publish.outputs.pr }}}`: when the run has a valid run id, the publisher appends `pr=<n>` to `$GITHUB_OUTPUT`, the pull request it created or updated, which carries this run's `<!-- vector:rid -->` marker (for a human pull request's thread that is the separate draft, not `VECTOR_ROUTE_PR`). It writes it last, only after the run's comment was posted and the publishing token was revoked, and only a positive integer, so a failed publish never starts the capture job. Own key has neither (its `VECTOR_RUN_ID` is empty) (V31; deviations 2026-11-16 BT12 item 1).
 
 **The Codium review job** (V20; own-key reviews keep today's shape):
 - Permissions: `contents: read`, `pull-requests: write`, `issues: write`, `id-token: write`.
-- Steps, in order: setup-node 20; `actions/cache/restore@v4`; Install Vector (pinned); `id: mint`, `vector github mint --purpose review`, with the agent job's mint env; checkout of `needs.route.outputs.ref` (`fetch-depth: 1`, `persist-credentials: false`, `if:` mint ok); the review step, `if:` mint ok, with the same `shell: env -u …` override, `run: vector github review`.
+- Steps, in order: setup-node 20; Install Vector (pinned, no cache; deviations 2026-11-16 BT12 item 5); `id: mint`, `vector github mint --purpose review`, with the agent job's mint env; checkout of `needs.route.outputs.ref` (`fetch-depth: 1`, `persist-credentials: false`, `if:` mint ok); the review step, `if:` mint ok, with the same `shell: env -u …` override, `run: vector github review`.
 - Review step env: `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE: codium`, `GITHUB_TOKEN`, `VECTOR_DISABLE_USAGE`, `VECTOR_REVIEW_PR`, `VECTOR_REVIEW_REF`, `MODEL: ${{ vars.VECTOR_MODEL || 'vector-plan' }}`, `VECTOR_PURE`, `VECTOR_DISABLE_PROJECT_CONFIG` and `VECTOR_CONFIG_CONTENT` with checks off. No `VECTOR_CLI_TOKEN`, no key lines, no `REVIEW_MAX_COST_USD_PER_MONTH`.
 - It needs no sandbox: the reviewer's model has read-only tools (INV-S4 exception).
+
+**The capture job** (V31, Codium only; deviations 2026-11-16 BT12): Ship Desk's before and after screenshots (Codium A49). It runs the pull request's own code (install, build and start from the base commit's `.vector/ship.json`), so it holds only the capture ticket.
+- Runs when: `!cancelled() && vars.VECTOR_SHIP_DESK == '1' && needs.agent.outputs.capture != '' && needs.publish.outputs.pr != ''`, after `route`, `agent` and `publish`. `!cancelled()` rather than `always()`, so a cancelled run stops it (item 2).
+- Permissions: `contents: read` only. No `id-token`, no run token, no `VECTOR_CLI_TOKEN`, no `GITHUB_TOKEN` in `env:`, no secret and no cache. `vector ship capture` itself refuses a job that can mint OIDC tokens or holds a run token or `VECTOR_CLI_TOKEN`.
+- `timeout-minutes: GithubAgents.TIMEOUT_MIN.capture` (15). Inside it, setup, the CLI's install, the full checkout and up to 2 minutes of waiting for the card come first, so about 10 to 12 minutes are left for two installs, two builds and two starts (item 6).
+- Steps: setup-node 20; Install Vector (pinned, no cache); checkout of `refs/pull/${{ needs.publish.outputs.pr }}/head` with `fetch-depth: 0` (the capture reads `.vector/ship.json` from the base commit) and `persist-credentials: false`; `run: vector ship capture --pr "$VECTOR_CAPTURE_PR"` with `VECTOR_CAPTURE_PR: ${{ needs.publish.outputs.pr }}` and `VECTOR_CAPTURE_TICKET: ${{ needs.agent.outputs.capture }}` in `env:` only (INV-S15).
+- Own-key workflows have no ticket step, no capture job and no publish output, and are byte-identical to before. `WORKFLOW_VERSION` stays `"3"`: no new job asks for `id-token`.
 
 **Concurrency:**
 - route: above;
@@ -1740,7 +1751,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - top-level `permissions: {}`;
   - INV-S4, INV-S6 and INV-S15, including "every expression is allowlisted", schedule prompts with quotes, colons, `${{`, `$` and newlines that round-trip as data, and invalid key, provider and model names that throw;
   - the agent job's step order; the `shell: env -u …` override on the agent and Codium review steps; no `VECTOR_RUN_TOKEN` in any step's `env:`; `sandbox prepare` guarded by `runner.environment == 'github-hosted'`; `sandbox finish` with `if: always()` before every upload;
-  - the Codium review job: mint before checkout, cache restore only, no `VECTOR_CLI_TOKEN`, no key lines, no cost limit;
+  - the Codium review job: mint before checkout, no npm cache (it restored one until BT12; deviations 2026-11-16 BT12 item 5), no `VECTOR_CLI_TOKEN`, no key lines, no cost limit;
   - the session upload step on Codium only;
   - publish: download into `runner.temp`, `working-directory` in `runner.temp`, routing env from `needs.route.outputs`, no cache, no `id-token` unless `publishAuth: "app"`;
   - the default `publishAuth` is `github` (INV-S18);
@@ -1787,13 +1798,13 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - `finish` copies with `O_NOFOLLOW`, regular files only, within `PATCH_LIMITS`, then removes the checkout.
 - **Tests:**
   - pure, local: the allowlisted environment drops every `ACTIONS_*`, `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, `GITHUB_STATE`, `GITHUB_STEP_SUMMARY`, `GITHUB_TOKEN` and secret name; the channel holds exactly the expected values and unlinks the token file; the copy refuses symlinks, directories, oversized files and unexpected names; `VECTOR_AGENT_SUDO=1` is refused in Codium mode.
-  - **CI-only, the `sandbox-probe` job on `ubuntu-latest`:** it plants marker values in the step env (`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `GITHUB_TOKEN`, `VECTOR_CLI_TOKEN`, a custom `DEEPSEEK_KEY` listed in `VECTOR_SECRET_ENV_NAMES`) and a fake run-token file, then runs `prepare`, `run -- node sandbox-probe.ts` and `finish` exactly as the generator writes them. The probe, as the agent user:
+  - **CI-only, the `sandbox-probe` job on `ubuntu-latest`:** it plants marker values in the step env (`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `GITHUB_TOKEN`, `VECTOR_CLI_TOKEN`, a custom `DEEPSEEK_KEY` listed in `VECTOR_SECRET_ENV_NAMES`), a fake run-token file and, in an earlier step's `$GITHUB_OUTPUT`, a ticket-shaped `capture=vcap_…` value (V31, BT12), then runs `prepare`, `run -- node sandbox-probe.ts` and `finish` exactly as the generator writes them. The probe, as the agent user:
     - reads the secret channel as the engine does and holds the values in memory, then starts a child shell, as the model's tools would, that scans every readable `/proc/*/environ` and `/proc/*/cmdline` and tries its parent's `/proc/<pid>/mem`;
-    - globs and tries to append to the runner's file-command files;
+    - reads every runner file-command file it can open, looking for each planted value, and tries to append to it;
     - tries `sudo -n true` and `docker info`;
     - spawns a detached `setsid` process that waits for the next step and then repeats the scan and appends to `$GITHUB_ENV`.
 
-    A following step asserts that the probe found no planted value, `ACTIONS_RUNTIME_TOKEN` or capability, that the detached process is gone, that the next step's environment is unchanged, that the staged checkout/container no longer exists, and that the original workspace is an empty runner-owned placeholder.
+    A following step asserts that the runner recorded the planted step output (the positive control), that the probe found no planted value, `ACTIONS_RUNTIME_TOKEN` or capability, that the detached process is gone, that the next step's environment is unchanged, that the staged checkout/container no longer exists, and that the original workspace is an empty runner-owned placeholder.
 - **Done:** the pure test passes; the engine typechecks; the `sandbox-probe` job is green in the V00 lane (record the run in the progress file).
 - **CI-only:** the probe job.
 
@@ -2086,12 +2097,12 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** both journeys pass in the V00 lane.
 - **CI-only:** the engine journey, if it spawns the CLI.
 
-### V31. Ship Desk capture job (deferred)
+### V31. Ship Desk capture job (built in BT12)
 - **Depends:** V14 and Codium A49 on `main`.
-- **Files:** `packages/core/src/review/workflow.ts`.
-- **Changes:** a job **Vector capture** with `if: vars.VECTOR_SHIP_DESK == '1'`, after publish. It has no `id-token` and no run token. It runs `vector ship capture --pr <n>` with A49's capture ticket (one PR, at most 8 files, 15 minutes).
-- **Tests:** the workflow golden.
-- **Done:** built only after A49 lands; until then the generator emits nothing for it.
+- **Files:** `packages/core/src/review/workflow.ts`; as built (BT12; deviations 2026-11-16 BT12) also `packages/core/src/github-agents.ts` (`JOB.capture`, `TIMEOUT_MIN.capture`), `packages/engine/src/cli/cmd/github.publish.ts` (the `pr` output) and their tests.
+- **Changes:** a job **Vector capture** with `if: vars.VECTOR_SHIP_DESK == '1'`, after publish. It has no `id-token` and no run token. It runs `vector ship capture --pr <n>` with A49's capture ticket (one PR, at most 8 files, 15 minutes). As built (2.11.3): the Codium agent job asks for the ticket in a step right after mint, before checkout; the pull request is the one publish names in its `pr` output; the job runs on `!cancelled()`; and Codium's minting jobs restore no npm cache.
+- **Tests:** the workflow golden (only the Codium golden changed; both own-key goldens are byte-identical); `github.workflow.test.ts` › "Ship Desk's ticket step and capture job are Codium-only, hold only the ticket and follow publish's pull request" and the step-order and allowlist cases; `github.publish.test.ts` › "the pull request carrying this run's marker is the publish step's pr output; a run without one writes none"; the engine journey resolves the new outputs as Actions would; `packages/core/test/github-agents.test.ts` (the constants).
+- **Done:** built in BT12; no ticket or card can exist in production until A59's repository binding reader is registered (deviations 2026-11-16 BT11 item 8) and the owner activates Ship Desk.
 
 ---
 
@@ -2151,7 +2162,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 | A40 and A42 (Remote run list) | `listCloudRuns` (V11) | Every paid plan. |
 | A47 (webhook router) | `cloudAgentsWebhookHandler` (V28) and the 2.14 shape | A47 owns the route and its signature check. Whichever of A47 and our merge lands second adds the registration line. Its owner step should list `repository` and `installation_repositories`. |
 | A48 and A50 (Release Guard, On Call) | `startCloudRun` (V13) | Only on a user tap. These runs publish with `GITHUB_TOKEN` (their prompts carry third-party data), so their PRs start no CI by themselves. |
-| A49 (Ship Desk) | `CloudRun.verdict` (V11) found through the PR body's `<!-- vector:rid <rid> -->` marker; the capture job (V31) | The command is A49's. With `GITHUB_TOKEN` publishing (the default), Vector's PRs are authored by `github-actions[bot]`, not the App bot; A49 must recognise them by the rid marker plus a run record whose repository matches, or Ship Desk covers only repositories that opted in to App publishing. |
+| A49 (Ship Desk) | `CloudRun.verdict` (V11) found through the PR body's `<!-- vector:rid <rid> -->` marker; the capture job (V31, built in BT12: the ticket step after mint, the capture job behind `vars.VECTOR_SHIP_DESK`, publish's `pr` output) | The command is A49's. With `GITHUB_TOKEN` publishing (the default), Vector's PRs are authored by `github-actions[bot]`, not the App bot; A49 must recognise them by the rid marker plus a run record whose repository matches, or Ship Desk covers only repositories that opted in to App publishing. |
 | A57 (account deletion) | `eraseCloudAgentsAccount` (V11) | The revocation key already blocks mints and tokens after deletion. |
 | A59 (integration) | in `cloud-agents-entitlement.ts`: the `cloudAgentEntitlement` body (→ `cloudAgentAllowance`), the `cloudAgentRevokedBefore` body (→ `runTokensRevokedBefore`), types imported, `RUN_SOURCES` and `ENABLED_SOURCES` re-exported from `../../packages/schema/src/codium-run-trigger.js`, deletion of `CLOUD_AGENT_LIMITS` and `createCloudAgentEntitlement` (the ledger imports the types `CloudAgentAllowance` and `RunSource` from this file, so A59 keeps exporting those names, and the ledger test never imports `createCloudAgentEntitlement`); deletion of `packages/web/test/cloud-agents-entitlement.test.ts`; `registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)`; `registerGatewayHook(cloudAgentsGatewayHook)`; the webhook registration if A47 landed first; meter wiring; the contract test; the cloud run reader registration (BT11; the repository binding reader and the ops run starter are still outstanding, deviations "2026-11-16 BT11" item 8) | Needs this branch merged to `main` first. Only A59 edits `cloud-agents-entitlement.ts`, and we authorize it to delete that test. After A59 the kill switch is Codium's `cloudAgents` runtime switch. No audience change is needed. Its contract test, `packages/web/test/cloud-agents-entitlement-contract.test.ts`, matches the lane's `test/cloud-agents-*.test.ts` glob, so it also runs in `vector-at-mention.yml`'s web step (V04 deviation 1), which a pull request carrying A59's `api/**` or `packages/web/test/cloud-agents-*` changes starts: from `packages/web`, with `GITHUB_ACTIONS=false`, Valkey at `VECTOR_TEST_REDIS_URL` and no Postgres or Codium environment, in one Bun process after `github-oidc`, `github-app` and `github-app-api` (so it restores any environment it changes). It must pass there; if it needs more, Codium tells us before A59 builds and we change the step, because A59 does not edit this lane (1.6 item 8). |
 | B08 (Brain in cloud runs) | the session artifact `manifest.files[]` (V27) | For owner-started desktop runs only. Coordinate the file split before B08 builds. |

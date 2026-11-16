@@ -16,6 +16,9 @@ export const JOB = {
   publish: "Vector publish",
   review: "Vector review",
   bind: "Vector bind",
+  // Codium only, behind vars.VECTOR_SHIP_DESK (V31): Ship Desk's screenshots. It has no id-token, so it never asks for an
+  // identity exchange, and the App's job check accepts no "capture" profile.
+  capture: "Vector capture",
   // The v2 App task job, which installed workflows and the App's job check still name.
   legacyTask: "Vector task",
 } as const
@@ -190,7 +193,15 @@ export const AT_ONCE_WAIT_MS = 600_000
 export const AT_ONCE_POLL_MS = 30_000
 export const BIND_CODE_SECONDS = 600
 export const TICKET_SECONDS = 900
-export const TIMEOUT_MIN = { codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 } as const
+export const TIMEOUT_MIN = {
+  codiumAgent: 135,
+  ownKeyAgent: 60,
+  publish: 15,
+  bind: 5,
+  route: 3,
+  review: 20,
+  capture: 15,
+} as const
 export const PATCH_LIMITS = {
   bytes: 8_000_000,
   files: 2_000,

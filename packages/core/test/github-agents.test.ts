@@ -321,6 +321,7 @@ describe("shared names", () => {
       publish: "Vector publish",
       review: "Vector review",
       bind: "Vector bind",
+      capture: "Vector capture",
       legacyTask: "Vector task",
     })
   })
@@ -392,7 +393,7 @@ describe("numbers", () => {
       AT_ONCE_POLL_MS: 30_000,
       BIND_CODE_SECONDS: 10 * 60,
       TICKET_SECONDS: 15 * 60,
-      TIMEOUT_MIN: { codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 },
+      TIMEOUT_MIN: { codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20, capture: 15 },
       PATCH_LIMITS: {
         bytes: 8_000_000,
         files: 2_000,

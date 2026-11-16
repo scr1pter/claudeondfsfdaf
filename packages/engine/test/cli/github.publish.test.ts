@@ -203,18 +203,21 @@ async function fixture(
     disposed: 0,
     fresh: pull,
     scheduledPulls: [] as PublishPull[],
+    created: 31,
+    fail: undefined as "comment" | "dispose" | undefined,
   }
   const api: PublishApi = {
     pull: async () => state.fresh,
     thread: async () => ({ comments: state.comments, writersOnly: state.writersOnly }),
     comment: async (_number, body) => {
+      if (state.fail === "comment") throw new Error("Fixture comment failed")
       state.posts.push(body)
     },
     openPulls: async () => [],
     schedulePulls: async () => state.scheduledPulls,
     createPull: async (request) => {
       state.pulls.push(request)
-      return { number: 31 }
+      return { number: state.created }
     },
     updatePull: async (number, request) => {
       state.updates.push({ number, ...request })
@@ -252,6 +255,7 @@ async function fixture(
             git,
             dispose: async () => {
               state.disposed++
+              if (state.fail === "dispose") throw new Error("Fixture revocation failed")
             },
           }
         },
@@ -474,6 +478,98 @@ test("an unchanged owned Vector PR is updated with the new rid and evidence whil
   expect(f.state.updates[0]).toMatchObject({ number: 17, draft: true })
   expect(f.state.updates[0]?.body).toContain("<!-- vector:rid gh-123-42-1-99 -->")
   expect(await f.text(["show", "refs/remotes/origin/vector/owned:source.txt"])).toBe("after")
+})
+
+// Ship Desk's capture job (V31) checks out and names the pull request that carries this run's marker, which is not the
+// route's pull request when the run publishes a separate draft (deviations 2026-11-16 BT12 item 1).
+test("the pull request carrying this run's marker is the publish step's pr output; a run without one writes none", async () => {
+  const output = (f: { directory: string }) => path.join(path.dirname(f.directory), "output")
+  const written = (f: { directory: string }) => fs.readFile(output(f), "utf8").catch(() => undefined)
+  {
+    // A human pull request's thread: the run's marker is on its separate draft, never on #17.
+    await using f = await fixture({ pr: true })
+    f.env.GITHUB_OUTPUT = output(f)
+    expect(await f.run()).toMatchObject({ outcome: "draft", pullRequest: 31 })
+    expect(f.env.VECTOR_ROUTE_PR).toBe("17")
+    expect(f.state.pulls[0]?.body).toContain("<!-- vector:rid gh-123-42-1-99 -->")
+    expect(await written(f)).toBe("pr=31\n")
+  }
+  {
+    await using f = await fixture({ pr: true, author: BOT, headRef: "vector/owned" })
+    f.env.GITHUB_OUTPUT = output(f)
+    expect(await f.run()).toMatchObject({ outcome: "changes", pullRequest: 17 })
+    expect(f.state.updates[0]?.body).toContain("<!-- vector:rid gh-123-42-1-99 -->")
+    expect(await written(f)).toBe("pr=17\n")
+  }
+  {
+    // Own key passes no run id (INV-K1): its pull request carries no marker, so nothing names it.
+    await using f = await fixture()
+    f.env.GITHUB_OUTPUT = output(f)
+    f.env.VECTOR_RUN_ID = ""
+    expect(await f.run()).toMatchObject({ outcome: "changes", pullRequest: 31 })
+    expect(f.state.pulls[0]?.body).not.toContain("<!-- vector:rid")
+    expect(await written(f)).toBeUndefined()
+  }
+  {
+    await using f = await fixture()
+    f.env.GITHUB_OUTPUT = output(f)
+    f.summary.outcome = "no-changes"
+    await f.save()
+    expect((await f.run()).outcome).toBe("no-changes")
+    expect(await written(f)).toBeUndefined()
+  }
+  {
+    await using f = await fixture()
+    f.env.GITHUB_OUTPUT = output(f)
+    f.env.VECTOR_AGENT_STATUS = "at-once"
+    expect((await f.run()).outcome).toBe("refused")
+    expect(await written(f)).toBeUndefined()
+  }
+  {
+    // Written last: a publish whose comment or token revocation fails names no pull request, so no capture follows it.
+    await using f = await fixture()
+    f.env.GITHUB_OUTPUT = output(f)
+    f.state.fail = "comment"
+    await expect(f.run()).rejects.toThrow("Fixture comment failed")
+    expect(f.state.pulls).toHaveLength(1)
+    expect(await written(f)).toBeUndefined()
+  }
+  {
+    await using f = await fixture()
+    f.env.GITHUB_OUTPUT = output(f)
+    f.state.fail = "dispose"
+    await expect(f.run()).rejects.toThrow("Fixture revocation failed")
+    expect(f.state.posts).toHaveLength(1)
+    expect(await written(f)).toBeUndefined()
+  }
+  {
+    // Only a pull request number is written: anything else could add a second output line.
+    await using f = await fixture()
+    f.env.GITHUB_OUTPUT = output(f)
+    f.state.created = 31.5
+    expect((await f.run()).pullRequest).toBe(31.5)
+    expect(await written(f)).toBeUndefined()
+  }
+  {
+    // Only the runner's own absolute file-command path is written, as the mint writes its outputs. The name has no
+    // directory, so it stays relative on every runner (on Windows a relative path across drives would be absolute).
+    await using f = await fixture()
+    const name = `vector-publish-output-${crypto.randomUUID()}`
+    const exists = (file: string) =>
+      fs.access(file).then(
+        () => true,
+        () => false,
+      )
+    f.env.GITHUB_OUTPUT = name
+    try {
+      expect((await f.run()).outcome).toBe("changes")
+      expect(await exists(path.resolve(name))).toBe(false)
+      expect(await exists(path.resolve(f.directory, name))).toBe(false)
+    } finally {
+      await fs.rm(path.resolve(name), { force: true })
+      await fs.rm(path.resolve(f.directory, name), { force: true })
+    }
+  }
 })
 
 test("an owned PR head that advanced remotely receives a separate draft instead of being overwritten", async () => {
