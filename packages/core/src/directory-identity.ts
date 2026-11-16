@@ -447,6 +447,10 @@ async function immutable(file: string, check: Check) {
     // Bun's fs.promises.realpath holds an O_PATH descriptor until it settles, so hundreds in flight exhausted a lowered
     // limit. The synchronous call holds it only while it runs, and the queue keeps it apart from open and readdir.
     // Awaiting each queued async realpath instead would serialize one event-loop round trip per stdlib entry.
+    // A synchronous call blocks the event loop, so a stalled filesystem holds off the hard timers and aborts until it
+    // returns; the verdict still fails closed because finish() and every later step check the deadline. That is
+    // acceptable only because every path here is fixed and local (the runtime, /etc, the loader and the libraries
+    // named by the root-owned images and cache): never route a caller-supplied path through these synchronous calls.
     check.descriptor(async () => {
       check()
       return realpathSync.native(file)
