@@ -142,10 +142,10 @@ The owner decisions of 27 Oct (V3C §6–§7 and the task) win. Then this contra
 ### B. A user sets up a repository (needs write access)
 
 1. **Install the workflow.**
-   - **Desktop:** the Vectorscope panel's setup card becomes "Set up @vector" (automatic reviews become a toggle inside it). When Codium's `github-agents` perk is listed, the user picks **Codium (your plan, no key)** or **Your own key**; otherwise only the own-key path shows (INV-H2). The card shows the workflow, then **Open setup pull request**: branch `vector/setup-<unix seconds>` with `.github/workflows/vector.yml` at workflow version 3. The user merges it in GitHub.
+   - **Desktop:** the Vectorscope panel's setup card becomes "Set up @vector" (automatic reviews become a toggle inside it; as built the heading names the handle from status, "Set up /vector" or "Set up @`<slug>`", per INV-H1; deviations 2026-11-16 BT13 item 4). When Codium's `github-agents` perk is listed, the user picks **Codium (your plan, no key)** or **Your own key**; otherwise only the own-key path shows (INV-H2). The card shows the workflow, then **Open setup pull request**: branch `vector/setup-<unix seconds>` with `.github/workflows/vector.yml` at workflow version 3. The user merges it in GitHub.
    - **CLI:** `vector github install` asks the same question, under the same listing rule, and writes the same file.
 2. **Codium: bind the repository** to the signed-in Vector account.
-   - **Desktop:** the app asks vectordev.ai for a one-time bind code, sending the default branch it read with the user's GitHub sign-in. It dispatches the workflow with `mode=bind` and the code on the default branch, then waits up to 2 minutes for the bind job. It then says: "Bound. Anyone with write access to owner/repo can start @vector runs that use your Codium plan."
+   - **Desktop:** the app asks vectordev.ai for a one-time bind code, sending the default branch it read with the user's GitHub sign-in. It dispatches the workflow with `mode=bind` and the code on the default branch, then waits up to 2 minutes for the bind job. It then says: "Bound. Anyone with write access to owner/repo can start @vector runs that use your Codium plan." (As built there is no post-bind sentence: a bound repository shows "Ready in `<repo>`", and the card and Settings → GitHub carry G's sentence; deviations 2026-11-16 BT13 item 4.)
    - **Website:** on vectordev.ai/account#github, enter `owner/repo` to get a code. The page then explains how to run the workflow from GitHub's Actions tab, on the default branch, with mode `bind` and that code.
    - No GitHub token ever reaches Vector. Write access, proven by the workflow's OIDC token, is the proof.
 3. **Own key:** add the provider key as a repo secret (for example `OPENROUTER_API_KEY`), plus `VECTOR_CLI_TOKEN` from vectordev.ai/auth/cli (the free account; decision O2). The app lists both secrets with a link to the repo's secrets page.
@@ -159,7 +159,7 @@ The owner decisions of 27 Oct (V3C §6–§7 and the task) win. Then this contra
   - Quoted text, code blocks, inline code and HTML comments never trigger a run.
 - **Review comment.** `/vector rename this` on a PR diff line. On Codium this needs the GitHub App (decision O7).
 - **Run in GitHub (desktop).** A dialog has a prompt box and shows the repository and the workflow's mode.
-  - Copy: "Runs in your own repo, on your own Actions minutes. Usually 5 to 30 minutes; at most N minutes", with N read from the binding's limits or the workflow's timeout. It links to GitHub's Actions billing page and states no dollar figure.
+  - Copy: "Runs in your own repo, on your own Actions minutes. Usually 5 to 30 minutes; at most N minutes", with N read from the binding's limits or the workflow's timeout. It links to GitHub's Actions billing page and states no dollar figure. (As built: "Runs in your own repo, on your own Actions minutes. Up to N minutes, from this workflow's timeout.", N from the current workflow's timeout, no "Usually 5 to 30 minutes", and no minutes sentence when N is unknown; deviations 2026-11-16 BT13 item 4.)
   - On a public repository: "This repository is public: its Actions logs are public."
   - **Run** dispatches the workflow with `mode=task` and the prompt, through the user's GitHub sign-in, and then links the run.
 - **Scheduled runs.** The automations panel has the switch "Run in GitHub Actions when this computer is off", with the sub-line "in your own repo, on your own Actions minutes" (V25).
@@ -338,7 +338,7 @@ Test: `packages/engine/test/tool/registry-actions.test.ts` › "bridged and comp
 
 Test: `packages/engine/test/cli/github.policy.test.ts` (V03: the policy is in the system layer) and `packages/engine/test/cli/github.bundle.test.ts` › "a `</issue>` payload stays inside its JSON string; a non-writer comment is labelled and collapsed" (V18)
 
-**INV-S15. Untrusted text never reaches a shell line or an expression.** Comment bodies, issue titles, inputs (prompt, code, ticket and Codium's brain_upload, deviations 2026-11-14 BT01) and schedule prompts reach steps only through `env:`. No `run:` line contains `${{` with event or input data, and the route script contains no `${{`. Every user string the generator writes (schedule prompts, the options header) has each `$` encoded as `$` inside its JSON. Key names match `^[A-Z_][A-Z0-9_]{0,99}$`, and provider and model names a fixed safe charset. Every `${{` in a generated file comes from a fixed allowlist of expressions.
+**INV-S15. Untrusted text never reaches a shell line or an expression.** Comment bodies, issue titles, inputs (prompt, code, ticket and Codium's `brain_upload`, deviations 2026-11-14 BT01) and schedule prompts reach steps only through `env:`. No `run:` line contains `${{` with event or input data, and the route script contains no `${{`. Every user string the generator writes (schedule prompts, the options header) has each `$` encoded as `$` inside its JSON. Key names match `^[A-Z_][A-Z0-9_]{0,99}$`, and provider and model names a fixed safe charset. Every `${{` in a generated file comes from a fixed allowlist of expressions.
 Test: `github.workflow.test.ts` › "no event or input expression in any run line"; "every expression is allowlisted" (V14)
 
 **INV-S16. Limited and fail-closed.** Bind codes, bind, mint, heartbeat, settle, artifact-key and the account endpoints are rate-limited per IP and per repository, run or account (2.7). Any persistent-store failure answers 503 `PERSISTENT_STORE_UNAVAILABLE` and issues no token, code, binding, key or reservation.
@@ -426,7 +426,7 @@ Test: `packages/engine/test/cli/github.bundle.test.ts` › "stop-code table, inc
 Tests: `packages/engine/test/cli/github.cloud.test.ts` › "own key calls no cloud-agents endpoint" (V15); `github.bundle.test.ts` › "own-key agent phase sends no heartbeat or settle" (V18); `github.agents-journey.test.ts` › "GitHub workflow journey own-key preserves route, run and publication authority" (V30; neither the loopback vectordev.ai nor the cloud client sees an `/api/cloud-agents/*` request and the fake gateway none, with a forced session proof, the job's ids, recording export and import seams, a listed session artifact and a dying share present; amended in BT08a)
 
 **INV-K2. The free path has no paid gate on the client.** No CLI, desktop or app code decides own-key availability from plan state or perk listing.
-Test: `packages/app/src/features/github-agents/agents-model.test.ts` › "own-key setup and Run in GitHub never read plan state or listing" (V25)
+Test: `packages/app/src/features/github-agents/agents-model.test.ts` › "own-key setup and schedules stay available without any paid entitlement or listing" (V25; the name as built, deviations 2026-11-16 BT13 item 5)
 
 **INV-K3. The seam has the exact shape.**
 - `cloudAgentEntitlement` returns the §4.18 union exactly (2.3).
@@ -455,10 +455,10 @@ Tests: `cloud-agents-run-token.test.ts` (V07); `cloud-agents-ledger.test.ts` ›
 - It names the handle only from `VECTOR_GITHUB_APP_SLUG`, otherwise it says `/vector`.
 - It types no plan number; numbers come from the seam or link to `/docs/codium#plans`.
 
-Test: `packages/web/test/vector-mention-copy.test.ts` (V29), covering the web, app, desktop and CLI strings listed in 2.17.
+Test: `packages/web/test/vector-mention-copy.test.ts` (V29), covering the web, app, desktop and CLI strings listed in 2.17. (As built it reads the web docs page and draft, the two owner docs, the refusal table and `api/_lib/cloud-agents-api.ts`; the app's only copy assertion is `ACTIONS_COPY` in `agents-model.test.ts`, and no test reads the desktop or `github.handler.ts` strings; deviations 2026-11-16 BT13 items 2, 3 and 5.)
 
 **INV-H2. Codium surfaces show only when listed** (SPEC H1). Codium-mode UI, the CLI's Codium choice, Settings → GitHub bindings, the website bind form, and the docs' Codium sections render only when Codium's listed set includes `github-agents`. Schedule surfaces on Codium also need `scheduled`, and "no key" or "no secret" wording needs `github-no-secret`. A missing listed set means nothing is listed, so on `main` before A27 and A59 every Codium surface is hidden. Own-key surfaces are never gated (INV-K2). For the owner's acceptance run, two unadvertised paths exist: `vector github install --codium` and the website form at `/account?github-preview=1#github`.
-Tests: `agents-model.test.ts` › "Codium surfaces need the listed perk" (V25); `packages/engine/test/cli/github.install.test.ts` › "no Codium choice unless listed" (V23); `vector-mention-copy.test.ts` › "docs Codium sections need the listed perk" (V29)
+Tests: `agents-model.test.ts` › "every Codium surface follows its separate listing gate" and "missing listing and child flags without the parent fail closed" (V25); `packages/engine/test/cli/github.install.test.ts` › "unlisted setup defaults to own key and writes both secret steps without a Codium choice" (V23); `vector-mention-copy.test.ts` › "the draft's Codium and schedule sections require the build's listed perks and own-key instructions remain unconditional" (V29) (the names as built; deviations 2026-11-16 BT13 item 5)
 
 ## 1.6 Owner decisions already made
 
@@ -1450,7 +1450,7 @@ eraseCloudAgentsAccount(account: string, store?): Promise<void>
 - Every cloud-agent surface says "in your own repo, on your own Actions minutes" and never uses the H3/H4 banned words (INV-H1).
 - Refusal comments are one sentence plus a docs link, from a fixed table in `github.publish.ts` keyed by `MINT_STATUS` and stop reason. They never name a plan, a share or a billing state.
 - The handle shows as `@<slug>` only when the slug is known. Otherwise copy says `/vector`.
-- Strings covered by the copy test:
+- Strings covered by the copy test (as built, `vector-mention-copy.test.ts` reads only the docs page and its draft, the owner docs, the refusal table and `cloud-agents-api.ts`; the app, desktop and install strings below have no copy test beyond `ACTIONS_COPY`; deviations 2026-11-16 BT13 item 5):
   - `vectorscope.astro#github*`;
   - the app's `github-agents` copy and `packages/app/src/features/scheduled/*` copy;
   - the desktop setup secrets text;
@@ -1972,7 +1972,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - `settings-registry.ts` (tab `"github"`) and `settings-registry.test.ts` (the exact item list and count, and search-filter cases for "github");
   - `packages/app/src/features/pull-requests/pull-requests.tsx` (the setup card replaces the auto-review setup);
   - `packages/app/src/features/scheduled/automations.tsx` and `schedule-model.ts` (the `cloud` switch);
-  - `packages/app/src/i18n/en.ts`.
+  - `packages/app/src/i18n/en.ts` (as built, the copy stays inline in the components and `agents-model.ts`, not in `en.ts`; deviations 2026-11-16 BT13 item 1).
 - **Changes:**
   - 1.3 B, C and G copy, under the listing gates (INV-H2).
   - The Run dialog shows estimated minutes from the binding's limits or the workflow's timeout, never a typed number, and a link to GitHub's Actions billing page, with no dollar figure.

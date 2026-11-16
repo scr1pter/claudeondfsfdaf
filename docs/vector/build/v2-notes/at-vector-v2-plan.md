@@ -154,9 +154,9 @@ Remaining:
 Built in `3b2476494`, plus `4c8e7390b` and `e706636ad`. App types and E2E types passed locally per the commit message. Browser lane green.
 
 Remaining:
-1. The copy is written inline in the components (`setup-card.tsx`, `run-dialog.tsx`, `agents-model.ts:3`), not in `packages/app/src/i18n/en.ts` as spec V25 lists. Move it there or record a deviation.
-2. The pending "final V24/V25 cross-surface copy audit" (`progress.md:1158`).
-3. A progress entry.
+1. The copy is written inline in the components (`setup-card.tsx`, `run-dialog.tsx`, `agents-model.ts:3`), not in `packages/app/src/i18n/en.ts` as spec V25 lists. Move it there or record a deviation. **Recorded as a deviation in BT13** (deviations "2026-11-16 BT13" item 1); the strings are not moved.
+2. The pending "final V24/V25 cross-surface copy audit" (`progress.md:1158`). **Done in BT13** (its progress entry, "V24/V25 cross-surface copy audit"); the one shipped INV-H1 phrase and the legacy auto-review text go to the lead (deviations "2026-11-16 BT13" items 2 and 3).
+3. A progress entry. **Added in BT13** (the "V25 record" in BT13's progress entry).
 4. A5 (fold the UI into the redesign) is the owner's call.
 
 ### V27 runtime: built pieces versus missing pieces
