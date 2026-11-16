@@ -20962,3 +20962,632 @@ is also the lane's progress record for SF-08.
     `vectorscope-continuation.md`, and the correcting entry for the stale
     `vectorscope-deviations.md:16000` sentence. SF-08 edits neither
     `remaining.md` nor `continuation.md`, and no eval README.
+
+## 2026-11-16 · VS-12c CLI consented apply step for verified findings (SF-09)
+
+The CLI half of VS-12 (`vectorscope-upgrade-addendum-a.md:1077`, the VS-12/13
+bullet under "Other approved packages": "Give the CLI a consented apply step on
+StrictResult. Loop on verified findings, never on a score"; `vectorscope-plan.md`
+"Fix proposals and consent" `:214-236` and the VS-12 row `:322`; v2 plan `:186`).
+It was built on `scope-finish` at `a6fd38d3` (SF-08) as lane package SF-09. The
+source was the SF-09 plan as corrected by its critique. Where a critique point
+was taken in another form or rejected, the reason is under "Critique points".
+This entry is also the lane's progress record for SF-09.
+
+- **Status.** Built and tested in the working tree, its round-one review
+  findings fixed (see "Review findings (round one)"), then committed by the
+  lane's commit gate (2026-11-16) as
+  `feat(review): add a consented local apply step to vector review`. Before
+  the commit the gate re-ran, one file at a time through the lock:
+  `test/cli/review-fix.test.ts` (17 pass, 1 skip, 0 fail, 169 `expect()`
+  calls), core `test/review/model-evidence.test.ts` (30 pass, 0 fail, 393),
+  `test/cli/help/help-snapshots.test.ts` (2 pass, 46 snapshots, no update)
+  and `test/cli/review.test.ts` (26 pass, 0 fail, 182); `bun typecheck` in
+  `packages/engine` and `packages/core`, the eval tsconfig, Prettier
+  `--check` on the five code files, and the full TURBO typecheck (27 of 27
+  tasks). The gate dispatched `typecheck.yml`, `scope-directory-identity.yml`,
+  `review-memory-fence.yml`, `scope-app-validation.yml` and
+  `vector-at-mention.yml` on `scope-finish`. `test.yml` was not in the gate's
+  dispatch list, so it is left to the lead (see "CI to dispatch" below).
+
+- **The lead's 2026-11-16 ruling** (quoted in full in the SF-07 entry) names
+  SF-09. It was applied as follows:
+  - No isolation, `TaskClaims`, owned-path, worktree or executor file changes.
+    `git diff --stat` touches none of `task/isolation.ts`, `tool/owned-path.ts`,
+    `review/fix.ts` or `worktree/index.ts`.
+  - The step uses only `ReviewFix`'s public `reserve`, `preview`, `apply`,
+    `commit` and `cancel`. The fix checkout stays the additive `fix.json` kind,
+    detached at the reviewed commit and swept by the registry's rules.
+  - Nothing seeds the user's files into a fix checkout.
+  - No new spawn path (`v2-spawn-review.md`). The step's own Git reads
+    (`cat-file blob`, `config --get`, `rev-parse`) go through the review's Git
+    client (the Git service). Everything else goes through the executor. No
+    hot-spot file changes.
+
+- **Scope.** `vector review --apply`, after a review of your own branch:
+  - It builds one fix proposal from this run's verified findings with a fix
+    Vector can apply, and shows all of it on stderr.
+  - It asks before an apply in the fix checkout, then separately before a
+    commit to a new local branch `vector/fix-<8 hex>`.
+  - It never pushes, never runs a command (the preview says "Commands: none"),
+    and never touches the user's branch, index or files.
+  - One change to the repository does come before any yes: the preview
+    (`fix.reserve`, before the apply question) reserves the detached fix
+    checkout under the data folder, a linked worktree that Git registers in
+    the repository's `.git/worktrees/<name>`. Cleanup removes it on every
+    path; after a `kill -9` while a question waits, a later process's boot
+    sweep does (SF-07's sweep). The apply question's "Your checkout, index and
+    files are not changed" stays true: the registration is worktree metadata,
+    not the user's checkout.
+  - Review mode gains no write permission: the step runs after the review,
+    from its in-memory outcome, in the trusted executor. No prompt, agent,
+    permission, `Review.run` or `RunInput` change.
+  - The existing no-push fix prompts are untouched: `ConnectFix` and
+    `/vector fix` have no change here.
+
+- **What landed.**
+  - `packages/engine/src/cli/cmd/review.fix.ts` (new, 677 lines; not pinned,
+    loaded only through a dynamic import when `--apply` is given):
+    - `cliFixStep` `:48` is what the command uses. It asks its questions on the
+      terminal, and its interactivity is `stdin.isTTY && stderr.isTTY`. Its
+      executor is `AppNodeBuilderV1.build(ReviewFix.node)`.
+    - `fixStep` `:57` is the factory. Its `run` provides the executor and
+      re-raises an interrupt. Any other cause is logged and reported as "The
+      fix step stopped with an unexpected error, which Vector logged". Every
+      refusal is reported where it happens, so nothing is mislabelled as a
+      startup failure.
+    - `fixRefusal` `:93` checks, in order: experimental, Linux,
+      `ReviewFix.runnerContext(env)`, terminal. `plainBranch` `:109` is the
+      contract's branch rule.
+    - `terminalAsk` `:126` treats Ctrl-C and the end of input as no. Before
+      each question, `dropTypedAhead` `:164` drops input typed before it
+      (see "Typed-ahead input" below).
+    - `runFixStep` `:182`, `offer` `:211`, `cleanup` `:281`,
+      `sameRepository` `:298`, `commitIdentity` `:311` and `person` `:320`
+      (the executor's identity rule).
+    - `fixCandidates` `:363`, `readHeads` `:439`, `UNSHOWN` `:466`,
+      `planEdits` `:475`, `fixPath` `:539`, `nonOverlapping` `:548`,
+      `linesText` `:561`, `patchText` `:576`, `gitPatch` `:585`, `describe`
+      `:600`, `leftOutLines` `:623`, `commitMessage` `:649` and `shown`
+      `:662`.
+  - `packages/engine/src/cli/cmd/review.ts` (pinned; 45 added lines, 1
+    changed):
+    - `LocalReviewOptions.apply` `:123` and `LocalReviewDeps.fix?: FixStep`
+      `:173`. Both are optional, so `service.ts`, `local-run.ts`, the connect
+      adapter and every existing test are unaffected.
+    - The env-time refusal `:227`: a service context or a missing step gives
+      "only available to the vector review command"; otherwise
+      `deps.fix.refusal(env)`.
+    - The branch refusal `:263`: a detached HEAD, or a branch name the
+      contract cannot name.
+    - The cached-outcome note `:344`.
+    - The step call after the review is printed and before `postToPull`
+      `:652`.
+    - Three `refuseFlags` lines `:897-900`: `--pr`, `--uncommitted`/`--staged`
+      and `--yes`.
+    - The hidden `--apply` option `:1443`.
+    - The handler builds the step inline, only under `args.apply` `:1459`:
+      it imports `./review.fix` dynamically, then reads the GLOBAL config
+      (`experimental.vectorscope === true` and no
+      `agent.vectorscope.disable`, the predicate at `review/owner.ts:75`).
+      The wiring is at `:1487` and `:1524`.
+  - `packages/core/src/review/model-evidence.ts`: the pin (below).
+  - `packages/core/test/review/model-evidence.test.ts`: one clause in the
+    pin list's rationale comment, which says the fix executor and the CLI
+    step are left out. The list itself is unchanged.
+  - `packages/engine/test/cli/review-fix.test.ts` (new, 18 cases; see
+    "Tests run").
+
+- **Order of refusals** (exit 2; every one before a model is resolved or
+  anything is reviewed, so nothing is spent):
+  1. `refuseFlags`: `--pr` (the CLI's only untrusted review; see the fork
+     note below), `--uncommitted`/`--staged`, `--yes`.
+  2. After `env`: a service caller (`options.context`) or no step.
+  3. Global `experimental.vectorscope` off.
+  4. Not Linux.
+  5. CI or a GitHub run: `CI` set to anything other than empty, 0 or false;
+     `GITHUB_ACTIONS=true`; a runner's own variable; or process isolation
+     required.
+  6. stdin or stderr not a terminal.
+  7. Once the branch is known: a detached HEAD, or a branch name outside the
+     contract's `branch` rule.
+
+  _Forks._ A fork's branch checked out locally (for example with
+  `gh pr checkout`) counts as your own branch. The CLI reviews it as trusted,
+  as it does without `--apply`, and `--apply` offers its fixes. No project
+  code runs, every step is shown and asked, and the only write is a new local
+  branch after the commit's own yes, so I-6 holds. The spec's "never for
+  forks" is therefore met only on the `--pr` path, not for a fork branch you
+  checked out yourself. Refusing a branch whose upstream remote differs from
+  the base's remote is a hand-off to the lead (below).
+
+  The `--base` ref is not refused. When it is not a plain branch name
+  (`HEAD~2`, `main@{1}`), the proposal names its merge-base commit as
+  `baseBranch`. The executor reads no base ref, only `proposal.base`.
+
+- **Decisions and interpretations.**
+  - _Fix source (critique major 1; no lead ruling was available, so it was
+    built so that either answer stays possible)._ When `outcome.strict` is
+    present, it is the only source:
+    - only its findings whose fix is a guardrail-checked `suggestion` or
+      `patch` on the RIGHT side are used, never `unchecked`;
+    - only when `strict.head` is the reviewed head;
+    - its findings are verified by construction (S1 drops "unverified").
+
+    No runner produces `outcome.strict` before VS-27c, so today the live path
+    is the legacy one: listed findings (`selection.inline`) with
+    `verified === true` and `suggestionAllowed === true`. Legacy `verified`
+    means the review's verify pass or judge answered "confirmed"
+    (`review/run.ts:1032`); `suggestionAllowed` is select.ts's committable
+    rule (`:332`). A legacy `patch` is deliberately never taken: only the
+    strict decoder sets one, and only the strict guardrail (S6) checks it.
+
+    stderr names the source on every run ("Fix source: …"). Dropping the
+    legacy branch is one `if` in `fixCandidates` and the case-3 fixture. The
+    lead should rule on whether the legacy path stays. Confidence and
+    severity never select a fix (test case 3: an unverified finding at 0.99
+    is left out).
+  - _"Loop on verified findings"._ This is one verified-only round per run.
+    The person loops by switching to the fix branch and running
+    `vector review --apply` again; the step prints that hint after a commit.
+  - _One proposal per run, with no per-finding choice._ The preview lists
+    each fix with its finding ID, the review's label for it, `path:line` and
+    title. The label is a legacy finding's severity, or a strict finding's
+    failure class (`crash`, `leak` and so on), because a strict finding has
+    no severity. Titles are model text, with every control or format
+    character escaped and clamped to 160 characters. They are shown on
+    stderr only and never put in the commit. Choosing single fixes is a
+    later package's (SF-10b's app UI is the natural place).
+  - _Commit identity (critique major 2, taken in this form)._ The author and
+    committer are the person's own Git `user.name` and `user.email` in the
+    reviewed repository. Each field falls back to `Vector` /
+    `bot@vectordev.ai` only when it is unset. This is the existing product
+    rule for task commits (`task/isolation.ts:897-907`,
+    `task/isolation-base.ts:81-99`), not the lane's own commit identity. The
+    commit question names the identity. An identity the executor would
+    refuse (`fix.ts` `person`) refuses before anything is reserved. The
+    identity is one helper (`commitIdentity`) if the lead decides otherwise.
+  - _Commit message._ It holds only the finding IDs with `path:line`, the
+    reviewed commit and the proposal digest, so no model text or private
+    review context goes in (plan.md `:235-236`). It stays within
+    `FIX_LIMITS.messageBytes`; the list is dropped first.
+  - _What the person sees before each step_ (plan.md: "Show the concrete
+    diff, paths, destination branch/repository and requested commands"):
+    - Before the apply: the fixes and what was left out (with counts and
+      per-fix reasons), the fix checkout path, the repository, the branch at
+      its short head and the base, the destination ("a new branch … only if
+      you approve the commit"), "Commands: none", the files with +/- counts
+      from the executor's preview, the proposal digest and the complete
+      patch.
+    - Before the commit: the fix checkout path and the full commit message.
+      The question names the identity and the branch.
+  - _The bytes shown are the bytes applied (critique major 5)._ A file is
+    left out ("control or invisible characters") when its head, or the
+    result after the fix, holds any of: a C0 or C1 control other than tab and
+    newline (so CR too), DEL, a Unicode format character (`\p{Cf}`: bidi
+    overrides and isolates, zero-width and invisible ones, the soft hyphen),
+    or U+2028/U+2029. A byte order mark that opens the file is the one
+    exception. The patch is printed exactly as proposed, and the executor
+    re-verifies the preimage, the postimage and an exact apply.
+  - _Patch shape._ `gitPatch` writes `diff --git`, `--- a/`, `+++ b/` and
+    jsdiff's `structuredPatch` hunks with 3 lines of context. Each hunk start
+    is one lower when its count is 0, as `formatPatch` writes it. "\ No
+    newline at end of file" is kept, and there is no index line. This is
+    exactly `fix-proposal.ts` `patchMatches`' subset. Line fixes are
+    normalized as `suggestionAllowed` does (CRLF to LF, one trailing newline
+    dropped) and applied bottom-up. A missing final newline is kept. A
+    strict patch goes through `applyFixPatch(head, text, { path, maxHunks:
+    MAX_FIX_HUNKS })`.
+  - _Bounds without spending (critique minor, taken)._
+    - Paths outside the contract's `filePath` rule are left out. The
+      left-out line shows the path through `shown`, so a file name with a
+      terminal control cannot hide the patch below it.
+    - The candidates are capped at `FIX_LIMITS.findings`.
+    - A patch fix is the only fix for its file.
+    - Overlapping line fixes keep the first in line order.
+    - Files are taken in path order. Once `FIX_LIMITS.files` are kept, the
+      rest are left out ("over the proposal's file limit"). A file whose
+      patch would take the running total over `FIX_LIMITS.lines` or
+      `patchBytes` is left out ("over the proposal's size limit"), and later
+      files that still fit are kept. Only when no file is left does the step
+      stop, before reserving.
+
+    Each fix left out is reported with its reason. Verified fixes with a
+    suggestion in `overflow` or `nits` are counted ("raise --max-comments or
+    lower --min-severity").
+  - _No checks, no push (plan, kept)._ The brief's tests cover neither. A
+    CLI push to the user's remotes would be new egress (no URL literal is
+    added, so the egress inventory is unchanged). CLI checks would need the
+    executor's `checksOperation` (`fix.ts:1563`, not exported) validated
+    before the review. Both are hand-offs below.
+  - _A cached review applies nothing._ When the commit was already reviewed,
+    the stored outcome (`.git/vector/review/<branch>.json`) is printed as
+    before, and `--apply` says it uses only findings from a review this run
+    makes. Case 3 edits the stored outcome to make every finding verified and
+    committable, and checks that nothing is offered.
+  - _Same repository._ `sameRepository` compares the reviewed root's
+    `git rev-parse --path-format=absolute --git-common-dir` with the
+    placement's, rather than the plan's `realpath(root)` check. A linked
+    worktree therefore works (case 8): `reserveFix` takes the instance's
+    worktree as the parent. `--path-format` needs Git 2.31 or later; older
+    Git refuses ("another repository").
+  - _Opt-in._ `--apply` is a flag and never a `review.json` key: a
+    repository's review settings come from the working tree, which is the
+    code under review, so a key would let reviewed code opt itself into
+    writes. There is no `EVIDENCE_POLICY_KEYS` change and no replay variant.
+  - _Owner gate Q16/D14._ `--apply` is `hidden: true` in yargs, so `--help`
+    and its snapshot are unchanged. It is honoured only with the GLOBAL
+    `experimental.vectorscope` setting and no `agent.vectorscope.disable`; a
+    project config cannot turn it on. Un-hiding is one line, plus the help
+    snapshot updated through the snapshot test's update mode; that is the
+    owner's call.
+  - _Cancelling (critique minor, taken)._ `terminalAsk` answers no on Ctrl-C
+    (readline's `SIGINT`) and on the end of input, so the step's
+    `Effect.ensuring(cancel)` always runs. The review's own `confirm` (the
+    cost and `--checks` questions) is unchanged. The apply and commit
+    approvals are checked for `{ ok: false }` and reported without calling
+    the executor. The remaining window is a `kill -9` while a question
+    waits: the placement then stays until a later process's boot sweep
+    finds its lease dead (SF-07's sweep).
+  - _Typed-ahead input (review finding, taken as a drain)._ Before each
+    question, `terminalAsk` drops what was typed before it. It reads the
+    input for 100 ms (`TYPED_AHEAD_MS`), in raw mode on a terminal so that a
+    line typed without Enter goes too. It then pauses the input, restores
+    the mode, and only then prints the question. A Ctrl-C or the end of
+    input among what it dropped answers no. An extra `y` after the cost
+    question, keys pressed during the review, or `y⏎y⏎` typed quickly at
+    the apply question therefore cannot answer the next question. The
+    full-word alternative (`apply`/`commit` or `yes`) was not taken: the
+    drain covers both questions and keeps the y/N convention of the review's
+    own questions.
+  - _Executor wiring (critique major 3, taken)._ The precedent is
+    `control-plane/workspace.ts:689`/`:705`: `Effect.provide(AppNodeBuilderV1.build(…))`
+    inside a running service. The plan cited `cli/usage-report.ts:77`,
+    which runs a fresh `Effect.runPromise`, so that citation was dropped.
+    How the sharing works:
+    - The handler runs on AppRuntime, whose context carries
+      `Layer.CurrentMemoMap` (the global `memoMap`).
+    - `LayerNode.compile` memoizes each node's implementation by reference,
+      so `TaskIsolation.layer` (built by AppRuntime through TaskRecovery,
+      TaskNotify and others) is reused.
+    - Only `ReviewFix` itself, and the lazy `LocationServiceMap`, are built
+      anew.
+    - `TaskIsolation`'s registry state is module-level anyway
+      (`isolation.ts:251-253`, and `TaskClaims`).
+
+    Case 9 runs the real `cliFixStep` executor inside the test runtime. It
+    shows the step's `ReviewFix` is the runtime's own (the test's service
+    reports the step's placement as `preview`). Mutation M7
+    (`Layer.fresh(...)`) fails it.
+  - _Scratch._ `/tmp/vector-v2/scope/sf09/` (the task header's `scope/`, as
+    SF-06 to SF-08 used).
+
+- **Default and parity proof.**
+  - With `--apply` unset, every new line in `executeLocalReview` is behind
+    `options.apply`. `deps.fix` is absent for every other caller (`service.ts`,
+    `local-run.ts`, the connect adapter). The handler builds no step and reads
+    no global config.
+  - The reviewer's `RunInput` is unchanged by `--apply`. Case 1 compares it
+    against a run without `--apply`: the key set, and with `toEqual` every
+    field but the callbacks (function values, new closures on each run),
+    plus `trust` and the absent `checks`.
+  - The JSON on stdout is byte-identical with and without `--apply` (case 1).
+  - The exit code never depends on the step.
+  - `--help` is unchanged: `help-snapshots.test.ts` passes without an update.
+  - `test/cli/review.test.ts` passes unchanged and was not edited.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `aef0d5c84ed90782` -> `116e459324fd182d`
+  (`review.ts` is pinned). The first build set `941d19e474bf9470`; the
+  review-findings round changed `review.ts` again (the inline step) and the
+  pin was recomputed. `REVIEW_PIPELINE_REVISION` stays 4: the step runs
+  after the review and changes nothing it finds or posts. `REVIEW_PIPELINE_FILES`
+  is unchanged. `review.fix.ts` and `fix.ts` are left out for the reason the
+  test's rationale comment now gives, as `verdict.ts` and `format.ts` are.
+  Recompute the pin after any merge of main or of the connect-finish lane's
+  `connect/hub.ts`/`adapters/vectorscope.ts`.
+- **Replay variant.** None: there is no key, so `script/vectorscope-eval/replay.ts`
+  VARIANTS is untouched.
+- **Desktop half: a documented difference.** The app's apply, checks, commit
+  and push buttons are SF-10b's. The CLI has no app counterpart in this
+  package.
+
+- **Tests run** (all through `/home/user/.tools/vector-serial`, one file at a
+  time, `--timeout 30000`, from the package directory, on this Linux host):
+  - `packages/engine/test/cli/review-fix.test.ts` (new): 17 pass, 1 skip
+    (the off-Linux case), 0 fail, 169 `expect()` calls. After the
+    review-findings round it was run three times (once before the mutations,
+    twice at the end), every time green. The first build's runs were 12
+    pass, 1 skip, 147 `expect()` calls. The cases are:
+    1. No offer without `--apply`, and no apply without an explicit yes.
+       This also covers `RunInput` parity (the key set and every non-function
+       field, with `toEqual`), identical JSON, and the no-terminal and
+       `--yes` refusals before review.
+    2. `--pr`, `--uncommitted`, `--staged`, `CI=true`,
+       `GITHUB_ACTIONS=true`, `BUILDKITE=1`, experimental off, no step and a
+       service context, each refused with zero `runReview` and
+       `resolveModel` calls and no question. Also a detached HEAD and a
+       branch named `odd+name`.
+    3. The proposal comes only from verified findings with a committable
+       fix. B is unverified at a confidence of 0.99; C's suggestion is the
+       line as it is; D has no suggestion. The commit branch changes only A's
+       file, to the exact postimage. Author and committer are the repo's
+       `Test <test@vector.test>`, the parent is the reviewed head, the
+       message names only A's ID and not its title, and the user's checkout
+       is unchanged. The cached run with an edited stored outcome asks
+       nothing.
+    4. A strict result's checked patch fix is applied and its `unchecked`
+       one is not. A legacy verified fix is ignored while a strict result is
+       there. The preview labels the strict fix with its class (`crash`). A
+       strict finding anchored to `src/\u001b[8mhidden.ts` is left out
+       with its path escaped (`\u{1b}`), and no raw ESC reaches stderr.
+    5. An approved apply grants neither a commit nor a push. A `file://`
+       bare origin stays empty through an apply-only run and an
+       apply-and-commit run, the questions are exactly Apply and Commit, and
+       the checkout is unchanged.
+    6. A branch moved between the preview and the answer: "Nothing was
+       applied: The reviewed branch moved since the review.", no commit
+       question, no placement, no `vector/*` ref, and the user's new commit
+       is kept.
+    7. A fix whose result holds U+202E is left out, a title's U+202E is shown
+       escaped, and no raw U+202E reaches stderr.
+    8. From a linked worktree: committed, and that checkout is unchanged.
+    9. The command's own `cliFixStep` executor reuses the running services.
+    10. Off Linux, refused before review. This is skipped here; Windows and
+        macOS CI legs run it.
+    11. `terminalAsk`: y and Yes give yes; n, an empty line, the end of input
+        and Ctrl-C (`\x03` with `terminal: true`) give no. Each answer is
+        typed once the question shows.
+    12. `terminalAsk` counts only what is typed once the question shows. A
+        `y` written before the call, or while the question waits to be
+        shown, never answers it: the end of input, `n`, or an empty line
+        typed afterwards gives no. `y` typed afterwards still gives yes, and
+        a Ctrl-C written while it waits gives no.
+    13. `fixRefusal`'s order, and `cliFixStep` refusing without a terminal
+        under the test runner.
+    14. The real CLI: `vector review --apply --model lmstudio/test-model`
+        exits 2 with "--apply is experimental", says nothing about
+        reviewing, and makes zero LLM calls.
+    15. `planEdits` on in-memory heads: in `a\nb\nc\nd` (no final
+        newline), a fix at line 1 with two lines and a range fix at lines
+        3-4 apply bottom-up to `A1\nA2\nb\nCD`, still without a final
+        newline. The exact patch has both "\ No newline" markers. A fix at
+        line 4 inside the range is left out ("it overlaps another fix").
+    16. `planEdits`: a patch fix displaces a line fix in the same file
+        ("another fix changes this file"), and the exact patch is checked.
+    17. `planEdits`: 130 one-line fixes in 130 files. The last 2 are over
+        the finding limit, the next 64 are over the file limit, and the
+        first 64 files are kept in path order.
+    18. `planEdits`: of `a.txt` (3,001 changed lines), `b.txt` (3,001 more,
+        over 5,000), `big.txt` (a 256 KiB line, over the byte limit) and
+        `c.txt`, the files kept are `a.txt` and `c.txt`. `b.txt` and
+        `big.txt` are left out "over the proposal's size limit".
+  - Mutations, each applied to a copy-backed source and restored
+    (`/tmp/vector-v2/scope/sf09/mutate.sh`; the restored files' md5 was
+    checked). Each failed exactly one case:
+    - M1: drop the `verified` filter.
+    - M2: let `--yes` through.
+    - M3: drop the `--pr` refusal.
+    - M4: commit without its yes.
+    - M5: run the step on the stored outcome.
+    - M6: drop the postimage character check.
+    - M7: build the executor with `Layer.fresh`.
+    - M8: print the left-out path raw (fails case 4).
+    - M9: label strict fixes "blocking" (fails case 4).
+    - M10: drop the typed-ahead drain (fails case 12).
+    - M11: count a left-out file in the running size total (fails case 18).
+    - M12: apply line fixes top-down (fails case 15). Its first attempt had
+      an anchor that did not match and ran unmutated, green; it was rerun
+      with a matching anchor.
+
+    M8 to M12 were run after the review-findings round, with the same
+    script; the restored file's md5 was checked.
+
+    Not covered by a mutation: dropping the stderr half of the terminal check
+    in `cliFixStep`. The test runner has neither stream as a TTY, so the
+    stdin-TTY, stderr-not-TTY combination cannot be produced in a test. For
+    the same reason, the drain's raw-mode half (`setRawMode` on a real
+    terminal, which delivers a line typed without Enter) is not exercised.
+    The `PassThrough` cases cover the stream's buffer and input arriving
+    while the question waits.
+  - Regressions, all unchanged files (first build; not re-run after the
+    review-findings round, which changed only the handler's step wiring, not
+    `executeLocalReview` or the yargs options; case 14 runs that handler
+    with `--apply`):
+    - `packages/engine/test/cli/review.test.ts`: 26 pass, 0 fail, 182
+      `expect()` calls.
+    - `packages/engine/test/cli/help/help-snapshots.test.ts`: 2 pass, 46
+      snapshots, no update.
+    - `packages/engine/test/review/fix.test.ts`: 30 pass, 3 skip, 0 fail,
+      553 `expect()` calls.
+  - `packages/engine/test/review/service.test.ts` (4 pass, 1 skip, 9 fail) and
+    `test/review/local-admission.test.ts` (2 pass, 1 skip, 2 fail) fail on
+    this host. Each failure is "Read-only Git inspection is unavailable: this
+    host has no supported unprivileged Git verifier" (the Python 3.12 rule
+    the SF-07 entry describes), or its "not-reviewed" consequence. With
+    `a6fd38d3`'s `review.ts` swapped in temporarily and then restored, the
+    counts are identical, so the failures are not SF-09's. CI's runners have
+    the verifier.
+  - `packages/core/test/review/model-evidence.test.ts`: it failed first and
+    printed the digest. After the pin it passed: 30 pass, 0 fail, 393
+    `expect()` calls. The same happened again after the review-findings
+    round (29 pass, 1 fail with the new digest; then 30 pass, 0 fail, 393
+    `expect()` calls).
+  - `bun typecheck` passes in `packages/engine` and `packages/core`, and so
+    does `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, after the review-findings round too.
+  - Prettier `--check` passes on the five touched code files, after the
+    review-findings round too.
+  - Not run locally: the full TURBO typecheck (it runs before the push, at
+    the commit gate) and any CI-only suite.
+
+- **CI to dispatch with the commit** (on `scope-finish`):
+  - `typecheck.yml`.
+  - `test.yml`. It runs the engine CLI files, `review-fix.test.ts` on the
+    Linux shards and its off-Linux case on Windows and macOS. Note: no
+    `test.yml` run exists on `scope-finish` at all (the run listing for
+    `test.yml` on the branch is empty), so SF-07's and SF-08's
+    `fix.test.ts` have never run there either. The lead may want `test.yml`
+    dispatched on `a6fd38d3` first, so a pre-existing failure is not
+    attributed to SF-09.
+  - `scope-directory-identity.yml`, because core `src/review/model-evidence.ts`
+    changes.
+  - `vector-at-mention.yml`, because a core `review/**` file changes. Its
+    runs on `a6fd38d3` (43866843046) and `1f5d62ad` (43833457617) were
+    already red before SF-09. The only failing job on `a6fd38d3` is
+    "sandbox (codium, success, bun)" (job 133297469184), at "Run the
+    unprivileged probe"; the "engine and core" job, which runs core
+    `test/review/*`, passed.
+  - Not needed: `review-memory-fence.yml` (no `run.ts`, `model.ts` or
+    `session/llm.ts`), `review-http-regression.yml` (no HttpApi or review
+    service change) or `scope-app-validation.yml` (no app change).
+
+- **Critique points** (the plan critique, before the build).
+  - _Strict vs legacy source (major): taken in its option (b), pending a
+    ruling._ Both were built, as above. The entry and stderr name the source.
+    Legacy patches are excluded deliberately.
+  - _Commit identity (major): taken._ The person's own Git identity with the
+    product's per-field fallback, shown in the question. It is not the lane
+    identity.
+  - _Executor wiring unverified, catch too wide (major): taken._ Case 9 and
+    M7 cover the wiring. The catch re-raises interrupts, logs every other
+    cause and no longer calls it a startup failure. The critique's narrower
+    form (catch only layer-construction failure) was not used: a defect
+    inside the step would then escape into the review's own result and turn
+    a finished review into exit 2. Logging it while keeping the review's
+    exit code is the plan's "never fails the review".
+  - _Blind approval (major): taken._ Both stdin and stderr must be
+    terminals. See the mutation note above for what the tests cannot
+    produce.
+  - _Bidi and invisible characters (major): taken_ (case 7, M6), plus
+    escaping of every model string shown.
+  - _SF-07's protection hazard is now reachable (major): taken_ (see "Not
+    claimed" and the hand-offs). `TaskClaims` is unchanged.
+  - _Late refusals (minor): taken._ The branch is checked before the review.
+    The base falls back to its commit. Paths and limits are capped
+    deterministically and reported.
+  - _Ctrl-C and `{ ok: false }` (minor): taken._
+  - _Second CLI spawn (minor): taken._ Dropped; the first spawn (experimental
+    off) is valid on every leg.
+  - _Silent selection limits (minor): taken_ (the `unlisted` count).
+  - _SF-08 hand-offs not re-handed (minor): taken_ (below). `test.yml` on
+    `a6fd38d3` was checked: it has never run there.
+  - _Linked worktree (minor): taken_ (case 8 and the common-dir check).
+  - _Preview lacks titles and severity (minor): taken._
+  - _Pin rationale location (minor): taken._
+
+- **Not claimed.**
+  - No paid run and no model call (the review is a fake in every test but
+    case 13, which refuses before one). No quality claim.
+  - No default, key, flag-default or permission change. No route or app
+    surface, and no un-hidden help text.
+  - No push or checks from the CLI. No durable consent (in memory, one
+    policy per run, a 60 s lifetime per approval).
+  - Linux only. No GitHub fix (VS-13).
+  - No claim that the stdin-TTY, stderr-not-TTY refusal is covered by a test.
+  - No claim that the typed-ahead drain's raw-mode read was seen on a real
+    terminal: no test drives one.
+  - No claim that another engine on the same data folder protects the CLI's
+    fix checkout during the step. SF-07's open hazard ("Protection after a
+    restart, and across engines") is now reachable: a running desktop app or
+    `vector serve` does not protect a placement this CLI process made after
+    it started until its own `fixes()` runs, so its model file tools could
+    write into the CLI's fix checkout during the apply/commit window. Those
+    writes fail closed:
+    - preview and apply re-stamp every file against the approved preimage
+      and require a clean checkout before the consent is spent;
+    - after the writes, Git's changed-path set must equal the proposal's;
+    - a commit requires `holds()` (every file its approved postimage and
+      nothing else changed).
+
+    The writes are not prevented, though.
+  - No claim that a linked worktree works with Git older than 2.31.
+
+- **Hand-offs.**
+  - The lead:
+    - rule on the legacy fix source (keep it, or strict-only until VS-27c);
+    - confirm the commit identity rule;
+    - decide whether `--apply` should refuse a branch whose upstream remote
+      differs from the base's remote, so that a fork branch checked out
+      locally is refused as `--pr` is (see "Forks" above);
+    - the `.fix` protection rule in `TaskClaims.protectedConflict`, now
+      reachable from the CLI (SF-07's hand-off, re-raised).
+  - The owner (Q16/D14): un-hiding `--apply`, with the help snapshot updated
+    through the snapshot test's update mode.
+  - A later CLI package, with owners to be named by the lead:
+    - checks, through an exported `checksOperation` validated before the
+      review, as a repeatable `--apply-check <command>`;
+    - a push.
+
+    The SF-08 hand-offs addressed to SF-09 move there unchanged:
+    - show each check operation exactly before `policy.approve`;
+    - the "others authored commits" confirmation for checks;
+    - the "Checks not run: …" reasons;
+    - redaction of check output before it reaches a model or a post;
+    - `Checked.leftovers` shown as "a check left files in the checkout";
+    - before a `file:///` push, say that its hooks are off but its own
+      configuration is read.
+  - SF-10a/SF-10b: the API and app may reuse `fixCandidates`, `planEdits`
+    and `gitPatch`. If they do, those move to a shared module, in core where
+    browser-safe.
+  - Still open from SF-07: hiding fix checkouts from `Worktree.list`
+    (`worktree/index.ts:414`).
+  - Still open from SF-08: re-adopting a destination branch left by a crash
+    between `update-ref` and the record.
+  - The final package (SF-42): `vectorscope-remaining.md:47` (the VS-12
+    row), `vectorscope-continuation.md`, and the correcting entry for the
+    stale `vectorscope-deviations.md:16000` sentence. SF-09 edits neither
+    `remaining.md` nor `continuation.md`.
+
+- **Review findings (round one).** All eleven were non-blocking. Two pairs
+  were the same point, so nine distinct changes; every one was taken, none
+  rejected.
+  - _Left-out paths printed raw (`review.fix.ts` `leftOutLines`)._ Taken:
+    the path goes through `shown`. Case 4 adds a strict finding anchored to
+    `src/\u001b[8mhidden.ts` (SGR conceal). Its left-out line shows
+    `\u{1b}`, and no raw ESC reaches stderr (M8).
+  - _Strict fixes shown as "blocking" (two findings)._ Taken: `Candidate`'s
+    `severity` became `label`, a legacy finding's severity or a strict
+    finding's `class`. Case 4 now expects `strict-1  crash` (M9).
+  - _`planEdits` doc comment overstated the size cap._ Taken in the code's
+    form, not the comment's: files that fit are kept in path order, and only
+    a file that would go over the line or byte limit is left out (see
+    "Bounds without spending"). The doc comment says so (M11).
+  - _Typed-ahead input could answer a question (two findings)._ Taken as a
+    drain before each question (see "Typed-ahead input"). The new question
+    case writes `y` before the call and while the question waits, and
+    expects no; it writes `n` before and `y` after, and expects yes (M10).
+  - _No direct `planEdits` coverage._ Taken: four cases call `planEdits` on
+    in-memory heads. They cover a last line without a final newline, a
+    multi-line fix applied bottom-up with a range fix, an overlapping fix
+    skipped, a patch fix displacing a line fix, and the finding, file, line
+    and byte caps. Each asserts the postimage, the exact patch or the
+    skipped reasons (M12).
+  - _`applyStep` was a single-use helper._ Taken: it is inline in the
+    handler under `args.apply`, with the dynamic import at the top of that
+    branch and the bound `Config.Service`.
+  - _Case 1 compared only part of `RunInput`._ Taken: every non-function
+    field is compared with `toEqual`, as well as the key set.
+  - _The record did not say the preview registers a linked worktree._
+    Taken: see "Scope".
+  - _"Never for forks" held only for `--pr`._ Taken: see "Forks" under
+    "Order of refusals", and the lead hand-off.
+
+- **Citations at `a6fd38d3`.**
+  - Engine `review/fix.ts`: `Refused` `:93`, `Identity` `:130`,
+    `runnerContext` `:213`, `reserve` `:606`, `preview` `:622`, `apply`
+    `:655`, `commit` `:1139`, `cancel` `:1493`, `checksOperation` `:1563`,
+    `person` `:1684`, `node` `:2054`.
+  - Core `review/fix-proposal.ts`: `FIX_LIMITS` `:8`, `createFixConsentPolicy`
+    `:128`, `branch` `:524`.
+  - Core `review/diff.ts`: `suggestionAllowed` `:417`, `applyFixPatch`
+    `:587`.
+  - Core `review/guardrail.ts`: `MAX_FIX_HUNKS` `:73`.
+  - Core `review/types.ts`: `StrictFinding` `:175`, `StrictResult` `:191`.
+  - Core `review/select.ts`: `suggestionAllowed` assigned at `:332`.
+  - Engine `review/run.ts`: `verified: true` set at `:1032`.
+  - Engine `review/owner.ts`: the experimental predicate at `:75`.
+  - Engine `task/isolation.ts`: `identity` `:897-907` and the module state
+    `:251-253`; `task/isolation-base.ts`: `:81-99`.
+  - Engine `control-plane/workspace.ts`: `:689`, `:705`.
+  - Line numbers in the new and changed files are from the working tree
+    after this package.

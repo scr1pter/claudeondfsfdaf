@@ -46,6 +46,8 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // count as marked, but stays unpinned for now: pinning state.ts would tie this pin to codium's and vector-at-mention's
 // edits there. It joins here when the job first calls guardedTeamPatterns, as BrainCode joins with VS-25b wiring.
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
+// So are the fix executor (engine review/fix.ts) and the CLI's apply step (cli/cmd/review.fix.ts, VS-12c): they run
+// after a review, from its outcome, and decide nothing it finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/connect/hub.ts",
   "packages/engine/src/connect/adapters/vectorscope.ts",

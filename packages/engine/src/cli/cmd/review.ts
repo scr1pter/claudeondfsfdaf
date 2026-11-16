@@ -73,6 +73,7 @@ import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 import { Provider } from "@/provider/provider"
 import { EffectBridge } from "@/effect/bridge"
 import { Instruction } from "@/session/instruction"
+import { Config } from "@/config/config"
 import { SessionPosting } from "@/session/posting"
 import { ReviewContext } from "@/review/context"
 import type { ReviewModel, ResolvedModel } from "@/review/model"
@@ -86,6 +87,7 @@ import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
 import type { ReviewGitHub, ReviewGitHubOptions } from "./github.review-api"
 import { renderLocalReview, type LocalTarget } from "./review.render"
+import type { FixStep } from "./review.fix"
 import { githubFetch } from "./github.shared"
 
 // --no-relative and the prefixes keep paths repository-relative and parseable whatever the user's diff config says.
@@ -117,6 +119,8 @@ export interface LocalReviewOptions {
   failOn?: FailOn
   checks?: boolean
   full?: boolean
+  // --apply (VS-12c): after a review of your branch, offer its verified fixes; a flag, never a repository setting.
+  apply?: boolean
   env?: Record<string, string | undefined> // REVIEW_* overrides; process.env by default
   // Internal service context, never parsed from CLI flags or repository settings.
   context?: {
@@ -165,6 +169,8 @@ export interface LocalReviewDeps<RunR = never, ModelR = never> {
     sessionIDs: readonly string[]
     untrusted: boolean
   }) => Promise<readonly string[]>
+  // The consented apply step behind --apply (review.fix.ts); only the vector review command gives one.
+  fix?: FixStep
 }
 
 // What --post needs from GitHub: a token for the remote's host, who it belongs to, and the two writes it makes.
@@ -217,6 +223,13 @@ export function executeLocalReview<RunR, ModelR>(
     const now = deps.now ?? Date.now
     const say = (text: string) => deps.stderr(text + "\n")
     const print = (text: string) => Effect.promise(() => deps.stdout(text))
+    // Every --apply refusal comes before a model is resolved or anything is reviewed.
+    const fixRefused = !options.apply
+      ? undefined
+      : options.context || !deps.fix
+        ? "--apply is only available to the vector review command."
+        : deps.fix.refusal(env)
+    if (fixRefused) return yield* new LocalReviewError({ message: fixRefused })
 
     // 1. The repository, and the branch or commit to compare with.
     const root = yield* toplevel(git, options.directory)
@@ -247,6 +260,8 @@ export function executeLocalReview<RunR, ModelR>(
     if (denied(REVIEW_CONFIG_PATH))
       return yield* new LocalReviewError({ message: "This conversation cannot read the review settings." })
     const branch = yield* git.branch(root)
+    const branchRefused = options.apply ? deps.fix?.branchRefusal(branch) : undefined
+    if (branchRefused) return yield* new LocalReviewError({ message: branchRefused })
     const trust = options.pr === undefined ? ("trusted" as const) : ("untrusted" as const)
     const pull =
       options.pr !== undefined && deps.pullInfo
@@ -324,6 +339,10 @@ export function executeLocalReview<RunR, ModelR>(
     // this commit is printed again, so a script, or someone who lost the first output, still gets its findings.
     if (saved?.head === range.head && !saved.unreviewed.length && !saved.failed) {
       const note = `Nothing new to review: ${short(range.head)} was already reviewed.${stillOpen(open)} Run \`vector review --full\` to review it again.`
+      if (options.apply)
+        say(
+          "Nothing was applied: --apply uses only findings from a review this run makes. Run `vector review --apply --full` to review it again.",
+        )
       const last = stored?.outcome?.head === range.head ? stored.outcome : undefined
       if (!last) return yield* early(note, open)
       if (options.json)
@@ -630,6 +649,7 @@ export function executeLocalReview<RunR, ModelR>(
           color: deps.color,
         }),
       )
+    if (options.apply && deps.fix) yield* deps.fix.run({ git, root, target, outcome, say, now })
     if (options.post && options.pr !== undefined && range.remote)
       yield* postToPull({
         git,
@@ -874,6 +894,10 @@ function refuseFlags(options: LocalReviewOptions): string | undefined {
   if (pr && options.checks)
     return "--checks runs the code under review, so it is only allowed on your own branch, not with --pr."
   if (options.post && !pr) return "--post needs --pr <number>: only a pull request can be posted to."
+  if (options.apply && pr) return "--apply fixes your own branch; it cannot be combined with --pr."
+  if (options.apply && (options.uncommitted || options.staged))
+    return "--apply fixes the commits of your branch; it cannot be combined with --uncommitted or --staged."
+  if (options.apply && options.yes) return "--apply asks before each step, so it cannot be combined with --yes."
   return undefined
 }
 
@@ -1415,7 +1439,13 @@ export const ReviewCommand = effectCmd({
         describe: "exit 1 while findings of this severity or above are open",
       })
       .option("checks", { type: "boolean", describe: "let the reviewer run your tests and typecheck" })
-      .option("full", { type: "boolean", describe: "review the whole change again, ignoring the last local review" }),
+      .option("full", { type: "boolean", describe: "review the whole change again, ignoring the last local review" })
+      .option("apply", {
+        type: "boolean",
+        hidden: true,
+        describe:
+          "experimental: after a review of your branch, offer to apply its verified fixes in a separate checkout, asking before each step",
+      }),
   directory: () => repositoryRoot(process.cwd()),
   handler: Effect.fn("Cli.review")(function* (args) {
     const { ReviewModel } = yield* Effect.promise(() => import("@/review/model"))
@@ -1424,6 +1454,18 @@ export const ReviewCommand = effectCmd({
     const instruction = yield* Instruction.Service
     const provider = yield* Provider.Service
     const bridge = yield* EffectBridge.make()
+    // The step behind --apply, loaded and configured only when it is asked for; it is honoured only when the GLOBAL
+    // settings turn VectorScope on, so a project's config cannot.
+    const fix = args.apply
+      ? yield* Effect.gen(function* () {
+          const { cliFixStep } = yield* Effect.promise(() => import("./review.fix"))
+          const config = yield* Config.Service
+          const global = yield* config.getGlobal()
+          return cliFixStep({
+            experimental: global.experimental?.vectorscope === true && !global.agent?.vectorscope?.disable,
+          })
+        })
+      : undefined
     const result = yield* executeLocalReview(
       {
         directory: repositoryRoot(process.cwd()),
@@ -1442,6 +1484,7 @@ export const ReviewCommand = effectCmd({
         failOn: args["fail-on"] as FailOn | undefined,
         checks: args.checks,
         full: args.full,
+        apply: args.apply,
       },
       {
         runReview: Review.run,
@@ -1478,6 +1521,7 @@ export const ReviewCommand = effectCmd({
             Effect.provideService(BrainKnowledge.Service, knowledge),
             Effect.catchCause(() => Effect.succeed(undefined)),
           ),
+        ...(fix ? { fix } : {}),
       },
     )
     if (result.error) UI.error(result.error)
