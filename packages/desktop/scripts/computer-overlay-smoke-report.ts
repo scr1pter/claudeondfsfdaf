@@ -643,7 +643,8 @@ export type ComputerSmokeDriverFailure = {
 /**
  * Reads the optional closed location of a coherent, unskipped Windows Stop driver failure. It is a
  * location only: it grants no pass, skip, retry or authority and never changes a reason or an exit.
- * Both keys or neither; anything else throws, which the caller treats as invalid native evidence.
+ * stage and cause together or neither, and uia only beside them; anything else throws, which the caller treats as
+ * invalid native evidence.
  */
 export function computerSmokeDriverFailure(value: Record<string, unknown>): ComputerSmokeDriverFailure | undefined {
   if (value.stage === undefined && value.cause === undefined && value.uia === undefined) return undefined
