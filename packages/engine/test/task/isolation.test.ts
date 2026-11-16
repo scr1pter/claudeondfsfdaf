@@ -1029,6 +1029,8 @@ it.instance(
       expect((yield* f.isolation.merge({ taskID: f.child.id, by: { kind: "owner" } })).record.state).toBe("merged")
     }),
   { git: true },
+  // Two full isolated lifecycles and two merges: 4.1 s locally, but over 30 s on a slow hosted Windows runner.
+  60_000,
 )
 
 it.instance(
@@ -1057,6 +1059,8 @@ it.instance(
       expect((yield* f.isolation.merge({ taskID: f.child.id, by: { kind: "owner" } })).record.state).toBe("merged")
     }),
   { git: true },
+  // Two isolated lifecycles, a discard and a merge: 4.1 s locally, but 29.8 s on a slow hosted Windows runner.
+  60_000,
 )
 
 it.instance(
@@ -1638,6 +1642,9 @@ for (const gitProject of [true, false])
         expect(yield* contents(f.home.directory, "result.txt")).toBe("result\n")
       }),
     { git: gitProject },
+    // Two isolated lifecycles and a stacked merge: Git took 3.6 s locally, but 25.5 s on a slow hosted Windows runner.
+    // The copy variant took 13.9 s on that runner, so it keeps the default budget.
+    gitProject ? 60_000 : undefined,
   )
 
 it.instance(

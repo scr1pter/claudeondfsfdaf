@@ -40,6 +40,7 @@ on:
       - packages/engine/src/mcp/**
       - packages/engine/src/lsp/launch.ts
       - packages/engine/script/stage-sandbox-probe.ts
+      - packages/engine/script/sandbox-*.ts
       - packages/engine/src/provider/provider.ts
       - packages/engine/src/session/llm/request.ts
       - packages/engine/src/session/posting.ts
@@ -326,7 +327,8 @@ jobs:
           elif [ "$PROBE_SCENARIO" = session-replaced ]; then
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
           elif [ "$PROBE_RUNTIME" = bun ]; then
-            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe-bun.mjs
+            # Plain Bun auto-installs unresolved bare specifiers; the probe bundle has no node_modules and runs under strict egress.
+            vector github sandbox run -- /opt/vector-probe-bun --no-install /opt/vector-sandbox-probe-bun.mjs
           else
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
           fi

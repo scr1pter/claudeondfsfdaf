@@ -118,17 +118,25 @@ describe("shared review service", () => {
       const head = yield* git(repo.directory, "rev-parse", "HEAD")
       const quoted = "'" + counter.replaceAll("'", "'\"'\"'") + "'"
       yield* git(repo.directory, "config", "filter.scope-probe.clean", `printf x >> ${quoted}; cat`)
-      yield* Effect.promise(() =>
-        fs.writeFile(
-          path.join(repo.directory, "visible.ts"),
-          "export function increment(value: number) { return value + 1 }\n",
-        ),
-      )
+      const visible = path.join(repo.directory, "visible.ts")
+      const committed = yield* Effect.promise(() => fs.readFile(visible, "utf8"))
+      const changed = committed.replace("count = 2", "count = 3")
+      // A different size lets status report a change from stat data without
+      // invoking the clean filter, and private.ts only reaches the filter when
+      // it happens to be racily clean. Same-size content with an mtime that
+      // differs from the index forces status to compare content through it.
+      expect(changed).not.toBe(committed)
+      expect(Buffer.byteLength(changed)).toBe(Buffer.byteLength(committed))
+      yield* Effect.promise(() => fs.writeFile(visible, changed))
       yield* Effect.promise(() => fs.writeFile(path.join(repo.directory, "added.ts"), "export const added = 1\n"))
-      yield* git(repo.directory, "status", "--porcelain")
+      yield* Effect.promise(() => fs.utimes(visible, 1_900_000_001, 1_900_000_001))
+      expect(yield* git(repo.directory, "-c", "core.fsmonitor=false", "status", "--porcelain")).toContain("visible.ts")
       expect((yield* Effect.promise(() => fs.readFile(counter, "utf8"))).length).toBeGreaterThan(0)
       yield* Effect.promise(() => fs.writeFile(counter, ""))
       for (let attempt = 0; attempt < 2; attempt++) {
+        // Every bound attempt faces a stat change the filter would have to
+        // resolve, so an empty counter proves collection never ran it.
+        yield* Effect.promise(() => fs.utimes(visible, 1_900_000_111 + attempt, 1_900_000_111 + attempt))
         const owned: { view?: ReviewGit.View } = {}
         const run = adapter()
         const result = yield* execute(
