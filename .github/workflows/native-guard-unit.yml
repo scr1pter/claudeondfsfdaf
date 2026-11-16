@@ -1,8 +1,7 @@
 name: Native guard unit checks
 
 on:
-  push:
-    branches: [build-native-shell]
+  pull_request:
     paths:
       - .github/workflows/native-guard-unit.yml
       - packages/core/src/process-isolation/linux/entry.py

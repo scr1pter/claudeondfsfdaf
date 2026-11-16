@@ -1,7 +1,6 @@
 // The documentation's shape: groups in order, each leaf a page under /docs.
 // Edit here and the sidebar, the pager and the search index all follow.
-import { handsReleasePreview, release111, release113 } from "./vector-releases"
-import { Hands } from "@vectordevai/schema/hands"
+import { release111, release113 } from "./vector-releases"
 
 export type DocLink = { id: string; title: string; blurb: string }
 export type DocGroup = { label: string; links: DocLink[] }
@@ -67,11 +66,6 @@ export const docsNav: DocGroup[] = [
   {
     label: "Features",
     links: [
-      {
-        id: Hands.DOCS,
-        title: Hands.NAME,
-        blurb: `${handsReleasePreview.since} work in the local apps you approve, with app permissions, sensitive-step asks and Stop.`,
-      },
       {
         id: "browser-agent",
         title: "Browser agent",

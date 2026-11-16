@@ -7,19 +7,6 @@ on:
         description: Run one baseline cell while diagnosing prepare; this does not qualify the full matrix
         type: boolean
         default: false
-  push:
-    branches: [build-native-shell]
-    paths:
-      - .github/workflows/native-shell.yml
-      - packages/engine/test/fixture/native-shell-*.ts
-      - packages/engine/test/fixture/native-shell-ci/**
-      - packages/core/src/directory-identity.ts
-      - packages/core/src/process-isolation/**
-      - packages/core/test/process-isolation-linux.test.ts
-      - packages/core/test/fixture/native-mask-origins.py
-      - packages/core/src/cross-spawn-spawner.ts
-      - packages/engine/src/cli/cmd/github.isolation.ts
-      - script/linux-isolation-asset.ts
 
 permissions:
   contents: read
@@ -30,7 +17,8 @@ env:
 jobs:
   shell:
     name: Shell seam (${{ matrix.runtime }}, ${{ matrix.mode }}, ${{ matrix.family }})
-    if: github.ref == 'refs/heads/build-native-shell' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["refs/heads/native-finish","refs/heads/main","refs/heads/release-finish"]'), github.ref))
+    # Dispatch is the only trigger and a manual step, so any ref may run the seam: a lane branch qualifies it before it
+    # merges. The artifacts carry the commit SHA, and only a run on main is the qualification of record.
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:

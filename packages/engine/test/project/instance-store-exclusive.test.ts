@@ -76,6 +76,37 @@ it.instance("exclusive admission is inert with Connect off while ordinary instan
   }),
 )
 
+// FIT-2: the load/reload rework serves exclusive instances, which exist only with Connect on. With Connect off, a load
+// that awaited a bootstrap keeps main's contract and returns that context even when a reload replaced it meanwhile.
+for (const experimentalConnect of [false, true])
+  it.instance(
+    `with Connect ${experimentalConnect ? "on, a load waiting on a replaced bootstrap follows the reload" : "off, a load waiting on a replaced bootstrap returns the context it awaited, as on main"}`,
+    () =>
+      Effect.gen(function* () {
+        const services = yield* Layer.build(Layer.fresh(storeLayers(experimentalConnect)))
+        const store = Context.get(services, InstanceStore.Service)
+        const input = yield* selection
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const gated = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+        yield* Effect.gen(function* () {
+          const waiting = yield* store
+            .load(input)
+            .pipe(Effect.provideService(Bootstrap, gated), Effect.forkChild({ startImmediately: true }))
+          yield* awaitWithTimeout(Deferred.await(entered), "The first bootstrap did not enter")
+          const reloading = yield* store.reload(input).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Deferred.succeed(release, undefined)
+          const reloaded = yield* awaitWithTimeout(Fiber.join(reloading), "The reload did not finish")
+          const first = yield* awaitWithTimeout(Fiber.join(waiting), "The waiting load did not finish")
+          expect(first.directory).toBe(input.directory)
+          if (experimentalConnect) expect(first).toBe(reloaded)
+          if (!experimentalConnect) expect(first).not.toBe(reloaded)
+          expect(yield* store.load(input)).toBe(reloaded)
+          yield* store.dispose(reloaded)
+        }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)))
+      }),
+  )
+
 it.instance(
   "a waiting loaded snapshot hides retired leases and cannot authorize disposing a later shared instance",
   () =>
