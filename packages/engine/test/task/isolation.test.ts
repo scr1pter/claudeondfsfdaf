@@ -1643,7 +1643,8 @@ for (const gitProject of [true, false])
       }),
     { git: gitProject },
     // Two isolated lifecycles and a stacked merge: Git took 3.6 s locally, but 25.5 s on a slow hosted Windows runner.
-    60_000,
+    // The copy variant took 13.9 s on that runner, so it keeps the default budget.
+    gitProject ? 60_000 : undefined,
   )
 
 it.instance(
