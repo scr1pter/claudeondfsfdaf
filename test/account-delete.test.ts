@@ -1175,8 +1175,9 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(left.find((entry) => entry.kept === "revocation mark")).toBeDefined()
     expect(left.some((entry) => /^(meter|estimate|run|hosted:(pages|egress|jobs:night)):/.test(entry.key))).toBe(false)
     expect(left.find((entry) => entry.kept === "deletion due")).toBeUndefined()
-    // Each of them lapses by itself.
-    expect(left.every((entry) => entry.ttl > 0 || (entry.kept === "connector closure" && entry.ttl === -1))).toBe(true)
+    // Each of them lapses by itself; the connector closure with the tombstone (DP-1).
+    expect(left.every((entry) => entry.ttl > 0)).toBe(true)
+    expect(left.find((entry) => entry.kept === "connector closure")?.ttl).toBe(TOMBSTONE_KEEP_MS)
     // A late notification about the old subscription writes nothing back.
     await reconcileModelPlanAccount(ACCOUNT, w.fetcher, w.clock(), { source: "webhook" })
     expect(leftovers(w).filter((entry) => !entry.kept)).toEqual([])
@@ -1370,6 +1371,31 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     // Once the host reports none left, the next due pass finishes the deletion.
     w.services.workspacesLeft = 0
     advance(w, deletionRetryMs(DELETION_ALERT_AFTER))
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
+  })
+
+  test("a follow-up pass stuck past the revocation mark's 100 days renews it, so the deletion can still finish", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    await seedEverything(w)
+    w.services.workspacesLeft = 1
+    expect((await deleteRoute(w)).status).toBe(200)
+    advance(w, DELETION_RECHECK_MS)
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    // The host keeps one workspace for longer than the mark lives; the passes keep failing on it alone.
+    for (let day = 0; day < 101; day++) {
+      advance(w, DAY)
+      expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    }
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      stage: "check",
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
+    w.services.workspacesLeft = 0
+    advance(w, DAY)
     expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
     expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })

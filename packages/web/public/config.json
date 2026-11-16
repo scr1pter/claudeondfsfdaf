@@ -2083,7 +2083,7 @@
         },
         "computer": {
           "$ref": "#/$defs/ComputerConfig",
-          "description": "Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent."
+          "description": "Not available in Vector 1.99.112 or earlier, which rejects this key. Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent."
         },
         "local": {
           "$ref": "#/$defs/LocalConfig",
@@ -2095,7 +2095,7 @@
         },
         "connect": {
           "$ref": "#/$defs/ConnectConfig",
-          "description": "Connected tools preview. Reviews run on the models you choose; GitHub is optional. A repository can only turn automatic reviews down or lower their limits."
+          "description": "Not available in Vector 1.99.112 or earlier, which rejects this key. Connected tools preview. Reviews run on the models you choose; GitHub is optional. A repository can only turn automatic reviews down or lower their limits."
         },
         "experimental": {
           "type": "object",

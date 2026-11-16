@@ -19,7 +19,7 @@ The same 16 attributed matches existed in the prior reviewed native build. They 
 
 Since the environment migration fix, `packages/core/src/flag/legacy.ts` imports `THIRD_PARTY_NOTICES.md` as text to derive the earlier product's environment prefix and default server username. The engine and TUI bundles therefore embed the notices text one more time, so the next audit will show extra "Embedded third-party notices" hits. They are expected legal-attribution hits, not new product identifiers.
 
-The development artifact is not a published release or an installed replacement. Its final audit is recorded at `/Users/Krishna/.cache/vector-rebuild-evidence/part1-binary-audit.json`, with exact occurrence attribution in `part1-final-native-attribution.json` beside it. Repeat the audit for each later release artifact. Until the 1 October decision below, the strict binary check was reported as unresolved rather than as complete removal.
+The development artifact is not a published release or an installed replacement. Its final audit is recorded at `~/.cache/vector-rebuild-evidence/part1-binary-audit.json`, with exact occurrence attribution in `part1-final-native-attribution.json` beside it. Repeat the audit for each later release artifact. Until the 1 October decision below, the strict binary check was reported as unresolved rather than as complete removal.
 
 ## Automated release audit
 

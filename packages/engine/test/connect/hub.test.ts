@@ -1213,7 +1213,7 @@ describe("checks before anything is asked", () => {
     }),
   )
 
-  it.effect("VECTOR_EXPERIMENTAL_CONNECT is off unless it or VECTOR_EXPERIMENTAL turns it on", () =>
+  it.effect("VECTOR_EXPERIMENTAL_CONNECT is off unless it is turned on explicitly", () =>
     Effect.gen(function* () {
       const read = (input: Record<string, unknown>) =>
         RuntimeFlags.Service.useSync((flags) => flags.experimentalConnect).pipe(
@@ -1225,8 +1225,10 @@ describe("checks before anything is asked", () => {
         )
       expect(yield* read({})).toBe(false)
       expect(yield* read({ VECTOR_EXPERIMENTAL_CONNECT: "true" })).toBe(true)
-      expect(yield* read({ VECTOR_EXPERIMENTAL: "true" })).toBe(true)
+      // The umbrella flag must not switch on unqualified Connect for users who set it for other experiments.
+      expect(yield* read({ VECTOR_EXPERIMENTAL: "true" })).toBe(false)
       expect(yield* read({ VECTOR_EXPERIMENTAL: "true", VECTOR_EXPERIMENTAL_CONNECT: "false" })).toBe(false)
+      expect(yield* read({ VECTOR_EXPERIMENTAL: "true", VECTOR_EXPERIMENTAL_CONNECT: "true" })).toBe(true)
     }),
   )
 

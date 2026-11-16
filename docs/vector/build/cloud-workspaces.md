@@ -187,7 +187,7 @@ VECTOR_WORKSPACES_TEST_URL=http://127.0.0.1:3457 \
 
 The browser script opens independent desktop/mobile browser contexts against the actual page and intercepts account/workspace responses. Its fixture covers history continuity, follow-up, Allow once, pause/review, digest-bound publication controls, responsive layout, disabled/unavailable service and signed-out gating. It does not authenticate a production account or create hosted compute or a real pull request.
 
-`.github/workflows/vector-workspaces.yml` adds a dedicated read-only-permission CI lane for package/API/client tests, typechecks, the production website, browser fixture and actual Docker engine smoke. It runs on every push to `cloud-workspaces` and on pull requests that touch these files, and keeps its source-bound artifacts with each run.
+`.github/workflows/vector-workspaces.yml` adds a dedicated read-only-permission CI lane for package/API/client tests, typechecks, the production website, browser fixture and actual Docker engine smoke. It runs on pull requests that touch these files and by hand, and keeps its source-bound artifacts with each run.
 
 ## Evidence scope and remaining external gates
 
