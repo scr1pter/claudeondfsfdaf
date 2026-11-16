@@ -7165,7 +7165,10 @@ non-blocking findings; none rejected.
 - **TB item 5, the four review-memory MISS lines.** 0f6fce89 and 225905e2 are ancestors of origin/main and of HEAD.
   The post-push Vector Codium run of the merged branch (43844651835 at `34c20b62`, Codium tests shard 1/4 job
   133221689218) shows `summary pass=363 fail=0 skip=0 missing=0 extra=0`, so item 5 is closed (dated lines under the
-  item and under "The baseline exerciser lines").
+  item and under "The baseline exerciser lines"). The whole run passed: 19 jobs succeeded (the four Codium tests
+  shards, Codium browser specs, the ten typecheck jobs and the three Hosted services jobs), and the two Hosted services
+  jobs the dispatch does not select (typecheck matrix, Hosted tests) were skipped. Vector hosted CI is dispatched after
+  it, since the two share a concurrency group.
 
 Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeout 30000`): `hosted-sessions-api.test.ts`
 59 pass, 0 fail, 1 skip; `hosted-copy.test.ts` 7/0; `account-delete.test.ts` 38 pass, 0 fail, 1 skip;
