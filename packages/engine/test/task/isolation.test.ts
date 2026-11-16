@@ -761,42 +761,63 @@ it.instance(
 )
 
 it.instance(
-  "a record replaced while it is read is not taken for a hard link, and a real hard link still is",
+  "a record replaced by a save is still read, and a second name for it is refused",
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
       yield* f.reserve()
       const text = yield* contents(path.dirname(f.recordPath), "record.json")
-      // Every save renames a fresh file over record.json. An lstat that resolved the old file just before the rename
-      // can report it with no names left (nlink 0): engine shard 4/4 of test.yml run 43859026439 failed on that read.
-      const replacing = yield* Effect.promise(async () => {
-        for (const index of Array.from({ length: 3000 }, (_, index) => index)) {
-          const temp = `${f.recordPath}.${index}.tmp`
-          await fs.writeFile(temp, text, { flag: "wx", mode: 0o600 })
-          await fs.rename(temp, f.recordPath)
-        }
-      }).pipe(Effect.forkScoped)
-      const reads = yield* Effect.forEach(
-        Array.from({ length: 4 }, () => 0),
-        () =>
-          Effect.gen(function* () {
-            const exits = []
-            while (replacing.pollUnsafe() === undefined)
-              exits.push(yield* f.isolation.find(f.child.id).pipe(Effect.exit))
-            return exits
-          }),
-        { concurrency: "unbounded" },
-      )
-      yield* Fiber.join(replacing)
-      const exits = reads.flat()
-      expect(exits.filter(Exit.isFailure).map((exit) => Cause.pretty(exit.cause))).toEqual([])
-      expect(exits.length).toBeGreaterThan(0)
-      // A second name for the record, which every OS can create without a privilege, is still refused.
+      // Every save renames a fresh file over record.json.
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${f.recordPath}.tmp`, text, { flag: "wx", mode: 0o600 })
+        await fs.rename(`${f.recordPath}.tmp`, f.recordPath)
+      })
+      expect((yield* f.isolation.find(f.child.id))?.taskID).toBe(f.child.id)
+      // A second name for the record, which every OS can create without a privilege, is refused.
       yield* Effect.promise(() => fs.link(f.recordPath, path.join(path.dirname(f.recordPath), "second-name.json")))
+      yield* failure(f.isolation.find(f.child.id), "registry")
+      // An ordinary file where the record's folder belongs is a forged entry, not a task without one.
+      yield* Effect.promise(async () => {
+        await fs.rm(path.dirname(f.recordPath), { recursive: true, force: true })
+        await fs.writeFile(path.dirname(f.recordPath), text)
+      })
       yield* failure(f.isolation.find(f.child.id), "registry")
     }),
   { git: true },
 )
+
+// Windows neither keeps a replaced file open under no name nor lets a test make a symbolic link without a privilege.
+if (process.platform !== "win32")
+  it.instance(
+    "a record replaced after it was checked is not taken for a hard link, and a link renamed in is refused at the open",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        yield* f.reserve()
+        const text = yield* contents(path.dirname(f.recordPath), "record.json")
+        // Engine shard 4/4 of test.yml run 43859026439 failed when an lstat resolved the old record just before a
+        // save's rename and saw it with no names left. A record open while a save replaces it is in that same state,
+        // which a read now checks on the open file.
+        const replaced = yield* Effect.promise(async () => {
+          const handle = await fs.open(f.recordPath, "r")
+          await fs.writeFile(`${f.recordPath}.tmp`, text, { flag: "wx", mode: 0o600 })
+          await fs.rename(`${f.recordPath}.tmp`, f.recordPath)
+          return handle.stat().finally(() => handle.close())
+        })
+        expect(replaced.nlink).toBe(0)
+        expect(TaskIsolation.linked(replaced)).toBe(false)
+        // A symbolic link renamed over the record between a check of the path and the read is not followed: the
+        // read checks only the folders by path and the open itself refuses a final link.
+        const outside = yield* tmpdirScoped()
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(outside, "record.json"), text)
+          await fs.symlink(path.join(outside, "record.json"), `${f.recordPath}.tmp`)
+          await fs.rename(`${f.recordPath}.tmp`, f.recordPath)
+        })
+        yield* failure(f.isolation.find(f.child.id), "registry")
+      }),
+    { git: true },
+  )
 
 it.instance(
   "a merge through a symlinked target directory is refused",

@@ -7221,3 +7221,31 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   reply}` (1/0 each), `bun run test:httpapi` (coverage, auth and effect modes 363/0 each),
   `test/server/free-model-guest.test.ts` 15/0, sdk-next `test/embedded.test.ts` 4/0; `bun typecheck` in server,
   engine and sdk-next.
+- **16 Nov 2026, the isolation race test replaced by deterministic steps, and the read check moved onto the open
+  file.** The stress test from the entry above (four `find` loops against 3000 renames) failed 1 time in 43 local
+  runs with a `readRecord` failure whose message was lost. That one failure has no proven mechanism: a Bun probe of
+  `readRecord`'s exact sequence against the test's write-then-rename loop made 1,550,821 reads with no failure other
+  than 6,782 `lstat` calls that saw `nlink` 0, which the guard already accepts. Two things are established. The test
+  was a stress test, not a regression test: how many reads ran was up to the scheduler, it could pass without the fix,
+  and any rare failure unrelated to the race turned it red. And the product fix still had a check-then-read window:
+  `guarded()` lstat'ed `record.json` by path and `readFile` then opened the path again, so every accepted `nlink` 0
+  meant the bytes came from a different file than the one checked, and a symbolic link or a file with a second name
+  renamed in between was read unchecked (also `deleted.json`, `enqueueDeleted`'s record and the copy baseline hashes).
+  Fix in `packages/engine/src/task/isolation.ts`: one reader, `privateRead`, for those four reads. It guards the
+  folders by path, opens with `O_NOFOLLOW` (`ELOOP` is the link error, `ENOTDIR` stays the "ancestor is not a
+  directory" error rather than reading as absent), and checks the open file with `fstat` under the same exported rule
+  as the guard, `linked` (symbolic link, or a file with `nlink > 1`; a replaced file at `nlink` 0 is accepted). A
+  rename after the check can no longer change what is read. Windows has no `O_NOFOLLOW`, so there the path's `lstat`
+  still runs first. Tests in `test/task/isolation.test.ts`, no timing and no mocks: "a record replaced by a save is
+  still read, and a second name for it is refused" (rename a fresh copy over the record, then `find` reads it; a hard
+  link and an ordinary file in place of the record's folder fail with `registry`), and, off Windows, "a record
+  replaced after it was checked is not taken for a hard link, and a link renamed in is refused at the open" (a record
+  replaced under an open handle shows `nlink` 0 and `linked` accepts it; a symbolic link renamed over the record fails
+  with `registry`). Each step fails when its part of the fix is removed: no `O_NOFOLLOW`, the old `nlink !== 1` rule,
+  or no `ENOTDIR` mapping. Ran locally through `vector-serial`, one file at a time, `--timeout 30000`, full logs kept:
+  the two new tests alone 100 times (2/0 each), `test/task/isolation.test.ts` 8 times (92/0 each, no error),
+  `test/tool/task.test.ts` 3 times (161/0 each), `test/task/isolation-base.test.ts` 6/0,
+  engine `bun typecheck`. `test/connect/worktree-target.test.ts` ends 4/10 here with and without this change (the
+  same 10 tests fail on `34def03b`'s `isolation.ts`): `ReadOnlyGit.inspect` reports "this host has no supported
+  unprivileged Git verifier", a limit of this container, not of the code. The Windows and Linux engine shards in CI
+  still have to confirm the change.
