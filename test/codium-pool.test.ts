@@ -397,8 +397,7 @@ function period() {
   return { start, end: start + 30 * 86_400 }
 }
 
-function subscription(price: (typeof PRICES)[number]) {
-  const { start, end } = period()
+function subscription(price: (typeof PRICES)[number], { start, end } = period()) {
   return {
     id: "sub_pool",
     customer: "cus_pool",
@@ -508,7 +507,9 @@ async function seed(options: {
         at: Date.now(),
       }),
     ])
-  world.subscriptions = [subscription(options.price)]
+  // The key's own period: a second boundary crossed since period() above would give Stripe a period one second later,
+  // and the reconcile below would then replace HASH with a new key (hosted CI run 43816263693).
+  world.subscriptions = [subscription(options.price, { start, end })]
   world.keys.set(HASH, {
     hash: HASH,
     name: `Vector test ${user.id} sub_pool ${start}`,
