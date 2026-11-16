@@ -1,0 +1,43 @@
+name: "Install ripgrep (Windows)"
+description: "Install a pinned, checksum-verified ripgrep release on a Windows runner and put its native rg.exe on PATH"
+runs:
+  using: "composite"
+  steps:
+    # Chocolatey made one request to its community feed, did not retry, and exited 0 after a 504 had left it with
+    # nothing installed (jobs 133556510297 and 133557296076). Download the same official release zip from GitHub, which
+    # every job already depends on for checkout, retry it, verify its pinned SHA-256 and put the native executable on
+    # PATH. Every failure throws; there is deliberately no Chocolatey fallback.
+    - name: Install ripgrep
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $version = '15.2.0'
+        # Hashes from the release's published .sha256 files. No job runs on Windows ARM64 with this action yet, so the
+        # ARM64 branch has not been exercised in CI.
+        $release = switch ($env:RUNNER_ARCH) {
+          'X64' { @{ Target = 'x86_64-pc-windows-msvc'; Sha256 = '71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5' } }
+          'ARM64' { @{ Target = 'aarch64-pc-windows-msvc'; Sha256 = 'e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f' } }
+          default { throw "No pinned ripgrep $version build for runner architecture '$($env:RUNNER_ARCH)'." }
+        }
+        $name = "ripgrep-$version-$($release.Target)"
+        $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
+        $zip = Join-Path $env:RUNNER_TEMP "$name.zip"
+        # --retry backs off exponentially and honours Retry-After; --retry-all-errors adds connection resets (and also
+        # retries a permanent 404 until the budget ends). Worst case: an attempt that starts just before the 180 s
+        # retry budget runs its full 60 s, so about 4 minutes plus backoff, inside the engine shards' 5-minute step limit.
+        # Do not add --retry-delay: it turns off the backoff.
+        curl.exe --fail --silent --show-error --location --connect-timeout 20 --max-time 60 --retry 6 --retry-all-errors --retry-max-time 180 --output $zip $url
+        if ($LASTEXITCODE -ne 0) { throw "ripgrep $version could not be downloaded from $url after retries (curl exit $LASTEXITCODE)." }
+        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $release.Sha256) { throw "ripgrep $version from $url has SHA-256 $actual, expected $($release.Sha256)." }
+        # A short directory, and the native rg.exe itself goes on PATH: no launcher shim that fails on long paths.
+        $directory = Join-Path $env:RUNNER_TEMP "ripgrep-$version"
+        Expand-Archive -LiteralPath $zip -DestinationPath $directory -Force
+        $folder = Join-Path $directory $name
+        $rg = Join-Path $folder 'rg.exe'
+        if (-not (Test-Path -LiteralPath $rg -PathType Leaf)) { throw "The ripgrep $version archive from $url has no $name\rg.exe." }
+        $reported = @(& $rg --version)
+        if ($LASTEXITCODE -ne 0) { throw "The downloaded ripgrep executable failed (exit $LASTEXITCODE)." }
+        if ($reported.Count -eq 0 -or $reported[0] -notmatch '^ripgrep 15\.2\.0( |$)') { throw "The downloaded rg.exe reports '$($reported | Select-Object -First 1)', not ripgrep $version." }
+        $reported[0]
+        $folder | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append

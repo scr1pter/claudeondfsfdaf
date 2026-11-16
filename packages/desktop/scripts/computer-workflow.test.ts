@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
@@ -511,7 +511,9 @@ test("the native lane covers supported runners and only expands PR matrices for 
   for (const name of ["mac-test", "windows-arm64-test"]) expect(job(name).if).toContain("needs.plan.outputs.extended")
   const plan = commands(job("plan"))
   expect(plan).toMatch(/extended=true[\s\S]*pull_request[\s\S]*extended=false/)
-  const filter = plan.match(/rg\s+-q\s+'([^']+)'/)?.[1]
+  // ubuntu-24.04 has no ripgrep, so the filter runs through the image's grep.
+  expect(plan).not.toMatch(/(^|[\s;(])rg\s/m)
+  const filter = plan.match(/grep\s+-qE\s+'([^']+)'/)?.[1]
   expect(filter, "PR coverage needs an actual changed-path filter").toBeDefined()
   const matches = new RegExp(filter!)
   for (const file of [
@@ -534,6 +536,104 @@ test("the native lane covers supported runners and only expands PR matrices for 
       (step) => typeof step.run === "string" && /--privileged(?:\s+|=)off/.test(step.run),
     )
     expect(core?.if).toContain("windows-protocol")
+  }
+})
+
+// Run the plan step's real script against a local repository. On main it used `if rg -q`: ubuntu-24.04 has no rg and
+// errexit ignores an `if` condition, so "command not found" read as "no match" and every PR skipped the extended jobs.
+test("the plan's changed-path check needs no ripgrep and fails closed when the filter cannot run", () => {
+  const plan = steps(job("plan")).find((step) => step.id === "plan")!
+  const script = String(plan.run)
+  expect(record(helper.document.env).VECTOR_CHANNEL).toBeDefined()
+  // Forward slashes, so Git Bash on Windows reads the same paths.
+  const temp = mkdtempSync(path.join(tmpdir(), "computer-plan-")).replaceAll("\\", "/")
+  const repo = `${temp}/repo`
+  const git = (...args: string[]) => {
+    const result = spawnSync(
+      "git",
+      ["-c", "user.name=Vector", "-c", "user.email=bot@vectordev.ai", "-c", "commit.gpgsign=false", ...args],
+      { cwd: repo, encoding: "utf8", timeout: 10000 },
+    )
+    expect(result.status, result.stderr).toBe(0)
+    return result.stdout.trim()
+  }
+  const change = (base: string, file: string) => {
+    git("checkout", "-q", "--detach", base)
+    mkdirSync(path.dirname(`${repo}/${file}`), { recursive: true })
+    writeFileSync(`${repo}/${file}`, "change\n")
+    git("add", file)
+    git("commit", "-q", "-m", file)
+    return git("rev-parse", "HEAD")
+  }
+  const run = (base: string, head: string, prefix = "") => {
+    writeFileSync(`${temp}/output`, "")
+    writeFileSync(`${temp}/summary`, "")
+    const env = {
+      VECTOR_CHANNEL: "prod",
+      ARTIFACT_SUFFIX: "plan-test",
+      PRIVILEGED_REQUIRED: "false",
+      ISOLATED_DESKTOP: "false",
+      EVENT_NAME: "pull_request",
+      FULL_DESKTOP_E2E: "true",
+      LINUX_ONLY: "false",
+      WINDOWS_ONLY: "false",
+      BASE_SHA: base,
+      HEAD_SHA: head,
+    }
+    // The script runs under `set -u`: give it every variable the step and the workflow define.
+    for (const name of Object.keys(record(plan.env))) expect(env).toHaveProperty(name)
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-c", `${prefix}\n${script}`], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        ...env,
+        RUNNER_TEMP: temp,
+        GITHUB_OUTPUT: `${temp}/output`,
+        GITHUB_STEP_SUMMARY: `${temp}/summary`,
+      },
+      encoding: "utf8",
+      timeout: 10000,
+    })
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      extended: readFileSync(`${temp}/output`, "utf8").match(/^extended=(\w+)$/m)?.[1],
+    }
+  }
+  try {
+    mkdirSync(repo)
+    git("init", "-q")
+    writeFileSync(`${repo}/README.md`, "base\n")
+    git("add", "README.md")
+    git("commit", "-q", "-m", "base")
+    const base = git("rev-parse", "HEAD")
+    const native = change(base, "packages/desktop/native/x.cpp")
+    const docs = change(base, "docs/note.md")
+
+    expect(run(base, native)).toMatchObject({ status: 0, extended: "true" })
+    expect(readFileSync(`${temp}/summary`, "utf8")).toContain("Native PR coverage: extended=true")
+    expect(run(base, docs)).toMatchObject({ status: 0, extended: "false" })
+
+    // A ripgrep on PATH must not be what decides coverage.
+    expect(run(base, native, `rg() { echo used > "$RUNNER_TEMP/rg-used"; return 1; }`)).toMatchObject({
+      status: 0,
+      extended: "true",
+    })
+    expect(existsSync(`${temp}/rg-used`)).toBe(false)
+
+    // A filter that cannot run (a missing tool, a read error) fails the plan instead of choosing narrow coverage.
+    const broken = run(base, native, 'grep() { if [[ "$1" == -qE ]]; then return 2; fi; command grep "$@"; }')
+    expect(broken.status).not.toBe(0)
+    expect(broken.stdout).toContain("::error::The native changed-path filter failed (grep exit 2)")
+    expect(broken.extended).toBeUndefined()
+
+    // A well-formed base that the repository does not have fails, as does a missing one.
+    expect(run("f".repeat(40), native).status).not.toBe(0)
+    const missing = run("", native)
+    expect(missing.status).not.toBe(0)
+    expect(missing.stdout).toContain("::error::The pull request base SHA is missing or malformed.")
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
   }
 })
 

@@ -151,10 +151,19 @@ jobs:
           extended=true
           if [[ "$EVENT_NAME" == pull_request ]]; then
             extended=false
+            if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::The pull request base SHA is missing or malformed."; exit 1; fi
             git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/computer-changed-paths"
-            if rg -q '(^packages/desktop/native/|^packages/desktop/(scripts/.*computer|test/(computer/|fixtures/computer-protocol/)|src/(main|preload)/computer)|^packages/(schema|core|engine|app)/.*(computer|hands)|^\.github/workflows/(computer-helper|test)\.yml$|^bun\.lock$|^package\.json$)' "$RUNNER_TEMP/computer-changed-paths"; then
-              extended=true
-            fi
+            # ubuntu-24.04 has no ripgrep, and errexit ignores a command used as an `if` condition, so the earlier
+            # ripgrep check here read "command not found" as "no match" and skipped the extended jobs on every PR.
+            # grep ships with the image, and any status other than match (0) or no match (1) fails the plan.
+            status=0
+            grep -qE '(^packages/desktop/native/|^packages/desktop/(scripts/.*computer|test/(computer/|fixtures/computer-protocol/)|src/(main|preload)/computer)|^packages/(schema|core|engine|app)/.*(computer|hands)|^\.github/workflows/(computer-helper|test)\.yml$|^bun\.lock$|^package\.json$)' "$RUNNER_TEMP/computer-changed-paths" || status=$?
+            case "$status" in
+              0) extended=true ;;
+              1) ;;
+              *) echo "::error::The native changed-path filter failed (grep exit $status); refusing to choose narrow native coverage."; exit 1 ;;
+            esac
+            echo "Native PR coverage: extended=$extended ($(wc -l < "$RUNNER_TEMP/computer-changed-paths") changed paths)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           windows=false
           windows_protocol=false
