@@ -28,13 +28,14 @@ function fixture(input: { modelLimit?: number; maxActive?: number; publish?: typ
     calls: 0,
     starts: 0,
     stops: 0,
-    requests: [] as { path: string; init: RequestInit }[],
+    requests: [] as { id: string; password: string; path: string; init: RequestInit }[],
     creation: undefined as unknown,
     saved: [] as unknown[],
     containers: new Map<string, "running" | "stopped">(),
     modelHeaders: "",
     snapshotText: "new content",
     publications: [] as unknown[],
+    connectOff: false,
   }
   const failedStops = new Set<string>()
   const runtime: WorkspaceRuntime = {
@@ -74,8 +75,10 @@ function fixture(input: { modelLimit?: number; maxActive?: number; publish?: typ
       }
       return { ...snapshot, digest: snapshotDigest(snapshot) }
     },
-    async request(_id, _password, path, init = {}) {
-      state.requests.push({ path, init })
+    async request(id, password, path, init = {}) {
+      state.requests.push({ id, password, path, init })
+      if (state.connectOff && path.startsWith("/experimental/"))
+        return Response.json({ code: "disabled", message: "ENGINE-CONNECT-DETAIL" }, { status: 400 })
       if (path.includes("prompt_async")) {
         state.saved.push(JSON.parse(String(init.body)))
         return new Response(null, { status: 204 })
@@ -238,6 +241,95 @@ test("account ownership, replay rejection and fixed engine routing hold across t
     model: { maxOutputTokens: 4096 },
   })
   expect(JSON.stringify(value.state.creation)).not.toContain("PRIVATE-UPSTREAM-KEY")
+})
+
+test("connected tools reach only the caller's own workspace engine, with its credential and fixed folder (CW-24b)", async () => {
+  const value = fixture()
+  const id = await value.create()
+  const engine = (command: unknown, accountId = owner) => value.call(`/workspaces/${id}/engine`, command, accountId)
+  const run = "cr_0123456789abABCDEFGHIJKLMN"
+  const start = "/experimental/session/ses_saved/connect"
+  const review = { to: "vectorscope", target: { kind: "branch", base: "main" }, background: true }
+  for (const item of [
+    {
+      command: { path: "/experimental/connect?sessionID=ses_saved", method: "GET" },
+      forwarded: "/experimental/connect?sessionID=ses_saved&directory=%2Fdata%2Frepository",
+    },
+    {
+      command: { path: "/experimental/connect/runs?sessionID=ses_saved", method: "GET" },
+      forwarded: "/experimental/connect/runs?sessionID=ses_saved&directory=%2Fdata%2Frepository",
+    },
+    {
+      command: { path: `/experimental/connect/runs/${run}`, method: "GET" },
+      forwarded: `/experimental/connect/runs/${run}?directory=%2Fdata%2Frepository`,
+    },
+    {
+      command: { path: `/experimental/connect/runs/${run}/cancel`, method: "POST", body: {} },
+      forwarded: `/experimental/connect/runs/${run}/cancel?directory=%2Fdata%2Frepository`,
+    },
+    {
+      command: { path: start, method: "POST", body: review },
+      forwarded: `${start}?directory=%2Fdata%2Frepository`,
+    },
+  ]) {
+    expect((await engine(item.command)).status).toBe(200)
+    const sent = value.state.requests.at(-1)!
+    expect(sent.id).toBe(id)
+    expect(sent.password).toBe(value.store.get(owner, id)!.enginePassword)
+    expect(sent.path).toBe(item.forwarded)
+    expect(sent.init.method).toBe(item.command.method)
+    // No forwarding or guest header goes to the engine, so its owner-only connect rules see the workspace's owner.
+    expect([...new Headers(sent.init.headers).keys()]).toEqual(["content-type", "x-vector-directory"])
+    expect(sent.init.body).toBe("body" in item.command ? JSON.stringify(item.command.body) : undefined)
+  }
+  const count = value.state.requests.length
+  for (const command of [
+    { path: "/experimental/connect?sessionID=ses_saved", method: "GET" },
+    { path: "/experimental/connect/runs?sessionID=ses_saved", method: "GET" },
+    { path: `/experimental/connect/runs/${run}`, method: "GET" },
+    { path: `/experimental/connect/runs/${run}/cancel`, method: "POST" },
+    { path: start, method: "POST", body: review },
+  ])
+    expect((await engine(command, other)).status).toBe(404)
+  for (const command of [
+    { path: "/experimental/connect/review", method: "POST", body: { ...review, requestKey: randomUUID() } },
+    { path: "/experimental/connect/findings", method: "POST", body: {} },
+    { path: `/experimental/connect/runs/${run}/dismiss`, method: "POST", body: {} },
+    { path: start, method: "POST", body: { ...review, action: "fix" } },
+    { path: start, method: "POST", body: { ...review, background: false } },
+    { path: "/experimental/connect/runs", method: "GET" },
+    { path: "/experimental/connect?sessionID=ses_saved&directory=/other", method: "GET" },
+  ])
+    expect((await engine(command)).status).toBe(400)
+  expect(value.state.requests).toHaveLength(count)
+})
+
+test("the engine's connect refusal stays generic, and a retiring engine starts no connect review (CW-24b)", async () => {
+  const value = fixture()
+  const id = await value.create()
+  value.state.connectOff = true
+  const refused = await value.call(`/workspaces/${id}/engine`, {
+    path: "/experimental/connect/runs?sessionID=ses_saved",
+    method: "GET",
+  })
+  expect(refused.status).toBe(409)
+  const text = await refused.text()
+  expect(JSON.parse(text)).toMatchObject({ error: { code: "ENGINE_REQUEST_FAILED" } })
+  expect(text).not.toContain("ENGINE-CONNECT-DETAIL")
+  expect(value.state.requests).toHaveLength(1)
+  value.state.stopFailure = true
+  expect((await value.call(`/workspaces/${id}/stop`, {})).status).toBe(503)
+  const retiring = await value.call(`/workspaces/${id}/engine`, {
+    path: "/experimental/session/ses_saved/connect",
+    method: "POST",
+    body: { to: "vectorscope", target: { kind: "uncommitted" }, background: true },
+  })
+  expect(retiring.status).toBe(409)
+  expect(await retiring.json()).toMatchObject({ error: { code: "WORKSPACE_RETIRING" } })
+  expect(value.state.requests).toHaveLength(1)
+  value.state.stopFailure = false
+  await value.service.reap()
+  expect(value.store.get(owner, id)!.state).toBe("stopped")
 })
 
 test("saved chats survive pause, service restart and explicit resume without replaying a turn", async () => {

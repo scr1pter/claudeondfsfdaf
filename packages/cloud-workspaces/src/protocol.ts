@@ -189,6 +189,56 @@ export function validateEngineCommand(command: EngineCommand) {
   const path = url.pathname
   const session = "ses_[A-Za-z0-9]{1,80}"
   const request = "(?:per|req|que)_[A-Za-z0-9]{1,80}"
+  const run = "cr_[A-Za-z0-9]{1,61}"
+  // Connected tools (CW-24b): a conversation's members and runs, one run, its cancel, and one VectorScope review of
+  // uncommitted, staged or branch changes, always in the background. service.ts forwards the body as sent, so it is
+  // exactly the engine's review input (schema Connect.ReviewInput, which has no `action`). Fixes, findings, dismissals,
+  // the sessionless folder review and every other /experimental route stay refused, and so does a path that reaches
+  // one of these routes only through dot segments.
+  if (path.startsWith("/experimental/")) {
+    if (command.path.split("?")[0] !== path) return invalid()
+    if (command.method === "GET" && (path === "/experimental/connect" || path === "/experimental/connect/runs")) {
+      const keys = [...url.searchParams.keys()]
+      if (
+        command.body !== undefined ||
+        keys.length !== 1 ||
+        keys[0] !== "sessionID" ||
+        !new RegExp(`^${session}$`).test(url.searchParams.get("sessionID") ?? "")
+      )
+        return invalid()
+      return
+    }
+    if (url.search) return invalid()
+    if (command.method === "GET" && new RegExp(`^/experimental/connect/runs/${run}$`).test(path)) {
+      if (command.body !== undefined) return invalid()
+      return
+    }
+    if (command.method === "POST" && new RegExp(`^/experimental/connect/runs/${run}/cancel$`).test(path)) {
+      if (command.body !== undefined && (!record(command.body) || Object.keys(command.body).length)) return invalid()
+      return
+    }
+    if (command.method !== "POST" || !new RegExp(`^/experimental/session/${session}/connect$`).test(path))
+      return invalid()
+    const body = command.body
+    if (!record(body)) return invalid()
+    fields(body, ["to", "target", "background"])
+    const target = body.target
+    if (
+      body.to !== "vectorscope" ||
+      body.background !== true ||
+      !record(target) ||
+      (target.kind !== "uncommitted" && target.kind !== "staged" && target.kind !== "branch")
+    )
+      return invalid()
+    fields(target, target.kind === "branch" ? ["kind", "base"] : ["kind"])
+    // A branch review's base, as Connect.Ref (schema connect.ts): never an option, no space or control character.
+    if (
+      target.base !== undefined &&
+      (typeof target.base !== "string" || !/^(?!-)[^\s\u0000-\u001f\u007f]{1,256}$/.test(target.base))
+    )
+      return invalid()
+    return
+  }
   if ([...url.searchParams.keys()].some((key) => !["limit", "roots"].includes(key))) return invalid()
   if (url.search && path !== "/session" && !new RegExp(`^/session/${session}/message$`).test(path)) return invalid()
   if ([...url.searchParams.keys()].some((key) => url.searchParams.getAll(key).length !== 1)) return invalid()
