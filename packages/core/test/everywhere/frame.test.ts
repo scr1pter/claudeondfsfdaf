@@ -9,6 +9,8 @@ import {
   OUTSIDE_KEY,
   TASK_LABEL,
   UNATTENDED_KEY,
+  UNATTENDED_SHELL_KEY,
+  UNATTENDED_SHELL_OFFLINE,
   everywhereSystemInstructions,
   frameTask,
   outsideMetadata,
@@ -233,6 +235,8 @@ describe("metadata and title", () => {
     expect(OUTSIDE_KEY).toBe(BrainSchema.OUTSIDE)
     expect(outsideMetadata(job({ platform: "linear" }))).toEqual({ "vector.outside": "linear" })
     expect(UNATTENDED_KEY).toBe("vector.unattended")
+    expect(UNATTENDED_SHELL_KEY).toBe("vector.unattended.shell")
+    expect(UNATTENDED_SHELL_OFFLINE).toBe("offline")
     expect(unattendedMetadata(job())).toEqual({ "vector.unattended": { by: "everywhere", jid, platform: "slack" } })
   })
 

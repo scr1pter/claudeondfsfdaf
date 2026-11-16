@@ -5371,6 +5371,53 @@
         ]
       }
     },
+    "/experimental/shell/unattended": {
+      "get": {
+        "tags": ["shell-unattended"],
+        "operationId": "shell.unattended.policy",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Unattended shell policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellUnattendedPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Report whether this engine runs an unattended session's commands in its offline sandbox: offline-v1 on Linux with a bubblewrap that starts, none elsewhere. Owner only.",
+        "summary": "Get the unattended shell policy",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.shell.unattended.policy({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/find": {
       "get": {
         "tags": ["file"],
@@ -40848,6 +40895,17 @@
         "required": ["directory", "branch", "base"],
         "additionalProperties": false
       },
+      "ShellUnattendedPolicy": {
+        "type": "object",
+        "properties": {
+          "shell": {
+            "type": "string",
+            "enum": ["offline-v1", "none"]
+          }
+        },
+        "required": ["shell"],
+        "additionalProperties": false
+      },
       "Symbol": {
         "type": "object",
         "properties": {
@@ -68144,6 +68202,10 @@
     {
       "name": "worktree-unattended",
       "description": "Owner-only unattended worktree routes."
+    },
+    {
+      "name": "shell-unattended",
+      "description": "Owner-only unattended shell probe."
     },
     {
       "name": "file",

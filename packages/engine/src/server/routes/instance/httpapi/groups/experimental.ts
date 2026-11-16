@@ -206,6 +206,7 @@ export const ExperimentalPaths = {
   worktree: "/experimental/worktree",
   worktreeReset: "/experimental/worktree/reset",
   worktreeUnattended: "/experimental/worktree/unattended",
+  shellUnattended: "/experimental/shell/unattended",
   session: "/experimental/session",
   sessionUsage: "/experimental/session/usage",
   sessionBackground: "/experimental/session/:sessionID/background",
@@ -229,6 +230,12 @@ export const ExperimentalPaths = {
 // The only answer an engine with the unattended worktree route gives. A client treats anything else as "not there".
 export const UnattendedWorktreePolicy = Schema.Struct({ policy: Schema.Literal("unattended-v1") }).annotate({
   identifier: "WorktreeUnattendedPolicy",
+})
+
+// Whether an unattended session's commands run in this engine's offline sandbox. A client treats anything but
+// "offline-v1", an older engine's 404 included, as "none": the session then runs no command at all.
+export const UnattendedShellPolicy = Schema.Struct({ shell: Schema.Literals(["offline-v1", "none"]) }).annotate({
+  identifier: "ShellUnattendedPolicy",
 })
 
 export const ExperimentalApi = HttpApi.make("experimental")
@@ -702,5 +709,38 @@ export const UnattendedWorktreeApi = HttpApi.make("unattended-worktree")
       title: "vector unattended worktree HttpApi",
       version: "0.0.1",
       description: "Owner-only unattended worktree routes.",
+    }),
+  )
+
+// Vector everywhere's command sandbox. Like the worktree routes it has no instance or workspace routing middleware:
+// the answer is this engine's, not a project's.
+export const UnattendedShellApi = HttpApi.make("unattended-shell")
+  .add(
+    HttpApiGroup.make("unattended-shell")
+      .add(
+        HttpApiEndpoint.get("unattendedShell", ExperimentalPaths.shellUnattended, {
+          success: described(UnattendedShellPolicy, "Unattended shell policy"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "shell.unattended.policy",
+            summary: "Get the unattended shell policy",
+            description:
+              "Report whether this engine runs an unattended session's commands in its offline sandbox: offline-v1 on Linux with a bubblewrap that starts, none elsewhere. Owner only.",
+          }),
+        ),
+      )
+      .annotateMerge(
+        OpenApi.annotations({
+          title: "shell-unattended",
+          description: "Owner-only unattended shell probe.",
+        }),
+      )
+      .middleware(Authorization),
+  )
+  .annotateMerge(
+    OpenApi.annotations({
+      title: "vector unattended shell HttpApi",
+      version: "0.0.1",
+      description: "Owner-only unattended shell probe.",
     }),
   )

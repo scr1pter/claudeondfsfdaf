@@ -531,6 +531,8 @@ import type {
   SessionUnshareResponses,
   SessionUpdateErrors,
   SessionUpdateResponses,
+  ShellUnattendedPolicyErrors,
+  ShellUnattendedPolicyResponses,
   SubtaskPartInput,
   SyncHistoryListErrors,
   SyncHistoryListResponses,
@@ -3510,6 +3512,28 @@ export class Worktree extends HeyApiClient {
   private _unattended?: Unattended
   get unattended(): Unattended {
     return (this._unattended ??= new Unattended({ client: this.client }))
+  }
+}
+
+export class Unattended2 extends HeyApiClient {
+  /**
+   * Get the unattended shell policy
+   *
+   * Report whether this engine runs an unattended session's commands in its offline sandbox: offline-v1 on Linux with a bubblewrap that starts, none elsewhere. Owner only.
+   */
+  public policy<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ShellUnattendedPolicyResponses,
+      ShellUnattendedPolicyErrors,
+      ThrowOnError
+    >({ url: "/experimental/shell/unattended", ...options })
+  }
+}
+
+export class Shell extends HeyApiClient {
+  private _unattended?: Unattended2
+  get unattended(): Unattended2 {
+    return (this._unattended ??= new Unattended2({ client: this.client }))
   }
 }
 
@@ -13019,6 +13043,11 @@ export class VectorClient extends HeyApiClient {
   private _worktree?: Worktree
   get worktree(): Worktree {
     return (this._worktree ??= new Worktree({ client: this.client }))
+  }
+
+  private _shell?: Shell
+  get shell(): Shell {
+    return (this._shell ??= new Shell({ client: this.client }))
   }
 
   private _find?: Find

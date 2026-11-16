@@ -18,6 +18,7 @@ import { TaskBridge } from "@vectordevai/schema/task-bridge"
 import type { Task } from "@vectordevai/schema/task"
 import type { TaskPromptOps } from "@/tool/task"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
+import { UnattendedShell } from "@/session/unattended-shell"
 import { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -26,6 +27,7 @@ import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { AppProcess } from "@vectordevai/core/process"
 import path from "node:path"
 import { Effect, Exit, Option, Schema } from "effect"
 import { Provider } from "@/provider/provider"
@@ -588,6 +590,12 @@ const UNATTENDED_OFF = "Vector everywhere is off for this folder."
 const UNATTENDED_UNAVAILABLE = "The allowed folder is not available."
 const UNATTENDED_CLOSED = "This project is not open in Vector. No unattended worktree was created."
 const UNATTENDED_UNTRUSTED = "This project is not trusted. No unattended worktree was created."
+const UNATTENDED_SHELL_OWNER = "The unattended shell policy requires the authenticated server owner."
+
+// A forwarded guest request carries owner credentials, so the credential alone does not make the owner.
+const requireOwner = Effect.fnUntraced(function* (message: string) {
+  if (!(yield* RequestOwner.owner)) return yield* new ForbiddenError({ message })
+})
 
 export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, "unattended-worktree", (handlers) =>
   Effect.gen(function* () {
@@ -597,7 +605,7 @@ export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, 
     const worktree = yield* Worktree.Service
 
     const policy = Effect.fn("UnattendedWorktreeHttpApi.policy")(function* () {
-      yield* owner()
+      yield* requireOwner(UNATTENDED_OWNER)
       return { policy: "unattended-v1" as const }
     })
 
@@ -607,7 +615,7 @@ export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, 
     const create = Effect.fn("UnattendedWorktreeHttpApi.create")(function* (ctx: {
       payload: Worktree.UnattendedInput
     }) {
-      yield* owner()
+      yield* requireOwner(UNATTENDED_OWNER)
       const directory = ctx.payload.directory
       if (!path.isAbsolute(directory)) return yield* refused(UNATTENDED_INVALID)
       // Folders are compared as Worktree compares them. One with no real path (a link loop) matches no listed folder.
@@ -623,11 +631,6 @@ export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, 
           return yield* new ForbiddenError({ message: UNATTENDED_UNTRUSTED })
         return yield* mapWorktreeError(worktree.createUnattended(ctx.payload))
       }).pipe(Effect.provideService(InstanceRef, instance))
-    })
-
-    // A forwarded guest request carries owner credentials, so the credential alone does not make the owner.
-    const owner = Effect.fnUntraced(function* () {
-      if (!(yield* RequestOwner.owner)) return yield* new ForbiddenError({ message: UNATTENDED_OWNER })
     })
 
     // Only the user's own config files may enable this, never a project's. They are read afresh for each request, so
@@ -660,3 +663,19 @@ export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, 
 function refused(message: string) {
   return new WorktreeApiError({ name: "WorktreeCreateFailedError", data: { message } })
 }
+
+// Vector everywhere's command sandbox (R-M2): whether this engine runs an unattended session's commands offline. The
+// owner's question alone, refused as the worktree probe refuses.
+export const unattendedShellHandlers = HttpApiBuilder.group(InstanceHttpApi, "unattended-shell", (handlers) =>
+  Effect.gen(function* () {
+    // The app's process service is the spawner, which owns and signals the start it tries.
+    const spawner = yield* AppProcess.Service
+
+    const policy = Effect.fn("UnattendedShellHttpApi.policy")(function* () {
+      yield* requireOwner(UNATTENDED_SHELL_OWNER)
+      return { shell: yield* UnattendedShell.policy(spawner) }
+    })
+
+    return handlers.handle("unattendedShell", policy)
+  }),
+)

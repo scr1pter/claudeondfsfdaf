@@ -29,6 +29,10 @@ import { PLATFORM_NAMES, titleWords } from "@vectordevai/schema/everywhere-polic
 export const OUTSIDE_KEY = "vector.outside"
 /** The session metadata key that marks a session nobody watches (3.5 step 5). */
 export const UNATTENDED_KEY = "vector.unattended"
+/** The session metadata key that keeps every command of a session nobody watches in the offline sandbox (R-M2). */
+export const UNATTENDED_SHELL_KEY = "vector.unattended.shell"
+/** The one value UNATTENDED_SHELL_KEY takes: no network, writes only in the job's checkout. */
+export const UNATTENDED_SHELL_OFFLINE = "offline"
 
 export const EVERYWHERE_WORK_POLICY =
   "You are working unattended on {repository} because of a request on {Platform}. Nobody can answer questions or approve actions during this run; if you need either, stop and say what you needed. Do only this repository's software work, inside this working directory. Never push, publish, open pull requests, post messages or contact other services; Vector does that after you finish."

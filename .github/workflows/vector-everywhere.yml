@@ -207,6 +207,19 @@ jobs:
           fi
           rg --version
 
+      # The offline-only session tests (packages/engine/test/everywhere/offline-shell.test.ts) run their commands in
+      # bubblewrap. Ubuntu 24.04 limits the unprivileged user namespaces bubblewrap needs, so this runner lifts that
+      # limit, as verify.yml's air-gap job does, and the check after it proves bubblewrap works.
+      - name: Install bubblewrap
+        if: hashFiles('packages/engine/test/everywhere/**') != ''
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-net --ro-bind / / true
+
       # The engine, core and app tests import their dependencies' builds, as turbo's ^build does for their suites.
       - name: Build test dependencies
         if: hashFiles('packages/engine/test/everywhere/**', 'packages/core/test/everywhere/**', 'packages/app/src/**/everywhere*.test.ts', 'packages/app/src/**/everywhere*.test.tsx') != ''
@@ -230,6 +243,8 @@ jobs:
         env:
           VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+          # offline-shell.test.ts fails rather than skips its bubblewrap cases if bubblewrap does not work here.
+          VECTOR_TEST_REQUIRE_BWRAP: "1"
         run: |
           # The tests run as on a developer's computer: engine code reads GITHUB_ACTIONS to act as Vector's GitHub agent.
           export GITHUB_ACTIONS=false

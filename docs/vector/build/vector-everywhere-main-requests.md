@@ -97,3 +97,54 @@ the owner's other sessions.
 The engine behaviour package (VE-08) verifies the actual HTTP request shape and
 records any remaining mismatch; a caller-supplied boolean is not live release
 qualification.
+
+*Status (EV-16, 2026-11-16): delivered for Linux with bubblewrap, CI pending,
+with no runner wiring yet.* Built in this lane, not by main's owners. The marks
+are two flat session metadata keys, `vector.unattended` and
+`vector.unattended.shell: "offline"` (core everywhere/frame.ts). Only the
+owner's `POST /session` sets them (403 for a guest or a guest-marked request,
+400 for any other value or without `vector.unattended`); nothing changes them
+after: PATCH /session/:id and POST /sync/replay refuse an added, changed or
+removed mark with 403 (an equal value passes), and the public metadata write
+keeps them as it keeps `subagent`; a sync replay also may not delete or move a
+session of a marked lineage. A session runs offline-only when it, or a stored
+session above it, carries the shell mark (a missing ancestor ends the
+lineage). Every shell command of such a session, background ones included,
+goes through `Sandbox.unattended` whatever VECTOR_SHELL_SANDBOX or Vector Local
+says, and runs only when that gives `sandboxed` with bubblewrap: no TCP or UDP
+network (not even this computer's servers) and no host socket under /tmp or
+/run, writes only in the checkout and never in its `.git`, private /tmp and
+/run, Vector's data folder hidden, no capabilities, the home-directory secrets
+and the common plaintext credential stores covered, and an allowlisted
+environment (no token, key, proxy, agent or bus socket) with HOME and the
+caches pointed at the sandbox's own /tmp. Windows, seatbelt, a missing,
+non-root or non-starting bubblewrap, and anything the sandbox cannot wrap are
+refused with one fixed message before anything is asked, and never run. The
+session's terminals and its POST /session/:id/shell are refused too. The
+capability is the owner-only probe `GET /experimental/shell/unattended`:
+`{shell: "offline-v1"}` only on Linux with a root-only bubblewrap whose
+one-time self-test starts, `{shell: "none"}` elsewhere (an older engine's 404
+means none). Other sessions are unaffected and there is no switch for the
+whole engine. Tests: packages/engine/test/everywhere/offline-shell.test.ts.
+EV-18 creates the runner's session with the shell mark and allows `bash` only
+on `offline-v1`; EV-21 wires the runner.
+
+- **macOS: not built.** Seatbelt's offline profile lets this computer's
+  servers and every Unix socket through, so it does not qualify. It needs a
+  loopback- and socket-denying seatbelt profile and a macOS CI runner to
+  qualify it, which no lane has yet; until then macOS laptop jobs edit but run
+  no checks.
+- **Windows:** refused; there is no sandbox.
+- **Residual:** a Unix socket file outside /tmp and /run that no mount covers
+  (one inside the checkout, /var/snap/lxd/common/lxd/unix.socket, sockets under
+  /var/lib) stays reachable; a seccomp AF_UNIX filter or more tmpfs mounts would
+  close that. Other projects' files and unknown credential stores in the home
+  folder stay readable (a precondition for EV-21's push).
+- **Escape path EV-18 or EV-21 must close:** a command can write a formatter,
+  package.json or .vector/ config into the checkout, and the engine's next
+  formatter run, LSP start or config reload runs it outside the sandbox with
+  the network. Formatters, LSP and config reloads must be off for an
+  unattended session, or the project's config paths bound read-only, before
+  the runner prompts one.
+
+See vector-everywhere-deviations.md, "2026-11-16, EV-16".

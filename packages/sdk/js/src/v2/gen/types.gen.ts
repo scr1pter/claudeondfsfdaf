@@ -3192,6 +3192,10 @@ export type WorktreeUnattended = {
   base: string
 }
 
+export type ShellUnattendedPolicy = {
+  shell: "offline-v1" | "none"
+}
+
 export type Symbol = {
   name: string
   kind: number
@@ -14271,6 +14275,35 @@ export type WorktreeUnattendedCreateResponses = {
 
 export type WorktreeUnattendedCreateResponse =
   WorktreeUnattendedCreateResponses[keyof WorktreeUnattendedCreateResponses]
+
+export type ShellUnattendedPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/experimental/shell/unattended"
+}
+
+export type ShellUnattendedPolicyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ShellUnattendedPolicyError = ShellUnattendedPolicyErrors[keyof ShellUnattendedPolicyErrors]
+
+export type ShellUnattendedPolicyResponses = {
+  /**
+   * Unattended shell policy
+   */
+  200: ShellUnattendedPolicy
+}
+
+export type ShellUnattendedPolicyResponse = ShellUnattendedPolicyResponses[keyof ShellUnattendedPolicyResponses]
 
 export type FindTextData = {
   body?: never

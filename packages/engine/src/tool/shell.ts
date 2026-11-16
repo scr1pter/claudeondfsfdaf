@@ -39,6 +39,7 @@ import { ComputerCommand } from "@vectordevai/core/util/computer-command"
 import { Hands } from "@vectordevai/schema/hands"
 import { ComputerSession } from "@/computer/session"
 import { Session } from "@/session/session"
+import { UnattendedShell } from "@/session/unattended-shell"
 
 export { Parameters } from "./shell/prompt"
 
@@ -1221,7 +1222,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
 ) {
   // With Vector Local's Web access None the command runs in the sandbox with no network but this computer's, whatever
   // VECTOR_SHELL_SANDBOX says, and is never run unwrapped (Sandbox.offline). Windows has no sandbox: there it runs as
-  // below, and its notice says so.
+  // below, and its notice says so. An unattended session's command arrives here as Sandbox.unattended decided it.
   if (offline?.type === "refused") return yield* Effect.die(new Error(offline.message))
   if (offline?.type === "sandboxed") {
     yield* Effect.logInfo("shell tool sandbox", {
@@ -1901,6 +1902,7 @@ export const ShellTool = Tool.define(
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
     const permission = yield* ShellPermission
+    const sessions = yield* Session.Service
     // Background commands (5.H). A build that leaves them out refuses them.
     const jobs = yield* Effect.serviceOption(ShellJobs.Service)
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
@@ -1925,6 +1927,7 @@ export const ShellTool = Tool.define(
         env: NodeJS.ProcessEnv
         timeout: number
         workspaceRoot: string
+        unattended: boolean
       },
       ctx: Tool.Context,
       beforeSpawn: Effect.Effect<void>,
@@ -1970,7 +1973,7 @@ export const ShellTool = Tool.define(
         ).pipe(Effect.catch(() => Effect.void))
       })
 
-      const offline = webNone() ? Sandbox.offline(input) : undefined
+      const offline = input.unattended ? Sandbox.unattended(input) : webNone() ? Sandbox.offline(input) : undefined
       const notice = offline && offline.type !== "refused" ? offline.notice : undefined
       // The first command of a session with Web access None says what the sandbox limits, before its own output.
       const first = notice !== undefined && !told.has(ctx.sessionID)
@@ -2155,13 +2158,14 @@ export const ShellTool = Tool.define(
         env: NodeJS.ProcessEnv
         timeout?: number
         workspaceRoot: string
+        unattended: boolean
         ops: TaskPromptOps
         beforeSpawn: Effect.Effect<void>
       },
       ctx: Tool.Context,
       shells: ShellJobs.Interface,
     ) {
-      const offline = webNone() ? Sandbox.offline(input) : undefined
+      const offline = input.unattended ? Sandbox.unattended(input) : webNone() ? Sandbox.offline(input) : undefined
       const notice = offline && offline.type !== "refused" ? offline.notice : undefined
       const first = notice !== undefined && !told.has(ctx.sessionID)
       if (first) told.add(ctx.sessionID)
@@ -2229,8 +2233,14 @@ export const ShellTool = Tool.define(
               }
               const timeout = params.timeout ?? defaultTimeoutMs
               // Refused before anything is asked: with Web access None a command runs only in the sandbox, and this
-              // computer has none to run it in.
-              const refused = webNone() ? Sandbox.offlineRefusal() : undefined
+              // computer has none to run it in. An unattended session's commands run only in the offline sandbox,
+              // whatever Vector Local and VECTOR_SHELL_SANDBOX say, and nowhere it cannot be applied (R-M2).
+              const unattended = yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID)
+              const refused = unattended
+                ? yield* UnattendedShell.refusal(spawner)
+                : webNone()
+                  ? Sandbox.offlineRefusal()
+                  : undefined
               if (refused) return yield* Effect.die(new Error(refused))
               const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell })
               // Reserve resolved targets only after every permission, before any process starts.
@@ -2245,6 +2255,7 @@ export const ShellTool = Tool.define(
                     env: yield* shellEnv(ctx, cwd),
                     ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
                     workspaceRoot: instanceCtx.worktree,
+                    unattended,
                     ops,
                     beforeSpawn,
                   },
@@ -2263,6 +2274,7 @@ export const ShellTool = Tool.define(
                   // a subdirectory still has to be able to write anywhere in the
                   // project it belongs to.
                   workspaceRoot: instanceCtx.worktree,
+                  unattended,
                 },
                 ctx,
                 beforeSpawn,

@@ -2617,3 +2617,148 @@ Eight non-blocking findings; each is taken or recorded (deviations log, "2026-11
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
 
 Committed as `feat(core): register the everywhere egress source for Vector Local` (the lead's title, in place of the one proposed above), staging by path the eight code and test files and the four lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-15 bullet keeps "CI pending" until then.
+
+## EV-16: session-scoped offline shell for unattended sessions (2026-11-16)
+
+Package EV-16 (spec §11 R-M2; vector-everywhere-main-requests.md "R-M2"; §5 E7): a session the owner creates with `vector.unattended` and `vector.unattended.shell: "offline"` runs every command of its own and of the sessions below it only in the engine's offline sandbox (Linux with bubblewrap), and none where that cannot be applied; the marks never change after creation; the owner-only probe `GET /experimental/shell/unattended` reports `offline-v1` or `none`. Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-16". Built in the working tree and not committed, as the task said.
+
+**Base.** `git fetch origin release-finish main everywhere-finish` and every lane tip: HEAD `12b3ad09` equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main is `3ab7858e`; PR #33 has merged, and of the lane notes' two rules on merging main this package follows the one EV-14 and EV-15 followed (the lead merges main into this branch), because it was asked to leave its work uncommitted and so cannot make a merge commit; `git diff --stat 67ec3a60 origin/main` over this package's files is empty (main changes test.yml and other files, none of these). No review-fixes or brain-transport precondition. docs/vector/build/v2-spawn-review.md was read before shell.ts was touched: no new spawn site in the shell or terminal tools; one fixed system helper (the bubblewrap self-test) through the spawner, which owns and signals it.
+
+**Files** (line numbers after the change):
+
+- packages/core/src/everywhere/frame.ts (+4): `UNATTENDED_SHELL_KEY` and `UNATTENDED_SHELL_OFFLINE` (:32-35).
+- packages/core/test/everywhere/frame.test.ts (+4): imports and two pins in "metadata and title".
+- packages/engine/src/session/unattended-shell.ts (new, 212 lines): `MARKS`, the five messages, `admission` (:62), `changes` (:75), `differs` (:83), `marked` (:96) with `find`, `lineage` and `above`, `policy` (:142) and `refusal` (:163) with the self-test, `replayRefusal` (:175).
+- packages/engine/src/tool/shell/sandbox.ts (+169/-9): scope-finish `a6fd38d3`'s workspace mode, byte for byte (`writes` :387-395, :447-467, :480-482, :500-541, helpers :600-634; not its `reason` field); new `UNATTENDED_NOTICE`, `UNATTENDED_REFUSAL`, the environment allowlist and caches, `unattendedBinary` (:328), `unattended` (:341), `unattendedEnvironment` (:354) and `rootOnly` (:367); two imports.
+- packages/engine/src/tool/shell.ts (+17/-5): import (:42), `sessions` (:1905), `unattended` in `run`'s and `background`'s inputs (:1930, :2161) and their plans (:1976, :2168), the marked-session refusal in `execute` (:2235-2244), both input literals; one comment sentence in `cmd()` (:1225).
+- packages/engine/src/tool/terminal.ts (+6): import (:20), `sessions` (:261), the refusal at the top of `run` (:679-682).
+- packages/engine/src/tool/subagent-lifecycle.ts (+9/-5): import (:26) and `setPublicMetadata` (:391-408).
+- packages/engine/src/server/routes/instance/httpapi/handlers/session.ts (+12): import (:23), `create` (:227-231), `update` (:301-303), `shell` (:531-533).
+- packages/engine/src/server/routes/instance/httpapi/handlers/sync.ts (+5): import (:5), the replay check (:57-61).
+- packages/engine/src/server/routes/instance/httpapi/groups/experimental.ts (+40): `shellUnattended` (:209), `UnattendedShellPolicy` (:235-239), `UnattendedShellApi` (:715-746).
+- packages/engine/src/server/routes/instance/httpapi/handlers/experimental.ts (+26/-7): two imports, `UNATTENDED_SHELL_OWNER` and the module-level `requireOwner(message)` (:593-598, EV-13's closure moved out), the two EV-13 calls, `unattendedShellHandlers` (:667-680).
+- packages/engine/src/server/routes/instance/httpapi/api.ts (+2/-1) and server.ts (+2/-1): the import and the registration.
+- packages/engine/test/server/httpapi-exercise/index.ts (+17): `shell.unattended.policy` and `session.create.unattended-shell.invalid` (:1450-1466).
+- .github/workflows/vector-everywhere.yml (+15): the "Install bubblewrap" step and `VECTOR_TEST_REQUIRE_BWRAP: "1"`.
+- packages/engine/test/everywhere/offline-shell.test.ts (new, 834 lines, fourteen tests; sixteen after review round one, below):
+  - "only the owner creates an offline-only session, and only with the one accepted value": owner 200 with both marks; guest-marked 403 `OWNER_ONLY` and the session list unchanged; guest credentials 403; `"online"` and the shell key alone 400 `INVALID`; `vector.unattended` alone from a guest-marked request still 200;
+  - "no update changes the marks: PATCH keeps them, refuses a change, and a fork copies them": for the owner and a guest-marked request, adding either mark (with a title) to a plain session is 403 `FIXED` and changes nothing; metadata without the marks keeps them; a changed or `null` mark 403; an equal write 200; the fork carries both;
+  - "a sync replay cannot change the marks or set them without the owner": a replayed update without the marks or with a changed one 403 `FIXED` and the marks stay; the same update with the marks as they are 200 (control); a replayed creation with `"online"` 403 `INVALID`; a guest-marked replay 403; no session made;
+  - "the owner can ask whether this engine keeps an unattended session's commands offline": owner 200 with the expected answer; guest-marked and guest 403 with the fixed text; no credentials 401; with no bubblewrap on PATH, and with a bubblewrap that exits 1, `none`;
+  - (Linux, bubblewrap) "reach no server on this computer, no host socket and no secret variable, and write only in the checkout": one probe script through the real prompt route in a marked session, a session below it and a plain session in the same engine: marked and child give `tcp=7`, `unix=7` (a `Bun.serve` Unix socket under /tmp/vector-v2/everywhere/ev16-*), the /run entry absent, no `*_TOKEN` and no `*_PAT` value, a cache write under $XDG_CACHE_HOME, the write in the checkout, the notice first and in metadata; the plain session reaches both servers, sees /run and both values, and has no sandbox;
+  - (Linux, bubblewrap) "a background command runs in the offline sandbox too": `exit=7` from the background job's loopback request;
+  - "terminals and the session's own shell route never run anything for it": terminal `open` and `list` fail with `TERMINAL` for the marked session and its child, no marker; POST /session/:id/shell 403 `USER_SHELL` for both, no marker; the plain session's 200 and its marker (control);
+  - (where `offline-v1` does not hold: test.yml's Linux shards without bubblewrap, Windows, macOS) "where the offline sandbox is missing, a command is refused and never run";
+  - tool level: "is refused before anything is asked, and nothing runs, on any platform without the sandbox" (no bubblewrap on PATH where it exists; a stored marked session and an unstored one whose context parent is marked; nothing asked, no marker; the plain session runs);
+  - `Sandbox.unattended`: refused for win32, darwin, freebsd and Linux without bubblewrap; a bubblewrap anyone may write is refused; (Linux) the bubblewrap arguments and the exact environment; (Linux) "a command it wraps cannot read the home folder's secrets, which a command outside it can" (runs the wrapped bubblewrap); "bubblewrap works on this runner" (only with `VECTOR_TEST_REQUIRE_BWRAP=1`).
+- Regenerated with ./packages/sdk/js/script/build.ts (two runs, the second byte-identical by sha256): packages/sdk/openapi.json (+62), packages/sdk/js/src/gen/sdk.gen.ts (+30), packages/sdk/js/src/gen/types.gen.ts (+33), packages/sdk/js/src/v2/gen/sdk.gen.ts (+29), packages/sdk/js/src/v2/gen/types.gen.ts (+33); additions only, no untracked output. packages/client: `bun run generate` and `bun run check:generated` exit 0, no change.
+- Lane documents: vector-everywhere-deviations.md (the EV-16 entry), this receipt, vector-everywhere-main-requests.md (R-M2 status), vector-everywhere-spec.md (dated EV-16 notes on the `Sandbox.offline` bullet, §3.5 step 5's bash bullet, E7, §6.4, §7 Stage B and §11 R-M2), vector-everywhere-handoff.md (an annotation on the "Component tests" gate, a "Current gates" bullet, an annotation on EV-14's Left open item and a new Left open item).
+- No flag, runtime environment variable, config key, dependency, lockfile, config.json, workflow.json or help snapshot changed. One test-only variable, VECTOR_TEST_REQUIRE_BWRAP, is set only in vector-everywhere.yml.
+
+**Checks**, each through `vector-serial`, one file at a time from the owning package with `--timeout 30000`, engine and core with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev16/tmp` (logs: /tmp/vector-v2/everywhere/ev16/before/, after/, final/ and runs/):
+
+| Check | Before (HEAD `12b3ad09`) | After |
+| --- | --- | --- |
+| engine test/everywhere/offline-shell.test.ts (new) | n/a | 12 pass, 2 skip (the "sandbox missing" case and the CI guard), 0 fail, 176 expects; with `VECTOR_TEST_REQUIRE_BWRAP=1` 13 pass, 1 skip, 177 expects; final-state run 12 pass, 2 skip, 176 expects |
+| engine test/tool/shell-sandbox-local.test.ts (the brief's regression file) | 9 pass, 2 skip, 30 expects | 9 pass, 2 skip, 30 expects (twice) |
+| engine src/tool/shell/sandbox.test.ts | 12 pass, 12 skip, 126 expects | 12 pass, 12 skip, 126 expects |
+| engine test/tool/shell.test.ts | 63 pass, 475 expects | 63 pass, 475 expects |
+| engine test/tool/terminal.test.ts | 55 pass, 290 expects | 53 pass, 2 fail in the first build ((g)); after the fix 55 pass, 290 expects (twice) |
+| engine test/tool/subagent-lifecycle.test.ts | 18 pass, 80 expects | 18 pass, 80 expects |
+| engine test/server/session-metadata.test.ts | 3 pass, 52 expects | 3 pass, 52 expects |
+| engine test/server/session-audience.test.ts (sync replay) | 12 pass, 115 expects | 12 pass, 115 expects |
+| engine test/server/httpapi-session.test.ts | not run | 26 pass, 142 expects |
+| engine test/control-plane/workspace.test.ts (warp replays) | not run | 39 pass, 156 expects |
+| engine test/server/auth-guest.test.ts | 28 pass, 271 expects | 28 pass, 271 expects |
+| engine test/server/httpapi-experimental.test.ts | 9 pass, 42 expects | 9 pass, 42 expects |
+| engine test/server/httpapi-public-openapi.test.ts | 20 pass, 215 expects | 20 pass, 215 expects |
+| engine test/everywhere/unattended-session.test.ts | 5 pass, 187 expects | 5 pass, 193 and 209 expects (its polling loops vary the count) |
+| engine test/everywhere/worktree.test.ts | 18 pass, 438 expects | 18 pass, 438 expects |
+| core test/everywhere/frame.test.ts | 18 pass, 465 expects | 18 pass, 467 expects (the two new pins) |
+| web test/everywhere-lane.test.ts | 13 pass, 151 expects | 13 pass, 151 expects |
+| cloud src/workflow-compliance.test.ts | 53 pass, 967 expects | 53 pass, 967 expects |
+| sdk/js test/v1-schema.test.ts and test/wire-compat.test.ts | 1 pass, 2 expects; 10 pass, 24 expects | the same, after the regeneration |
+| `bun run test:httpapi` in packages/engine (coverage, auth, effect; `--fail-on-missing --fail-on-skip`) | pass=366 (EV-13's receipt) | pass=368 fail=0 skip=0 missing=0 extra=0 in each mode, the two new scenarios among them |
+| ./packages/sdk/js/script/build.ts, twice (fresh XDG roots in /tmp/vector-v2/everywhere-finish/ev16-xdg) | | exit 0; the five files above; the second run byte-identical (sha256, runs/sdk1.sha = runs/sdk2.sha) |
+| `bun run generate`, then `bun run check:generated` in packages/client | | exit 0 each, packages/client unchanged |
+| `bun typecheck` in packages/core, packages/engine (includes the tests) and packages/sdk/js | | exit 0 each |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | | 27 of 27 tasks successful, exit 0 |
+| prettier | | unattended-shell.ts, offline-shell.test.ts and sandbox.ts conform; shell.ts, subagent-lifecycle.ts, session.ts, sync.ts, api.ts and server.ts conform as at HEAD; frame.ts, frame.test.ts, terminal.ts, groups/handlers experimental.ts and the exerciser keep exactly HEAD's prettier diff (3, 22, 28, 108, 129, 126 lines), so the added hunks conform |
+| Lines over 120 columns added | | string literals and template strings only (messages, the OpenAPI description, two curl lines in the test) |
+| `git diff` scan for personal paths and email addresses | | none |
+
+**Mutations:** nineteen, on the source files alone, each with the new test file run alone (/tmp/vector-v2/everywhere/ev16-mut/): nineteen red, every file's sha256 checked after each restore. Table in the deviations entry.
+
+**Found while testing:**
+- terminal.test.ts's subagent cases pass an unstored `parentID`, and the first build refused them ("The conversation ancestry of this command could not be verified.", two failures): `marked` now judges an unstored session by its context parent only when that parent is stored (deviations (g)); 55 of 55 pass again.
+- Bun reads `os.homedir()` once at start, so the plan's in-process fake HOME could not move the profile's protected home; the home-secret case now runs the wrapped bubblewrap directly, and `unattended` sets the command's HOME to the protected home (deviations (b), (l)).
+- Real guest credentials scoped to no workspace are refused before the create check ("Guest credential is not scoped to this workspace or session"), and POST /sync/replay is owner-only at the middleware; the tests assert the guest-marked path for the messages and plain 403s for those.
+
+**Coordination:** `git merge-tree --write-tree` of a temporary commit of the working tree against every lane tip: clean for main, codium-finish, hands-finish, native-qualify, brain-transport, review-fixes and workspaces-finish; scope-finish and connect-finish conflict only in packages/core/src/review/model-evidence.ts, as HEAD alone already does. Details in the deviations entry.
+
+**Not done here (the task said not to commit):** the commit (`feat(engine): run an unattended session's shell only in a no-network sandbox`, the lead's title, staging by path exactly the 26 paths listed under "Commit paths" in "EV-16 review round one" below; the body names the regenerated files and their generator, says packages/client is unchanged, names the workflow step and the test-only VECTOR_TEST_REQUIRE_BWRAP, and says no flag, runtime variable, config key, dependency or lockfile changed), the full `bun turbo typecheck` before the push, the push, and the workflow_dispatch runs of vector-everywhere.yml and typecheck.yml on everywhere-finish, whose run ids go in the next lane-docs commit.
+
+### EV-16 review round one (2026-11-16)
+
+Eighteen non-blocking findings (several repeat one another); each is taken or recorded (deviations log, "2026-11-16, EV-16", "Review round one"). Left in the working tree, not committed. HEAD is still `12b3ad09` (= origin/everywhere-finish, holding origin/release-finish `67ec3a60`); `git fetch` showed scope-finish at `4ca3ce5f` and main at `2f64aca2`, nothing was merged, and `git diff --stat 67ec3a60 origin/main` over this package's files is still empty.
+
+**Files** (line numbers after the change):
+
+- packages/engine/src/session/unattended-shell.ts (now 250 lines): `KEPT` (:26); `SELF_TEST` exported and ending `/bin/sh -c :` (:40-60); `admission` refuses a null `vector.unattended` (:69-75); `marked` and `lineage` (:102-148): a missing ancestor ends the lineage, a loop or more than 64 levels still dies; `policy(spawner, platform?)` (:155), the uncached `selfTest(spawner, binary)` (:167) and `refusal(spawner, platform?)` (:185); `decodeReplayed` (`Schema.decodeUnknownOption`, :196) in place of `metadataOf` and both casts; `replayRefusal` (:216) also refuses a replayed deletion or move of a session of a marked lineage.
+- packages/engine/src/tool/shell/sandbox.ts (now +221/-9 against HEAD): `UNATTENDED_NOTICE` narrowed (:289); `UNATTENDED_SECRETS` (:325); `unattended` (:358) binds the checkout's `.git` read-only and hides the stores, inserted before `--remount-ro` or `--chdir`, and refuses a `.git` link; `gitMetadata` (:392) and `hiddenStores` (:399); a one-line NOTE above `wrapCommand` (:428). The ported scope-finish hunks are unchanged.
+- packages/engine/test/everywhere/offline-shell.test.ts (now 947 lines, sixteen tests): the creation case adds the null `vector.unattended` 400; the replay case is now "a sync replay cannot change the marks, set them without the owner, or cut a session off from them" (deleting the marked session, deleting then re-creating it, deleting the child, moving the child: 403 `KEPT`; deleting the plain session: 200 and 404 after; an orphan replayed with a missing parent runs its POST /session/:id/shell); the end-to-end probe writes `.git/hooks/post-checkout` (refused in the marked session and its child, written in the plain one); the argument case checks the ~/.docker tmpfs, the ~/.git-credentials bind, the `.git` bind after the checkout's own bind, and a `.git` link's refusal; the home-secrets case reads ~/.git-credentials; new "the capability an engine reports" describe: `policy` and `refusal` for win32 and darwin (`none`, `UNATTENDED_REFUSAL`), and `selfTest` on a fake bubblewrap (records exactly `SELF_TEST`; exit 1 false, exit 0 true; skipped on Windows only).
+- Lane documents: the deviations entry ("What changed", "The sequence", (a), (d), (g), (h), new (n)-(q), Safe by default, Left open, round-two mutations, Coordination with the land order, Review round one), this receipt, main-requests.md's R-M2 status and residuals, the handoff's EV-16 gate bullet and Left open item (three runner preconditions and a merge note), and the spec's EV-16 notes (§5 E7's wording, §6.4's numstat now +17/-5, §11 R-M2's wording).
+- Not changed this round: shell.ts (+17/-5), terminal.ts, subagent-lifecycle.ts, the route handlers, the probe's API, core frame.ts and its test, the workflow, the exerciser, and every generated file (no public HttpApi changed, so no regeneration).
+
+**Checks**, each through `vector-serial`, one file at a time from packages/engine with `--timeout 30000` and `TMPDIR=/tmp/vector-v2/everywhere-finish/ev16/tmp`, on the final sources (logs: /tmp/vector-v2/everywhere/ev16/fix/):
+
+| Check | Result |
+| --- | --- |
+| test/everywhere/offline-shell.test.ts | 14 pass, 2 skip (the "sandbox missing" case and the CI guard), 0 fail, 210 expects; with `VECTOR_TEST_REQUIRE_BWRAP=1` 15 pass, 1 skip, 211 expects |
+| test/tool/shell-sandbox-local.test.ts (the brief's regression file) | 9 pass, 2 skip, 30 expects |
+| src/tool/shell/sandbox.test.ts | 12 pass, 12 skip, 126 expects |
+| test/tool/shell.test.ts | 63 pass, 475 expects |
+| test/tool/terminal.test.ts | 55 pass, 290 expects |
+| test/tool/subagent-lifecycle.test.ts | 18 pass, 80 expects |
+| test/server/session-metadata.test.ts | 3 pass, 52 expects |
+| test/server/session-audience.test.ts (sync replay) | 12 pass, 115 expects |
+| test/server/httpapi-session.test.ts | 26 pass, 142 expects |
+| test/server/auth-guest.test.ts | 28 pass, 271 expects |
+| test/server/httpapi-experimental.test.ts | 9 pass, 42 expects |
+| test/control-plane/workspace.test.ts (warp replays through /sync/replay) | 39 pass, 157 expects (156 before; its polling varies the count) |
+| test/everywhere/unattended-session.test.ts | 5 pass, 193 expects |
+| `bun run test:httpapi` (coverage, auth, effect; `--fail-on-missing --fail-on-skip`) | pass=368 fail=0 skip=0 missing=0 extra=0 in each mode |
+| `bun typecheck` in packages/engine (includes the tests) | exit 0 |
+| prettier | unattended-shell.ts, offline-shell.test.ts and sandbox.ts conform |
+| mutations N1-N9 (/tmp/vector-v2/everywhere/ev16-mut2/, one test-file run each, sha256 restored) | nine red; table in the deviations entry |
+| `git merge-tree --write-tree` of a temporary commit of the working tree | scope-finish `4ca3ce5f` and connect-finish `19c48b89`: only the pre-existing model-evidence.ts conflict (sandbox.ts auto-merges with scope-finish); main `2f64aca2`, codium-finish `c703cdf9`, hands-finish `8139e5fc`, native-qualify `2677c32c`, brain-transport `a5280117`, review-fixes `1433d105` and workspaces-finish `e37ec1b5`: clean |
+
+The full `bun turbo typecheck --concurrency=2` is the pre-push gate and was not re-run here (no commit or push in this task); core is unchanged this round.
+
+**Commit paths** (26, stage exactly these):
+
+- source (11 modified and the new module): packages/core/src/everywhere/frame.ts, packages/engine/src/session/unattended-shell.ts (new), packages/engine/src/tool/shell.ts, packages/engine/src/tool/shell/sandbox.ts, packages/engine/src/tool/terminal.ts, packages/engine/src/tool/subagent-lifecycle.ts, packages/engine/src/server/routes/instance/httpapi/api.ts, packages/engine/src/server/routes/instance/httpapi/server.ts, packages/engine/src/server/routes/instance/httpapi/groups/experimental.ts, packages/engine/src/server/routes/instance/httpapi/handlers/experimental.ts, packages/engine/src/server/routes/instance/httpapi/handlers/session.ts, packages/engine/src/server/routes/instance/httpapi/handlers/sync.ts;
+- tests (3): packages/engine/test/everywhere/offline-shell.test.ts (new), packages/engine/test/server/httpapi-exercise/index.ts, packages/core/test/everywhere/frame.test.ts;
+- workflow (1): .github/workflows/vector-everywhere.yml;
+- regenerated with ./packages/sdk/js/script/build.ts (5): packages/sdk/openapi.json, packages/sdk/js/src/gen/sdk.gen.ts, packages/sdk/js/src/gen/types.gen.ts, packages/sdk/js/src/v2/gen/sdk.gen.ts, packages/sdk/js/src/v2/gen/types.gen.ts;
+- lane documents (5): docs/vector/build/vector-everywhere-deviations.md, docs/vector/build/vector-everywhere-handoff.md, docs/vector/build/vector-everywhere-main-requests.md, docs/vector/build/vector-everywhere-progress.md, docs/vector/build/vector-everywhere-spec.md.
+
+### EV-16 commit gate (2026-11-16)
+
+Before the commit, on the final sources (HEAD `12b3ad09` = origin/everywhere-finish, holding origin/release-finish `67ec3a60`; origin/main `2f64aca2` is not merged here, as the lane notes leave that to the lead), each through `vector-serial`, one file at a time from the owning package with `--timeout 30000` and `TMPDIR=/tmp/vector-v2/everywhere-finish/ev16/tmp` (logs: /tmp/vector-v2/everywhere/ev16/gate/):
+
+| Check | Result |
+| --- | --- |
+| engine test/everywhere/offline-shell.test.ts | 14 pass, 2 skip, 0 fail, 210 expects; with `VECTOR_TEST_REQUIRE_BWRAP=1` 15 pass, 1 skip, 211 expects |
+| engine test/tool/shell-sandbox-local.test.ts | 9 pass, 2 skip, 30 expects |
+| engine src/tool/shell/sandbox.test.ts | 12 pass, 12 skip, 126 expects |
+| engine test/tool/shell.test.ts, terminal.test.ts, subagent-lifecycle.test.ts | 63 pass (475 expects), 55 pass (290), 18 pass (80) |
+| engine test/server/session-metadata.test.ts, httpapi-session.test.ts, session-audience.test.ts, httpapi-experimental.test.ts | 3 pass (52), 26 pass (142), 12 pass (115), 9 pass (42) |
+| core test/everywhere/frame.test.ts | 18 pass, 467 expects |
+| `bun run test:httpapi` in packages/engine | pass=368 fail=0 skip=0 missing=0 extra=0 in coverage, auth and effect modes |
+| ./packages/sdk/js/script/build.ts (fresh XDG roots in /tmp/vector-v2/everywhere-finish/ev16-gate-xdg) | exit 0; the five regenerated files byte-identical to the working tree (sha256) |
+| `bun run check:generated` in packages/client | exit 0, unchanged |
+| `bun typecheck` in packages/core, packages/engine and packages/sdk/js | exit 0 each |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+The commit title is the lead's (`feat(engine): run an unattended session's shell only in a no-network sandbox`); it stages exactly the 26 paths above. The workflow_dispatch run ids of vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml on everywhere-finish go in the next lane-docs commit; the handoff's EV-16 bullet keeps "CI pending" until then.

@@ -17,6 +17,7 @@ import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
 import { ComputerSession } from "@/computer/session"
 import { Session } from "@/session/session"
+import { UnattendedShell } from "@/session/unattended-shell"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Plugin } from "@/plugin"
@@ -257,6 +258,7 @@ export const TerminalTool = Tool.define<
     const permission = yield* ShellPermission
     const guests = yield* FreeModelGuests.Service
     const flags = yield* RuntimeFlags.Service
+    const sessions = yield* Session.Service
     // Exit and pattern notes (notify). A build that leaves TaskNotify out (a test of the tool alone) refuses notify.
     const notifier = yield* Effect.serviceOption(TaskNotify.Service)
     // By terminal. Lines the user types themselves are not here: the scan sees only what the agent typed.
@@ -674,6 +676,10 @@ export const TerminalTool = Tool.define<
     })
 
     const run = Effect.fn("TerminalTool.run")(function* (params: Params, ctx: Tool.Context, directory: string) {
+      // An unattended session's commands run only in the offline sandbox, and no terminal runs there: none is opened,
+      // listed, read, typed into or closed for it (R-M2).
+      if (yield* UnattendedShell.marked(sessions, ctx.sessionID, ctx.parentID))
+        return yield* Effect.die(new Error(UnattendedShell.TERMINAL))
       const offline = Egress.policy()
       // Refused before anything is asked: a terminal runs outside the sandbox Web access None keeps every command in.
       if (["open", "type", "keys", "signal"].includes(params.action) && offline.enabled && offline.web === "none")
