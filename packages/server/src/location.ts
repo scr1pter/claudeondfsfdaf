@@ -1,9 +1,10 @@
 import { Location } from "@vectordevai/core/location"
 import { LocationServiceMap } from "@vectordevai/core/location-services"
+import { PluginInternal } from "@vectordevai/core/plugin/internal"
 import { PtyTicket } from "@vectordevai/core/pty/ticket"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { WorkspaceV2 } from "@vectordevai/core/workspace"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { ForbiddenError, InvalidRequestError } from "@vectordevai/protocol/errors"
@@ -33,6 +34,14 @@ export function response<A, E, R>(data: Effect.Effect<A, E, R>) {
     }
   })
 }
+
+// A Location's built-in plugins fill its agents and catalog in the background as it starts, and a request can be what
+// starts it. A route that judges agents or models waits for them rather than reading an empty list: with no agent, a
+// permission check fails closed to deny. Read optionally: embedded callers may provide no location plugins, so there is
+// nothing to wait for.
+export const pluginsLoaded = Effect.serviceOption(PluginInternal.Service).pipe(
+  Effect.flatMap((plugins) => (Option.isSome(plugins) ? plugins.value.ready : Effect.void)),
+)
 
 function ref(request: HttpServerRequest.HttpServerRequest): Location.Ref {
   const query = new URL(request.url, "http://localhost").searchParams

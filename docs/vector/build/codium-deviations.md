@@ -7201,3 +7201,23 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   over the record takes the old file from 1 name to 0 and never gives either file a second one, and the guard now
   refuses only `nlink > 1`. If CI shows this test red, its log has the full `Cause.pretty` text and needs a root cause.
   The assertion stays as it is.
+- **16 Nov 2026, unit (linux) red at `b2537951`: HttpApi exerciser `v2.session.permission.create` (test.yml job
+  133280588107, step "Run HttpApi exerciser gates", pass=362 fail=1).** "permission create should create a pending
+  request" (`packages/engine/test/server/httpapi-exercise/index.ts:2038`). Not caused by this lane: its diff touches no
+  permission, agent, plugin or server code, and the same tree passed on main (run 43839344467, job 133204672070). Root
+  cause, a startup race on main: `POST /api/session/{sessionID}/permission` called `PermissionV2.ask` without waiting
+  for the Location's built-in plugins. They load in the background (`PluginInternal.boot`, forked), and the build
+  agent's rules become visible only when the whole plugin batch commits. A request that starts the Location and lands
+  in that window finds no agent, so the permission service falls back to its fail-closed `* * deny` ruleset and answers
+  200 with `effect: "deny"` and no pending request. The guest prompt checks in the session handler and session execution already
+  wait for `PluginInternal.ready`; this route did not. Fix: the shared `pluginsLoaded` wait moved from
+  `packages/server/src/handlers/session.ts` to `packages/server/src/location.ts`, and the permission create handler
+  now waits on it before `ask`. `createEmbeddedRoutes` takes optional node replacements so a test can hold a
+  Location's plugin boot. The fail-closed deny stays. New test
+  `packages/engine/test/server/httpapi-v2-permission-plugins.test.ts` holds the boot open, posts the `.env` read, checks
+  the request waits for the plugins, then releases them and expects `ask` with one pending request. Without the fix it
+  failed 6 of 6 runs (the request answered at once with `effect: "deny"`, the CI symptom); with it it passed 20 of 20.
+  Ran locally through `vector-serial`, one file at a time: the exerciser for `v2.session.permission.{create,list,get,
+  reply}` (1/0 each), `bun run test:httpapi` (coverage, auth and effect modes 363/0 each),
+  `test/server/free-model-guest.test.ts` 15/0, sdk-next `test/embedded.test.ts` 4/0; `bun typecheck` in server,
+  engine and sdk-next.
