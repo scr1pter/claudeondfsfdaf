@@ -4,7 +4,7 @@ This is a review checklist, not authorization to publish installers or deploy a 
 
 ## Reviewable release material
 
-- User guide: [`/docs/vector-hands`](../../../packages/web/src/pages/docs/vector-hands.astro).
+- User guide (draft, not public): [`packages/web/src/drafts/docs/vector-hands.astro`](../../../packages/web/src/drafts/docs/vector-hands.astro). PUB-4 moved it out of `pages/`; publishing it is for the website-gating lane and the owner.
 - Release entry and generated changelog: `packages/web/src/data/vector-releases.ts` and `packages/web/public/changelog.json`.
 - Engineering/signing/identity procedures: [VECTOR-HANDS.md](../VECTOR-HANDS.md).
 - Legal proposals: [hands-legal-draft.md](./hands-legal-draft.md). Existing privacy and terms pages are unchanged until explicit sign-off.
