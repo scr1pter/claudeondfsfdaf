@@ -2380,3 +2380,42 @@ Update (2026-11-12, PR #26 head): every run below is a `pull_request` run of PR 
 - Vector standalone installers [43151686001](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43151686001): `windows` and `windows-native` passed.
 
 This is the native Windows CI evidence that this entry's independent-review paragraph required. It covers Linux and Windows runners only. No macOS run, release review, merge or release is claimed.
+
+## 2026-11-16 CI14 - Add server refused a slow Ollama fake on Windows (local.test.ts:413)
+
+Status: root cause found and fixed in core. The test is unchanged. "local.test.ts probe 400" stays on the known-flake lists (RULES-v2.md, v2-handoff.md:51, v2-master-prompt.md:40, connected-workspace-handoff.md:180 and vector-everywhere-handoff.md:124) until several Windows engine shards that hold local.test.ts pass on the fix. One green shard proves little for a failure this rare. RULES-v2.md is the lead's to edit.
+
+What failed:
+- Run 42159471110, engine (windows, shard 12/12), job `127701423208`, on `f062bcce` (2026-11-06): "the Local API > a new identity pin for a server on the list, or none, needs confirm; Add server says what changed", 1,612.27 ms, at local.test.ts:413. It was handed to CI14 in the CI11 entry and not diagnosed then.
+- Run 43907070848, engine (windows, shard 9/12), job `133439824061`, on hands-finish `7078232f` (PR merge ref, 2026-11-16T17:06:06Z): the same test, 1,060.11 ms, `expect(again.status).toBe(409)`, Expected 409, Received 400. The 9 tests before it and the 20 after it passed, including the sibling that re-adds the same server with Vector Local off (1,130.26 ms). The log does not show the response body.
+- Passes in between include native-qualify job `133220821371` (shard 8/12, 1,032.52 ms) and the CI14 samples recorded under CI13 and SE-5.
+
+Cause:
+- The 400 is Add server's own "not-found" refusal. POST /local/servers runs `LocalSettings.probe` (handlers/local.ts:122). That calls `LocalProbe.probe(input.url, { headers })` with no timeout (local-settings.ts:595). `examine` (core/src/local-mode/probe.ts) picked `IDENTIFY_TIMEOUT.loopback`, 400 ms, for 127.0.0.1. Each kind's identity read has an `AbortSignal.timeout(400)` that covers `Egress.fetch` and the body read. When Ollama's GET /api/version took longer, `found` was empty, the probe returned undefined, `LocalSettings.probe` returned `{ server: null }`, and the handler failed with `failure("not-found")` (handlers/local.ts:123). `LocalApiError` is declared with `httpApiStatus: 400` (groups/local.ts:22-33). The code never reached `LocalSettings.addServer`, whose apply confirm (local-settings.ts:717-721) gives the 409.
+- No other 400 in addServer or apply fits this test: there is no agent marker, no lock, no named provider (freeID always gives a valid id) and no `held`, and the config was readable, because the two PATCHes just before were judged normally.
+- Why only on Windows: the probe at local.test.ts:403 ran with Vector Local off. turnOn at :405 switched it on, so every read at :412 takes the full `Egress.fetch` path (firstHop, decide, and the network log's synchronous `fs.appendFileSync`, with open and chmod on the first write after `Egress.erase`; log-store.ts:104-110) while the 400 ms timer runs. The API listener and the fake (Bun.serve in core/test/fixture/local-servers/serve.ts, which closes every connection, so each read opens a new loopback connection) share one event loop with it. On Linux the whole probe takes 36 ms. Why Windows goes over 400 ms was not measured.
+- The 400 ms budget was meant for Detect only. `makeHolds.read` already gave a pinned loopback server `IDENTIFY_TIMEOUT.remote`, and its comment says "the short wait is for Detect, which reads many ports at once". Detect passes `IDENTIFY_TIMEOUT.loopback` explicitly (detect.ts:37-38). Every other caller reads one address the owner typed or listed, and inherited Detect's wait: Add server and Read (/local/probe), `vector local` setup (cli/cmd/local.ts:169), the Check row (local-settings.ts:541 `verify` and :542 `probe`) and Check models (local-settings.ts:800).
+- hands-finish did not cause it: `git diff origin/main...hands-finish` touches nothing under core/src/local-mode, local-settings.ts, the local handler or group, or local.test.ts. Its new test file only moves Bun's whole-file shard split.
+
+Fix (packages/core/src/local-mode/probe.ts):
+- `examine` defaults to `options.timeout ?? IDENTIFY_TIMEOUT.remote` (3 s) for every address. `examine` serves both `probe` and `verify`, so the Check row for a pinned server (local-settings.ts:541) also waits up to 3 s now. That matches what `makeHolds.read` already did for model calls. The engine-only alternative (passing the timeout at local-settings.ts:542, :595 and :800) would have missed :541.
+- The `IDENTIFY_TIMEOUT` doc comment now says what each value is for.
+- Not changed: `ollamaModels`, the model read of a listed server with no pin before a model call, keeps the loopback default. It is not on the failing path, and changing it would make unpinned loopback servers hold model calls for up to 3 s. That is a separate behaviour change and needs its own test.
+- Cost: Add server, Read and Check rows for a loopback server that is down or silent now wait up to 3 s instead of 0.4 s. A refused connection still fails at once on Linux, but on Windows a refused loopback connection can take about 2 s because of SYN retries. Waiting longer on one address the owner typed is acceptable. Wrongly calling a slow server "not found" is not: it refuses Add server and fails a Check row. Windows tests such as "Check reads every layer, and a listed server that stops answering fails its row" get slower but stay well inside `--timeout 30000`.
+
+Tests:
+- core/test/local-mode/probe.test.ts "waits for one typed address on this computer as long as for one elsewhere, not Detect's short wait": an Ollama fake on 127.0.0.1 whose GET /api/version answers 600 ms late (`IDENTIFY_TIMEOUT.loopback + 200`). `LocalProbe.probe(origin)` still finds it. Without the fix this test fails (621.04 ms, undefined).
+- core/test/local-mode/detect.test.ts "keeps its short wait: an Ollama server slower than 400 ms to say its version is not found": the same slow fake, and `LocalDetect.detect({ ports: [port] })` gives `[]`. As a mutation, with detect.ts:38 changed to `timeout: options.timeout`, this test and "gives a server 400 ms to answer before moving on" both fail, so Detect's fast scan is pinned.
+- packages/engine/test/server/local.test.ts is unchanged. Its 409 assertion is correct.
+- Mechanism script /tmp/vector-v2/local-400/probe-budget.ts (the real `LocalProbe.probe` against the real fake on 127.0.0.1). Before the fix: /api/version 300 ms late is found at 308 ms, 390 ms late at 397 ms, and 410 or 600 ms late gives undefined at 401 ms. After the fix: 410 ms late is found at 419 ms, and 600 ms late at 607 ms.
+
+Local runs (Linux, one file at a time through vector-serial, `--timeout 30000`):
+- core probe.test.ts 61 pass, 0 fail (215 expect() calls, 5.15 s). detect.test.ts 6 pass, 0 fail (21 calls). servers.test.ts 13 pass. v2-model-calls.test.ts 4 pass.
+- engine test/server/local.test.ts 30 pass, 0 fail (20.43 s). test/server/httpapi-add-model-server.test.ts 3 pass.
+- engine test/cli/local.test.ts 12 pass, 1 fail, and test/local-mode/local-run.test.ts 30 pass, 1 fail. Both failures happen in this sandbox with and without the fix (checked with the fix reverted). They are the same environment leak: the provider list gains `amazon-bedrock` ("Off in Vector Local: amazon-bedrock, lmstudio." at cli/local.test.ts:161, and the key list at local-run.test.ts:722). They are not related to the probe budget.
+- core and engine `bun typecheck` passed. Prettier is clean on the three changed core files.
+
+Remaining:
+- The fix should go to main in its own small PR (for example branch `probe-identify-budget`, "fix(core): give one-address server reads the full identify budget"). It is committed on hands-finish as one self-contained commit so it can be cherry-picked.
+- After several Windows engine shards that hold local.test.ts pass on the fix, remove "local.test.ts probe 400" from the four handoff docs above. The lead removes it from RULES-v2.md.
+- Do not re-run job `133439824061` on its own. It failed inside a test body, so the re-run policy does not cover it.
