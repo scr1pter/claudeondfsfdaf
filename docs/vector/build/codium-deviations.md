@@ -7249,3 +7249,46 @@ Ran locally (through `vector-serial`, one file at a time from `test/`, `--timeou
   same 10 tests fail on `34def03b`'s `isolation.ts`): `ReadOnlyGit.inspect` reports "this host has no supported
   unprivileged Git verifier", a limit of this container, not of the code. The Windows and Linux engine shards in CI
   still have to confirm the change.
+
+## Codium finish: TUI runtime plugin port for spawn-inventory, codium-finish lane (16 Nov 2026)
+
+Why `d93b40b8` (the cherry-pick of connect-finish's `1d944dd9`) is on this branch, and what proves it works here.
+Its commit message and the entry it appends to `connected-workspace-deviations.md` describe only connect-finish's
+`hub.test.ts` failure; this entry records the codium one.
+
+- **Failure.** PR #36 run 43929693613 on `4435beab` failed two tests in `test/spawn-inventory.test.ts` ("the scan sees
+  every spawn primitive and ignores comments and look-alikes" at :385 and "the launch check sees each other way a
+  launch file can start a process" at :456) on engine (linux, shard 4/4) job 133519182004 and engine (windows, shard
+  12/12) job 133519182617. Every bare import specifier in the test's source strings (for example
+  `import launch from "cross-spawn"` at :349 and :436) came back as a `file:///…/node_modules/…` URL, so the
+  `PRIMITIVES` patterns no longer matched. Same root cause as connect-finish's: the process-global OpenTUI runtime
+  plugin text-rewrites `from "<bare>"` in later non-`node_modules` files once a resolve parent exists.
+- **Shard indices** (0-based, sorted engine test files from `git ls-tree`). At `4435beab` (662 files)
+  `cli/tui/plugin-loader-entrypoint.test.ts` is 143, `plugin/local-sdk.test.ts` 311 and `spawn-inventory.test.ts` 551:
+  all residue 3 mod 4 and 11 mod 12, so one Bun process on both systems. `server/httpapi-v2-permission-plugins.test.ts`
+  (new on this branch) moved spawn-inventory into that residue. At `3fbc3eb2` (663 files, with
+  `plugin/tui-runtime-scope.test.ts` at 323) spawn-inventory is 552: Linux 1/4 and Windows 1/12. Entrypoint, local-sdk
+  and tui-runtime-scope stay in Linux 4/4 and Windows 12/12. Its new shard-mates `cli/tui/plugin-add.test.ts` (140,
+  Linux only) and `cli/tui/plugin-loader-pure.test.ts` (144, both) do import `src/plugin/tui/runtime`, but without the
+  fix `./test/cli/tui/plugin-add.test.ts ./test/cli/tui/plugin-loader-pure.test.ts ./test/spawn-inventory.test.ts`
+  passes (15/0): they register the plugin but no resolve parent follows. So spawn-inventory passing in the next CI run
+  is not evidence for the fix.
+- **Evidence** (`./` paths keep argument order; one invocation at a time through `vector-serial`, `--timeout 30000`).
+  The suggested two-file check `./test/plugin/local-sdk.test.ts ./test/spawn-inventory.test.ts` does not reproduce:
+  with `runtime.ts` and `local-sdk.test.ts` restored to `4435beab` it passes 23/0, because local-sdk registers the
+  plugin without making a resolve parent. Adding the entrypoint test first reproduces the CI failure exactly:
+  `./test/cli/tui/plugin-loader-entrypoint.test.ts ./test/plugin/local-sdk.test.ts ./test/spawn-inventory.test.ts`
+  gives 29 pass, 2 fail (the :385 and :456 tests) on the `4435beab` sources and 31 pass, 0 fail with the fix. With the
+  fix, single files: `tui-runtime-scope` 2/0, `spawn-inventory` 11/0, `local-sdk` 12/0, and the two-file pair 23/0.
+  On CI, `tui-runtime-scope.test.ts` passed on PR #38 run 43913739229 (Windows shard 3/12); it must pass on both
+  systems in this PR's run too. Engine `bun typecheck` passed.
+- **Still to check after the push.** PR #38 run 43913739229 had engine (linux, shard 3/4) job 133464471365 hit the
+  30-minute step timeout while tests were still passing, after the plugin registered in that shard. Runner variance is
+  the likelier cause (the slowdown sits in a few long tests), but the scoped resolver adds one `import.meta.resolve` per
+  catch-all resolve. Compare this PR's Linux 4/4 and Windows 12/12 step durations with run 43929693613 (Linux 4/4 took
+  802 s). If either nears 30 minutes, profile the wrapper's extra resolve. The timeout is not to be raised.
+- **Merge note.** The pick appends connect-finish's "2026-11-16 — connect-finish lane: root cause and fix for the
+  hub.test.ts load error on Linux shard 2" entry at the end of `connected-workspace-deviations.md` (about line 235
+  here, about 2134 on connect-finish), and it cites connect-finish jobs and commits (`a320bdbe`, `973895e3`) that are
+  not on this branch. When the second of PR #36 and PR #38 merges into main, keep one copy of that entry. The five
+  code files of the pick are byte-identical to `origin/connect-finish`.
