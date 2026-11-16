@@ -604,8 +604,11 @@ export async function probeToolProcesses() {
       const guard = await guarded
       if (guard.opened !== true || guard.refused !== true)
         throw new Error("A running Node inspector was not refused before private-channel loading")
-      if (network.attempts().some((attempt) => !attempt.allowed))
-        throw new Error("The tool process probe attempted external network access")
+      const refused = network.attempts().filter((attempt) => !attempt.allowed)
+      if (refused.length > 0)
+        throw new Error(
+          `The tool process probe attempted external network access: ${refused.map((attempt) => `${attempt.kind} ${attempt.host}`).join(", ")}`,
+        )
       if (observed.length !== 5) throw new Error("A tool launch path did not report")
       return {
         floor,

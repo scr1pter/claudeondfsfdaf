@@ -2,7 +2,7 @@ export * as DirectoryIdentityReader from "./directory-identity"
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { createHash } from "node:crypto"
-import { constants } from "node:fs"
+import { constants, readdirSync, realpathSync } from "node:fs"
 import fs, { type FileHandle } from "node:fs/promises"
 import path from "node:path"
 import { release } from "node:os"
@@ -414,7 +414,24 @@ export function packageImage(list: string, sums: string, member: string, image: 
 // A Check belongs to one read, lease or launch and is never reused after it fails. Proofs run concurrently, so siblings
 // may still be in flight when the first one rejects; they cannot change a verdict, and every caller makes check() fail
 // once it has refused, so leftover steps stop at their next check instead of finishing the walk.
-type Check = (() => void) & { readonly directories: Set<string> }
+// A realpath, an open handle and a readdir hold a descriptor while they run; lstat and stat hold none. A Check runs its
+// descriptor steps one at a time while its metadata walks stay concurrent, so a proof never needs more than one
+// spare descriptor and descriptor pressure cannot turn an unchanged runtime into a spurious refusal.
+type Check = (() => void) & {
+  readonly directories: Set<string>
+  readonly descriptor: <A>(operation: () => Promise<A>) => Promise<A>
+}
+function checker(predicate: () => void): Check {
+  let tail: Promise<unknown> = Promise.resolve()
+  return Object.assign(predicate, {
+    directories: new Set<string>(),
+    descriptor: <A>(operation: () => Promise<A>) => {
+      const result = tail.then(operation)
+      tail = result.catch(() => undefined)
+      return result
+    },
+  })
+}
 const step = async <A>(check: Check, operation: () => Promise<A>): Promise<A> => {
   check()
   const value = await operation()
@@ -425,7 +442,20 @@ async function immutable(file: string, check: Check) {
   requireValue(path.isAbsolute(file) && path.normalize(file) === file)
   // The ancestors are independent observations, so each walk issues them together instead of one awaited lstat
   // at a time. Every proof below still runs and must pass; only the issue order changes.
-  const [named, canonical] = await Promise.all([lineage(file, check), step(check, () => fs.realpath(file))])
+  const [named, canonical] = await Promise.all([
+    lineage(file, check),
+    // Bun's fs.promises.realpath holds an O_PATH descriptor until it settles, so hundreds in flight exhausted a lowered
+    // limit. The synchronous call holds it only while it runs, and the queue keeps it apart from open and readdir.
+    // Awaiting each queued async realpath instead would serialize one event-loop round trip per stdlib entry.
+    // A synchronous call blocks the event loop, so a stalled filesystem holds off the hard timers and aborts until it
+    // returns; the verdict still fails closed because finish() and every later step check the deadline. That is
+    // acceptable only because every path here is fixed and local (the runtime, /etc, the loader and the libraries
+    // named by the root-owned images and cache): never route a caller-supplied path through these synchronous calls.
+    check.descriptor(async () => {
+      check()
+      return realpathSync.native(file)
+    }),
+  ])
   for (const entry of named)
     requireValue(entry.info.uid === 0n && (entry.info.isSymbolicLink() || (entry.info.mode & 0o022n) === 0n))
   const [resolved, info] = await Promise.all([
@@ -454,36 +484,39 @@ function lineage(file: string, check: Check) {
 async function capturedBytes(file: string, maximum: number, check: Check) {
   const checked = await immutable(file, check)
   requireValue(checked.info.isFile() && checked.info.size <= BigInt(maximum))
-  check()
-  // A resource-producing await must enter finally even if cancellation arrived during open.
-  const handle = await fs.open(checked.canonical, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try {
+  // The handle holds its descriptor from open until close, so the whole read is one descriptor step.
+  return check.descriptor(async () => {
     check()
-    const before = await step(check, () => handle.stat({ bigint: true }))
-    const result = await step(check, () => handle.readFile())
-    const after = await step(check, () => handle.stat({ bigint: true }))
-    requireValue(
-      before.dev === checked.info.dev &&
-        before.ino === checked.info.ino &&
-        before.uid === 0n &&
-        after.uid === 0n &&
-        before.uid === after.uid &&
-        before.gid === after.gid &&
-        before.mode === after.mode &&
-        (before.mode & 0o6022n) === 0n &&
-        before.dev === after.dev &&
-        before.ino === after.ino &&
-        before.size === after.size &&
-        before.mtimeNs === after.mtimeNs &&
-        before.ctimeNs === after.ctimeNs &&
-        BigInt(result.length) === after.size &&
-        result.length <= maximum,
-    )
-    return { bytes: result, proof: { canonical: checked.canonical, info: after } }
-  } finally {
-    // Cleanup is unconditional; cancellation never skips closing a leased runtime file.
-    await handle.close()
-  }
+    // A resource-producing await must enter finally even if cancellation arrived during open.
+    const handle = await fs.open(checked.canonical, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      check()
+      const before = await step(check, () => handle.stat({ bigint: true }))
+      const result = await step(check, () => handle.readFile())
+      const after = await step(check, () => handle.stat({ bigint: true }))
+      requireValue(
+        before.dev === checked.info.dev &&
+          before.ino === checked.info.ino &&
+          before.uid === 0n &&
+          after.uid === 0n &&
+          before.uid === after.uid &&
+          before.gid === after.gid &&
+          before.mode === after.mode &&
+          (before.mode & 0o6022n) === 0n &&
+          before.dev === after.dev &&
+          before.ino === after.ino &&
+          before.size === after.size &&
+          before.mtimeNs === after.mtimeNs &&
+          before.ctimeNs === after.ctimeNs &&
+          BigInt(result.length) === after.size &&
+          result.length <= maximum,
+      )
+      return { bytes: result, proof: { canonical: checked.canonical, info: after } }
+    } finally {
+      // Cleanup is unconditional; cancellation never skips closing a leased runtime file.
+      await handle.close()
+    }
+  })
 }
 async function bytes(file: string, maximum: number, check: Check) {
   return (await capturedBytes(file, maximum, check)).bytes
@@ -578,7 +611,11 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
     visited.add(current.canonical)
     // Siblings are independent proofs under an already-proven directory; walk them together.
     if (current.info.isDirectory()) {
-      const names = await step(check, () => fs.readdir(current.canonical))
+      // Synchronous for the same reason as realpath in immutable(): its descriptor is held only while it runs.
+      const names = await check.descriptor(async () => {
+        check()
+        return readdirSync(current.canonical)
+      })
       await Promise.all(names.map((name) => walk(path.join(current.canonical, name), depth + 1)))
     } else if (/\/(?:_ctypes|_struct)\.cpython-312-(?:x86_64|aarch64)-linux-gnu\.so$/.test(current.canonical))
       extensions.push(current.canonical)
@@ -651,9 +688,8 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return
   let closed = false
   const deadline = Math.min(expires, performance.now() + LIMIT.milliseconds - LIMIT.reap)
-  const check: Check = Object.assign(
-    () => requireValue(!closed && !signal?.aborted && Number.isFinite(deadline) && performance.now() < deadline),
-    { directories: new Set<string>() },
+  const check = checker(() =>
+    requireValue(!closed && !signal?.aborted && Number.isFinite(deadline) && performance.now() < deadline),
   )
   try {
     const proof = await runtime(process.arch === "x64" ? "x64" : "arm64", check)
@@ -663,17 +699,15 @@ export async function pythonImage(expires: number, signal?: AbortSignal): Promis
         // Promise.all rejects on the first failed proof while its siblings are still in flight. Once this launch is
         // refused, `failed` makes every leftover step fail at its next check instead of finishing the walk.
         let failed = false
-        const check: Check = Object.assign(
-          () =>
-            requireValue(
-              !failed &&
-                !closed &&
-                !signal?.aborted &&
-                !launchSignal?.aborted &&
-                Number.isFinite(expires) &&
-                performance.now() < expires,
-            ),
-          { directories: new Set<string>() },
+        const check = checker(() =>
+          requireValue(
+            !failed &&
+              !closed &&
+              !signal?.aborted &&
+              !launchSignal?.aborted &&
+              Number.isFinite(expires) &&
+              performance.now() < expires,
+          ),
         )
         try {
           // The cache, every attested image and the preload file are independent proofs, so they are observed
@@ -738,11 +772,8 @@ export function read(handle: FileHandle, signal?: AbortSignal): Promise<Info | u
   const expires = performance.now() + LIMIT.milliseconds,
     workExpires = expires - LIMIT.reap,
     controller = new AbortController()
-  const check: Check = Object.assign(
-    () => {
-      requireValue(!signal?.aborted && !controller.signal.aborted && performance.now() < workExpires)
-    },
-    { directories: new Set<string>() },
+  const check = checker(() =>
+    requireValue(!signal?.aborted && !controller.signal.aborted && performance.now() < workExpires),
   )
   return new Promise((resolve) => {
     let settled = false

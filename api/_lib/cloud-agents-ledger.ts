@@ -1,6 +1,7 @@
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, generationKey } from "./cloud-agents-binding.js"
+import { METER_EPOCH_PATTERN } from "./cloud-agents-epoch.js"
 import { RUN_SOURCES, type CloudAgentAllowance, type RunSource, type RunTrigger } from "./cloud-agents-entitlement.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
@@ -38,9 +39,6 @@ const SCHEDULED_KEPT_MS = 2 * DAY_MS
 const LIVE_KEPT_MS = DAY_MS
 // The latest time a Date can hold, so every time names a UTC day.
 const LATEST_TIME = 8_640_000_000_000_000
-
-/** A meter epoch: the local `p<periodStart>`, or Codium's `<subscription>:<periodStart>` (and its `none`). */
-export const METER_EPOCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_:.-]{0,127}$/
 
 const Decimal = Schema.String.check(
   Schema.makeFilter((value: string) => /^[1-9]\d{0,15}$/.test(value) && Number.isSafeInteger(Number(value))),
