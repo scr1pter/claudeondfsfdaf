@@ -913,9 +913,10 @@ jobs:
           CI: true
           # Five browser workers stalled asset loading on both hosted platforms; keep test deadlines intact.
           PLAYWRIGHT_WORKERS: "1"
-        # On Windows the 304-test, one-worker suite reached test 303 before the 30-minute step cap (run 41263948181).
-        # This step also builds and tests the public viewer after that suite; individual test deadlines stay intact.
-        timeout-minutes: ${{ runner.os == 'Windows' && 45 || 30 }}
+        # 474 tests on one worker: Linux 22-27 min; a slow runner projected 33.5 min (4.19 s x 474; job 133204672092 hit 30 at test 431).
+        # Windows 28-40 min; it got 45 after its 304-test suite reached test 303 at the 30-minute cap (run 41263948181).
+        # 45 leaves about 35% over the slowest Linux projection. Individual test deadlines stay intact.
+        timeout-minutes: 45
 
       - name: Build and test the public share viewer
         run: bun --cwd packages/app test:e2e:viewer
