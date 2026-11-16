@@ -593,6 +593,33 @@ describe("util.flock", () => {
       expect(result.elapsed).toBeLessThan(10_000)
     }, 30_000)
 
+    test("a breaker it cannot delete after breaking a stale lock does not strand the new lock dir", async () => {
+      await using tmp = await tmpdir()
+      const dir = path.join(tmp.path, "locks")
+      const key = "flock:breaker-cleanup-denied"
+      const lockDir = lock(dir, key)
+      await makeStale(lockDir)
+      let hit = false
+      {
+        using _ = inject(fault("rm", lockDir + ".breaker", "EACCES"))
+        await Flock.withLock(
+          key,
+          async () => {
+            hit = true
+          },
+          { dir, staleMs: 1_000, timeoutMs: 20_000 },
+        )
+      }
+      expect(hit).toBe(true)
+      // The acquisition released cleanly: no empty lock dir is left for others to wait out.
+      expect(await exists(lockDir)).toBe(false)
+      expect(await exists(lockDir + ".breaker")).toBe(true)
+      // A later contender acquires at once rather than waiting staleMs on an orphan.
+      const start = Date.now()
+      await Flock.withLock(key, async () => {}, { dir, staleMs: 60_000, timeoutMs: 5_000 })
+      expect(Date.now() - start).toBeLessThan(5_000)
+    }, 30_000)
+
     test("names the lock dir and the file in a compromised lock error", async () => {
       const result = await withFaults("flock:compromised-message", ({ lockDir }) => [
         fault("writeFile", path.join(lockDir, "heartbeat"), "EEXIST", 1),

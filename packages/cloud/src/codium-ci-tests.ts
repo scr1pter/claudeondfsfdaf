@@ -8,8 +8,9 @@ import path from "node:path"
 // - every test whose path names Codium (Codium, model plans, model top-ups);
 // - every test file the branch added or changed since it left main.
 // Each file runs in its own Bun process from the package that owns it: a crash names its file, and one file's module
-// mocks cannot reach the next. Browser specs (Playwright, packages/app/e2e) are picked by the same rule. The Stripe
-// test-mode checks in packages/web/e2e/codium run only in vector-codium-e2e.yml.
+// mocks cannot reach the next. With --shard=i/n the lane splits that selection over n jobs, each running its share.
+// Browser specs (Playwright, packages/app/e2e) are picked by the same rule. The Stripe test-mode checks in
+// packages/web/e2e/codium run only in vector-codium-e2e.yml.
 
 export const CODIUM_PATH = /codium|model[-_]?plans?|model[-_]?topups?/i
 
@@ -28,6 +29,23 @@ export function selectUnitTests(tracked: readonly string[], changed: readonly st
     .filter((file) => UNIT_TEST.test(file) && !file.split("/").some((part) => NOT_UNIT.has(part)))
     .filter((file) => file.startsWith("test/") || CODIUM_PATH.test(file) || touched.has(file))
     .sort()
+}
+
+/**
+ * The files shard `index` of `count` runs: every count-th file of the sorted selection. Each file lands in exactly one
+ * shard, and every shard takes its share of each package and of the hosted test/ suite, which sorts last.
+ */
+export function selectShard(files: readonly string[], shard: { index: number; count: number }) {
+  return files.filter((_, position) => position % shard.count === shard.index - 1)
+}
+
+/** Reads `--shard=i/n` (1-based, as `bun test --shard` takes it). Without it one job runs the whole selection. */
+export function parseShard(argv: readonly string[]) {
+  const value = argv.find((argument) => argument.startsWith("--shard="))?.slice("--shard=".length)
+  if (value === undefined) return { index: 1, count: 1 }
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
+  if (!match || Number(match[1]) > Number(match[2])) throw new Error(`--shard takes i/n with 1 <= i <= n, not ${value}`)
+  return { index: Number(match[1]), count: Number(match[2]) }
 }
 
 // The hosted services lane (.github/workflows/vector-hosted-ci.yml, WP A58) runs on pull requests that touch the hosted
@@ -138,12 +156,14 @@ async function main(argv: readonly string[]) {
     return run([process.execPath, ...browserCommand(specs)], path.join(root, BROWSER_DIRECTORY), "Playwright")
   }
 
-  const files = hosted ? selectHostedTests(tracked) : selectUnitTests(tracked, changed)
+  const selected = hosted ? selectHostedTests(tracked) : selectUnitTests(tracked, changed)
+  const shard = parseShard(argv)
+  const files = selectShard(selected, shard)
   if (argv.includes("--list")) {
     for (const file of files) console.log(file)
     return 0
   }
-  if (!files.length) throw new Error(hosted ? "No hosted test files found" : "No Codium test files found")
+  if (!selected.length) throw new Error(hosted ? "No hosted test files found" : "No Codium test files found")
   const owners = new Map(files.map((file) => [file, owningDirectory(file, exists)]))
 
   // Desktop packaging fixtures need the locked Electron runtime, as packages/desktop/scripts/test.ts installs it.
@@ -164,7 +184,8 @@ async function main(argv: readonly string[]) {
     const status = await run([process.execPath, ...unitCommand(file, directory)], path.join(root, directory), file)
     if (status !== 0) failed.push(file)
   }
-  console.log(`\n${hosted ? "Hosted" : "Codium"}: ${files.length - failed.length}/${files.length} test files passed`)
+  const lane = `${hosted ? "Hosted" : "Codium"}${shard.count > 1 ? ` shard ${shard.index}/${shard.count}` : ""}`
+  console.log(`\n${lane}: ${files.length - failed.length}/${files.length} test files passed`)
   if (failed.length) console.error(`Failed test files:\n${failed.join("\n")}`)
   return failed.length ? 1 : 0
 }

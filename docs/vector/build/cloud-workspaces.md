@@ -236,7 +236,7 @@ These are external validation/deployment steps. This document does not enable th
 
 ## Finish lane record
 
-Packages WS-01, WS-03, WS-02, WS-04a, WS-04b and WS-05 landed on `workspaces-finish`, in that order, branched from `release-finish` at `0ee486e3`; each has its own entry below. WS-06 (CW-24's proxy routes) was removed from this lane and belongs to the Connect lane's CN-19 (D22). Each entry records what landed, what is deferred, decisions, deviations and local evidence. Each entry's CI paragraph records the hosted runs of its own commit once they exist (from WS-03 on); WS-05(b) gathers them into "Evidence scope and remaining external gates". The phase review's fixes follow the package entries in their own entry.
+Packages WS-01, WS-03, WS-02, WS-04a, WS-04b and WS-05 landed on `workspaces-finish`, in that order, branched from `release-finish` at `0ee486e3`; each has its own entry below. WS-06 (CW-24's proxy routes) was removed from this lane and belongs to the Connect lane's CN-19 (D22). Each entry records what landed, what is deferred, decisions, deviations and local evidence. Each entry's CI paragraph records the hosted runs of its own commit once they exist (from WS-03 on); WS-05(b) gathers them into "Evidence scope and remaining external gates". The phase review's fixes follow the package entries in their own entry, and the merge of PR #33's fixed head has the last entry.
 
 ### WS-01: page tests in CI and the lane's triggers (2026-11-15)
 
@@ -660,3 +660,24 @@ Follow-ups:
 - Before the PR merges, one `test.yml` run on a head that contains `0f6fce89` (after a `release-finish` or `main` merge, or the draft PR's `pull_request` run); its `unit (linux)` result, and in particular the "Run hosted API tests" and "Run website account and workspace page tests" steps, goes in "Evidence scope" (D32).
 - The lead accepts or rejects D9, reconciles CN-19's scope (D34), and applies D33 at the merge.
 - The Connect lane rewrites the CW-24 rows of `connected-workspace-spec.md` to name CN-15 and CN-19 (D31).
+
+### workspaces-finish lane: PR #33 head `0f034957` merged in (2026-11-16)
+
+`origin/release-finish` at `0f034957` (round-1 CI fixes `7b43deb5` to `cf2373c4` plus the `review-fixes` merge, so `0f6fce89` and `268bc877` included) is merged into `workspaces-finish` at `7ecd64a1` with `--no-ff`, unpushed. The merge conflicted in exactly the four files D33 predicted, resolved by its checklist:
+
+1. `api/_lib/codium-erase.ts`: this branch's strict revoke hunk is kept (D8). It contains `cbf83048`'s renewal of the revocation mark in every follow-up pass and adds the stop at `revoke` when the write fails. `8233cf72`'s retention comment and DP-1's tombstone expiry for Everywhere's closed marker (`53e98294`, `a12f2395`, named through `everywhereKeys.accountClosed` without its store key) merged without conflict.
+2. `.env.example`: `268bc877`'s block is kept whole (every switch `false`, every secret without a value), with its "# Cloud workspaces" sub-block replaced by this branch's; `grep -c '^VECTOR_WORKSPACES_' .env.example` returns 4 (D23).
+3. `.github/workflows/vector-workspaces.yml`: this branch's `push: branches: [main]` trigger and its paths list, identical to the `pull_request` list, are kept (WS-01, D2). No trigger names a lane branch, so FIT-4's rule holds; checked by eye and by `workflow-compliance.test.ts`.
+4. Test (a): `grep -c "stuck past the revocation mark" test/account-delete.test.ts` returns 1, so nothing to drop (D9 still awaits the lead).
+5. This document: this branch's "Build and validation commands" workflow paragraph is kept; it already says the lane runs by hand, on pull requests and on pushes to `main`, which is `f251ac2c`'s point (no push to the retired `cloud-workspaces` branch).
+
+No generated file is involved. The head now contains `0f6fce89`, so the `test.yml` run D32 asks for can be made on it once the lead pushes; until then D32 stays open.
+
+Local evidence (merge tree before the commit, Bun 1.3.14, through the workload lock, one file per process, logs under `/tmp/vector-v2/workspaces-merge/`):
+
+- `test/`: `account-delete.test.ts` 41 pass, 1 skip (the Valkey-only describe), 0 fail; `account-delete-api.test.ts` 8 pass; `cloud-workspaces-node.test.ts` 2 pass.
+- `packages/web`: `test/env-example.test.ts` 2 pass; `test/codium-configuration.test.ts` 11 pass; `test/everywhere-erase.test.ts` 11 pass; `test/cloud-agents-runs.test.ts` 0 pass, 1 skip, 0 fail.
+- `packages/cloud`: `src/workflow-compliance.test.ts` 53 pass, 0 fail.
+- Hosted API typecheck (`bun typecheck --project ../../tsconfig.json` from `packages/engine`) clean; full `bun turbo typecheck --concurrency=2`: 27 of 27 tasks successful.
+
+Follow-ups: the lead pushes, then dispatches `test.yml` (or opens the draft PR) for D32 and records its `unit (linux)` result in "Evidence scope"; D9 and D34 are unchanged.
