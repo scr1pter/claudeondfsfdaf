@@ -117,7 +117,7 @@ import { configHandlers } from "./handlers/config"
 import { computerHandlers } from "./handlers/computer"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
-import { experimentalHandlers } from "./handlers/experimental"
+import { experimentalHandlers, unattendedWorktreeHandlers } from "./handlers/experimental"
 import { reviewHandlers } from "./handlers/review"
 import { reviewMemoryHandlers } from "./handlers/review-memory"
 import { teamsHandlers } from "./handlers/teams"
@@ -200,6 +200,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     computerHandlers,
     configHandlers,
     experimentalHandlers,
+    unattendedWorktreeHandlers,
     reviewHandlers,
     reviewMemoryHandlers,
     fileHandlers,

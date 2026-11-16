@@ -2328,3 +2328,108 @@ The full turbo typecheck was not re-run for these fixes (it runs before the push
 | `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
 
 Committed as `feat(engine): add a safe unattended worktree creator` (the four code files and the five lane documents, staged by path), with deviation (b)'s move to core as built. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit.
+
+## EV-13: owner-only unattended worktree route (2026-11-16)
+
+Package EV-13 (vector-everywhere-main-requests.md, "Safe unattended worktree creation": capability advertisement, no fallback; VE-07's SafeWorktree port): `POST /experimental/worktree/unattended` and the `unattended-v1` probe. Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-13". Built in the working tree, then committed at the lane's commit gate ("EV-13, 2026-11-16: commit gate" below).
+
+**Base.** `git fetch origin release-finish main everywhere-finish scope-finish connect-finish`: HEAD `46471914` (EV-12) equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main is `b362fdf6` (PR #33's merge); `git diff 67ec3a60 origin/main` is empty, and main is not merged here (the lead merges it). Precondition EV-12 (`46471914`) is HEAD itself; no review-fixes or brain-transport commit is needed. Cross-lane check against each tip's merge base: only origin/connect-finish `a320bdbe` touches this package's files (packages/sdk/openapi.json and both types.gen.ts, regenerated files; resolve only by regenerating). review-fixes `1433d105`, hands-finish `d9d5afaf`, brain-transport `34a9d93a`, codium-finish `b2537951`, workspaces-finish `e37ec1b5`, native-qualify `47db73cd` and scope-finish `1f5d62ad` touch none.
+
+**Files:**
+
+- packages/engine/src/server/routes/instance/httpapi/groups/experimental.ts (+50): `worktreeUnattended` path (:208), `UnattendedWorktreePolicy` (:230-232), `UnattendedWorktreeApi` (:666-706).
+- packages/engine/src/server/routes/instance/httpapi/api.ts (+2/-1): import (:15), `.addHttpApi(UnattendedWorktreeApi)` (:73).
+- packages/engine/src/server/routes/instance/httpapi/server.ts (+2/-1): import (:120), `unattendedWorktreeHandlers` (:203).
+- packages/engine/src/server/routes/instance/httpapi/handlers/experimental.ts (+87/-1 after review round one): imports (:25-30), messages (:585-590), `unattendedWorktreeHandlers` (:592-658: `policy` :599, `create` :607, `owner` :629, `allowed` :637, `loaded` :649), `refused` (:660-662).
+- packages/engine/src/worktree/index.ts (+22/-8, review round one): `normalize` import (:26), the service's `canonical` built on `canonicalPath` (:420-424), the exported `canonicalPath` (:942-954) and `folded` (:956-959).
+- packages/engine/src/config/config.ts (+16, review round one, additive): `readGlobal` in `Interface` (:556-560), its implementation (:1829-1837) and in `Service.of` (:2779).
+- packages/engine/test/fixture/config.ts (+1, review round one): the fake's `readGlobal`.
+- packages/engine/test/server/httpapi-exercise/index.ts (+32): two imports (:22-23) and three scenarios (:1420-1449).
+- packages/engine/test/everywhere/worktree.test.ts (+411/-4 after review round one, the import block included): the describe "POST /experimental/worktree/unattended (EV-13)" (:553-944), ten tests:
+  - H1 "the probe answers unattended-v1 to the owner only": owner 200 `{policy: "unattended-v1"}`; guest 403; owner with `x-vector-guest-request: 1` 403; no credentials 401.
+  - H2 "the owner's create makes the job's worktree, runs no hook or start script, and answers only directory, branch and base": allowed through PATCH /global/config (awaiting `global.disposed`), every instance disposed and the repository's absent from `loaded()`; then opened through GET /project/current, which shows up in `loaded()` (the observation's positive control); plain `git branch` fires the committed hook (positive control); the POST with an extra `task` marker answers 200 with exactly `[base, branch, directory]`, the directory `realpath(<data>/everywhere-worktree/<project id>/<jid>)`, HEAD the base on the job's branch, `a.txt` the base's, no hook or start-script marker, no task marker in the response, no `worktree.ready` or `worktree.failed` event, `loaded()` unchanged by the request, and GET /experimental/worktree listing the new folder.
+  - H3 "a guest or a guest-marked request is refused before anything exists": allowed, trusted and open; 403 for each, no branch and no folder.
+  - H4 "a folder the user's own config does not allow is refused and never gets an instance": no block; `enabled: false` listing the folder; another folder listed; an invalid block (`pushh: true`), whose 403 body carries neither the config folder nor the repository path, as written or JSON-escaped. Each is the fixed 403, with `loaded()` lacking the repository before and after and no branch or folder. GET /global/config answers 200 before the cases and still 200 after the invalid file (the route's read leaves the engine's copy alone).
+  - H5 "turning it off by hand applies to the next request, with the project open and trusted": a request while allowed reaches `createUnattended` (its base refusal), then `enabled: false` written by hand gives the fixed 403.
+  - H6 "a company lock on everywhere is off, with the project open and trusted": the managed `{local: {lock: true, locked_keys: ["everywhere"]}}` (EV-10's sequence and cleanup) gives the fixed 403.
+  - H7 "an allowed, trusted project the owner has not opened is refused and gets no instance": 403 "not open", `loaded()` lacking it before and after.
+  - H8 "a listed link to the folder admits the folder": the list holds a link (a junction on Windows) and the payload the real path: 200.
+  - H9 "an allowed project that is open but not trusted is refused, with or without settings of its own": 403 for both.
+  - H10 "malformed or foreign input answers 400 and creates nothing": branch `main`, base `HEAD`, jid `vej_short` and `directory: 1` (schema 400s); a schema 400 whose body carried a `task` marker does not echo it; another job's `vector/ve-<12>` ("Invalid unattended worktree request."); a valid base with no fetch ref ("The base is not this job's fetched commit."); a relative path naming the open listed folder and one naming a listed folder that is not open (both "Invalid unattended worktree request."; across drives, where `path.relative` answers an absolute path, `../<folder name>` instead); a listed folder that does not exist ("The allowed folder is not available.", never loaded, never created).
+- Regenerated with ./packages/sdk/js/script/build.ts (two runs, the second changing nothing): packages/sdk/openapi.json (+161), packages/sdk/js/src/gen/sdk.gen.ts (+46), packages/sdk/js/src/gen/types.gen.ts (+77), packages/sdk/js/src/v2/gen/sdk.gen.ts (+53), packages/sdk/js/src/v2/gen/types.gen.ts (+77). Additions only. packages/client: `bun run generate` and `bun run check:generated` exit 0 with no diff.
+- Lane docs: vector-everywhere-deviations.md (the EV-13 entry), this receipt, vector-everywhere-main-requests.md (an annotation on EV-12's status line and the "delivered" paragraph), vector-everywhere-handoff.md (annotations on the "Current gates" safe-worktree bullet, the EV-12 bullet and the EV-12 "Left open" item; a new EV-13 bullet), vector-everywhere-spec.md (dated notes on §3.5 step 4, §6.4 and §6.5's generated row).
+- No flag, env var, dependency, lockfile, workflow, config.json, workflow.json or help snapshot changed.
+
+**Checks**, each through `vector-serial`, one file at a time from the owning package, engine tests with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev13/tmp`:
+
+| Check | Result |
+| --- | --- |
+| packages/engine test/everywhere/worktree.test.ts | 18 pass (EV-12's 8 and EV-13's 10), 0 fail, 428 expects (16.6 s); run again after the mutation runs and the regeneration: 18 pass, 0 fail, 428 expects (15.3 s) |
+| packages/engine test/server/httpapi-experimental.test.ts (the existing worktree routes) | 9 pass, 0 fail, 42 expects |
+| packages/engine test/server/auth-guest.test.ts (the owner gate list) | 28 pass, 0 fail, 271 expects |
+| packages/engine test/server/session-stop.test.ts and test/server/task-batch-promotion.test.ts (`ExperimentalApi` alone) | 4 pass, 20 expects; 5 pass, 29 expects; 0 fail each |
+| packages/engine test/server/httpapi-public-openapi.test.ts | 20 pass, 0 fail, 215 expects |
+| packages/engine test/server/httpapi-query-schema-drift.test.ts | 12 pass, 0 fail, 51 expects |
+| packages/engine test/compliance/egress-inventory.test.ts (no lane workflow runs it) | 5 pass, 0 fail, 12 expects |
+| packages/engine test/compliance/generated-artifacts.test.ts | 2 pass, 0 fail, 9 expects |
+| packages/engine test/server/worktree-endpoint-repro.test.ts (imports `ExperimentalPaths`) | 6 pass, 0 fail, 13 expects |
+| packages/engine test/server/server-package-auth.test.ts (the isOwnerOnlyRoute table) | 5 pass, 0 fail, 15 expects |
+| packages/sdk/js test/v1-schema.test.ts and test/wire-compat.test.ts | 1 pass, 2 expects; 10 pass, 24 expects; 0 fail each |
+| `bun run test:httpapi` in packages/engine (coverage, auth, effect; `--fail-on-missing --fail-on-skip`) | pass=366 fail=0 skip=0 missing=0 extra=0 in each mode, the three new scenarios among them; exit 0 |
+| ./packages/sdk/js/script/build.ts, twice | exit 0; the five files above; the second run changed nothing (same diff hash) |
+| `bun run generate`, then `bun run check:generated` in packages/client | exit 0 each, no change under src/generated or src/generated-effect |
+| `bun typecheck` in packages/engine (includes the tests) | exit 0 |
+| `bun typecheck` in packages/sdk/js (the regenerated files) | exit 0 (`tsgo --noEmit` and the test project) |
+| `bun prettier --check` | worktree.test.ts, api.ts and server.ts conform. groups/experimental.ts, handlers/experimental.ts and httpapi-exercise/index.ts did not conform at HEAD (108, 129 and 126 lines of prettier diff, all in other packages' hand-packed lines) and are not reformatted; with this package their prettier diff is the same 108, 129 and 126 lines, so the added hunks conform |
+| Lines over 120 columns added | two string literals only: the create endpoint's OpenAPI description and H2's test name |
+| `git diff` scan for personal paths and email addresses | none |
+
+**Mutations**: thirteen, on handlers/experimental.ts alone (/tmp/vector-v2/everywhere/ev13-mut/). round1/ (13): 12 red, M9 survived; the malformed-input test then gained a relative path naming a listed folder that is not open, and M9 went red (round2-m9/); round3/ (all 13 against the final handler and test file): 13 red, each restore's sha256 checked. The table is in the deviations entry.
+
+**Found while testing:** the global loader's settings import (`ConfigMigration.run`) copies the seeded config.json into vector.jsonc on a load where the global folder has no Vector file with settings, so a later hand edit of config.json is shadowed. The first H5 build edited config.json and failed for that reason, not because of the route; the tests now write vector.json (deviations (b)).
+
+**Not done here (the task said not to commit):** the commit (`feat(engine): add the owner-only unattended worktree route`, staging by path the six engine source files (the four route files, plus worktree/index.ts and config/config.ts from review round one), the three test files (test/fixture/config.ts from review round one), the five regenerated SDK files and the five lane documents; the body names the regenerated files, says packages/client is unchanged because the client compiles only the protocol API, and that no flag, env var, dependency or workflow changed), the full `bun turbo typecheck` before the push, the push, and the workflow_dispatch runs of vector-everywhere.yml and typecheck.yml on everywhere-finish, whose run ids go in the next lane-docs commit. The lead's ruling on deviation (c) (only an instance already loaded in this engine) is asked for; the looser option is recorded there.
+
+### EV-13, 2026-11-16: review fixes (round one)
+
+One blocking and nine non-blocking findings, all taken; the deviations entry's "Review round one" says what changed for each and why. Code: the relative-path case's cross-drive fallback and the JSON-escaped leak assertions (test/everywhere/worktree.test.ts), the allowlist test's two GET /global/config checks, one exported `Worktree.canonicalPath` (packages/engine/src/worktree/index.ts) used by the service and the route, the folder canonicalized once in `create`, the FSUtil service's `isDir` in place of `isDirectory`, `opened` renamed `loaded` with the "already loaded in this engine (by any authenticated request)" wording, comments without lane package ids, and `Config.readGlobal` (packages/engine/src/config/config.ts, additive; the fake in test/fixture/config.ts) in place of `config.invalidate()` plus `getGlobal()`. Docs: deviations (b), (c), (i), "What changed", "The sequence", "Not changed", "Coordination", the mutations paragraph and table, "Review round one" and "Deferred verification"; this receipt's "Files" list; main-requests.md's annotation and status ("delivered, CI pending"); the handoff's EV-12 annotation and EV-13 bullet; spec §3.5 step 4's and §6.4's EV-13 notes. Not committed, as the task said.
+
+Checks, each through `vector-serial`, one file at a time from the owning package, engine tests with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev13/tmp` (logs in /tmp/vector-v2/everywhere/ev13-rr1/):
+
+| Check | Result |
+| --- | --- |
+| packages/engine test/everywhere/worktree.test.ts | 18 pass, 0 fail, 438 expects (12.9 s); again after the mutation run: 18 pass, 0 fail, 438 expects (15.0 s) |
+| packages/engine test/server/httpapi-experimental.test.ts | 9 pass, 0 fail, 42 expects |
+| packages/engine test/project/worktree.test.ts (the service's `canonical` now built on `canonicalPath`) | 14 pass, 0 fail, 34 expects |
+| packages/engine test/project/worktree-remove.test.ts | 2 pass, 2 skip (their platform guards), 0 fail, 9 expects |
+| packages/engine test/server/worktree-endpoint-repro.test.ts | 6 pass, 0 fail, 13 expects |
+| packages/engine test/everywhere/config.test.ts | 19 pass, 0 fail, 68 expects |
+| packages/engine test/config/config.test.ts (Config gains `readGlobal`) | 175 pass, 0 fail, 415 expects |
+| packages/engine test/server/auth-guest.test.ts | 28 pass, 0 fail, 271 expects |
+| packages/engine test/server/httpapi-public-openapi.test.ts | 20 pass, 0 fail, 215 expects |
+| `bun run test:httpapi` in packages/engine | pass=366 fail=0 skip=0 missing=0 extra=0 in each of the three modes; exit 0 |
+| ./packages/sdk/js/script/build.ts | exit 0; the SDK diff is unchanged (same hash before and after), so no generated file changes with this round |
+| `bun run generate`, then `bun run check:generated` in packages/client | exit 0 each, packages/client unchanged |
+| `bun typecheck` in packages/engine (includes the tests) | exit 0 |
+| prettier, by file | worktree/index.ts, config/config.ts, worktree.test.ts and test/fixture/config.ts conform (0 lines of prettier diff, as at HEAD); handlers/experimental.ts has the same 133 lines of prettier diff as at HEAD, none in the EV-13 block |
+| Lines over 120 columns added | the same two string literals as before |
+| `git diff` scan for personal paths and email addresses | none |
+
+**Mutations, round4/** (/tmp/vector-v2/everywhere/ev13-mut/: mutations_r4.py, run_r4.py, round4.out, one log per mutation): fourteen on the fixed handler, each applied alone with the test file run alone, the handler restored and its sha256 checked after every run: 14 red. M11 is now "read the cached `getGlobal()`" (red on the hand edit), M12 "let a `readGlobal` failure propagate" (red on `pushh`) and the new M14 "the first build's invalidate, then `getGlobal()`" (red on the allowlist test's last GET /global/config, 400 instead of 200). The table is in the deviations entry.
+
+Still to do by the lead: the commit (with the staging list in "Not done here" above), the full `bun turbo typecheck` before the push, the push, and the workflow_dispatch runs of vector-everywhere.yml and typecheck.yml on everywhere-finish; then the "left uncommitted" and "Not committed" sentences in this receipt and the deviations entry become the commit and the run ids. *Done at the commit gate below, apart from the run ids.*
+
+### EV-13, 2026-11-16: commit gate
+
+`git fetch origin release-finish main everywhere-finish`: HEAD `46471914` (EV-12) still equals origin/everywhere-finish and holds origin/release-finish `67ec3a60`, so nothing was merged. origin/main has moved to `33fc9fbc` (PR #34's cloud workspaces and PR #37's CI budget after PR #33's `b362fdf6`); none of its commits since the merge base `67ec3a60` touches a file of this package, and main is not merged here (the lead merges main into this branch). The working tree held only this package's nineteen paths. Re-run at the gate, each through `vector-serial`, from the owning package, engine with `TMPDIR=/tmp/vector-v2/everywhere-finish/ev13/tmp` (logs in /tmp/vector-v2/everywhere/ev13-gate/):
+
+| Check | Result |
+| --- | --- |
+| packages/engine test/everywhere/worktree.test.ts | 18 pass, 0 fail, 438 expects (18.5 s) |
+| `bun run test:httpapi` in packages/engine | pass=366 fail=0 skip=0 missing=0 extra=0 in each of coverage, auth and effect; exit 0 |
+| `bun run check:generated` in packages/client | exit 0, no change under src/generated or src/generated-effect |
+| ./packages/sdk/js/script/build.ts | exit 0; the SDK diff's hash is the same before and after, so the five regenerated files are current |
+| `bun typecheck` in packages/engine and packages/sdk/js | exit 0 each |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
+Committed as `feat(engine): expose the unattended worktree capability to the owner` (the commit gate's title, in place of the planned `feat(engine): add the owner-only unattended worktree route`), staging by path the six engine source files, the three engine test files, the five regenerated SDK files and the five lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-13 bullet and main-requests.md keep "CI pending" until then. The lead's ruling on deviation (c) (only an instance already loaded in this engine) is still asked for.

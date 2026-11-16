@@ -205,6 +205,7 @@ export const ExperimentalPaths = {
   toolIDs: "/experimental/tool/ids",
   worktree: "/experimental/worktree",
   worktreeReset: "/experimental/worktree/reset",
+  worktreeUnattended: "/experimental/worktree/unattended",
   session: "/experimental/session",
   sessionUsage: "/experimental/session/usage",
   sessionBackground: "/experimental/session/:sessionID/background",
@@ -224,6 +225,11 @@ export const ExperimentalPaths = {
   taskBridgeReceipt: "/experimental/session/:sessionID/tasks/bridge/receipt",
   resource: "/experimental/resource",
 } as const
+
+// The only answer an engine with the unattended worktree route gives. A client treats anything else as "not there".
+export const UnattendedWorktreePolicy = Schema.Struct({ policy: Schema.Literal("unattended-v1") }).annotate({
+  identifier: "WorktreeUnattendedPolicy",
+})
 
 export const ExperimentalApi = HttpApi.make("experimental")
   .add(
@@ -652,5 +658,49 @@ export const ExperimentalApi = HttpApi.make("experimental")
       title: "vector experimental HttpApi",
       version: "0.0.1",
       description: "Experimental HttpApi surface for selected instance routes.",
+    }),
+  )
+
+// Vector everywhere's job checkout. It has no instance or workspace routing middleware: the handler checks the user's
+// own allowlist before it looks for the project's instance, and it uses only an instance that is already loaded.
+export const UnattendedWorktreeApi = HttpApi.make("unattended-worktree")
+  .add(
+    HttpApiGroup.make("unattended-worktree")
+      .add(
+        HttpApiEndpoint.get("unattendedPolicy", ExperimentalPaths.worktreeUnattended, {
+          success: described(UnattendedWorktreePolicy, "Unattended worktree policy"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.unattended.policy",
+            summary: "Get the unattended worktree policy",
+            description: "Report the unattended worktree policy this engine supports. Owner only.",
+          }),
+        ),
+        HttpApiEndpoint.post("unattendedCreate", ExperimentalPaths.worktreeUnattended, {
+          payload: Worktree.UnattendedInput,
+          success: described(Worktree.Unattended, "Unattended worktree created"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.unattended.create",
+            summary: "Create an unattended worktree",
+            description:
+              "Create a job's worktree at an exact fetched commit in an allowed, trusted project that is already open, with git hardened and no startup scripts. Owner only.",
+          }),
+        ),
+      )
+      .annotateMerge(
+        OpenApi.annotations({
+          title: "worktree-unattended",
+          description: "Owner-only unattended worktree routes.",
+        }),
+      )
+      .middleware(Authorization),
+  )
+  .annotateMerge(
+    OpenApi.annotations({
+      title: "vector unattended worktree HttpApi",
+      version: "0.0.1",
+      description: "Owner-only unattended worktree routes.",
     }),
   )

@@ -553,6 +553,11 @@ export type PermissionCeiling = {
 export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
+  /**
+   * The user's own global files read afresh, as getGlobal merges them, without writing anything and without touching
+   * getGlobal's cache. An invalid file is a defect of this read only.
+   */
+  readonly readGlobal: () => Effect.Effect<Info>
   readonly update: (config: Info) => Effect.Effect<void>
   readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
   readonly updateMcpLocal: (name: string, entry: ConfigMCPV1.Info | { enabled: boolean }) => Effect.Effect<void>
@@ -1821,6 +1826,16 @@ const layer = Layer.effect(
       return yield* Effect.uninterruptible(cachedGlobal)
     })
 
+    // loadGlobal's files as they are now, with nothing written (no settings import, seeded file or schema rewrite) and
+    // nothing cached: an invalid file fails this read alone, and getGlobal keeps its last good copy.
+    const readGlobal = Effect.fn("Config.readGlobal")(function* () {
+      const files = ["config.json", "vector.json", "vector.jsonc"].map((name) => path.join(Global.Path.config, name))
+      const read = yield* Effect.forEach(files, (file) =>
+        loadFile(file, undefined, true).pipe(Effect.map((info) => withheld(file, info))),
+      )
+      return read.reduce(mergeConfig, {})
+    })
+
     // A repository's budget.run stopped applying when spend limits became one overall set, and its subagent spend
     // limits (budget.subagents usd, steps, warnAt, unpricedSteps) never apply. Say so once per repository
     // file and key, so a cap someone relied on does not disappear silently, without repeating it on every load. Parallel
@@ -2761,6 +2776,7 @@ const layer = Layer.effect(
     return Service.of({
       get,
       getGlobal,
+      readGlobal,
       update,
       updateGlobal,
       updateMcpLocal,

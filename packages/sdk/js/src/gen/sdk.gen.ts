@@ -993,6 +993,12 @@ import type {
   WorktreeResetData,
   WorktreeResetErrors,
   WorktreeResetResponses,
+  WorktreeUnattendedCreateData,
+  WorktreeUnattendedCreateErrors,
+  WorktreeUnattendedCreateResponses,
+  WorktreeUnattendedPolicyData,
+  WorktreeUnattendedPolicyErrors,
+  WorktreeUnattendedPolicyResponses,
 } from "./types.gen.js"
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<
@@ -2227,6 +2233,41 @@ export class Tool extends HeyApiClient {
   }
 }
 
+export class Unattended extends HeyApiClient {
+  /**
+   * Get the unattended worktree policy
+   *
+   * Report the unattended worktree policy this engine supports. Owner only.
+   */
+  public policy<ThrowOnError extends boolean = false>(options?: Options<WorktreeUnattendedPolicyData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      WorktreeUnattendedPolicyResponses,
+      WorktreeUnattendedPolicyErrors,
+      ThrowOnError
+    >({ url: "/experimental/worktree/unattended", ...options })
+  }
+
+  /**
+   * Create an unattended worktree
+   *
+   * Create a job's worktree at an exact fetched commit in an allowed, trusted project that is already open, with git hardened and no startup scripts. Owner only.
+   */
+  public create<ThrowOnError extends boolean = false>(options?: Options<WorktreeUnattendedCreateData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      WorktreeUnattendedCreateResponses,
+      WorktreeUnattendedCreateErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/worktree/unattended",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
 export class Worktree extends HeyApiClient {
   /**
    * Remove worktree
@@ -2286,6 +2327,11 @@ export class Worktree extends HeyApiClient {
         ...options?.headers,
       },
     })
+  }
+
+  private _unattended?: Unattended
+  get unattended(): Unattended {
+    return (this._unattended ??= new Unattended({ client: this.client }))
   }
 }
 

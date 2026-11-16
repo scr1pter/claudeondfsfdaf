@@ -23,6 +23,7 @@ import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN } from "@vectordevai/s
 import { GIT_HARDENING, fetchRef, runnerGitEnvironment, safeRepositoryConfig } from "@vectordevai/core/everywhere/git"
 import { UntrustedGit } from "@vectordevai/core/untrusted-git"
 import { lstatSync } from "node:fs"
+import { normalize } from "node:path"
 import os from "node:os"
 
 export const Event = WorktreeEvent
@@ -416,16 +417,10 @@ const layer: Layer.Layer<
       )
     })
 
-    // Git lists a worktree under the real path it stored, also once the folder is gone: on Windows that is the long
-    // name, where Node's non-native realpath keeps 8.3 short names such as RUNNER~1. FSUtil.realpath resolves
-    // natively on Windows and resolves the deepest existing ancestor of a missing folder, so both spellings meet.
+    // canonicalPath, or the resolved path folded the same way when it has no real path.
     const canonical = Effect.fnUntraced(function* (input: string) {
       const abs = pathSvc.resolve(input)
-      const real = yield* Effect.try({ try: () => FSUtil.realpath(abs), catch: (error) => error }).pipe(
-        Effect.orElseSucceed(() => abs),
-      )
-      const normalized = pathSvc.normalize(real)
-      return process.platform === "win32" ? normalized.toLowerCase() : normalized
+      return (yield* canonicalPath(abs)) ?? folded(abs)
     })
 
     // Vector everywhere's git: the runner's hardening, an environment that inherits nothing from this process (no
@@ -943,6 +938,25 @@ const layer: Layer.Layer<
     })
   }),
 )
+
+/**
+ * How worktrees, and the unattended worktree route, compare folders: the real path, normalized, and case-folded only
+ * on Windows. Git lists a worktree under the real path it stored, also once the folder is gone: on Windows that is the
+ * long name, where Node's non-native realpath keeps 8.3 short names such as RUNNER~1. FSUtil.realpath resolves
+ * natively on Windows and resolves the deepest existing ancestor of a missing folder, so both spellings meet. A path
+ * with no real path (a link loop) gives undefined.
+ */
+export function canonicalPath(input: string) {
+  return Effect.try({ try: () => FSUtil.realpath(input), catch: () => undefined }).pipe(
+    Effect.map(folded),
+    Effect.orElseSucceed(() => undefined),
+  )
+}
+
+function folded(input: string) {
+  const normalized = normalize(input)
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
 
 export const node = LayerNode.make({
   service: Service,

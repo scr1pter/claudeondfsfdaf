@@ -3175,6 +3175,23 @@ export type McpResource = {
   client: string
 }
 
+export type WorktreeUnattendedPolicy = {
+  policy: "unattended-v1"
+}
+
+export type WorktreeUnattendedInput = {
+  directory: string
+  base: string
+  branch: string
+  jid: string
+}
+
+export type WorktreeUnattended = {
+  directory: string
+  branch: string
+  base: string
+}
+
 export type Symbol = {
   name: string
   kind: number
@@ -14194,6 +14211,66 @@ export type ExperimentalResourceListResponses = {
 
 export type ExperimentalResourceListResponse =
   ExperimentalResourceListResponses[keyof ExperimentalResourceListResponses]
+
+export type WorktreeUnattendedPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/experimental/worktree/unattended"
+}
+
+export type WorktreeUnattendedPolicyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type WorktreeUnattendedPolicyError = WorktreeUnattendedPolicyErrors[keyof WorktreeUnattendedPolicyErrors]
+
+export type WorktreeUnattendedPolicyResponses = {
+  /**
+   * Unattended worktree policy
+   */
+  200: WorktreeUnattendedPolicy
+}
+
+export type WorktreeUnattendedPolicyResponse =
+  WorktreeUnattendedPolicyResponses[keyof WorktreeUnattendedPolicyResponses]
+
+export type WorktreeUnattendedCreateData = {
+  body?: WorktreeUnattendedInput
+  path?: never
+  query?: never
+  url: "/experimental/worktree/unattended"
+}
+
+export type WorktreeUnattendedCreateErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type WorktreeUnattendedCreateError = WorktreeUnattendedCreateErrors[keyof WorktreeUnattendedCreateErrors]
+
+export type WorktreeUnattendedCreateResponses = {
+  /**
+   * Unattended worktree created
+   */
+  200: WorktreeUnattended
+}
+
+export type WorktreeUnattendedCreateResponse =
+  WorktreeUnattendedCreateResponses[keyof WorktreeUnattendedCreateResponses]
 
 export type FindTextData = {
   body?: never

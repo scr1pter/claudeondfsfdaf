@@ -1,10 +1,13 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { $ } from "bun"
 import { createHash } from "node:crypto"
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs"
-import { lstat, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Cause, Context, Effect, Exit, Layer } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
+import { HttpRouter } from "effect/unstable/http"
+import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { GIT_HARDENING, fetchRef, runnerGitEnvironment } from "@vectordevai/core/everywhere/git"
 import { branchFor } from "@vectordevai/core/everywhere/publish"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -13,15 +16,22 @@ import { Global } from "@vectordevai/core/global"
 import { AppProcess } from "@vectordevai/core/process"
 import { createJobId } from "@vectordevai/schema/everywhere"
 import { GlobalBus } from "../../src/bus/global"
+import { Config } from "../../src/config/config"
+import { AppLayer } from "../../src/effect/app-runtime"
 import { InstanceState } from "../../src/effect/instance-state"
 import { Git } from "../../src/git"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
+import { Event } from "../../src/server/event"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { FileLock } from "../../src/tool/file-lock"
 import { Worktree } from "../../src/worktree"
-import { disposeAllInstances, provideInstance } from "../fixture/fixture"
+import { resetDatabase } from "../fixture/db"
+import { disposeAllInstances, provideInstance, tmpdir } from "../fixture/fixture"
+import { useManagedPolicyFixture } from "../fixture/managed-policy"
 import { testEffect } from "../lib/effect"
+import { waitGlobalBusEvent } from "../server/global-bus"
 
 // EV-12: Vector everywhere's unattended checkout, against real git in a disposable repository that has a start script
 // and committed hooks (as husky leaves them) which each write a marker. The process boundary is observed, not replaced.
@@ -534,4 +544,401 @@ describe("Worktree.createUnattended", () => {
       }),
     { git: true },
   )
+})
+
+// EV-13: the same service through the real HTTP API, with the owner's and a guest's credentials. The route must refuse
+// a guest, a folder the user's own config does not allow (checked before anything looks for an instance), a project
+// the owner has not opened and an untrusted one, and it must never load an instance itself. The server's own
+// InstanceStore is observed through the memo map the handler shares.
+describe("POST /experimental/worktree/unattended (EV-13)", () => {
+  const ROUTE = "/experimental/worktree/unattended"
+  const OWNER_PASSWORD = "ev13-owner-secret"
+  const GUEST_PASSWORD = "ev13-guest-secret"
+  const TASK = "EV13-TASK-MARKER"
+  const OFF = "Vector everywhere is off for this folder."
+  const CLOSED = "This project is not open in Vector. No unattended worktree was created."
+  const UNTRUSTED = "This project is not trusted. No unattended worktree was created."
+  const UNAVAILABLE = "The allowed folder is not available."
+  const basic = (username: string, password: string) =>
+    `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
+  const owner = { authorization: basic("vector", OWNER_PASSWORD) }
+  const guest = { authorization: basic("guest", GUEST_PASSWORD) }
+  const forwarded = { ...owner, [GUEST_REQUEST_HEADER]: "1" }
+  const managedDirectory = process.env.VECTOR_TEST_MANAGED_CONFIG_DIR!
+  const globalFiles = () =>
+    ["config.json", "vector.json", "vector.jsonc"].map((name) => path.join(Global.Path.config, name))
+
+  const memo = Layer.makeMemoMapUnsafe()
+  const web = HttpRouter.toWebHandler(
+    HttpApiApp.routes.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({
+            VECTOR_SERVER_USERNAME: "vector",
+            VECTOR_SERVER_PASSWORD: OWNER_PASSWORD,
+            VECTOR_SERVER_GUEST_USERNAME: "guest",
+            VECTOR_SERVER_GUEST_PASSWORD: GUEST_PASSWORD,
+            VECTOR_DISABLE_DEFAULT_PLUGINS: true,
+          }),
+        ),
+      ),
+    ),
+    { disableLogger: true, memoMap: memo },
+  )
+  const scope = Scope.makeUnsafe()
+  const services: { app?: Promise<Context.Context<Layer.Success<typeof AppLayer>>> } = {}
+  const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof AppLayer>>) =>
+    (services.app ??= Effect.runPromise(Layer.buildWithMemoMap(AppLayer, memo, scope))).then((app) =>
+      Effect.runPromise(effect.pipe(Effect.provide(app))),
+    )
+  const loaded = () =>
+    run(InstanceStore.Service.use((store) => store.loaded())).then((items) =>
+      items.map((item) => FileLock.key(item.directory)),
+    )
+
+  const call = async (route: string, init: { method?: string; headers?: object; body?: unknown } = {}) => {
+    const response = await web.handler(
+      new Request(new URL(route, "http://localhost"), {
+        method: init.method ?? "GET",
+        headers: {
+          ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+          ...init.headers,
+        },
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      }),
+      HttpApiApp.context,
+    )
+    const text = await response.text()
+    return { status: response.status, text, body: text ? JSON.parse(text) : undefined }
+  }
+  const post = (body: unknown, headers: object = owner) => call(ROUTE, { method: "POST", headers, body })
+  // How the app opens a project: any instance route with the folder selected.
+  const open = async (directory: string) => {
+    const response = await call("/project/current", { headers: { ...owner, "x-vector-directory": directory } })
+    expect(response.status).toBe(200)
+    return response.body as { id: string }
+  }
+  // The user's own vector.json, written by hand. A Vector file with settings in it also keeps the loader from importing
+  // config.json into vector.jsonc, which would then shadow the next edit.
+  const writeGlobal = (config: object) =>
+    writeFile(
+      path.join(Global.Path.config, "vector.json"),
+      JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...config }),
+    )
+  const allow = (directories: string[], enabled = true) =>
+    writeGlobal({
+      everywhere: { enabled, projects: directories.map((directory) => ({ directory, repository: "acme/widgets" })) },
+    })
+
+  // The fixture's own git runs with hooks off, so only the positive control fires them.
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = await $`git -c core.hooksPath=${os.devNull} ${args}`.cwd(cwd).quiet().nothrow()
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString())
+    return result.stdout.toString().trim()
+  }
+  const disposables: AsyncDisposable[] = []
+  const cleanup: string[] = []
+  // A repository with committed hooks (as husky leaves them) and a start script that each write a marker, and one
+  // job whose base the runner fetched.
+  const repository = async (trusted: boolean, settings = true) => {
+    const tmp = await tmpdir({ git: true, trusted, config: settings ? { formatter: false, lsp: false } : undefined })
+    disposables.push(tmp)
+    const repo = tmp.path
+    const markers = `${repo}-markers`
+    cleanup.push(markers)
+    await mkdir(markers, { recursive: true })
+    const hook = path.join(markers, "hook")
+    const start = path.join(markers, "start")
+    await git(repo, "config", "core.autocrlf", "false")
+    for (const name of ["reference-transaction", "post-checkout", "post-index-change"]) {
+      await mkdir(path.join(repo, ".husky"), { recursive: true })
+      await writeFile(
+        path.join(repo, ".husky", name),
+        `#!/bin/sh\necho "$0 $PWD" >> '${hook.replaceAll("\\", "/")}'\n`,
+        { mode: 0o755 },
+      )
+    }
+    await writeFile(path.join(repo, "a.txt"), "base\n")
+    await git(repo, "add", ".")
+    await git(repo, "commit", "-m", "base")
+    const base = await git(repo, "rev-parse", "HEAD")
+    await writeFile(path.join(repo, "a.txt"), "head\n")
+    await git(repo, "commit", "-am", "head")
+    await git(repo, "config", "core.hooksPath", ".husky")
+    const id = await run(
+      Effect.gen(function* () {
+        const project = yield* Project.Service
+        const found = yield* project.fromDirectory(repo)
+        yield* project
+          .update({ projectID: found.project.id, commands: { start: `echo start>> "${start}"` } })
+          .pipe(Effect.orDie)
+        return found.project.id
+      }),
+    )
+    const root = path.join(Global.Path.data, "everywhere-worktree", id)
+    cleanup.push(root)
+    const jid = createJobId(Date.now())
+    await git(repo, "update-ref", fetchRef(jid), base)
+    return { repo, markers, hook, start, base, id, root, input: { directory: repo, jid, branch: branchFor(jid), base } }
+  }
+  // Neither the job's branch nor its folder exists.
+  const untouched = async (f: Awaited<ReturnType<typeof repository>>, input = f.input) => {
+    const ref = await $`git show-ref --verify --quiet ${`refs/heads/${input.branch}`}`.cwd(f.repo).quiet().nothrow()
+    expect(ref.exitCode).toBe(1)
+    expect(await present(path.join(f.root, input.jid))).toBe(false)
+  }
+  const refusedWith = (response: { status: number; body: unknown }, status: number, message: string) => {
+    expect(response.status).toBe(status)
+    const body = response.body as { _tag?: string; message?: string; name?: string; data?: { message?: string } }
+    expect(status === 403 ? body.message : body.data?.message).toBe(message)
+  }
+
+  const originals: (string | undefined)[] = []
+  beforeEach(async () => {
+    originals.length = 0
+    for (const file of globalFiles()) originals.push((await present(file)) ? await readFile(file, "utf8") : undefined)
+  })
+  afterEach(async () => {
+    await Promise.all(
+      globalFiles().map((file, index) => {
+        const original = originals[index]
+        return original === undefined ? rm(file, { force: true }) : writeFile(file, original)
+      }),
+    )
+    await run(
+      Effect.gen(function* () {
+        const config = yield* Config.Service
+        const store = yield* InstanceStore.Service
+        yield* config.invalidate()
+        yield* store.disposeAll()
+      }),
+    )
+    for (const item of disposables.splice(0)) await item[Symbol.asyncDispose]()
+    for (const item of cleanup.splice(0)) await rm(item, { recursive: true, force: true })
+    await resetDatabase()
+  })
+  afterAll(async () => {
+    await web.dispose()
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+  })
+
+  test("the probe answers unattended-v1 to the owner only", async () => {
+    const answer = await call(ROUTE, { headers: owner })
+    expect(answer.status).toBe(200)
+    expect(answer.body).toEqual({ policy: "unattended-v1" })
+    expect((await call(ROUTE, { headers: guest })).status).toBe(403)
+    expect((await call(ROUTE, { headers: forwarded })).status).toBe(403)
+    expect((await call(ROUTE)).status).toBe(401)
+  }, 30_000)
+
+  test("the owner's create makes the job's worktree, runs no hook or start script, and answers only directory, branch and base", async () => {
+    const f = await repository(true)
+    // The write the settings page makes; it reloads every instance.
+    const disposed = Effect.runPromise(
+      waitGlobalBusEvent({ predicate: (event) => event.payload.type === Event.Disposed.type }),
+    )
+    const saved = await call("/global/config", {
+      method: "PATCH",
+      headers: owner,
+      body: { everywhere: { enabled: true, projects: [{ directory: f.repo, repository: "acme/widgets" }] } },
+    })
+    expect(saved.status).toBe(200)
+    await disposed
+    await run(InstanceStore.Service.use((store) => store.disposeAll()))
+    expect(await loaded()).not.toContain(FileLock.key(f.repo))
+    // Positive control for the observation: opening the project through the app's own route shows up here.
+    expect((await open(f.repo)).id).toBe(f.id)
+    expect(await loaded()).toContain(FileLock.key(f.repo))
+    const before = (await loaded()).sort()
+    // Positive control: plain git in this repository fires its hooks.
+    await $`git branch vector/control`.cwd(f.repo).quiet()
+    expect(await present(f.hook)).toBe(true)
+    await git(f.repo, "branch", "-D", "vector/control")
+    await rm(f.hook)
+
+    const events: string[] = []
+    const on = (event: { payload: { type: string } }) => events.push(event.payload.type)
+    GlobalBus.on("event", on)
+    const created = await post({ ...f.input, task: TASK }).finally(() => GlobalBus.off("event", on))
+
+    expect(created.status).toBe(200)
+    const directory = FSUtil.realpath(path.join(f.root, f.input.jid))
+    expect(Object.keys(created.body).sort()).toEqual(["base", "branch", "directory"])
+    expect(created.body).toEqual({ directory, branch: f.input.branch, base: f.base })
+    expect(created.text).not.toContain(TASK)
+    expect(await git(directory, "rev-parse", "HEAD")).toBe(f.base)
+    expect(await git(directory, "symbolic-ref", "--short", "HEAD")).toBe(f.input.branch)
+    expect(await readFile(path.join(directory, "a.txt"), "utf8")).toBe("base\n")
+    expect(await present(f.hook)).toBe(false)
+    expect(await present(f.start)).toBe(false)
+    expect(events).not.toContain(Worktree.Event.Ready.type)
+    expect(events).not.toContain(Worktree.Event.Failed.type)
+    // The route loaded nothing, not even the new checkout.
+    expect((await loaded()).sort()).toEqual(before)
+    const listed = await call("/experimental/worktree", { headers: { ...owner, "x-vector-directory": f.repo } })
+    expect(listed.status).toBe(200)
+    expect((listed.body as string[]).map((item) => FileLock.key(item))).toContain(FileLock.key(directory))
+  }, 30_000)
+
+  test("a guest or a guest-marked request is refused before anything exists", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    for (const headers of [guest, forwarded]) {
+      expect((await post(f.input, headers)).status).toBe(403)
+      await untouched(f)
+    }
+  }, 30_000)
+
+  test("a folder the user's own config does not allow is refused and never gets an instance", async () => {
+    const f = await repository(true)
+    const other = await repository(true)
+    // The engine's copy of the global config, which the route's own reads must leave alone.
+    expect((await call("/global/config", { headers: owner })).status).toBe(200)
+    const cases: (() => Promise<unknown>)[] = [
+      () => writeGlobal({}),
+      () => allow([f.repo], false),
+      () => allow([other.repo]),
+      // A key the schema does not have makes the loader throw: the refusal must not carry its message or the path.
+      () =>
+        writeGlobal({
+          everywhere: { enabled: true, pushh: true, projects: [{ directory: f.repo, repository: "acme/widgets" }] },
+        }),
+    ]
+    for (const write of cases) {
+      await write()
+      expect(await loaded()).not.toContain(FileLock.key(f.repo))
+      const refused = await post(f.input)
+      refusedWith(refused, 403, OFF)
+      // As written and as JSON escapes it, since a Windows path's backslashes never appear raw in a JSON body.
+      for (const leak of [Global.Path.config, f.repo]) {
+        expect(refused.text).not.toContain(leak)
+        expect(refused.text).not.toContain(JSON.stringify(leak).slice(1, -1))
+      }
+      expect(await loaded()).not.toContain(FileLock.key(f.repo))
+      await untouched(f)
+    }
+    // The invalid file failed the route's read only: the rest of the engine keeps its last good copy.
+    expect((await call("/global/config", { headers: owner })).status).toBe(200)
+  }, 30_000)
+
+  test("turning it off by hand applies to the next request, with the project open and trusted", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    // Read once while allowed, so a cached copy would still say yes.
+    refusedWith(await post({ ...f.input, base: "0".repeat(40) }), 400, "The base is not this job's fetched commit.")
+    await allow([f.repo], false)
+    refusedWith(await post(f.input), 403, OFF)
+    await untouched(f)
+  }, 30_000)
+
+  test("a company lock on everywhere is off, with the project open and trusted", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const agent = process.env.VECTOR_AGENT_SESSION
+    // Under the agent marker the owner's yes below would not count, and the lock would outlive this case.
+    delete process.env.VECTOR_AGENT_SESSION
+    const restore = useManagedPolicyFixture(managedDirectory)
+    try {
+      await mkdir(managedDirectory, { recursive: true })
+      await writeFile(
+        path.join(managedDirectory, "vector.json"),
+        JSON.stringify({ local: { lock: true, locked_keys: ["everywhere"] } }),
+      )
+      Config.refreshLocal()
+      Config.confirmLocal()
+      expect(Config.lockedKeys()).toContain("everywhere")
+      refusedWith(await post(f.input), 403, OFF)
+      await untouched(f)
+    } finally {
+      await rm(managedDirectory, { force: true, recursive: true })
+      restore()
+      await rm(Config.localConfirmedFile(), { force: true })
+      // Removing the company's policy loosens Vector Local, which waits for the owner; the owner here says yes.
+      Config.refreshLocal()
+      Config.confirmLocal()
+      if (agent !== undefined) process.env.VECTOR_AGENT_SESSION = agent
+    }
+  }, 30_000)
+
+  test("an allowed, trusted project the owner has not opened is refused and gets no instance", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    expect(await loaded()).not.toContain(FileLock.key(f.repo))
+    refusedWith(await post(f.input), 403, CLOSED)
+    expect(await loaded()).not.toContain(FileLock.key(f.repo))
+    await untouched(f)
+  }, 30_000)
+
+  test("a listed link to the folder admits the folder", async () => {
+    const f = await repository(true)
+    const link = path.join(f.markers, "linked")
+    await symlink(f.repo, link, process.platform === "win32" ? "junction" : "dir")
+    await allow([link])
+    await open(f.repo)
+    const created = await post(f.input)
+    expect(created.status).toBe(200)
+    expect(created.body.branch).toBe(f.input.branch)
+  }, 30_000)
+
+  test("an allowed project that is open but not trusted is refused, with or without settings of its own", async () => {
+    const f = await repository(false)
+    // Trust only decides on a project's own settings, so one with none is still refused: the check is "trusted".
+    const bare = await repository(false, false)
+    await allow([f.repo, bare.repo])
+    for (const item of [f, bare]) {
+      await open(item.repo)
+      refusedWith(await post(item.input), 403, UNTRUSTED)
+      await untouched(item)
+    }
+  }, 30_000)
+
+  test("malformed or foreign input answers 400 and creates nothing", async () => {
+    const f = await repository(true)
+    const gone = path.join(f.markers, "gone")
+    const closed = await repository(true)
+    await allow([f.repo, gone, closed.repo])
+    await open(f.repo)
+    for (const body of [
+      { ...f.input, branch: "main" },
+      { ...f.input, base: "HEAD" },
+      { ...f.input, jid: "vej_short" },
+      { ...f.input, directory: 1 },
+    ]) {
+      expect((await post(body)).status).toBe(400)
+      await untouched(f)
+    }
+    // A refused field never brings the request's other fields back with it.
+    const echoed = await post({ ...f.input, branch: "main", task: TASK })
+    expect(echoed.status).toBe(400)
+    expect(echoed.text).not.toContain(TASK)
+
+    const other = createJobId(Date.now() + 1)
+    refusedWith(
+      await post({ ...f.input, branch: `vector/ve-${other.slice(-12)}` }),
+      400,
+      "Invalid unattended worktree request.",
+    )
+    refusedWith(await post({ ...f.input, base: "0".repeat(40) }), 400, "The base is not this job's fetched commit.")
+    await untouched(f)
+
+    // A relative path is refused as written, never resolved against the engine's own folder first: here it would name
+    // a listed folder that is open, and another that is not.
+    // Across drives (a Windows runner's checkout on D:, its temp folder on C:) path.relative answers the absolute path,
+    // so there the request names a folder of that name beside the engine's folder instead: still relative, so refused.
+    for (const item of [f, closed]) {
+      const between = path.relative(process.cwd(), item.repo)
+      const relative = path.isAbsolute(between) ? path.join("..", path.basename(item.repo)) : between
+      expect(path.isAbsolute(relative)).toBe(false)
+      refusedWith(await post({ ...item.input, directory: relative }), 400, "Invalid unattended worktree request.")
+      await untouched(item)
+    }
+
+    refusedWith(await post({ ...f.input, directory: gone }), 400, UNAVAILABLE)
+    expect(await loaded()).not.toContain(FileLock.key(gone))
+    expect(await present(gone)).toBe(false)
+    await untouched(f)
+  }, 30_000)
 })

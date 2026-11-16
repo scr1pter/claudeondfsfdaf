@@ -46,6 +46,44 @@ an already loaded instance) and also advertises `unattended-v1`; "delivered" is
 written there. The runner has no `safeWorktree`
 and settles `held` until EV-21. See vector-everywhere-deviations.md,
 "2026-11-16, EV-12".
+*Annotation 2026-11-16 (EV-13):* EV-13 took the second option. The route
+checks the allowlist before it looks for an instance and then accepts only an
+instance already loaded in this engine for the folder (by any authenticated
+request), checking trust on that instance; it never loads one.
+
+*Status 2026-11-16 (EV-13): delivered, CI pending, with no runner wiring
+yet.* The engine
+serves `POST /experimental/worktree/unattended` (input `{directory, base,
+branch, jid}`, success exactly `{directory, branch, base}`) and the probe
+`GET /experimental/worktree/unattended`, which answers `{policy:
+"unattended-v1"}` to the owner. Both are owner only: no credentials get 401,
+and a guest or owner credentials carrying the guest marker get 403. A create
+runs these checks in order, and a refusal creates nothing: the handler's owner
+check; an absolute `directory` (400); the user's own config files, read
+afresh for each request without writing anything or touching the engine's
+cached copy (`Config.readGlobal`: `everywhere.enabled` true, the key not
+company-locked, the folder listed under the same canonical path; anything
+else, an unreadable or invalid file included, is a fixed 403); the folder
+exists (400); an instance already loaded in this engine for it, by any
+authenticated request (otherwise a fixed 403: creating a job's checkout never
+loads an instance, so it never starts the project's plugins, language servers
+or dependency installs); `config.trust()` reports trusted
+(403); then `Worktree.createUnattended`'s own checks (400). Messages are fixed
+and carry no path or task text, and a stray `task` key in the body is dropped.
+`POST /experimental/worktree`, `Worktree.create` and
+`/experimental/capabilities` are unchanged, and nothing falls back to them. The
+cost of never loading an instance: a job for a project no request has loaded
+since the engine started (or since the last reload) is refused until it is
+opened, and EV-21 holds it. Tests:
+packages/engine/test/everywhere/worktree.test.ts, "POST
+/experimental/worktree/unattended (EV-13)". The runner still has no
+`safeWorktree` and settles `held`; EV-21 wires the port to this route. The
+"already loaded" rule is EV-13's own decision, built because the lead's ruling
+could not be asked for inside the package; the looser option (load the
+instance for an allowed folder, then check trust) would start a trusted
+project's plugins and could install their dependencies, so choosing it would
+withdraw "delivered" here. See vector-everywhere-deviations.md, "2026-11-16,
+EV-13", (c).
 
 ## R-M2: session-scoped offline shell
 

@@ -5263,6 +5263,114 @@
         ]
       }
     },
+    "/experimental/worktree/unattended": {
+      "get": {
+        "tags": ["worktree-unattended"],
+        "operationId": "worktree.unattended.policy",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Unattended worktree policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeUnattendedPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Report the unattended worktree policy this engine supports. Owner only.",
+        "summary": "Get the unattended worktree policy",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.worktree.unattended.policy({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "tags": ["worktree-unattended"],
+        "operationId": "worktree.unattended.create",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Unattended worktree created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeUnattended"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Create a job's worktree at an exact fetched commit in an allowed, trusted project that is already open, with git hardened and no startup scripts. Owner only.",
+        "summary": "Create an unattended worktree",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeUnattendedInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.worktree.unattended.create({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/find": {
       "get": {
         "tags": ["file"],
@@ -40691,6 +40799,55 @@
         "required": ["name", "uri", "client"],
         "additionalProperties": false
       },
+      "WorktreeUnattendedPolicy": {
+        "type": "object",
+        "properties": {
+          "policy": {
+            "type": "string",
+            "enum": ["unattended-v1"]
+          }
+        },
+        "required": ["policy"],
+        "additionalProperties": false
+      },
+      "WorktreeUnattendedInput": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$"
+          },
+          "branch": {
+            "type": "string",
+            "pattern": "^vector\\/ve-(?:[0-9a-z]{12}|[A-Za-z][A-Za-z0-9_]{0,9}-[0-9]{1,7}-[0-9a-z]{8})$"
+          },
+          "jid": {
+            "type": "string",
+            "pattern": "^vej_[0-9a-hjkmnp-tv-z]{22}$"
+          }
+        },
+        "required": ["directory", "base", "branch", "jid"],
+        "additionalProperties": false
+      },
+      "WorktreeUnattended": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          }
+        },
+        "required": ["directory", "branch", "base"],
+        "additionalProperties": false
+      },
       "Symbol": {
         "type": "object",
         "properties": {
@@ -67983,6 +68140,10 @@
     {
       "name": "experimental",
       "description": "Experimental HttpApi read-only routes."
+    },
+    {
+      "name": "worktree-unattended",
+      "description": "Owner-only unattended worktree routes."
     },
     {
       "name": "file",
