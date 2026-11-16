@@ -319,7 +319,13 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
       }
     } else invalid(L"input_post_failed");
     if (backend.confirm_down) backend.confirm_down(release);
-    stage = Stage::retire; guardian->retire(*ticket); stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300); require(confirmed_up, L"cleanup_failed");
+    stage = Stage::retire; guardian->retire(*ticket); stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300);
+    // Diagnostic only, as for the DOWN above: name this caller's own failed UP confirmation phase before
+    // the catch can retire or drain. The reason stays cleanup_failed, which keeps UP apart from DOWN.
+    if (!confirmed_up) {
+      if (const auto observed = overlay_driver_guardian_stage(guardian_diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+    }
+    require(confirmed_up, L"cleanup_failed");
     stage = Stage::cleanup; if (backend.forget_release) backend.forget_release(release);
   } catch (...) { guardian->retire(*ticket, !attempted); (void)guardian->drain(300); throw; }
   require(confirmed_up, L"cleanup_failed"); return {true, false, {}};
