@@ -2509,6 +2509,18 @@ The other regression files in the table above were not re-run: this round change
 
 Committed as `feat(engine): give unattended sessions the outward memory audience`, staging by path the three engine source files, the two engine test files and the four lane documents. After the push, vector-everywhere.yml, vector-hosted-ci.yml, vector-at-mention.yml, vector-codium.yml and typecheck.yml are dispatched on everywhere-finish; their run ids go in the next lane-docs commit, and the handoff's EV-14 bullet keeps "CI pending" until then.
 
+### EV-14, 2026-11-16: CI follow-up
+
+EV-14's dispatched runs at `cb2a73ba`: vector-everywhere 43910516659, vector-hosted-ci 43910521930, vector-codium 43910537013 and typecheck 43910543984 passed. vector-at-mention 43910529519 failed one job, "engine and core" (133450900610), step "Run core GitHub tests": packages/core/test/review/model-evidence.test.ts "scope > the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION" (1354 pass, 1 fail), because prompt.ts and read.ts are pinned review pipeline files. main's newest completed at-mention run, 43896073324 at `2034e1da`, passed. Fixed in packages/core/src/review/model-evidence.ts: `REVIEW_PIPELINE_REVISION` 4 to 5 and `REVIEW_PIPELINE_SOURCES` to 58a3650e0bb3f9e2 (why: deviations entry, "CI follow-up (2026-11-16)"). Each through `vector-serial`, one file at a time (logs in /tmp/vector-v2/everywhere/ci-ev16/):
+
+| Check | Result |
+| --- | --- |
+| packages/core test/review/model-evidence.test.ts at HEAD `bc254e85`, before the fix | 29 pass, 1 fail (the pin, printing 58a3650e0bb3f9e2), 392 expects |
+| the same file with the fix | 30 pass, 0 fail, 393 expects |
+| packages/engine test/review/model.test.ts (reads the model evidence) | 21 pass, 0 fail, 90 expects |
+| `bun typecheck` in packages/core | exit 0 |
+| `bun turbo typecheck --concurrency=2` (TURBO_CACHE_DIR in the worktree) | 27 of 27 tasks successful, exit 0 |
+
 ## EV-15: Vector Local `everywhere` source and the runner's E15 decision (2026-11-16)
 
 Package EV-15 (spec §11 R-M1; §5 E15; §3.5 step 2): core local-mode/sources.ts declares the `everywhere` source and lists desktop everywhere-git.ts under `git-remote`; the desktop runner replaces its three blanket `settings.localMode` checks with the registry's decision (`localAllows`: `everywhere`, `git-remote` and `github` all allowed), its jobs client sends through `Egress.fetch("everywhere", …)`, and everywhere-git.ts decides each fetch and push as `git-remote` before git starts. Decisions and deviations: vector-everywhere-deviations.md, "2026-11-16, EV-15". Built in the working tree and not committed, as the task said.
