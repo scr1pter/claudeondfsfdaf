@@ -29,6 +29,8 @@ function fixture(mode: "codium" | "own-key" = "codium", brain = false) {
     authorityReads: 0,
     beforeUnbindAuthorityReads: 0,
     time: 1_800_000_000_000,
+    // The owner read's answer; unset, it answers 503 as the hosted route does while the Brain switch is off.
+    ownerKey: undefined as Record<string, unknown> | undefined,
   }
   const hooks: {
     github?: (path: string) => Promise<void>
@@ -106,6 +108,14 @@ function fixture(mode: "codium" | "own-key" = "codium", brain = false) {
             },
           ],
         })
+      if (url.pathname === "/repos/acme/repo/actions/artifacts/7")
+        return Response.json({
+          id: 7,
+          name: "vector-session-dispatch-99",
+          expired: false,
+          size_in_bytes: 1024,
+          workflow_run: { id: 99, repository_id: 41, head_repository_id: 41 },
+        })
       if (url.pathname.endsWith("/git/ref/heads/main")) return Response.json({ object: { sha: "b".repeat(40) } })
       if (url.pathname.endsWith("/git/refs")) return Response.json({ ref: "created" }, { status: 201 })
       if (url.pathname.endsWith("/pulls"))
@@ -167,6 +177,10 @@ function fixture(mode: "codium" | "own-key" = "codium", brain = false) {
         return Response.json({ ok: true })
       }
       if (url.pathname === GithubAgents.ENDPOINT.runs) return Response.json({ runs: [] })
+      if (url.pathname === "/api/cloud-agents/owner-artifact-key")
+        return state.ownerKey
+          ? Response.json(state.ownerKey)
+          : Response.json({ error: { code: "ARTIFACT_READ_UNAVAILABLE" } }, { status: 503 })
       throw new Error("Unexpected Vector endpoint")
     },
     // Only a Brain fixture has an engine, so listed.brain stays false everywhere else. Its engine never starts, so a
@@ -313,6 +327,49 @@ test("bind uses the trusted default branch, keeps token domains separate, and ha
       .filter((call) => call.path.startsWith("/api/cloud-agents/"))
       .every((call) => call.token === "Bearer vector-only"),
   ).toBe(true)
+})
+
+// BT10: the returned-draft owner read through the real account transport (`vector()`), which the Brain controller's
+// own test replaces with a fake port. vectordev.ai gets the desktop bearer and only the run and artifact ids; GitHub
+// gets only its own bearer.
+test("the returned-draft owner read sends only the desktop bearer to vectordev.ai and only the GitHub bearer to GitHub", async () => {
+  using f = fixture("codium", true)
+  const input = { cwd: "/fixture", rid: "gh-41-99-1-7", artifactId: "7" }
+  await expect(f.controller.previewReturned(input)).rejects.toThrow("Vector could not complete this GitHub request")
+  expect(f.calls.some((call) => call.path.includes("/actions/artifacts"))).toBe(false)
+  f.state.ownerKey = {
+    key: Buffer.alloc(32, 7).toString("base64url"),
+    keyId: "b".repeat(16),
+    repositoryId: "41",
+    thread: "dispatch-99",
+    rid: input.rid,
+    artifactId: "7",
+    publicRepository: false,
+  }
+  // This fixture's account transport serves only vectordev.ai, so the zip download stops there once it is recorded.
+  await expect(f.controller.previewReturned(input)).rejects.toThrow("The encrypted GitHub run artifact is unavailable.")
+  expect(
+    f.calls
+      .filter((call) => call.path === "/api/cloud-agents/owner-artifact-key")
+      .map((call) => [call.host, call.method, call.token, call.body]),
+  ).toEqual(
+    Array.from({ length: 2 }, () => [
+      "https://vectordev.ai",
+      "POST",
+      "Bearer vector-only",
+      { rid: input.rid, artifactId: "7" },
+    ]),
+  )
+  expect(
+    f.calls
+      .filter((call) => call.path.startsWith("/repos/acme/repo/actions/artifacts/"))
+      .map((call) => [call.path, call.token]),
+  ).toEqual([
+    ["/repos/acme/repo/actions/artifacts/7", "Bearer github-only"],
+    ["/repos/acme/repo/actions/artifacts/7/zip", "Bearer github-only"],
+  ])
+  for (const call of f.calls)
+    expect(JSON.stringify(call)).not.toContain(call.host === "https://vectordev.ai" ? "github-only" : "vector-only")
 })
 
 test("unsettled bind returns pending within its bounded polling window", async () => {

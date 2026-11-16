@@ -36,6 +36,8 @@ type Selection = {
   sha256: string
   rid?: string
   artifactId?: string
+  // A returned run's own visibility at its first download, as its approval in the artifact records it.
+  publicRun?: boolean
 }
 const LIMIT = 512 * 1024
 const LIFE = 5 * 60_000
@@ -328,9 +330,14 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
     const descriptor = decoded?.manifest.files.find((file) => file.path === RunProposalsCodec.PATH)
     if (!decoded?.proposals || !descriptor || digest(decoded.proposals) !== descriptor.sha256)
       throw new Error("This run has no valid returned repository Brain proposals.")
+    // The owner read and the context answer the repository's current visibility. The run's own visibility, at its first
+    // download, is the approval the run's engine wrote beside the bundle. Only a holder of this run's key could write
+    // it, and it can only make screening more conservative, so a run that was public stays publicly screened.
+    const publicRun =
+      decoded.manifest.files.find((file) => file.path === "brain/bundle.json")?.approval?.publicRepository === true
     const current = await fence()
     const currentPublicRepository = !current.info.private
-    const publicRepository = key.publicRepository || currentPublicRepository
+    const publicRepository = key.publicRepository || currentPublicRepository || publicRun
     const file = RunProposalsCodec.parse({ path: RunProposalsCodec.PATH, bytes: decoded.proposals, publicRepository })
     const id = randomUUID()
     const bytes = Uint8Array.from(decoded.proposals)
@@ -346,6 +353,7 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
       sha256: descriptor.sha256,
       rid: input.rid,
       artifactId: input.artifactId,
+      publicRun,
     })
     return {
       id,
@@ -380,7 +388,7 @@ export function createGithubAgentsBrain(ports: BrainPorts) {
       )
         throw new Error("This returned attachment is no longer authorized.")
       const current = await checkItem(item)
-      const publicRepository = key.publicRepository || !current.info.private
+      const publicRepository = key.publicRepository || !current.info.private || item.publicRun === true
       RunProposalsCodec.parse({ path: RunProposalsCodec.PATH, bytes: item.bytes, publicRepository })
       const result = await local(
         item.cwd,
