@@ -9,6 +9,7 @@ import {
   bindRepository,
   brainDownload,
   heartbeat,
+  isRepositoryId,
   mintRunToken,
   settle,
   verifyGithubRun,
@@ -335,6 +336,14 @@ const padded = (value: unknown, size: number) => {
 }
 
 describe("conversation and Brain key clients", () => {
+  test("the job's repository id follows the server's rule: a positive safe integer without a leading zero", () => {
+    for (const value of ["1", "4711", "9007199254740991"]) expect(isRepositoryId(value)).toBe(true)
+    for (const value of [undefined, "", "0", "042", "-5", "1.5", "1e3", "0x1", "42\n", "9007199254740992"])
+      expect(isRepositoryId(value)).toBe(false)
+    // 17 to 20 digits, which MINTED_RUN_ID's parts still decode, never pass (deviations, brain-transport lane item 4).
+    for (const value of ["12345678901234567", "12345678901234567890"]) expect(isRepositoryId(value)).toBe(false)
+  })
+
   test("artifact key sends only the run's own thread and decodes a strict key", async () => {
     await using f = await fixture(() => Response.json(KEY))
     const result = await artifactKey({

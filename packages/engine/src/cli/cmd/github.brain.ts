@@ -1,7 +1,7 @@
 import { createDecipheriv, createHash } from "node:crypto"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
 import { BrainUpload } from "@vectordevai/core/brain/upload"
-import type { BrainDownload } from "./github.cloud"
+import { UPLOAD, isRepositoryId, type BrainDownload } from "./github.cloud"
 import type { DesktopBrainApproval } from "./github.session"
 
 /**
@@ -70,9 +70,8 @@ export function openUpload(
 function bound(download: BrainDownload, expected: { repositoryId: string; uploadId: string }) {
   const parts = download.aad.split("|")
   return (
-    /^[1-9]\d{0,15}$(?![\s\S])/.test(expected.repositoryId) &&
-    Number.isSafeInteger(Number(expected.repositoryId)) &&
-    /^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/.test(expected.uploadId) &&
+    isRepositoryId(expected.repositoryId) &&
+    UPLOAD.test(expected.uploadId) &&
     download.uploadId === expected.uploadId &&
     download.aad.length <= 256 &&
     parts.length === 5 &&

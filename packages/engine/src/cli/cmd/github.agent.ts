@@ -23,7 +23,7 @@ import path from "node:path"
 import { Octokit } from "@octokit/rest"
 import { APICallError } from "ai"
 import { graphql } from "@octokit/graphql"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema, type Types } from "effect"
 import { z } from "zod"
 import { EventV2 } from "@vectordevai/core/event"
 import { GithubAgents } from "@vectordevai/core/github-agents"
@@ -54,7 +54,15 @@ import type { SessionID } from "../../session/schema"
 import { GITHUB_ACTIONS_BOT } from "./github.auth"
 import { GithubBundle } from "./github.bundle"
 import type { GithubBrain } from "./github.brain"
-import { MINTED_RUN_ID, TICKET, UPLOAD, artifactKey, brainDownload, type Services } from "./github.cloud"
+import {
+  MINTED_RUN_ID,
+  TICKET,
+  UPLOAD,
+  artifactKey,
+  brainDownload,
+  isRepositoryId,
+  type Services,
+} from "./github.cloud"
 import { buildEvidenceBody, parseNumstat, type EvidenceChange } from "./github.evidence"
 import { withGithubCallbacks, withGithubSignals, withRunHeartbeat } from "./github.lifecycle"
 import { githubSystemInstructions, untrustedJson } from "./github.policy"
@@ -842,7 +850,11 @@ async function writeConversation(start: Start, sessionID: SessionID, paths: { di
 function conversationIdentity(start: Start, env: Readonly<Record<string, string | undefined>>) {
   const repositoryId = env.GITHUB_REPOSITORY_ID ?? ""
   const rid = env.VECTOR_RUN_ID ?? ""
-  if (!MINTED_RUN_ID.test(rid) || !rid.startsWith(`gh-${repositoryId}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-`))
+  if (
+    !isRepositoryId(repositoryId) ||
+    !MINTED_RUN_ID.test(rid) ||
+    !rid.startsWith(`gh-${repositoryId}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-`)
+  )
     return undefined
   return { repositoryId, thread: start.route.thread, rid }
 }
@@ -879,7 +891,7 @@ async function brainContext(start: Start, model: Provider.Model | undefined, dep
   if (!start.route.ticket || !UPLOAD.test(uploadId) || deps.halt.reason()) return undefined
   const repositoryId = deps.env.GITHUB_REPOSITORY_ID ?? ""
   const room = Math.floor((model?.limit.input || model?.limit.context || 0) * BRAIN_CONTEXT_SHARE)
-  if (!/^[1-9]\d{0,15}$(?![\s\S])/.test(repositoryId) || room <= 0) {
+  if (!isRepositoryId(repositoryId) || room <= 0) {
     deps.log(BRAIN_NOT_ATTACHED)
     return undefined
   }
@@ -976,7 +988,7 @@ async function readConversation(start: Start, model: Provider.Model | undefined,
   const repositoryId = deps.env.GITHUB_REPOSITORY_ID ?? ""
   const importSession = deps.restore.importSession
   const room = Math.floor((model?.limit.input || model?.limit.context || 0) * RESTORE_CONTEXT_SHARE)
-  if (!/^[1-9]\d{0,19}$(?![\s\S])/.test(repositoryId) || !importSession || !model || room <= 0) return undefined
+  if (!isRepositoryId(repositoryId) || !importSession || !model || room <= 0) return undefined
   // The codec loads zip.js, so only a run that restores loads it.
   const { allowConversationRestore, decryptConversation, latestConversation } = await import("./github.session")
   const thread = start.route.thread
@@ -1018,8 +1030,13 @@ async function readConversation(start: Start, model: Provider.Model | undefined,
   // The import turns a compaction into plain text, so everything before it would be sent again in full.
   if (local.messages.some((message) => message.parts.some((part) => part.type === "compaction"))) return undefined
   // The estimate a compaction makes before a turn, over the history as its turns would send it: an image or a tool's
-  // attachment counts its visual tokens, a text file its text once. It only reads the decoded (readonly) messages.
-  const estimate = SessionCompaction.estimate({ messages: local.messages as SessionV1.WithParts[], model })
+  // attachment counts its visual tokens, a text file its text once. The archive decodes SessionV1's own WithParts
+  // schema and estimate only reads it, so the cast drops only `readonly`: any other difference from the session type
+  // fails to compile.
+  const estimate = SessionCompaction.estimate({
+    messages: local.messages as Types.DeepMutable<typeof local.messages>,
+    model,
+  })
   if ((await deps.run(estimate)) > room) return undefined
   if (deps.halt.reason()) return "stopped" as const
   const imported = await deps.run(importSession(conversation.session))

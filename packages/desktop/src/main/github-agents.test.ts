@@ -47,6 +47,7 @@ function fixture(mode: "codium" | "own-key" = "codium", brain = false) {
     codium: "ready",
   }
   const github = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url)

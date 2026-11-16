@@ -45,6 +45,13 @@ const Binding = z
   .strict()
 /** A Brain upload id as brain-download reads it from VECTOR_BRAIN_UPLOAD: `vbu_` and 32 base64url characters. */
 export const UPLOAD = /^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/
+/**
+ * The job's GITHUB_REPOSITORY_ID as the run's Brain context, restore and save use it: a positive safe integer without a
+ * leading zero, the bound the server's mint, binding and Brain routes and the desktop also apply. One rule, so a run
+ * never gets its conversation without its Brain context, or the other way round.
+ */
+export const isRepositoryId = (value: string | undefined) =>
+  /^[1-9]\d{0,15}$(?![\s\S])/.test(value ?? "") && Number.isSafeInteger(Number(value))
 const canonical = (value: string) => Buffer.from(value, "base64url").toString("base64url") === value
 // The same 32-byte key shape github.session.ts's keyBytes accepts, for the ordinary and the Brain conversation key.
 const Key = z

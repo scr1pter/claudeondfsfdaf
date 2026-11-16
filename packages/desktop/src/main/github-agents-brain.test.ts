@@ -630,6 +630,7 @@ function returnedDesk(artifact: { zip: Uint8Array; key: { key: string; keyId: st
     ...extra,
   })
   const github = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url)
@@ -652,6 +653,7 @@ function returnedDesk(artifact: { zip: Uint8Array; key: { key: string; keyId: st
     },
   })
   const engine = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
       const url = new URL(request.url)

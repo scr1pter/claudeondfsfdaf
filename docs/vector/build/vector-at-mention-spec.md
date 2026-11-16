@@ -135,7 +135,7 @@ The owner decisions of 27 Oct (V3C §6–§7 and the task) win. Then this contra
 
 1. **Register the GitHub App.** Its name must not be "vector". It gets its final permission set from day one (2.11.6). Set the `VECTOR_GITHUB_APP_*` variables in Production.
 2. **Set the run-token secrets.** Set `VECTOR_RUN_TOKEN_SECRET`, then `VECTOR_RUN_ARTIFACT_SECRET` (V27).
-3. **Switch the service on.** Before A59, our env switch `VECTOR_CLOUD_AGENTS_ENABLED` stays unset, so Codium mints answer 503 `MODEL_PLANS_DISABLED`. After A59 the switch is Codium's `cloudAgents` runtime switch: it stays off when A59 merges, goes on for the acceptance run, and stays on only once acceptance passes. The own-key path is unaffected either way.
+3. **Switch the service on.** Before A59, our env switch `VECTOR_CLOUD_AGENTS_ENABLED` stays unset, so Codium mints answer 503 `MODEL_PLANS_DISABLED`. After A59 the switch is Codium's `cloudAgents` runtime switch: it stays off when A59 merges, goes on for the acceptance run, and stays on only once acceptance passes. The own-key path is unaffected either way. _As built_ (deviations, "2026-11-16 brain-transport lane (phase-review findings)" item 1): no code reads `VECTOR_CLOUD_AGENTS_ENABLED`. The bind-code, bind, bindings, unbind, runs, mint, heartbeat, settle and artifact-key routes and the `cloud-agents` webhook handler answer before any store read unless both `MODEL_PLANS_ENABLED` and `VECTOR_GITHUB_BRAIN_ENABLED` are `true` (`cloudAgentsEnabled()`, `api/_lib/model-plan-config.ts`); Codium's `cloudAgents` and `codium` runtime switches then gate each allowance.
 4. **Turn on the webhook last.** Save the webhook only after the shared router (A47) has been deployed.
 5. **List the perks last.** Codium surfaces appear only after the owner adds the perks to `CODIUM_LISTED_PERKS` (section 4 step 9).
 
@@ -485,7 +485,7 @@ Tests: `agents-model.test.ts` › "every Codium surface follows its separate lis
 | O7 | Codium runs from `pull_request_review_comment` | Only with the App installed. The server then verifies the commenter, the comment, a same-repository head and an unchanged `vector.yml`. Without the App: 403 `EVENT_NEEDS_APP`, and publish replies that a PR conversation comment works instead. |
 | O8 | Job timeouts | Codium agent job: 135 min (120 plus margin; the server deadline does the per-plan work). Own-key agent job: 60 min. Publish: 15 min. Bind: 5 min. Route: 3 min. Review: 20 min. |
 | O9 | Run in GitHub without the App | Allowed. The desktop dispatches with the user's own GitHub sign-in (`repo` scope). The App is needed only for server-started runs (`startCloudRun`). |
-| O10 | Our kill switch | Before A59: env `VECTOR_CLOUD_AGENTS_ENABLED` (default unset, meaning off). A59 replaces the function that reads it, so afterwards Codium's `cloudAgents` runtime switch (with `MODEL_PLANS_ENABLED` and the `codium` switch) is the only gate. |
+| O10 | Our kill switch | Before A59: env `VECTOR_CLOUD_AGENTS_ENABLED` (default unset, meaning off). A59 replaces the function that reads it, so afterwards Codium's `cloudAgents` runtime switch (with `MODEL_PLANS_ENABLED` and the `codium` switch) is the only gate. _As built_ (deviations, "2026-11-16 brain-transport lane (phase-review findings)" item 1): `VECTOR_CLOUD_AGENTS_ENABLED` is read nowhere; the service gate is `cloudAgentsEnabled()`, `MODEL_PLANS_ENABLED` and `VECTOR_GITHUB_BRAIN_ENABLED` both `true`, checked before the bind-code, bind, bindings, unbind, runs, mint, heartbeat, settle and artifact-key routes and the webhook handler (the Brain routes check `VECTOR_GITHUB_BRAIN_ENABLED` first on their own, 503 `BRAIN_UPLOAD_UNAVAILABLE`); the `cloudAgents` and `codium` runtime switches gate the allowance behind it. |
 | O11 | Session continuity for own-key runs | No. It needs the server's key. Own-key follow-ups use thread context. |
 | O12 | Session artifact retention | 7 days. Run bundles: 1 day. |
 | O13 | App uninstall | Keep bindings, which do not depend on the App. Drop App-only extras such as review-comment runs. |
@@ -616,7 +616,7 @@ export function createCloudAgentEntitlement(deps: {
 }): typeof cloudAgentEntitlement
 ```
 
-The local backing works as follows until A59. It is dormant in production, because the kill switch stays unset until A59 replaces it (O10):
+The local backing works as follows until A59. It is dormant in production, because the kill switch stays unset until A59 replaces it (O10). _As built_ (deviations, "2026-11-16 brain-transport lane (phase-review findings)" item 1): A59 removed `createCloudAgentEntitlement` and this `enabled()`; `cloudAgentEntitlement` reads Codium's allowance (`MODEL_PLANS_ENABLED`, then the `cloudAgents` and `codium` runtime switches), and the routes' own gate is `cloudAgentsEnabled()`:
 1. Not `enabled()` → `service-off`.
 2. A source outside `ENABLED_SOURCES` → `source-unavailable`.
 3. Otherwise `plan()` decides. The default `plan()` reads `readModelPlanAccount(accountId)?.closing` first (closing → `closing`), then `modelPlanStatus(accountId)` from `api/_lib/model-plan-account.ts`, cached per account for 60 s in memory so at-once retries do not repeat it. Its answers map like this:
@@ -2117,7 +2117,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 4. **Production env, Production scope only:**
    - the existing `VECTOR_GITHUB_APP_*`;
    - `VECTOR_RUN_TOKEN_SECRET` and `VECTOR_RUN_ARTIFACT_SECRET` (each 32 or more random characters, generated outside chat);
-   - `VECTOR_CLOUD_AGENTS_ENABLED`: leave it unset. It matters only before A59, and nothing needs it on.
+   - `VECTOR_CLOUD_AGENTS_ENABLED`: leave it unset. No code reads it (deviations, "2026-11-16 brain-transport lane (phase-review findings)" item 1). The service gate is `MODEL_PLANS_ENABLED` plus `VECTOR_GITHUB_BRAIN_ENABLED`, which this step leaves off.
 5. **Decode one live OIDC token** per event on a private test repository: `issue_comment`, `issues`, `workflow_dispatch`, `schedule` and `pull_request_review_comment`.
    - Use a throwaway step that prints only claim *names* and these facts:
      - whether `job_workflow_ref == workflow_ref` and `job_workflow_sha == workflow_sha`;
@@ -2130,7 +2130,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
    - This confirms the [verify] items in 2.10 and 2.11.
 6. **Confirm the sandbox's assumptions** on `ubuntu-latest`, from the same throwaway run and from the V16 `sandbox-probe` job's log: the runner user is in the `docker` group (so the sandbox must keep the agent user out of it), `kernel.yama.ptrace_scope` before and after `sandbox prepare`, and that `useradd`, `setpriv` and passwordless `sudo -n` are available to the runner. The sandbox verifies all of this itself and fails closed; this step is confirmation only. This build holds the bubblewrap tool floor off (INV-S5 ship gate), so step 8 and any hosted activation wait until native isolation qualifies.
 7. **Merge `vector-at-mention` to `main`** after V30, and publish an npm CLI release that carries it, at or above `GithubAgents.MIN_AGENTS_CLI`. Before any desktop release offers @vector setup, raise `vectorRequiredCliVersion` in `packages/desktop/package.json` to that release. Codium's A59 then integrates.
-8. **Acceptance on a private test repository**, after A59. Keep Codium's `cloudAgents` runtime switch off when A59 merges; turn it on for this run; leave it on only once acceptance passes. Use the test account's plan, `vector github install --codium` and the website form at `/account?github-preview=1#github` (Codium surfaces are not listed yet):
+8. **Acceptance on a private test repository**, after A59. Keep Codium's `cloudAgents` runtime switch off when A59 merges; turn it on for this run; leave it on only once acceptance passes. _As built_ (deviations, "2026-11-16 brain-transport lane (phase-review findings)" item 1): the run also needs `MODEL_PLANS_ENABLED` and `VECTOR_GITHUB_BRAIN_ENABLED` set to `true`, because `VECTOR_GITHUB_BRAIN_ENABLED` gates every cloud-agents route (bind codes, bind, bindings, unbind, runs, mint, heartbeat, settle, artifact key, and the webhook handler), not only the Brain routes; while it is off every route answers 503 (`CLOUD_AGENTS_UNAVAILABLE`, or `MODEL_PLANS_DISABLED` while `MODEL_PLANS_ENABLED` is off). Whether it stays on after this run, and how that fits step 9, is the owner's decision. Use the test account's plan, `vector github install --codium` and the website form at `/account?github-preview=1#github` (Codium surfaces are not listed yet):
    - bind;
    - an issue task → PR with "Codium" only in its body, and no CI run on it;
    - a follow-up on that PR;

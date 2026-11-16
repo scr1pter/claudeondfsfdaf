@@ -165,10 +165,10 @@ Remaining:
 - Server key `api/cloud-agents/artifact-key.ts`.
 - Owner read `owner-artifact-key.ts`.
 - The Brain prepare, commit, download and desktop-run routes (all behind `VECTOR_GITHUB_BRAIN_ENABLED`, which is off: `api/_lib/cloud-agents-desktop.ts:75`, `cloud-agents-owner-artifact.ts:50`, `cloud-agents-readiness.ts:66`).
-- The VSA1 codec, newest-artifact selection and restore predicate (`engine/src/cli/cmd/github.session.ts:135,197,284,360,392`).
-- The runner side of the session proof: the FD3 bridge (`github.sandbox.ts:626-637`) and the proof-checked copy into `vector-session` (`:785-790`, `:828-850`).
-- The workflow upload of `vector-session-<thread>` (`core/src/review/workflow.ts:702-703`).
-- Desktop preview and import (`desktop/src/main/github-agents-brain.ts:114,192,269,361`), with the engine's local `/experimental/brain/preview` and `/experimental/brain/run-proposals/import` routes.
+- The VSA1 codec, newest-artifact selection and restore predicate (`engine/src/cli/cmd/github.session.ts`: `encryptConversation`, `decryptConversation`, `allowConversationRestore`, `latestConversation`, `downloadConversationArtifact`; named by symbol, since line numbers moved with BT06, BT12 and `a5280117`).
+- The runner side of the session proof: the FD3 bridge (`github.sandbox.ts` `run`, the `vector-session-proof` `bash -c 'exec 3>"$1" …'` prefix opened after sudo and bwrap, before the `setpriv` UID switch) and the proof-checked copy into `vector-session` (`finish`, through `readSessionProof` and `copyBundleFile`).
+- The workflow upload of `vector-session-<thread>` (`core/src/review/workflow.ts` `buildAgentsWorkflow`: the Codium-only `actions/upload-artifact@v4` step after `sandbox_finish`, named `vector-session-${{ needs.route.outputs.thread }}`).
+- Desktop preview and import (`desktop/src/main/github-agents-brain.ts` `createGithubAgentsBrain`: `preview`, `start`, `previewReturned`, `importReturned`), with the engine's local `/experimental/brain/preview` and `/experimental/brain/run-proposals/import` routes.
 - BT03 (`brain-transport`): the Brain upload store and the live run reader are hardened and tested against real Redis (and passed against the lane's hosted Valkey in vector-at-mention.yml 43675601284, job 132694938440), and with the switch off every Brain route answers 503 first (deviations, "2026-11-15 BT03"). The ordinary artifact key is now refused (403 `ARTIFACT_KEY_NOT_ALLOWED`) to every owner-desktop run, so the engine client in item 3 must take a Brain run's conversation key from `brain-download`'s `artifactKey`, never call artifact-key when `VECTOR_BRAIN_UPLOAD` is set, and treat that 403 as "no ordinary key" (the run then saves no session).
 
 **Missing: the Actions engine side does none of this yet.**
