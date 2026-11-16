@@ -112,6 +112,8 @@ export const REMOTE_ROUTES: readonly Route[] = [
     path: "/experimental/connect/runs/:runID/cancel",
     params: { runID: isRun },
     query: { sessionID: isSession },
+    // Scoped as the run read is: the phone cancels only a run of a conversation it names.
+    required: ["sessionID"],
     body: (value) => (value === undefined || (isRecord(value) && Object.keys(value).length === 0) ? {} : undefined),
     connect: true,
   },

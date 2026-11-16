@@ -527,11 +527,11 @@ describe("connected tools from a phone (CW-23b)", () => {
     expect(t.engineCalls().length).toBe(reads.length * 2)
   })
 
-  test("a cancel carries no body, and its session id is optional", async () => {
+  test("a cancel carries no body and names its conversation", async () => {
     const t = await setup()
     const path = "/experimental/connect/runs/cr_1/cancel"
     for (const [body, query] of [
-      [undefined, undefined],
+      [undefined, { sessionID: "ses_1" }],
       [{}, { sessionID: "ses_1" }],
     ] as const) {
       const answer = await t.ask({
@@ -549,10 +549,19 @@ describe("connected tools from a phone (CW-23b)", () => {
     }
     const before = t.engineCalls().length
     for (const body of [{ reason: "x" }, { sessionID: "ses_1" }, { findings: ["f1"] }, [], null, "x", 1])
-      expect({ body, code: code(await t.ask({ method: "POST", path, directory: "/repo", body })) }).toEqual({
+      expect({
+        body,
+        code: code(await t.ask({ method: "POST", path, directory: "/repo", query: { sessionID: "ses_1" }, body })),
+      }).toEqual({
         body,
         code: "REMOTE_BODY_REFUSED",
       })
+    // A cancel that names no conversation could reach any run in the folder, a desktop review included.
+    for (const query of [undefined, { sessionID: "ses 1" }, { sessionID: "wrk_1" }])
+      expect({
+        query,
+        code: code(await t.ask({ method: "POST", path, directory: "/repo", body: {}, ...(query ? { query } : {}) })),
+      }).toEqual({ query, code: "REMOTE_QUERY_REFUSED" })
     // Refused before the engine is asked anything, even whether connected tools are on.
     expect(t.engineCalls().length).toBe(before)
   })
@@ -878,7 +887,7 @@ describe("connected tools from a phone (CW-23b)", () => {
         { method: "GET", path: "/experimental/connect" },
         { method: "GET", path: "/experimental/connect/runs", query: { sessionID: "ses_1" } },
         { method: "GET", path: "/experimental/connect/runs/cr_1", query: { sessionID: "ses_1" } },
-        { method: "POST", path: "/experimental/connect/runs/cr_1/cancel", body: {} },
+        { method: "POST", path: "/experimental/connect/runs/cr_1/cancel", query: { sessionID: "ses_1" }, body: {} },
         { method: "POST", path: "/remote/approval", body: { review: { sessionID: "ses_1", target: UNCOMMITTED } } },
       ]
       for (const request of requests) {
