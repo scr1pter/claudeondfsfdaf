@@ -17,6 +17,7 @@ import { APICallError } from "ai"
 import { Clock, Context, Duration, Effect, Exit, Fiber, Layer, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js"
+import { Brain } from "@vectordevai/core/brain/brain"
 import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
 import { Database } from "@vectordevai/core/database/database"
@@ -70,6 +71,7 @@ import { allowConversationRestore, decryptConversation, encryptConversation } fr
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Provider } from "../../src/provider/provider"
+import { Instruction } from "../../src/session/instruction"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
@@ -190,6 +192,57 @@ const noBundle = (dir: string) =>
   )
 const taskRequests = () => codium.state.requests.filter((request) => !request.title)
 const writeNotes = (dir: string) => ({ filePath: path.join(dir, "NOTES.md"), content: "notes\n" })
+
+/** The artifact's download as the runner uploads it: a zip that holds session.vsa. */
+const artifactZip = async (bytes: Uint8Array) => {
+  const writer = new ZipWriter(new Uint8ArrayWriter())
+  await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
+    level: 0,
+    useWebWorkers: false,
+    useCompressionStream: false,
+  })
+  return writer.close()
+}
+
+/**
+ * The real SessionArchive over this runtime's database behind a share service whose other methods die: the save and
+ * the restore may use only its export and import. Projects resolve to this instance's own.
+ */
+const archiveShare = Effect.fn("AgentCodiumTest.archiveShare")(function* () {
+  const ctx = yield* InstanceRef
+  if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
+  const bridge = yield* EventV2Bridge.Service
+  const built = yield* Layer.build(
+    SessionArchive.node.implementation as Layer.Layer<
+      SessionArchive.Service,
+      never,
+      Database.Service | EventV2.Service | ProjectV2.Service
+    >,
+  ).pipe(
+    Effect.provideService(EventV2.Service, bridge),
+    Effect.provideService(
+      ProjectV2.Service,
+      ProjectV2.Service.of({
+        directories: () => Effect.die(new Error("The archive's import resolves only the project.")),
+        resolve: (directory) => Effect.succeed({ id: ctx.project.id, directory }),
+        commit: () => Effect.die(new Error("The archive's import resolves only the project.")),
+      }),
+    ),
+  )
+  const archive = Context.get(built, SessionArchive.Service)
+  const unused = () =>
+    Effect.die(new Error("The conversation save and restore use only the archive's export and import."))
+  return PublicSessionShare.Service.of({
+    ...archive,
+    publish: unused,
+    review: unused,
+    flush: unused,
+    unshare: unused,
+    removeTree: unused,
+    auto: unused,
+    read: unused,
+  })
+})
 
 describe("the Codium lifecycle", () => {
   it.instance(
@@ -1414,7 +1467,7 @@ describe("the conversation save (V27, BT05)", () => {
   )
 
   it.instance(
-    "a desktop Brain run saves nothing until BT07b and asks for no key, and a session file the model wrote is removed",
+    "a writer's dispatch that carries an upload id saves nothing and asks for no key, and a session file the model wrote is removed",
     () =>
       Effect.gen(function* () {
         const test = yield* start()
@@ -1726,17 +1779,6 @@ describe("the conversation restore (V27, BT06)", () => {
     [field: string]: unknown
   }
 
-  /** The artifact's download as the runner uploads it: a zip that holds session.vsa. */
-  const artifactZip = async (bytes: Uint8Array) => {
-    const writer = new ZipWriter(new Uint8ArrayWriter())
-    await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
-      level: 0,
-      useWebWorkers: false,
-      useCompressionStream: false,
-    })
-    return writer.close()
-  }
-
   /** A conversation as a run of `thread` (this run's own by default) saved it under the key, before it is zipped. */
   const sealed = (
     session: unknown,
@@ -1767,46 +1809,6 @@ describe("the conversation restore (V27, BT06)", () => {
     created_at: at(12),
     zip,
     ...extra,
-  })
-
-  /**
-   * The real SessionArchive over this runtime's database behind a share service whose other methods die: the save and
-   * the restore may use only its export and import. Projects resolve to this instance's own.
-   */
-  const archiveShare = Effect.fn("AgentCodiumTest.archiveShare")(function* () {
-    const ctx = yield* InstanceRef
-    if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
-    const bridge = yield* EventV2Bridge.Service
-    const built = yield* Layer.build(
-      SessionArchive.node.implementation as Layer.Layer<
-        SessionArchive.Service,
-        never,
-        Database.Service | EventV2.Service | ProjectV2.Service
-      >,
-    ).pipe(
-      Effect.provideService(EventV2.Service, bridge),
-      Effect.provideService(
-        ProjectV2.Service,
-        ProjectV2.Service.of({
-          directories: () => Effect.die(new Error("The archive's import resolves only the project.")),
-          resolve: (directory) => Effect.succeed({ id: ctx.project.id, directory }),
-          commit: () => Effect.die(new Error("The archive's import resolves only the project.")),
-        }),
-      ),
-    )
-    const archive = Context.get(built, SessionArchive.Service)
-    const unused = () =>
-      Effect.die(new Error("The conversation save and restore use only the archive's export and import."))
-    return PublicSessionShare.Service.of({
-      ...archive,
-      publish: unused,
-      review: unused,
-      flush: unused,
-      unshare: unused,
-      removeTree: unused,
-      auto: unused,
-      read: unused,
-    })
   })
 
   /** A Codium issue comment's step env with the job's repository id and the run id mint wrote; `extra` replaces names. */
@@ -2189,9 +2191,10 @@ describe("the conversation restore (V27, BT06)", () => {
           settle("changes"),
         ])
 
-        // A ticket dispatch is a desktop run, which never gets the ordinary key (2.8): no list on a re-run attempt,
-        // with or without a Brain upload. The Brain run's only cloud request before its settle is its one
-        // brain-download (BT07a), which the recorder answers unavailable.
+        // A ticket dispatch has nothing to restore on a re-run attempt: without a Brain upload its single-use ticket
+        // lets no re-run attempt mint (deviations BT06 item 3), and a Brain run restores only under the Brain key its
+        // opened download gave it (BT07b). Neither lists here. The Brain run's only cloud request before its settle
+        // is its one brain-download (BT07a), which the recorder answers unavailable, so it has no Brain key.
         const service = { login: "vector-test[bot]", id: 77, type: "Bot" }
         const ticketed = { inputs: { mode: "task", ticket: TICKET_FIXTURE }, sender: service }
         const upload = `vbu_${"A".repeat(16)}${"b-".repeat(8)}`
@@ -2489,6 +2492,36 @@ describe("the conversation restore (V27, BT06)", () => {
             cloud: [keyRequest(), keyRequest(), settle("changes")],
           })
         }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    120_000,
+  )
+
+  it.instance(
+    "a conversation sealed under a Brain key never opens under a comment run's ordinary key, though both carry the same key id",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const share = yield* archiveShare()
+        const one = yield* firstRun(test, share)
+        // BT07b's Brain-key save of a desktop Brain run, as if its artifact sat under this issue's name: the brain
+        // key with the ordinary key's id, so only authenticated decryption tells them apart.
+        const key = { key: BRAIN_KEY.key, keyId: ARTIFACT_KEY.keyId }
+        const bytes = yield* Effect.promise(() => sealed(one.archive, { key, brain: true }))
+        const opened = (grant: typeof ARTIFACT_KEY) =>
+          decryptConversation({ bytes, key: grant, expected: { repositoryId: REPOSITORY_ID, thread: THREAD } })
+        expect(yield* Effect.promise(() => opened(key))).toBeDefined()
+        expect(yield* Effect.promise(() => opened(ARTIFACT_KEY))).toBeUndefined()
+        const spy = importer()
+        const result = yield* followUp(test, {
+          artifacts: [artifact(yield* Effect.promise(() => artifactZip(bytes)))],
+          importSession: spy.importSession,
+          session: { exportSession: () => Effect.succeed({ fixture: "the save's export" }) },
+        })
+        yield* fellBack(test, "a Brain-key conversation", result)
+        expect(spy.calls).toEqual([])
+        expect(result.cloud.requests).toEqual([keyRequest(), keyRequest(), settle("changes")])
         expect(guard.outside()).toEqual([])
       }),
     { git: true },
@@ -3013,12 +3046,15 @@ describe("the Brain context (B08, BT07a)", () => {
   type EnvOf = (github: string, time: ReturnType<typeof fakeClock>) => Effect.Effect<Env>
 
   /**
-   * One run against `answer` for brain-download (the recorder's unavailable `{ok: true}` by default): the model plants
-   * vector-out/session.vsa, writes the notes and answers. The env is a ticket dispatch (`ticket` adjusts it) unless
-   * `env` builds another, the holder has the runner's session proof unless `credentials` replaces it, so a save would
-   * run if a Brain run were not kept from it, and the opener counts its calls. `catalog` runs on every catalog read
-   * (each provider list), and `time` replaces the fresh fake clock. Returns the run, its fakes, every model request
-   * body and the first task request's.
+   * One run against `answer` for brain-download (the recorder's unavailable `{ok: true}` by default): the model makes
+   * the `calls` it is given, plants vector-out/session.vsa, writes the notes and answers `text`. The env is a ticket
+   * dispatch (`ticket` adjusts it) unless `env` builds another, the holder has the runner's session proof unless
+   * `credentials` replaces it, and the opener, the export and the attestation count their calls; `session` replaces
+   * any of the save's seams. With `share` the real archive exports and imports (and the counting export is dropped).
+   * The fake GitHub lists `artifacts` for the restore, which goes through its transport (`restore` replaces seams), and
+   * `sessions` replaces the phase's Session service. `catalog` runs on every catalog read (each provider list), and
+   * `time` replaces the fresh fake clock. Returns the run, its fakes, every model request body, the first task
+   * request's and vector-out's listing.
    */
   const brainRun = Effect.fn("AgentCodiumTest.brainRun")(function* (
     test: Effect.Success<ReturnType<typeof start>>,
@@ -3030,6 +3066,13 @@ describe("the Brain context (B08, BT07a)", () => {
       credentials?: AgentCredentials
       catalog?: (time: ReturnType<typeof fakeClock>) => void
       time?: ReturnType<typeof fakeClock>
+      calls?: [string, Record<string, unknown>][]
+      text?: string
+      session?: Partial<SessionSave>
+      share?: PublicSessionShare.Interface
+      artifacts?: FakeArtifact[]
+      restore?: Partial<SessionRestore>
+      sessions?: Session.Interface
     } = {},
   ) {
     yield* Effect.promise(() => resetTree(test.dir))
@@ -3038,12 +3081,13 @@ describe("the Brain context (B08, BT07a)", () => {
     const time = input.time ?? fakeClock()
     const catalog = input.catalog
     codium.reset(catalog ? { onCatalog: () => catalog(time) } : {})
+    for (const [tool, args] of input.calls ?? []) yield* test.llm.tool(tool, args)
     yield* test.llm.tool("write", {
       filePath: path.join(test.dir, "vector-out", "session.vsa"),
       content: "planted by the model\n",
     })
     yield* test.llm.tool("write", writeNotes(test.dir))
-    yield* test.llm.text("Wrote the notes.")
+    yield* test.llm.text(input.text ?? "Wrote the notes.")
     const github = fakeGithub({
       roles: { alice: "write" },
       threads: [
@@ -3053,25 +3097,29 @@ describe("the Brain context (B08, BT07a)", () => {
           data: issueData({ title: "Notes", body: "Keep notes.", author: "alice" }),
         },
       ],
+      ...(input.artifacts ? { artifacts: input.artifacts } : {}),
     })
     const calls = { open: 0, export: 0, attest: 0 }
     const cloud = cloudRecorder(input.answer ? { brainDownload: input.answer } : {})
     const open = input.open ?? OPEN
-    const run = yield* phase({
+    const exported: SessionExport = () => {
+      calls.export++
+      return Effect.succeed({ fixture: "the save's export" })
+    }
+    const effect = phase({
       env: yield* input.env ? input.env(github.url, time) : ticketEnv({ github: github.url, time, ...input.ticket }),
       credentials: input.credentials ?? (yield* Effect.promise(() => holder("codium", true, { sessionProof: true }))),
       services: cloud.services,
       clock: time.clock,
       session: {
-        exportSession: () => {
-          calls.export++
-          return Effect.succeed({ fixture: "the save's export" })
-        },
+        ...(input.share ? {} : { exportSession: exported }),
         attest: () => {
           calls.attest++
           return true
         },
+        ...input.session,
       },
+      restore: { request: github.request, ...input.restore },
       brain: {
         open: (...args) => {
           calls.open++
@@ -3079,10 +3127,26 @@ describe("the Brain context (B08, BT07a)", () => {
         },
       },
     })
+    const shared = input.share ? effect.pipe(Effect.provideService(PublicSessionShare.Service, input.share)) : effect
+    const run = yield* input.sessions ? shared.pipe(Effect.provideService(Session.Service, input.sessions)) : shared
     github.stop()
     const bodies = yield* test.llm.inputs
     const first = bodies.find((body) => !isTitle(body))
-    return { run, cloud, time, calls, bodies, first, files: yield* Effect.promise(() => listing(test.dir)) }
+    return { run, cloud, github, time, calls, bodies, first, files: yield* Effect.promise(() => listing(test.dir)) }
+  })
+
+  /** The session file a run left, and how it opens: under the Brain key, for this dispatch's thread and run. */
+  const sessionPath = (dir: string) => path.join(dir, "vector-out", GithubAgents.SESSION_FILE)
+  const openSaved = (bytes: Uint8Array, key: { key: string; keyId: string } = BRAIN_KEY, rid = RID) =>
+    decryptConversation({ bytes, key, expected: { repositoryId: REPOSITORY_ID, thread: `dispatch-${RUN_ID}`, rid } })
+  /** The approval openUpload builds for `sha256` from the download's own answer. */
+  const approvalOf = (sha256: string, download: { approvedAt: number; publicRepository: boolean }) => ({
+    source: "desktop" as const,
+    repositoryId: REPOSITORY_ID,
+    sha256,
+    approvedAt: download.approvedAt,
+    audience: "owner-desktop" as const,
+    publicRepository: download.publicRepository,
   })
 
   /** What every run without Brain context shares: one neutral line, no block, the plain ticket task, nothing saved. */
@@ -3100,8 +3164,8 @@ describe("the Brain context (B08, BT07a)", () => {
       name,
       task: true,
     })
-    // One brain-download, then the settle: the Brain run asks for no ordinary key, exports nothing and attests
-    // nothing, and the session file the model left is gone.
+    // One brain-download, then the settle: a Brain run whose read opened no Brain key asks for no ordinary key,
+    // exports nothing and attests nothing, and the session file the model left is gone.
     expect({ name, cloud: row.cloud.requests }).toEqual({ name, cloud: [brainRequest, settle("changes")] })
     expect({ name, save: { export: row.calls.export, attest: row.calls.attest } }).toEqual({
       name,
@@ -3115,7 +3179,7 @@ describe("the Brain context (B08, BT07a)", () => {
   })
 
   it.instance(
-    "a desktop Brain run gives its first model request the approved context once, as labelled untrusted data, with the rule only in the system instructions, and saves nothing",
+    "a desktop Brain run gives its first model request the approved context once, as labelled untrusted data, with the rule only in the system instructions, and saves its conversation only under the Brain key",
     () =>
       Effect.gen(function* () {
         const test = yield* start()
@@ -3124,9 +3188,10 @@ describe("the Brain context (B08, BT07a)", () => {
         const row = yield* brainRun(test, { answer: () => Response.json(download) })
         expect(row.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
         expect(brainLines(row.run.lines)).toEqual([BRAIN_ATTACHED])
-        // One brain-download with the run token, then the settle: no artifact-key request, export or attestation.
+        // One brain-download with the run token, then the settle: no artifact-key request. The save exports once and
+        // attests once (BT07b).
         expect(row.cloud.requests).toEqual([brainRequest, settle("changes")])
-        expect(row.calls).toEqual({ open: 1, export: 0, attest: 0 })
+        expect(row.calls).toEqual({ open: 1, export: 1, attest: 1 })
         expect(row.cloud.masks).toEqual(expect.arrayContaining([download.key, BRAIN_KEY.key]))
         // The first task message: the service's task line and its labelled request, then the approved context once.
         const user = textIn(row.first, false)
@@ -3157,9 +3222,23 @@ describe("the Brain context (B08, BT07a)", () => {
         expect(user).not.toContain(UNTRUSTED_DATA_RULE)
         // The account in the envelope's authenticated data reaches no model request (deviations BT04 item 11).
         expect(JSON.stringify(row.bodies)).not.toContain(BRAIN_ACCOUNT)
-        // Until BT07b a Brain run saves nothing: the session file the model left is gone, and there is no save line.
-        expect(row.files).toEqual(["patch.diff", "summary.json"])
-        expect(sessionLines(row.run.lines)).toEqual([])
+        // BT07b: the session file the model left is replaced by the save, under the Brain key only, with the exact
+        // approved bundle and its approval and no returned drafts.
+        expect(row.files).toEqual(["patch.diff", "session.vsa", "summary.json"])
+        expect(sessionLines(row.run.lines)).toEqual([SESSION_SAVED])
+        const file = yield* Effect.promise(() => fs.readFile(sessionPath(test.dir)))
+        expect(MARKERS.filter((marker) => file.includes(Buffer.from(marker)))).toEqual([])
+        const saved = yield* Effect.promise(() => openSaved(file))
+        expect(saved?.session).toEqual({ fixture: "the save's export" })
+        expect(saved?.header).toMatchObject({ keyId: BRAIN_KEY.keyId, rid: RID })
+        expect(Buffer.from(saved?.brain ?? []).equals(packed.bytes)).toBe(true)
+        expect(saved?.proposals).toBeUndefined()
+        expect(saved?.manifest.files.map((entry) => entry.path)).toEqual(["session.json", "brain/bundle.json"])
+        expect(saved?.manifest.files[1]?.approval).toEqual(approvalOf(packed.sha256, download))
+        // The ordinary key, even with the Brain key's id, opens nothing.
+        expect(
+          yield* Effect.promise(() => openSaved(file, { key: ARTIFACT_KEY.key, keyId: BRAIN_KEY.keyId })),
+        ).toBeUndefined()
         const out = yield* Effect.promise(() => bundleOf(test.dir))
         expect(out.patch).toContain("NOTES.md")
         expect(out.patch).not.toContain("vector-out")
@@ -3450,10 +3529,19 @@ describe("the Brain context (B08, BT07a)", () => {
         expect(over.bytes.byteLength).toBeLessThanOrEqual(BrainRunBundle.MAX_BYTES)
         const large = yield* Effect.promise(() => brainUploaded(over.bytes))
         const small = yield* Effect.promise(() => brainUploaded(within.bytes))
-        // Over the share: one request, opened, and the neutral line instead of the block.
+        // Over the share: one request, opened, and the neutral line instead of the block. The server recorded Brain
+        // context at that read, so the conversation is still saved, under the Brain key only, with the approval the
+        // run was granted and the bundle it was not given (deviations BT07b item 3).
         const overRow = yield* brainRun(test, { answer: () => Response.json(large) })
-        yield* withoutBrain(test, "over the share", overRow)
-        expect(overRow.calls.open).toBe(1)
+        expect(overRow.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(brainLines(overRow.run.lines)).toEqual([BRAIN_NOT_ATTACHED])
+        expect(JSON.stringify(overRow.bodies).includes("brain_context")).toBe(false)
+        expect(overRow.calls).toEqual({ open: 1, export: 1, attest: 1 })
+        expect(overRow.cloud.requests).toEqual([brainRequest, settle("changes")])
+        expect(sessionLines(overRow.run.lines)).toEqual([SESSION_SAVED])
+        const saved = yield* Effect.promise(async () => openSaved(await fs.readFile(sessionPath(test.dir))))
+        expect(Buffer.from(saved?.brain ?? []).equals(over.bytes)).toBe(true)
+        expect(saved?.manifest.files[1]?.approval).toEqual(approvalOf(over.sha256, large))
         // Well within it: attached once.
         const row = yield* brainRun(test, { answer: () => Response.json(small) })
         expect(brainLines(row.run.lines)).toEqual([BRAIN_ATTACHED])
@@ -3539,4 +3627,441 @@ describe("the Brain context (B08, BT07a)", () => {
     { git: true },
     60_000,
   )
+
+  // B08 and the Brain history restriction (BT07b): a desktop Brain run with the runner's session proof saves its
+  // conversation only under the Brain key its opened download gave it, with the exact approved bundle and its approval,
+  // and a re-run attempt continues it only under that key and an approval of the same digest, audience and visibility.
+  // No returned drafts are written: every memory write of a GitHub run is held for review.
+  describe("the Brain history (B08, BT07b)", () => {
+    const THREAD = `dispatch-${RUN_ID}`
+    const MARKER = "BRAIN-RUN-ONE"
+    const RERUN = GithubAgents.runId(REPOSITORY_ID, RUN_ID, "2", "99")
+    const rerun = { extra: { GITHUB_RUN_ATTEMPT: "2", VECTOR_RUN_ID: RERUN } }
+    const QUESTIONS = [{ permission: "question", action: "deny" as const, pattern: "*" }]
+    const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+    const sessionOf = (lines: string[]) =>
+      lines.find((line) => line.startsWith("vector session "))?.slice("vector session ".length)
+    /** A conversation as attempt 1 of this dispatch saved it, zipped as its artifact and listed under its name. */
+    const listed = (zip: Uint8Array): FakeArtifact[] => [
+      { id: 31, name: `vector-session-${THREAD}`, created_at: "2026-11-16T05:00:00Z", zip },
+    ]
+    const sealed = (input: {
+      session: unknown
+      bytes: Uint8Array
+      approval: ReturnType<typeof approvalOf>
+      key?: { key: string; keyId: string }
+    }) =>
+      encryptConversation({
+        identity: { repositoryId: REPOSITORY_ID, thread: THREAD, rid: RID },
+        key: input.key ?? BRAIN_KEY,
+        session: input.session,
+        brain: { path: "brain/bundle.json", bytes: input.bytes, approval: input.approval },
+      }).then(artifactZip)
+    /** An importer that records each call and dies, since a row that should not import never calls it. */
+    const importer = () => {
+      const calls: unknown[] = []
+      const importSession: SessionImport = (value) => {
+        calls.push(value)
+        return Effect.die(new Error("This row imports nothing."))
+      }
+      return { calls, importSession }
+    }
+
+    it.instance(
+      "a re-run attempt continues the first attempt's conversation under the same approval and Brain key, sends the block only when that history lacks it, and falls back under any other approval or key",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const share = yield* archiveShare()
+          const sessions = yield* Session.Service
+          const audience = SessionAudience.make(yield* Database.Service)
+          const packed = yield* Effect.promise(() => pack())
+          const download = yield* Effect.promise(() => brainUploaded(packed.bytes))
+
+          // Attempt 1: no list (a dispatch's first attempt), the block attached, the real archive saved under the
+          // Brain key with no artifact-key request.
+          const one = yield* brainRun(test, {
+            answer: () => Response.json(download),
+            share,
+            text: `${MARKER} wrote the notes.`,
+          })
+          expect(one.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+          expect(brainLines(one.run.lines)).toEqual([BRAIN_ATTACHED])
+          expect(sessionLines(one.run.lines)).toEqual([SESSION_SAVED])
+          expect(one.cloud.requests).toEqual([brainRequest, settle("changes")])
+          expect(one.github.transport).toEqual([])
+          const file = yield* Effect.promise(() => fs.readFile(sessionPath(test.dir)))
+          const opened = yield* Effect.promise(() => openSaved(file))
+          if (!opened) throw new Error("Attempt 1's conversation does not open under the Brain key.")
+          // The session in the format SessionArchive.import decodes, whose first user message holds the block.
+          const local = Schema.decodeUnknownSync(Schema.Union([SessionArchive.Native, SessionArchive.Legacy]))(
+            opened.session,
+          )
+          expect("engine" in local).toBe(false)
+          expect(String(local.info.id)).toBe(sessionOf(one.run.lines)!)
+          const json = JSON.stringify(opened.session)
+          expect(json).toContain(JSON.stringify(OPEN_TAG).slice(1, -1))
+          expect(json).toContain(MARKER)
+          expect(Buffer.from(opened.brain ?? []).equals(packed.bytes)).toBe(true)
+          const approval = approvalOf(packed.sha256, download)
+          expect(opened.manifest.files[1]?.approval).toEqual(approval)
+          expect(allowConversationRestore(opened)).toBe(false)
+          expect(allowConversationRestore(opened, approval)).toBe(true)
+          expect(yield* Effect.promise(() => openSaved(file, { key: ARTIFACT_KEY.key, keyId: BRAIN_KEY.keyId }))).toBe(
+            undefined,
+          )
+          // As a hosted runner's fresh database sees it: a session id this database has never seen.
+          const source = SessionID.descending()
+          const raw = opened.session as { info: Record<string, unknown> }
+          const session = { ...raw, info: { ...raw.info, id: source } }
+          expect(yield* audience.knows(source)).toBe(false)
+
+          // Attempt 2 of the same dispatch: a fresh download of the same approved bytes (a new approval time).
+          const again = yield* Effect.promise(() => brainUploaded(packed.bytes))
+          const zip = yield* Effect.promise(() => sealed({ session, bytes: packed.bytes, approval }))
+          const two = yield* brainRun(test, {
+            answer: () => Response.json(again),
+            share,
+            ticket: rerun,
+            artifacts: listed(zip),
+            text: "RUN-TWO wrote the notes again.",
+          })
+          expect(two.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+          expect(brainLines(two.run.lines)).toEqual([BRAIN_ATTACHED])
+          expect(sessionLines(two.run.lines)).toEqual([SESSION_RESTORED, SESSION_SAVED])
+          // Still no artifact-key request: both keys came with the download. GitHub got only GETs.
+          expect(two.cloud.requests).toEqual([brainRequest, settle("changes")])
+          expect(two.github.transport.length).toBeGreaterThan(0)
+          expect(two.github.transport.every((entry) => entry.method === "GET")).toBe(true)
+          // The first task request holds attempt 1's history, whose first message carries the block, which is not
+          // sent a second time with the new task.
+          const user = textIn(two.first, false)
+          expect(user).toContain(MARKER)
+          expect(user.split(OPEN_TAG)).toHaveLength(2)
+          expect(user.indexOf(OPEN_TAG)).toBeLessThan(user.indexOf(MARKER))
+          const sessionID = sessionOf(two.run.lines)
+          expect(sessionID).toBeDefined()
+          expect(sessionID).not.toBe(source)
+          expect((yield* sessions.get(sessionID as SessionID)).permission).toEqual(QUESTIONS)
+          expect(yield* audience.knows(source)).toBe(false)
+          // Attempt 2 saves the continued conversation for its own run, under the Brain key, with the new approval.
+          const next = yield* Effect.promise(async () =>
+            openSaved(await fs.readFile(sessionPath(test.dir)), BRAIN_KEY, RERUN),
+          )
+          expect(JSON.stringify(next?.session)).toContain(MARKER)
+          expect(JSON.stringify(next?.session)).toContain("RUN-TWO")
+          expect(next?.manifest.files[1]?.approval).toEqual(approvalOf(packed.sha256, again))
+          expect(two.run.lines.some((line) => line.includes(MARKER))).toBe(false)
+
+          // Attempt 1 over the share: it saved the same approved bundle and approval, but its model had no room for the
+          // block, so no message of its history holds one. Attempt 2's model has room, so it sends the block once, with
+          // its new task, after the restored history.
+          const unblocked = JSON.parse(
+            JSON.stringify({ ...session, info: { ...session.info, id: SessionID.descending() } }).replace(
+              /\\n\\n<brain_context>[\s\S]*?<\/brain_context>/,
+              "",
+            ),
+          )
+          expect(JSON.stringify(unblocked)).not.toContain("<brain_context>")
+          expect(JSON.stringify(unblocked)).toContain(MARKER)
+          const late = yield* brainRun(test, {
+            answer: () => Response.json(again),
+            share,
+            ticket: rerun,
+            artifacts: listed(
+              yield* Effect.promise(() => sealed({ session: unblocked, bytes: packed.bytes, approval })),
+            ),
+          })
+          expect(late.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+          expect(brainLines(late.run.lines)).toEqual([BRAIN_ATTACHED])
+          expect(sessionLines(late.run.lines)).toEqual([SESSION_RESTORED, SESSION_SAVED])
+          expect(late.cloud.requests).toEqual([brainRequest, settle("changes")])
+          const resent = textIn(late.first, false)
+          expect(resent).toContain(MARKER)
+          expect(resent.split(OPEN_TAG)).toHaveLength(2)
+          expect(resent.indexOf(MARKER)).toBeLessThan(resent.indexOf(OPEN_TAG))
+
+          // Re-run attempts that fall back: each logs the one fallback line, imports nothing, still asks for no
+          // artifact key and saves its own conversation.
+          const other = Buffer.from('{"other":"approved repository context"}')
+          const rows: [string, Promise<Uint8Array>, unknown][] = [
+            [
+              "a stored approval of another digest",
+              sealed({ session, bytes: other, approval: { ...approval, sha256: sha(other) } }),
+              again,
+            ],
+            [
+              "a stored approval for a public repository",
+              sealed({ session, bytes: packed.bytes, approval: { ...approval, publicRepository: true } }),
+              again,
+            ],
+            [
+              "a download whose Brain key differs under the same key id",
+              sealed({ session, bytes: packed.bytes, approval }),
+              { ...again, artifactKey: { key: Buffer.alloc(32, 10).toString("base64url"), keyId: BRAIN_KEY.keyId } },
+            ],
+            [
+              "a conversation sealed under the ordinary key with the Brain key's id",
+              sealed({
+                session,
+                bytes: packed.bytes,
+                approval,
+                key: { key: ARTIFACT_KEY.key, keyId: BRAIN_KEY.keyId },
+              }),
+              again,
+            ],
+          ]
+          for (const [name, artifact, answer] of rows) {
+            const spy = importer()
+            const row = yield* brainRun(test, {
+              answer: () => Response.json(answer),
+              ticket: rerun,
+              artifacts: listed(yield* Effect.promise(() => artifact)),
+              restore: { importSession: spy.importSession },
+            })
+            expect({ name, result: row.run.result }).toMatchObject({
+              name,
+              result: { exitCode: 0, outcome: "changes" },
+            })
+            expect({ name, lines: sessionLines(row.run.lines) }).toEqual({
+              name,
+              lines: [SESSION_NOT_RESTORED, SESSION_SAVED],
+            })
+            expect({ name, imported: spy.calls.length }).toEqual({ name, imported: 0 })
+            expect({ name, cloud: row.cloud.requests }).toEqual({ name, cloud: [brainRequest, settle("changes")] })
+            expect({ name, restored: JSON.stringify(row.bodies).includes(MARKER) }).toEqual({ name, restored: false })
+            expect({ name, block: textIn(row.first, false).split(OPEN_TAG).length }).toEqual({ name, block: 2 })
+          }
+          expect(guard.outside()).toEqual([])
+        }),
+      { git: true },
+      240_000,
+    )
+
+    it.instance(
+      "nothing is saved without the Brain key or the proof channel, a first attempt never lists, a refused re-run lists nothing, and a run that fails after its read saves nothing",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const real = yield* Session.Service
+          const packed = yield* Effect.promise(() => pack())
+          const download = yield* Effect.promise(() => brainUploaded(packed.bytes))
+          const present = listed(
+            yield* Effect.promise(() =>
+              sealed({
+                session: { fixture: "attempt 1's conversation" },
+                bytes: packed.bytes,
+                approval: approvalOf(packed.sha256, download),
+              }),
+            ),
+          )
+          const plain = yield* Effect.promise(() => holder("codium"))
+          const failing = Session.Service.of({ ...real, create: () => Effect.die(new Error("fixture: create failed")) })
+          const rows: [
+            string,
+            Parameters<typeof brainRun>[1],
+            { brain: string; session: string[]; saved: boolean; outcome: GithubAgents.Outcome },
+          ][] = [
+            [
+              "a 200 without the Brain key",
+              { answer: () => Response.json({ ...download, artifactKey: undefined }) },
+              { brain: BRAIN_ATTACHED, session: [], saved: false, outcome: "changes" },
+            ],
+            [
+              "a holder without the runner's session proof",
+              { answer: () => Response.json(download), credentials: plain },
+              { brain: BRAIN_ATTACHED, session: [], saved: false, outcome: "changes" },
+            ],
+            [
+              "a first attempt with a saved conversation present",
+              { answer: () => Response.json(download), artifacts: present },
+              { brain: BRAIN_ATTACHED, session: [SESSION_SAVED], saved: true, outcome: "changes" },
+            ],
+            [
+              "a re-run attempt whose download is refused",
+              { answer: refusal(503, "BRAIN_UPLOAD_UNAVAILABLE"), ticket: rerun, artifacts: present },
+              { brain: BRAIN_NOT_ATTACHED, session: [], saved: false, outcome: "changes" },
+            ],
+            [
+              "a session that cannot be created after a valid read",
+              { answer: () => Response.json(download), sessions: failing },
+              { brain: BRAIN_ATTACHED, session: [], saved: false, outcome: "failed" },
+            ],
+          ]
+          for (const [name, input, expected] of rows) {
+            const row = yield* brainRun(test, input)
+            expect({ name, result: row.run.result }).toMatchObject({
+              name,
+              result: { exitCode: 0, outcome: expected.outcome },
+            })
+            expect({ name, lines: brainLines(row.run.lines) }).toEqual({ name, lines: [expected.brain] })
+            expect({ name, lines: sessionLines(row.run.lines) }).toEqual({ name, lines: expected.session })
+            // No artifact-key request ever; no GitHub artifact request on a first attempt or without a Brain key.
+            expect({ name, cloud: row.cloud.requests }).toEqual({
+              name,
+              cloud: [brainRequest, settle(expected.outcome)],
+            })
+            expect({ name, transport: row.github.transport }).toEqual({ name, transport: [] })
+            expect({ name, calls: { export: row.calls.export, attest: row.calls.attest } }).toEqual({
+              name,
+              calls: expected.saved ? { export: 1, attest: 1 } : { export: 0, attest: 0 },
+            })
+            expect({ name, files: row.files }).toEqual({
+              name,
+              files: expected.saved ? ["patch.diff", "session.vsa", "summary.json"] : ["patch.diff", "summary.json"],
+            })
+            const output = JSON.stringify({ lines: row.run.lines, notices: row.cloud.notices })
+            expect({ name, leaked: P6.test(output) || output.includes(BRAIN_ACCOUNT) }).toEqual({
+              name,
+              leaked: false,
+            })
+          }
+          expect(guard.outside()).toEqual([])
+        }),
+      { git: true },
+      240_000,
+    )
+
+    it.instance(
+      "a memory write in a desktop Brain run is held for review, never proposed, so the saved conversation carries no returned drafts",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const packed = yield* Effect.promise(() => pack())
+          const download = yield* Effect.promise(() => brainUploaded(packed.bytes))
+          const PROPOSAL = "PROPOSAL-LESSON-7"
+          const row = yield* brainRun(test, {
+            answer: () => Response.json(download),
+            calls: [
+              [
+                "memory",
+                {
+                  action: "add",
+                  kind: "lesson",
+                  scope: "repository",
+                  text: `${PROPOSAL}: run the parser fixtures before a release.`,
+                },
+              ],
+            ],
+          })
+          expect(row.run.result).toMatchObject({ exitCode: 0, outcome: "changes" })
+          // The agent can write memory here: the memory tool is offered to the run's first task request.
+          const tools = (Array.isArray(row.first?.tools) ? row.first.tools : []).map(
+            (item: { function?: { name?: string } }) => item.function?.name,
+          )
+          expect(tools).toContain("memory")
+          // The task text is outside content, so the write waits for review under an outside hold: quarantined, never
+          // the "proposed" status that CloudBrain.proposals and BrainRunProposals.select collect. Here the hold is the
+          // taint's: the fixture repository holds no settings of its own (so its memory is not held as untrusted) and
+          // this process carries no agent marker, so the task part's `github` outside mark decides it.
+          const instruction = yield* Instruction.Service
+          const brain = yield* Brain.Service
+          const place = yield* instruction.place()
+          expect(place.held).toBe(false)
+          const written = (yield* brain.list(place, { scope: "repository", filter: "review" })).filter((entry) =>
+            entry.text.includes(PROPOSAL),
+          )
+          expect(written.map((entry) => ({ status: entry.status, hold: entry.hold }))).toEqual([
+            { status: "quarantined", hold: "web" },
+          ])
+          expect(
+            (yield* brain.list(place, { scope: "repository", filter: "all" })).filter(
+              (entry) => entry.status === "proposed",
+            ),
+          ).toEqual([])
+          // The saved conversation carries the session and the approved bundle only.
+          const saved = yield* Effect.promise(async () => openSaved(await fs.readFile(sessionPath(test.dir))))
+          expect(saved?.manifest.files.map((entry) => entry.path)).toEqual(["session.json", "brain/bundle.json"])
+          expect(saved?.proposals).toBeUndefined()
+          expect(sessionLines(row.run.lines)).toEqual([SESSION_SAVED])
+          expect(guard.outside()).toEqual([])
+        }),
+      { git: true },
+      60_000,
+    )
+
+    it.instance(
+      "the size bound counts the approved bundle with the conversation: at the bound it is saved, one byte over it is not, and neither asks for a key",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const packed = yield* Effect.promise(() => pack())
+          const download = yield* Effect.promise(() => brainUploaded(packed.bytes))
+          const room = GithubAgents.PATCH_LIMITS.sessionBytes - SESSION_HEADROOM - packed.bytes.byteLength
+          // JSON.stringify({p}) is the string's length plus 8 bytes.
+          for (const [name, length] of [
+            ["over", room - 7],
+            ["at", room - 8],
+          ] as const) {
+            const row = yield* brainRun(test, {
+              answer: () => Response.json(download),
+              session: { exportSession: () => Effect.succeed({ p: "x".repeat(length) }) },
+            })
+            expect({ name, result: row.run.result }).toMatchObject({
+              name,
+              result: { exitCode: 0, outcome: "changes" },
+            })
+            expect({ name, cloud: row.cloud.requests }).toEqual({ name, cloud: [brainRequest, settle("changes")] })
+            if (name === "over") {
+              expect(sessionLines(row.run.lines)).toEqual([SESSION_TOO_LARGE])
+              expect(row.calls.attest).toBe(0)
+              expect(row.files).toEqual(["patch.diff", "summary.json"])
+              continue
+            }
+            expect(sessionLines(row.run.lines)).toEqual([SESSION_SAVED])
+            const file = yield* Effect.promise(() => fs.readFile(sessionPath(test.dir)))
+            expect(file.byteLength).toBeLessThanOrEqual(GithubAgents.PATCH_LIMITS.sessionBytes)
+            const saved = yield* Effect.promise(() => openSaved(file))
+            expect((saved?.session as { p?: string } | undefined)?.p?.length).toBe(length)
+            expect(Buffer.from(saved?.brain ?? []).equals(packed.bytes)).toBe(true)
+          }
+          expect(guard.outside()).toEqual([])
+        }),
+      { git: true },
+      120_000,
+    )
+
+    it.instance(
+      "SIGTERM while a desktop Brain run's conversation is exported writes no file and no bundle and logs no save line",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const download = yield* Effect.promise(() => pack().then((packed) => brainUploaded(packed.bytes)))
+          const exitCode = process.exitCode
+          const listeners = process.listenerCount("SIGTERM")
+          try {
+            const row = yield* brainRun(test, {
+              answer: () => Response.json(download),
+              session: {
+                exportSession: () =>
+                  Effect.sync(() => {
+                    process.emit("SIGTERM")
+                  }).pipe(Effect.andThen(Effect.never)),
+              },
+            })
+            expect(row.run.result).toBeUndefined()
+            expect(process.exitCode).toBe(143)
+            // The phase's own work ends with its deadline timer cleared; only then is the absence of files meaningful.
+            yield* Effect.promise(async () => {
+              const until = Date.now() + 20_000
+              while (!row.time.state.timers[0]?.cleared && Date.now() < until)
+                await new Promise((done) => setTimeout(done, 20))
+            })
+            expect(row.time.state.timers.map((timer) => timer.cleared)).toEqual([true])
+            // The model's planted session.vsa made vector-out; the save removed it first, and nothing was written.
+            expect(yield* Effect.promise(() => listing(test.dir))).toEqual([])
+            expect(brainLines(row.run.lines)).toEqual([BRAIN_ATTACHED])
+            expect(sessionLines(row.run.lines)).toEqual([])
+            expect(row.calls.attest).toBe(0)
+            expect(row.cloud.requests).toEqual([brainRequest, settle("cancelled")])
+            expect(process.listenerCount("SIGTERM")).toBe(listeners)
+          } finally {
+            // Bun keeps an exit code that was set once, so a cleared one is set back to 0.
+            process.exitCode = exitCode ?? 0
+          }
+        }),
+      { git: true },
+      60_000,
+    )
+  })
 })

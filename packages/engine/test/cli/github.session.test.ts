@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test"
-import { createHash } from "node:crypto"
+import { createCipheriv, createHash, randomBytes } from "node:crypto"
 import { ZipWriter, Uint8ArrayReader, Uint8ArrayWriter } from "@zip.js/zip.js"
+import type { BrainExport } from "@vectordevai/core/brain/export"
+import { BrainRunProposals } from "@vectordevai/core/brain/run-proposals"
+import { RunProposalsCodec } from "@vectordevai/core/brain/run-proposals-codec"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { cloudBrainArtifactKey, cloudRunArtifactKey } from "../../../../api/_lib/cloud-agents-artifact"
 import {
   allowConversationRestore,
   decryptConversation,
@@ -133,6 +137,193 @@ test("repository triggers and changed approval digest/audience/visibility cannot
   expect(allowConversationRestore(result, { ...approval, sha256: "c".repeat(64) })).toBe(false)
   expect(allowConversationRestore(result, { ...approval, repositoryId: "124" })).toBe(false)
   expect(allowConversationRestore(result, { ...approval, publicRepository: true })).toBe(false)
+})
+
+// BT07b: the keys the server derives for one conversation scope (account, repository, generation, thread), as the
+// artifact-key endpoint, brain-download and the owner result read derive them, with a fixture master secret.
+const master = { VECTOR_RUN_ARTIFACT_SECRET: "s".repeat(32) }
+const claims = {
+  sub: "00000000-0000-4000-8000-0000000000aa",
+  repo: identity.repositoryId,
+  gen: 1,
+  thr: identity.thread,
+}
+const brainKey = cloudBrainArtifactKey(claims, { sha256: approval.sha256, publicRepository: false }, master)
+const withBrain = {
+  identity,
+  key: brainKey,
+  session,
+  brain: { path: "brain/bundle.json" as const, bytes: brain, approval },
+}
+
+test("the ordinary conversation key never opens a Brain-key conversation of the same scope and key id, nor does a Brain key for another digest or visibility", async () => {
+  const ordinary = cloudRunArtifactKey(claims, master)
+  // Both are derived from the same master, so the clear header cannot tell them apart: only GCM does.
+  expect(ordinary.keyId).toBe(brainKey.keyId)
+  expect(ordinary.key).not.toBe(brainKey.key)
+  const bytes = await encryptConversation(withBrain)
+  const opened = await decryptConversation({ bytes, key: brainKey, expected: { ...expected, rid: identity.rid } })
+  expect(opened?.session).toEqual(session)
+  expect(opened?.brain).toEqual(brain)
+  for (const other of [
+    ordinary,
+    cloudBrainArtifactKey(claims, { sha256: "c".repeat(64), publicRepository: false }, master),
+    cloudBrainArtifactKey(claims, { sha256: approval.sha256, publicRepository: true }, master),
+    cloudBrainArtifactKey({ ...claims, thr: "18" }, { sha256: approval.sha256, publicRepository: false }, master),
+  ]) {
+    expect(other.keyId).toBe(brainKey.keyId)
+    expect(await decryptConversation({ bytes, key: other, expected })).toBeUndefined()
+  }
+})
+
+// The drafts a desktop Brain run could return (B08), as core's BrainRunProposals.pack selects them.
+const startedAt = 1_800_000_000_000
+const draft = (extra: Partial<BrainExport.Item> = {}): BrainExport.Item => ({
+  id: "d1",
+  kind: "lesson",
+  scope: "repository",
+  status: "proposed",
+  text: "Run the parser fixtures before a release.",
+  paths: [],
+  pinned: false,
+  evidence: [],
+  createdAt: startedAt + 1,
+  ...extra,
+})
+const drafts = (entries: BrainExport.Item[]): BrainExport.File => ({
+  format: "vector-memory",
+  version: 1,
+  scope: "repository",
+  exportedAt: startedAt + 2,
+  documents: [],
+  entries,
+  skills: [
+    draft({
+      id: "s1",
+      kind: "skill",
+      text: "Check the parser",
+      skill: {
+        name: "parser-check",
+        description: "Check the parser",
+        procedure: "Run bun test",
+        checks: ["bun test"],
+        commands: [],
+        version: 1,
+      },
+    }),
+  ],
+})
+const packDrafts = (input: { entries?: BrainExport.Item[]; publicRepository?: boolean; maxBytes?: number }) =>
+  BrainRunProposals.pack({
+    memory: drafts(
+      input.entries ?? [
+        draft(),
+        draft({ id: "a1", status: "active", text: "An active entry stays home." }),
+        draft({ id: "p1", private: true, text: "A private draft stays home." }),
+        draft({ id: "o1", createdAt: startedAt - 1, text: "An older draft stays home." }),
+      ],
+    ),
+    startedAt,
+    publicRepository: input.publicRepository ?? false,
+    maxBytes: input.maxBytes ?? BrainRunProposals.MAX_BYTES - brain.byteLength,
+    screen: async (parts) => parts.map(() => true),
+  })
+
+test("returned drafts packed by core obey the proposal limits, leave skills out on a public repository, and open on the desktop only as unapproved proposals", async () => {
+  const packed = await packDrafts({})
+  if (!packed) throw new Error("Fixture drafts did not pack")
+  expect({ entries: packed.entries, skills: packed.skills }).toEqual({ entries: 1, skills: 1 })
+  expect((await packDrafts({ publicRepository: true }))?.skills).toBe(0)
+  expect(await packDrafts({ maxBytes: packed.bytes.byteLength - 1 })).toBeUndefined()
+  const many = Array.from({ length: BrainRunProposals.LIMIT.entries + 1 }, (_, index) => draft({ id: `m${index}` }))
+  expect((await packDrafts({ entries: many }))?.entries).toBe(BrainRunProposals.LIMIT.entries)
+  const bytes = await encryptConversation({
+    ...withBrain,
+    proposals: { path: "brain/proposals.json", bytes: packed.bytes },
+  })
+  // As the desktop's returned-proposals preview reads it: the owner read's Brain key, the exact run.
+  const opened = await decryptConversation({ bytes, key: brainKey, expected: { ...expected, rid: identity.rid } })
+  if (!opened?.proposals) throw new Error("The returned drafts do not open")
+  const descriptor = opened.manifest.files.find((file) => file.path === RunProposalsCodec.PATH)
+  expect(descriptor).toMatchObject({ kind: "brain-proposals", origin: identity, sha256: packed.sha256 })
+  expect(descriptor?.approval).toBeUndefined()
+  const file = RunProposalsCodec.parse({
+    path: RunProposalsCodec.PATH,
+    bytes: opened.proposals,
+    publicRepository: false,
+  })
+  expect(BrainRunProposals.decode({ ...packed, bytes: opened.proposals, publicRepository: false })).toEqual(file)
+  const records = [...file.memory.entries, ...(file.memory.skills ?? [])]
+  expect(records.map((record) => record.id)).toEqual(["d1", "s1"])
+  expect(records.every((record) => record.status === "proposed" && !record.pinned && !record.private)).toBe(true)
+  // A repository that is public by now refuses drafts that carry a skill.
+  expect(() =>
+    RunProposalsCodec.parse({ path: RunProposalsCodec.PATH, bytes: opened.proposals!, publicRepository: true }),
+  ).toThrow()
+})
+
+/**
+ * Seals a manifest the codec never writes, under the right key and identity. It mirrors github.session.ts's framing on
+ * purpose: no public function produces an authenticated artifact with a forged manifest.
+ */
+async function forged(manifest: unknown, files: { path: string; bytes: Uint8Array }[]) {
+  const writer = new ZipWriter(new Uint8ArrayWriter())
+  for (const file of [{ path: "manifest.json", bytes: Buffer.from(JSON.stringify(manifest)) }, ...files])
+    await writer.add(file.path, new Uint8ArrayReader(Uint8Array.from(file.bytes)), {
+      level: 6,
+      useWebWorkers: false,
+      useCompressionStream: false,
+    })
+  const content = await writer.close()
+  const header = { keyId: brainKey.keyId, ...identity, iv: randomBytes(12).toString("base64url") }
+  const encoded = Buffer.from(JSON.stringify(header))
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    Buffer.from(brainKey.key, "base64url"),
+    Buffer.from(header.iv, "base64url"),
+  )
+  cipher.setAAD(Buffer.from(`VSA1|${header.keyId}|${header.repositoryId}|${header.thread}|${header.rid}`))
+  const prefix = Buffer.alloc(6)
+  prefix.write("VSA1")
+  prefix.writeUInt16BE(encoded.length, 4)
+  return Buffer.concat([prefix, encoded, cipher.update(content), cipher.final(), cipher.getAuthTag()])
+}
+
+test("returned drafts that claim a desktop approval or another run's origin do not open", async () => {
+  const proposals = Buffer.from('{"format":"vector-brain-proposals","version":1}')
+  const sessionBytes = Buffer.from(JSON.stringify(session))
+  const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+  const files = [
+    { path: "session.json", bytes: sessionBytes },
+    { path: "brain/proposals.json", bytes: proposals },
+  ]
+  const manifest = (entry: Record<string, unknown>) => ({
+    v: 1,
+    thread: identity.thread,
+    rid: identity.rid,
+    files: [
+      { path: "session.json", bytes: sessionBytes.length, sha256: sha(sessionBytes), kind: "session" },
+      {
+        path: "brain/proposals.json",
+        bytes: proposals.length,
+        sha256: sha(proposals),
+        kind: "brain-proposals",
+        ...entry,
+      },
+    ],
+  })
+  // The control: the manifest the codec writes, sealed the same way, opens.
+  expect(
+    (await decryptConversation({ bytes: await forged(manifest({ origin: identity }), files), key: brainKey, expected }))
+      ?.proposals,
+  ).toEqual(proposals)
+  for (const entry of [
+    { origin: identity, approval: { ...approval, sha256: sha(proposals) } },
+    { origin: { ...identity, rid: "gh-123-43-1-99" } },
+  ])
+    expect(
+      await decryptConversation({ bytes: await forged(manifest(entry), files), key: brainKey, expected }),
+    ).toBeUndefined()
 })
 
 test("highly compressible session content is refused when the complete expanded archive exceeds its bound", async () => {

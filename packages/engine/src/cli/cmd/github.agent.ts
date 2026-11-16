@@ -11,9 +11,12 @@
 // conversation opens under the thread's key and fits; otherwise it reads the thread as before. A desktop-started run
 // (Vector's ticket dispatch with VECTOR_BRAIN_UPLOAD, B08) reads the Brain context its owner approved once, before any
 // session, and gives it to its first task message as labelled untrusted JSON; it never enters the runner's Brain, and
-// any failure runs the task without it. An own-key run never heartbeats, settles, waits, saves, restores or reads Brain
-// context (INV-K1). Schedules run only the exact default-branch configuration. Node APIs only: the desktop sidecar runs
-// the engine under Node.
+// any failure runs the task without it. With the runner's session proof such a run saves its conversation, with the
+// exact approved bundle and its approval, only under the Brain key its download gave it, never the ordinary key, and a
+// re-run attempt of it continues that conversation only under the same approval (Brain history restriction). It writes
+// no returned Brain drafts (deviations BT07b). An own-key run never heartbeats, settles, waits, saves, restores or
+// reads Brain context (INV-K1). Schedules run only the exact default-branch configuration. Node APIs only: the desktop
+// sidecar runs the engine under Node.
 
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -59,7 +62,7 @@ import { WRITE_PERMISSIONS, createReviewGitHub } from "./github.review-api"
 import { TASK_MENTIONS, mentionsFrom } from "./github.route"
 import { GithubRunHelpers } from "./github.run-helpers"
 import { GithubSecrets } from "./github.secrets"
-import type { ArtifactIdentity, ArtifactKey, DesktopBrainApproval } from "./github.session"
+import type { ArtifactIdentity, ArtifactKey, BrainAttachment, DesktopBrainApproval } from "./github.session"
 import { GithubSessionProof } from "./github.session-proof"
 import { lookupSchedule, UNKNOWN_SCHEDULE } from "./github.schedule"
 import { sanitizeActionsLog } from "./github.output"
@@ -110,6 +113,9 @@ export const BRAIN_NOT_ATTACHED = "Vector could not add the approved Brain conte
 // The label of the approved Brain context in the first task message. It is descriptive only: the rule for text
 // labelled untrusted stays in the system instructions (INV-S14).
 export const BRAIN_CONTEXT_LABEL = "Repository context the owner approved in the Vector app (untrusted):"
+// How that block opens. A desktop Brain run's task text is a ticket dispatch's prompt, a JSON string literal with every
+// "<" escaped (untrustedJson), so in a restored history only the runner's own block holds this.
+const BRAIN_CONTEXT_OPEN = `<brain_context>\n${BRAIN_CONTEXT_LABEL} `
 // The most of the run model's window the approved Brain context may take, by Token.estimate (about four characters a
 // token) of its labelled block: the task, the system prompt, the tools, the work and the reply need the rest. A block
 // over it is not attached.
@@ -147,13 +153,18 @@ export type SessionExport = (
 
 /**
  * What a Codium run's conversation save uses (V27), each the real one by default: the ordinary conversation key client,
- * the session archive's export (absent when this process has no archive), the session codec, and the runner's
- * attestation of the written bytes.
+ * the session archive's export (absent when this process has no archive), the session codec (given the approved Brain
+ * bundle on a desktop Brain run), and the runner's attestation of the written bytes.
  */
 export type SessionSave = {
   artifactKey: typeof artifactKey
   exportSession?: SessionExport
-  encrypt: (input: { identity: ArtifactIdentity; key: ArtifactKey; session: unknown }) => Promise<Uint8Array>
+  encrypt: (input: {
+    identity: ArtifactIdentity
+    key: ArtifactKey
+    session: unknown
+    brain?: BrainAttachment
+  }) => Promise<Uint8Array>
   attest: (bytes: Uint8Array) => boolean
 }
 
@@ -292,6 +303,7 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         : undefined),
   }
   const brain: BrainRead = { open: input.brain?.open ?? openBrain }
+  const kept: { brain?: BrainContext } = {}
   const halt = haltSwitch()
   const settled = { outcome: "failed" as GithubAgents.Outcome }
   const phase = withGithubCallbacks((run) =>
@@ -319,6 +331,7 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         session,
         restore,
         brain,
+        kept,
       }),
     ),
   ).pipe(Effect.tap((result) => Effect.sync(() => (settled.outcome = result.outcome ?? "failed"))))
@@ -391,6 +404,12 @@ type Deps = {
   session: SessionSave
   restore: SessionRestore
   brain: BrainRead
+  /**
+   * What a desktop Brain run opened, set by readBrain right after an open that carried the Brain key, and read by the
+   * conversation restore before any session exists and by the save in record() whatever work() returned. A run that
+   * failed has no session, so it saves nothing (deviations BT07b item 4).
+   */
+  kept: { brain?: BrainContext }
 }
 
 // What a phase that SIGINT or SIGTERM cancelled hands back: nobody reads it, and it writes no bundle (2.13).
@@ -571,12 +590,13 @@ type Result = {
   comment: string
   sessionID?: SessionID
   shared?: boolean
-  /** The approved Brain context this run was given (B08): kept, never active memory, for BT07b's Brain-key save. */
-  brain?: BrainContext
 }
 
-/** The exact approved bytes, their approval and the Brain conversation key, as GithubBrain.openUpload returned them. */
-type BrainContext = { bytes: Uint8Array; approval: DesktopBrainApproval; brainKey?: ArtifactKey }
+/**
+ * What a desktop Brain run opened with its Brain key (B08), as GithubBrain.openUpload returned it: the exact approved
+ * bytes, their approval and the Brain conversation key. Never active memory.
+ */
+type BrainContext = { bytes: Uint8Array; approval: DesktopBrainApproval; brainKey: ArtifactKey }
 
 async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
   const fallback = () => task.threadTitle?.trim() || FALLBACK_TITLE
@@ -591,8 +611,8 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
   const info = providers[model.providerID]?.models[model.modelID]
   // B08: a desktop-started Codium run reads the Brain context its owner approved, once, before any session. A signal
   // during it ends the run here, before any session is created.
-  const brain = deps.codium ? await brainContext(start, info, deps) : undefined
-  if (brain === "aborted") return { end: deps.halt.reason(), title: fallback(), body: "", comment: "" }
+  const block = deps.codium ? await brainContext(start, info, deps) : undefined
+  if (block === "aborted") return { end: deps.halt.reason(), title: fallback(), body: "", comment: "" }
   // V27 "The next run": a Codium run continues its thread's saved conversation when it can, otherwise starts a new
   // session exactly as before. It runs before the log subscription, since the import publishes the restored parts and
   // none of them may reach the public log. A signal during it ends the run here, before any session is created.
@@ -630,8 +650,10 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     cancels.clear = deps.clock.timer(CANCEL_REPEAT_MS, cancel)
   }
   const unhook = deps.halt.onHalt(cancel)
-  // The approved Brain context follows the task once, as labelled data; it is never written into the runner's Brain.
-  const message = brain ? `${task.message}\n\n${brain.block}` : task.message
+  // The approved Brain context follows the task once, as labelled data; it is never written into the runner's Brain. A
+  // re-run attempt that continued a history saved with the same approved bundle, whose task message already holds
+  // the block, does not send it twice; one whose earlier attempt had no room for it sends it now.
+  const message = block && !restored?.brain ? `${task.message}\n\n${block}` : task.message
   const reply = await GithubRunHelpers.chat(chat, message, task.files).then(
     (response) => ({ response, end: deps.halt.reason() }),
     (cause: unknown) => {
@@ -666,7 +688,6 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     comment: reply.response,
     sessionID,
     shared: shared !== undefined,
-    ...(brain ? { brain: brain.kept } : {}),
   }
 }
 
@@ -727,14 +748,16 @@ async function record(start: Start, task: Partial<Task>, result: Result, deps: D
 
 /**
  * V27 "The file": a Codium run saves its conversation for the next run of its own thread. The run's root session, in
- * the encoded archive format SessionArchive.import reads and redacted with the run's credentials, is encrypted under
- * the ordinary conversation key for this run's identity, written once to `<worktree>/vector-out/session.vsa`, and then
- * attested to the runner, whose finish refuses the whole bundle for a session file it cannot match. On return the file
- * holds exactly the attested bytes or is absent. Failure is never fatal: it costs only the saved conversation and logs
- * one fixed line. Nothing is attempted, and nothing is logged, without the runner's proof channel or a session, on a
- * desktop Brain run, or once a signal ended the run. BT07b owns Brain-run encryption: a desktop Brain run, whose
- * download may already have recorded Brain context at the server (brainContext), may save its history only under the
- * Brain key, so until then such a run saves nothing here and asks for no ordinary key. It never rejects.
+ * the encoded archive format SessionArchive.import reads and redacted with the run's credentials, is encrypted for this
+ * run's identity, written once to `<worktree>/vector-out/session.vsa`, and then attested to the runner, whose finish
+ * refuses the whole bundle for a session file it cannot match. On return the file holds exactly the attested bytes or
+ * is absent. The key is the ordinary conversation key, except on a desktop Brain run (Brain history restriction): a
+ * run that can download Brain context, whose download may already have recorded it at the server, saves only under the
+ * Brain key its opened download gave it, with the exact approved bundle and its approval as brain/bundle.json, and
+ * never asks for the ordinary key. It writes no brain/proposals.json (deviations BT07b item 2). Failure is never fatal:
+ * it costs only the saved conversation and logs one fixed line. Nothing is attempted, and nothing is logged, without
+ * the runner's proof channel or a session, on a run with an upload id that opened no Brain key, or once a signal ended
+ * the run. It never rejects.
  */
 async function saveConversation(start: Start, result: Result, deps: Deps) {
   const dir = path.join(deps.worktree, GithubAgents.BUNDLE_DIR)
@@ -748,10 +771,13 @@ async function saveConversation(start: Start, result: Result, deps: Deps) {
   // A session file the model left would make the runner refuse the whole bundle, so it goes on every Codium run.
   await clear()
   const sessionID = result.sessionID
-  // Without the proof channel the runner accepts no session file, so the run never asks for the key. A ticket dispatch
-  // without an upload still asks: only the server knows its trigger source, and it refuses only a desktop run (2.8), so
-  // a ticket run from any other source (Release Guard, On Call) saves what its owner's result read opens.
-  if (deps.env.VECTOR_BRAIN_UPLOAD || !sessionID || !deps.credentials.sessionProof()) return
+  // Without the proof channel the runner accepts no session file, so the run never asks for the key. A run with an
+  // upload id saves only under the Brain key its opened download gave it: a writer's dispatch that carries one, a
+  // refused, failed or unopened read, or an answer without the key saves nothing and asks for no ordinary key. A ticket
+  // dispatch without an upload still asks: only the server knows its trigger source, and it refuses only a desktop run
+  // (2.8), so a ticket run from any other source (Release Guard, On Call) saves what its owner's result read opens.
+  if (!sessionID || !deps.credentials.sessionProof()) return
+  if (deps.env.VECTOR_BRAIN_UPLOAD && !deps.kept.brain) return
   const attempted = await writeConversation(start, sessionID, { dir, file }, deps).catch(() => "failed" as const)
   // A signal ended the run while the save ran: nothing is kept and nothing is said, whatever the save reached.
   const outcome = deps.signal.aborted ? "aborted" : attempted
@@ -762,8 +788,11 @@ async function saveConversation(start: Start, result: Result, deps: Deps) {
 
 /**
  * The save's steps in order. Every check of the run and its conversation comes before the key request, so a run that
- * cannot save its conversation spends none of its artifact-key requests. Only the write's own refusal of a vector-out
- * that is not a real directory comes after it, where it guards the write itself. Any throw is the caller's "failed".
+ * cannot save its conversation spends none of its artifact-key requests; a desktop Brain run makes none, since its key
+ * came with its download. Its approved bundle travels in the same encrypted zip, so the size counts it too; it is
+ * written as approved (the desktop's posting check screened it at pack time, and its digest binds it), while the
+ * session is redacted. Only the write's own refusal of a vector-out that is not a real directory comes after the key,
+ * where it guards the write itself. Any throw is the caller's "failed".
  */
 async function writeConversation(start: Start, sessionID: SessionID, paths: { dir: string; file: string }, deps: Deps) {
   const identity = conversationIdentity(start, deps.env)
@@ -772,18 +801,30 @@ async function writeConversation(start: Start, sessionID: SessionID, paths: { di
   // Owner-only work would reach every later run of the thread.
   if (local.privacy === "owner-only") return "failed"
   const text = deps.credentials.redact(JSON.stringify(local))
-  if (Buffer.byteLength(text) > GithubAgents.PATCH_LIMITS.sessionBytes - SESSION_HEADROOM) return "too-large"
+  const brain = deps.kept.brain
+  if (
+    Buffer.byteLength(text) + (brain?.bytes.byteLength ?? 0) >
+    GithubAgents.PATCH_LIMITS.sessionBytes - SESSION_HEADROOM
+  )
+    return "too-large"
   const conversation = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
   if (conversation === undefined) return "failed"
-  const answer = await deps.session.artifactKey({
-    env: deps.env,
-    holder: deps.credentials,
-    services: deps.services,
-    signal: deps.signal,
-  })
+  const answer = brain
+    ? { status: "ok" as const, key: brain.brainKey }
+    : await deps.session.artifactKey({
+        env: deps.env,
+        holder: deps.credentials,
+        services: deps.services,
+        signal: deps.signal,
+      })
   if (deps.signal.aborted) return "aborted"
   if (answer.status !== "ok") return "failed"
-  const bytes = await deps.session.encrypt({ identity, key: answer.key, session: conversation })
+  const bytes = await deps.session.encrypt({
+    identity,
+    key: answer.key,
+    session: conversation,
+    ...(brain ? { brain: { path: "brain/bundle.json" as const, bytes: brain.bytes, approval: brain.approval } } : {}),
+  })
   if (deps.signal.aborted) return "aborted"
   // The first point where vector-out may be created; each write is new, exclusive and private, as writeBundle's are.
   await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 })
@@ -814,7 +855,7 @@ function portableArchive(local: SessionArchive.Local) {
 }
 
 // The codec loads zip.js, so only a run that saves its conversation loads it.
-async function encryptSession(input: { identity: ArtifactIdentity; key: ArtifactKey; session: unknown }) {
+async function encryptSession(input: Parameters<SessionSave["encrypt"]>[0]) {
   const { encryptConversation } = await import("./github.session")
   return encryptConversation(input)
 }
@@ -826,10 +867,12 @@ async function encryptSession(input: { identity: ArtifactIdentity; key: Artifact
  * repository id and the run model's window (`model`, BRAIN_CONTEXT_SHARE). The envelope is opened and verified here
  * against the server's and the event's view of the repository's visibility, and the decoded bundle (memory entries,
  * skills, which only a private repository's bundle can hold, and insight rows) becomes one labelled untrusted JSON block
- * for the first task message; it never enters this runner's Brain. Failure is never fatal: a refusal, an outage, a
- * failed open or a block over the share logs one fixed line and the task runs without it. Nothing is attempted, and
- * nothing is logged, on any other route, without a well-formed id, or once the run stopped; a stop during the read
- * attaches nothing and logs nothing, and a signal answers "aborted". It never rejects.
+ * for the first task message, which this answers; it never enters this runner's Brain. An open that carried the Brain
+ * key also keeps the bytes, the approval and the key for the conversation's restore and save (`Deps.kept`). Failure is
+ * never fatal: a refusal, an outage, a failed open or a block over the share logs one fixed line and the task runs
+ * without it. Nothing is attempted, and nothing is logged, on any other route, without a well-formed id, or once the
+ * run stopped; a stop during the read attaches nothing and logs nothing, and a signal answers "aborted". It never
+ * rejects.
  */
 async function brainContext(start: Start, model: Provider.Model | undefined, deps: Deps) {
   const uploadId = deps.env.VECTOR_BRAIN_UPLOAD ?? ""
@@ -852,8 +895,10 @@ async function brainContext(start: Start, model: Provider.Model | undefined, dep
 /**
  * The read's steps in order: the one brain-download request, then the local open and verify, then the block and its
  * size. The download answer, whose `aad` names the account and whose `key` opens the envelope, is used only here and
- * never logged or given to the model. A stop or a signal during the download skips the open. Any refusal answers
- * undefined, and any throw is the caller's undefined.
+ * never logged or given to the model. A stop or a signal during the download skips the open. An open that carried the
+ * Brain key is kept before the size gate: the server recorded Brain context at this read, so this run's conversation
+ * can be saved only under that key even when the block is too large to attach. Any refusal answers undefined, and any
+ * throw is the caller's undefined.
  */
 async function readBrain(
   expected: { repositoryId: string; uploadId: string; publicRepository: boolean },
@@ -869,22 +914,15 @@ async function readBrain(
   if (answer.status !== "ok" || deps.signal.aborted || deps.halt.reason()) return undefined
   const opened = await deps.brain.open(answer.download, expected)
   if (!opened) return undefined
-  const block = `<brain_context>\n${BRAIN_CONTEXT_LABEL} ${untrustedJson(
+  if (opened.brainKey) deps.kept.brain = { bytes: opened.bytes, approval: opened.approval, brainKey: opened.brainKey }
+  const block = `${BRAIN_CONTEXT_OPEN}${untrustedJson(
     JSON.stringify({
       memory: opened.bundle.memory.entries,
       skills: opened.bundle.memory.skills ?? [],
       insights: opened.bundle.insights.rows,
     }),
   )}\n</brain_context>`
-  if (Token.estimate(block) > room) return undefined
-  return {
-    block,
-    kept: {
-      bytes: opened.bytes,
-      approval: opened.approval,
-      ...(opened.brainKey ? { brainKey: opened.brainKey } : {}),
-    },
-  }
+  return Token.estimate(block) > room ? undefined : block
 }
 
 // The opener pulls core's Brain module graph (deviations BT04 item 8), so only a run whose download answered loads it.
@@ -897,20 +935,25 @@ async function openBrain(...input: Parameters<BrainRead["open"]>) {
  * V27 "The next run": a Codium run continues the conversation its thread's last run saved. The newest unexpired
  * `vector-session-<thread>` artifact that a run of this repository (never a fork's) uploaded is read with the job's
  * read-only GITHUB_TOKEN, opened under the ordinary key for this run's own thread and bound to the job's repository id
- * and that thread, and imported into this instance as a new session, which gets the question rule. `model` is the run
- * model, whose window bounds the restored history (RESTORE_CONTEXT_SHARE, by SessionCompaction.estimate). Failure is
- * never fatal: no artifact, a list or download that fails, a key refusal, a file that does not open, Brain or proposal
- * provenance, an archive the agent phase cannot continue, a history over the share or one that holds a compaction, or a
- * failed import each start a new session from the thread with one fixed line. Nothing is attempted, and nothing is logged, without
- * the runner's proof channel, on a desktop Brain run or a ticket dispatch, on a dispatch's first attempt, or once the
- * run stopped; a signal that ended the run answers "aborted". It never rejects.
+ * and that thread, and imported into this instance as a new session, which gets the question rule. A desktop Brain run
+ * opens it only under the Brain key its own download gave it, and continues it only when its Brain provenance has the
+ * same approved digest, audience and visibility (allowConversationRestore with its approval; the Brain history
+ * restriction). `model` is the run model, whose window bounds the restored history (RESTORE_CONTEXT_SHARE, by
+ * SessionCompaction.estimate). Failure is never fatal: no artifact, a list or download that fails, a key refusal, a
+ * file that does not open, Brain or proposal provenance without that approval, an archive the agent phase cannot
+ * continue, a history over the share or one that holds a compaction, or a failed import each start a new session from
+ * the thread with one fixed line. Nothing is attempted, and nothing is logged, without the runner's proof channel, on
+ * a run with an upload id that opened no Brain key, on a ticket dispatch without one, on a dispatch's first attempt, or
+ * once the run stopped; a signal that ended the run answers "aborted". It never rejects.
  */
 async function restoreConversation(start: Start, model: Provider.Model | undefined, deps: Deps) {
-  // A key is asked for only where the run could also save its conversation: with the runner's proof channel. A Brain
-  // run is a desktop run, which never gets the ordinary key (2.8, ARTIFACT_KEY_NOT_ALLOWED), and no ticket dispatch,
-  // desktop or not, has anything to restore: its thread is dispatch-<runId>, and its single-use ticket lets no re-run
-  // attempt mint (deviations BT06 item 3).
-  if (deps.env.VECTOR_BRAIN_UPLOAD || start.route.ticket || !deps.credentials.sessionProof()) return undefined
+  // A key is used only where the run could also save its conversation: with the runner's proof channel. A run with an
+  // upload id never gets the ordinary key (2.8, ARTIFACT_KEY_NOT_ALLOWED), so it restores only under the Brain key its
+  // opened download gave it. A ticket dispatch without one has nothing to restore: its thread is dispatch-<runId>, and
+  // its single-use ticket lets no re-run attempt mint (deviations BT06 item 3). That holds for a Brain run's re-run
+  // attempt too, so its restore cannot be reached in production today (deviations BT07b item 5).
+  if (!deps.credentials.sessionProof() || (deps.env.VECTOR_BRAIN_UPLOAD ? !deps.kept.brain : start.route.ticket))
+    return undefined
   // A dispatch's thread is dispatch-<runId>: only an earlier attempt of this run can have saved it.
   if (start.route.kind === "dispatch" && !(Number(deps.env.GITHUB_RUN_ATTEMPT) > 1)) return undefined
   const restored = await readConversation(start, model, deps).catch(() => undefined)
@@ -922,12 +965,14 @@ async function restoreConversation(start: Start, model: Provider.Model | undefin
 
 /**
  * The restore's steps in order. The run's own checks come before the list, and the list and download before the key
- * request, so a thread with no artifact spends none of its artifact-key requests. A stop (the deadline or the
- * heartbeat) seen before the list, the key request or the import answers "stopped", so a stopped run spends nothing
- * more on it. Any throw is the caller's fallback.
+ * request, so a thread with no artifact spends none of its artifact-key requests; a desktop Brain run (`Deps.kept`)
+ * makes none, since its key came with its download. A stop (the deadline or the heartbeat) seen before the list, the
+ * key request or the import answers "stopped", so a stopped run spends nothing more on it. Any throw is the caller's
+ * fallback.
  */
 async function readConversation(start: Start, model: Provider.Model | undefined, deps: Deps) {
   if (deps.halt.reason()) return "stopped" as const
+  const brain = deps.kept.brain
   const repositoryId = deps.env.GITHUB_REPOSITORY_ID ?? ""
   const importSession = deps.restore.importSession
   const room = Math.floor((model?.limit.input || model?.limit.context || 0) * RESTORE_CONTEXT_SHARE)
@@ -946,17 +991,24 @@ async function readConversation(start: Start, model: Provider.Model | undefined,
   if (deps.signal.aborted || !bytes) return undefined
   if (deps.halt.reason()) return "stopped" as const
   // The key is used only inside this callback, so nothing here holds it once the file is open.
-  const conversation = await deps.session
-    .artifactKey({ env: deps.env, holder: deps.credentials, services: deps.services, signal: deps.signal })
-    .then((answer) =>
-      answer.status === "ok"
-        ? decryptConversation({ bytes, key: answer.key, expected: { repositoryId, thread } })
-        : undefined,
-    )
+  const conversation = await (
+    brain
+      ? Promise.resolve({ status: "ok" as const, key: brain.brainKey })
+      : deps.session.artifactKey({
+          env: deps.env,
+          holder: deps.credentials,
+          services: deps.services,
+          signal: deps.signal,
+        })
+  ).then((answer) =>
+    answer.status === "ok"
+      ? decryptConversation({ bytes, key: answer.key, expected: { repositoryId, thread } })
+      : undefined,
+  )
   if (deps.signal.aborted || !conversation) return undefined
-  // No run that reaches here holds live owner-desktop Brain authority, so history with Brain or proposal provenance
-  // falls back whole (the Brain history restriction).
-  if (!allowConversationRestore(conversation, undefined)) return undefined
+  // History with Brain or proposal provenance continues only in a desktop Brain run whose approval has the same digest,
+  // audience and visibility; every other run falls back whole (the Brain history restriction).
+  if (!allowConversationRestore(conversation, brain?.approval)) return undefined
   // Only what the save writes for the agent phase's v1 sessions, decoded as the import decodes it: a legacy archive
   // that is not owner-only. A native v2 archive cannot continue in the v1 agent phase.
   const local = Option.getOrUndefined(
@@ -975,7 +1027,20 @@ async function readConversation(start: Start, model: Provider.Model | undefined,
   if (imported.engine !== "v1") return undefined
   await deps.run(deps.sessions.setPermission({ sessionID: imported.sessionID, permission: NO_QUESTIONS }))
   const messages = await deps.run(deps.sessions.messages({ sessionID: imported.sessionID }))
-  return { sessionID: imported.sessionID, messages: new Set<string>(messages.map((message) => message.info.id)) }
+  return {
+    sessionID: imported.sessionID,
+    messages: new Set<string>(messages.map((message) => message.info.id)),
+    // Whether the history already holds this run's block: it was saved with the same approved bundle (checked above),
+    // and one of its task messages carries the block. An earlier attempt whose model had no room for the block still
+    // saved the bundle, but no message of its history holds the block, so this run sends it.
+    brain:
+      conversation.brain !== undefined &&
+      local.messages.some(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.text.includes(BRAIN_CONTEXT_OPEN)),
+      ),
+  }
 }
 
 function bundleRoute(
