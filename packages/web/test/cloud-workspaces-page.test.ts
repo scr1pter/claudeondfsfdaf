@@ -27,5 +27,5 @@ test("the public workspaces page says the pilot is closed before anyone signs in
   expect(html).toContain("<h1>Cloud workspaces are a private pilot.</h1>")
   expect(html).toContain("The pilot is not open to everyone yet.")
   expect(html).not.toContain("wherever you are")
-  expect(html).not.toMatch(/credit|\$\d|per token/i)
+  expect(html).not.toMatch(/credit|\$\d|per token|\b\d+ (?:requests|minutes)\b/i)
 })
