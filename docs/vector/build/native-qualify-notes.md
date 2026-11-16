@@ -2865,3 +2865,33 @@ From the worktree, read-only except for the four documents:
     No production source, workflow or `owned-process.ts` changed, and every Bun command ran
     through `/home/user/.tools/vector-serial`. The full typecheck before the push belongs
     to the commit step. Both native build switches and FLOOR stay false.
+
+## Merge of PR #33 head `0f034957`, 16 November 2026
+
+The lead asked for `origin/release-finish` to be merged into this branch so the lane's
+CI runs against #33's fixes before the lane's PR into `main`. `native-qualify` was at
+`73651efe` (equal to `origin/native-qualify`, clean tree). `origin/release-finish` was at
+`0f034957`: the round-1 CI fixes `7b43deb5..cf2373c4` and the merge of `review-fixes`
+(PUB-1..PUB-7, SEC-1/SEC-2, DP-1..DP-4, SPAWN-1/3, FIT-1..FIT-5). The merge commit is
+`ff566a82` (`git merge --no-ff`, parents `73651efe` and `0f034957`).
+
+- Conflict: `.github/workflows/native-shell.yml`, the job-level `if`. The NQ-1 side
+  (`597dbcc9`) added `refs/heads/native-qualify` to the dispatch allow-list, which still
+  named the retired `build-native-shell` branch. FIT-4 (`f251ac2c`, `48b76a5b`) removed the
+  `build-native-shell` push trigger and then the `if` itself: dispatch is the only trigger,
+  any ref may run the seam, and only a run on `main` is the qualification of record.
+  Resolved to the FIT-4 form, which fully contains NQ-1's intent (this branch can still
+  dispatch the seam) and names no retired lane branch. The merged file is byte-identical
+  to `origin/release-finish`'s. The NQ-1 "What landed" bullet about the allow-list is
+  superseded by this; it stays as recorded.
+- `docs/vector/build/v2-spawn-review.md` auto-merged. No generated file was involved.
+- D95 now applies: the merge brings in `release-finish`'s change to
+  `packages/core/src/directory-identity.ts`, so `native-shell-ci/build.ts` refuses the
+  compile step until the reader is re-reviewed and `READER_SHA` is re-pinned. That stays a
+  lead item; this merge does not re-pin it, and no native dispatch follows it.
+- Checks, each through `/home/user/.tools/vector-serial`:
+  - `packages/cloud` `src/workflow-compliance.test.ts`: 53 pass, 0 fail (it holds FIT-4's
+    trigger rule and the Ubuntu pin for every workflow);
+  - `packages/engine` `test/fixture/native-shell-ci/policy.test.ts`: 10 pass, 0 fail;
+  - `bun typecheck` in `packages/cloud`, `packages/core` and `packages/engine`: exit 0.
+- Not pushed. Both native build switches and `FLOOR` stay false.
