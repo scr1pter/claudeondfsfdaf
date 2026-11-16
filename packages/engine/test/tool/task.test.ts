@@ -6325,6 +6325,40 @@ describe("task isolation saves", () => {
   const HOLD = "Hold until the test releases you."
   const held = (input: SessionPrompt.PromptInput) =>
     input.parts.some((part) => part.type === "text" && part.text.includes(HOLD))
+  // Waits for a run's save to start (its record turns settling). A timeout says how far the child got: its record and
+  // attempt, its job, its assignment and whether it has a place, so a stall in the checkout's preparation, the slot
+  // admission, the run or the job's completion can be told apart.
+  const saveStarted = (child: SessionID) =>
+    Effect.gen(function* () {
+      const isolation = yield* TaskIsolation.Service
+      const jobs = yield* BackgroundJob.Service
+      const sessions = yield* Session.Service
+      yield* pollWithTimeout(
+        isolation.find(child).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
+        "the isolated save never started",
+        ISOLATED,
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            const record = yield* isolation.find(child)
+            const job = yield* jobs.get(child)
+            const assignment = SubagentLifecycle.read(yield* sessions.get(child))
+            const saved = record
+              ? `${record.state}, attempt ${record.attempt}, settled ${record.settledAttempt ?? "none"}${record.error ? `, error ${JSON.stringify(record.error)}` : ""}`
+              : "missing"
+            const ran = job ? `${job.status}${job.error ? `, error ${JSON.stringify(job.error)}` : ""}` : "missing"
+            const assigned = assignment
+              ? `${assignment.status}, attempt ${assignment.attempt ?? "none"}${assignment.slotReason ? `, ${assignment.slotReason}` : ""}`
+              : "unreadable"
+            return yield* Effect.fail(
+              new Error(
+                `${error.message} (record ${saved}; job ${ran}; child ${assigned}; place ${TaskPlace.get(child) ? "set" : "none"})`,
+              ),
+            )
+          }),
+        ),
+      )
+    })
 
   background.instance(
     "a held save leaves the control lock free and finishes once Git answers",
@@ -6350,11 +6384,7 @@ describe("task isolation saves", () => {
         const child = (yield* sessions.children(seeded.chat.id))[0]
         yield* Effect.addFinalizer(() => cleanup(child.id))
         // The run finished and its save is waiting on the commit.
-        yield* pollWithTimeout(
-          isolation.find(child.id).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
-          "the isolated save never started",
-          ISOLATED,
-        )
+        yield* saveStarted(child.id)
         // Other task controls are not held behind Git.
         yield* SubagentLifecycle.locked(SubagentLifecycle.controlLock)(Effect.void).pipe(Effect.timeout("2 seconds"))
         yield* Deferred.succeed(gate, undefined)
@@ -6584,11 +6614,7 @@ describe("task isolation saves", () => {
         yield* awaitWithTimeout(Deferred.await(asking), "the message never reached its approval")
         // Meanwhile the run ends and its save starts, held at the commit.
         yield* Deferred.succeed(release, undefined)
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
-          "the isolated save never started",
-          ISOLATED,
-        )
+        yield* saveStarted(child)
         yield* Deferred.succeed(proceed, undefined)
         const exit = yield* Fiber.join(late).pipe(Effect.timeout("5 seconds"))
         expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("saving its changes")
@@ -7046,11 +7072,7 @@ describe("task isolation saves", () => {
         )
         yield* Effect.addFinalizer(() => cleanup(child))
         // The child's run returned; its save waits on the held commit, and the call waits for the save.
-        yield* pollWithTimeout(
-          isolation.find(child).pipe(Effect.map((record) => (record?.state === "settling" ? true : undefined))),
-          "the isolated save never started",
-          ISOLATED,
-        )
+        yield* saveStarted(child)
         // The parent's Stop interrupts the call. Its release stops the child, which had already ended on its own.
         yield* Fiber.interrupt(call).pipe(Effect.timeout("5 seconds"))
         yield* Deferred.succeed(gate, undefined)
