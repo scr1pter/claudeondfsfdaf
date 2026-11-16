@@ -619,9 +619,26 @@ export const COMPUTER_SMOKE_DRIVER_CAUSES = [
   "std_exception",
   "unknown",
 ] as const
+// Closed facts of a failed Stop UIA lookup (overlay_driver.h, uia_native.h). They only locate the failure.
+export const COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS = ["first", "refresh"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_CALLS = ["root", "hit"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_ACTORS = ["healthy", "retired"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES = ["none", "worker-current", "worker-budget", "caller-wait"] as const
+export const COMPUTER_SMOKE_DRIVER_UIA_HRESULTS = ["unobserved", ...COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES] as const
 export type ComputerSmokeDriverStage = (typeof COMPUTER_SMOKE_DRIVER_STAGES)[number]
 export type ComputerSmokeDriverCause = (typeof COMPUTER_SMOKE_DRIVER_CAUSES)[number]
-export type ComputerSmokeDriverFailure = { stage: ComputerSmokeDriverStage; cause: ComputerSmokeDriverCause }
+export type ComputerSmokeDriverUiaFailure = {
+  lookup: (typeof COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS)[number]
+  call: (typeof COMPUTER_SMOKE_DRIVER_UIA_CALLS)[number]
+  actor: (typeof COMPUTER_SMOKE_DRIVER_UIA_ACTORS)[number]
+  expiry: (typeof COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES)[number]
+  hresult: (typeof COMPUTER_SMOKE_DRIVER_UIA_HRESULTS)[number]
+}
+export type ComputerSmokeDriverFailure = {
+  stage: ComputerSmokeDriverStage
+  cause: ComputerSmokeDriverCause
+  uia?: ComputerSmokeDriverUiaFailure
+}
 
 /**
  * Reads the optional closed location of a coherent, unskipped Windows Stop driver failure. It is a
@@ -629,7 +646,7 @@ export type ComputerSmokeDriverFailure = { stage: ComputerSmokeDriverStage; caus
  * Both keys or neither; anything else throws, which the caller treats as invalid native evidence.
  */
 export function computerSmokeDriverFailure(value: Record<string, unknown>): ComputerSmokeDriverFailure | undefined {
-  if (value.stage === undefined && value.cause === undefined) return undefined
+  if (value.stage === undefined && value.cause === undefined && value.uia === undefined) return undefined
   if (
     value.ok !== false ||
     value.skipped !== undefined ||
@@ -643,7 +660,33 @@ export function computerSmokeDriverFailure(value: Record<string, unknown>): Comp
     (value.cause !== "driver_failure" && value.reason !== "native_failure")
   )
     throw new Error("The native driver failure location is invalid.")
-  return { stage: value.stage as ComputerSmokeDriverStage, cause: value.cause as ComputerSmokeDriverCause }
+  return {
+    stage: value.stage as ComputerSmokeDriverStage,
+    cause: value.cause as ComputerSmokeDriverCause,
+    ...(value.uia === undefined ? {} : { uia: computerSmokeDriverUiaFailure(value.uia) }),
+  }
+}
+
+// All five closed facts or none. A healthy actor never expired a ticket, so it cannot name an expiry side.
+function computerSmokeDriverUiaFailure(value: unknown): ComputerSmokeDriverUiaFailure {
+  if (
+    !record(value) ||
+    !exact(value, ["lookup", "call", "actor", "expiry", "hresult"]) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS as readonly unknown[]).includes(value.lookup) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_CALLS as readonly unknown[]).includes(value.call) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_ACTORS as readonly unknown[]).includes(value.actor) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES as readonly unknown[]).includes(value.expiry) ||
+    !(COMPUTER_SMOKE_DRIVER_UIA_HRESULTS as readonly unknown[]).includes(value.hresult) ||
+    (value.actor === "healthy" && value.expiry !== "none")
+  )
+    throw new Error("The native driver UIA failure facts are invalid.")
+  return {
+    lookup: value.lookup as ComputerSmokeDriverUiaFailure["lookup"],
+    call: value.call as ComputerSmokeDriverUiaFailure["call"],
+    actor: value.actor as ComputerSmokeDriverUiaFailure["actor"],
+    expiry: value.expiry as ComputerSmokeDriverUiaFailure["expiry"],
+    hresult: value.hresult as ComputerSmokeDriverUiaFailure["hresult"],
+  }
 }
 
 /**
@@ -658,7 +701,7 @@ export function parseComputerSmokeDriverResultFrame(value: Record<string, unknow
     !exact(
       value,
       platform === "win32"
-        ? ["id", "ok", "protocol", "check", "skipped", "reason", "capture", "stage", "cause"]
+        ? ["id", "ok", "protocol", "check", "skipped", "reason", "capture", "stage", "cause", "uia"]
         : ["id", "ok", "protocol", "check", "skipped", "reason", "capture"],
     )
   )
@@ -772,7 +815,9 @@ export function parseComputerSmokeNativeDiagnostic(line: string, platform?: stri
       !record(value) ||
       !exact(
         value,
-        stop && platform === "win32" ? ["ok", "skipped", "reason", "stage", "cause"] : ["ok", "skipped", "reason"],
+        stop && platform === "win32"
+          ? ["ok", "skipped", "reason", "stage", "cause", "uia"]
+          : ["ok", "skipped", "reason"],
       ) ||
       typeof value.ok !== "boolean" ||
       (value.skipped !== undefined && value.skipped !== true) ||

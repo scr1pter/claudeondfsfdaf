@@ -226,10 +226,10 @@ size_t run_overlay_driver_tests() {
       const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
       diagnostic->phase.store(phase);
       require(diagnostic->failure_phase(false) == WindowsUiaPhase::none, "overlay-driver.retired-actor-without-timeout-snapshot-does-not-publish-live-phase");
-      diagnostic->note_timeout();
+      diagnostic->note_timeout(WindowsUiaExpiry::caller_wait);
       diagnostic->phase.store(WindowsUiaPhase::actor_expired);
       diagnostic->phase.store(WindowsUiaPhase::actor_complete);
-      diagnostic->note_timeout();
+      diagnostic->note_timeout(WindowsUiaExpiry::worker_current);
       require(diagnostic->failure_phase(false) == phase, "overlay-driver.first-timeout-phase-survives-late-work-and-later-timeouts");
       require(diagnostic->failure_phase(true) == WindowsUiaPhase::actor_complete, "overlay-driver.healthy-actor-keeps-existing-live-phase-observation");
       const auto stage = overlay_driver_uia_stage(diagnostic->failure_phase(false));
@@ -245,15 +245,101 @@ size_t run_overlay_driver_tests() {
     for (const auto first : {WindowsUiaPhase::none, static_cast<WindowsUiaPhase>(255)}) {
       const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
       diagnostic->phase.store(first);
-      diagnostic->note_timeout();
+      diagnostic->note_timeout(WindowsUiaExpiry::caller_wait);
       const auto recorded = diagnostic->timeout_observation.load();
       require(recorded != 0, "overlay-driver.unknown-first-timeout-is-distinct-from-an-unobserved-snapshot");
       diagnostic->phase.store(WindowsUiaPhase::root_element);
-      diagnostic->note_timeout();
+      diagnostic->note_timeout(WindowsUiaExpiry::worker_current);
       require(diagnostic->timeout_observation.load() == recorded && diagnostic->failure_phase(false) == WindowsUiaPhase::none,
         "overlay-driver.none-or-invalid-first-timeout-cannot-be-overwritten-by-late-provider-progress");
       require(!overlay_driver_uia_stage(diagnostic->failure_phase(false)), "overlay-driver.unknown-snapshot-never-fabricates-a-closed-stage");
     }
+  });
+  test([] {
+    // HF-7 (1): the first timeout snapshot names its side once, beside the phase, and later observers cannot change it.
+    for (const auto side : {WindowsUiaExpiry::worker_current, WindowsUiaExpiry::worker_budget, WindowsUiaExpiry::caller_wait}) {
+      const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+      require(diagnostic->failure_expiry(false) == WindowsUiaExpiry::none && !diagnostic->failure_status(false), "overlay-driver.unobserved-snapshot-has-no-side-or-status");
+      diagnostic->phase.store(WindowsUiaPhase::root_element);
+      diagnostic->note_timeout(side);
+      for (const auto later : {WindowsUiaExpiry::worker_current, WindowsUiaExpiry::worker_budget, WindowsUiaExpiry::caller_wait}) { diagnostic->phase.store(WindowsUiaPhase::root_handle); diagnostic->note_timeout(later); }
+      require(diagnostic->failure_expiry(false) == side && diagnostic->failure_phase(false) == WindowsUiaPhase::root_element, "overlay-driver.first-expiry-side-survives-later-observers");
+      require(diagnostic->failure_expiry(true) == WindowsUiaExpiry::none, "overlay-driver.healthy-actor-never-reports-an-expiry-side");
+    }
+    // A worker-side expiry before the provider call leaves no status; a status the late call writes after
+    // the snapshot (for example a CoCancelCall cancellation) is never reported for the retired actor.
+    {
+      const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+      diagnostic->phase.store(WindowsUiaPhase::root_element);
+      diagnostic->note_timeout(WindowsUiaExpiry::caller_wait);
+      diagnostic->note_root_element_status(static_cast<int32_t>(RPC_E_CALL_CANCELED));
+      require(!diagnostic->failure_status(false), "overlay-driver.late-root-status-after-retirement-is-not-reported");
+      require(diagnostic->failure_status(true) == static_cast<int32_t>(RPC_E_CALL_CANCELED), "overlay-driver.live-root-status-is-kept-for-a-healthy-actor-only");
+    }
+    // A status written before the first observer sampled is part of that snapshot; the first status wins.
+    {
+      const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+      diagnostic->phase.store(WindowsUiaPhase::root_element);
+      diagnostic->note_root_element_status(static_cast<int32_t>(UIA_E_TIMEOUT));
+      diagnostic->note_root_element_status(static_cast<int32_t>(E_FAIL));
+      diagnostic->note_root_element_status(0);
+      require(diagnostic->failure_status(true) == static_cast<int32_t>(UIA_E_TIMEOUT), "overlay-driver.first-root-status-wins");
+      diagnostic->note_timeout(WindowsUiaExpiry::caller_wait);
+      diagnostic->root_element_status.store(static_cast<int32_t>(E_ACCESSDENIED));
+      require(diagnostic->failure_status(false) == static_cast<int32_t>(UIA_E_TIMEOUT) && diagnostic->failure_expiry(false) == WindowsUiaExpiry::caller_wait && diagnostic->failure_phase(false) == WindowsUiaPhase::root_element, "overlay-driver.status-sampled-before-retirement-is-in-the-snapshot");
+    }
+    // Out-of-range side encodings never fabricate a side.
+    {
+      const auto diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+      diagnostic->phase.store(WindowsUiaPhase::root_element);
+      diagnostic->note_timeout(static_cast<WindowsUiaExpiry>(windows_uia_expiries.size()));
+      require(diagnostic->failure_expiry(false) == WindowsUiaExpiry::none && diagnostic->failure_phase(false) == WindowsUiaPhase::root_element, "overlay-driver.unknown-expiry-side-is-none");
+    }
+  });
+  test([] {
+    // The closed uia object rides beside stage and cause only, and never changes ok, skip, reason or exit.
+    const auto stage = overlay_driver_uia_stage(WindowsUiaPhase::root_element);
+    require(stage.has_value(), "overlay-driver.root-element-has-a-stage");
+    struct Case { OverlayDriverUiaFailure failure; const wchar_t* lookup; const wchar_t* call; const wchar_t* actor; const wchar_t* expiry; const wchar_t* hresult; };
+    const std::vector<Case> cases{
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::worker_current, {}}, L"first", L"root", L"retired", L"worker-current", L"unobserved"},
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}}, L"first", L"root", L"retired", L"caller-wait", L"unobserved"},
+      {{OverlayDriverLookup::refresh, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, static_cast<int32_t>(UIA_E_TIMEOUT)}, L"refresh", L"root", L"retired", L"caller-wait", L"timeout"},
+      {{OverlayDriverLookup::refresh, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::worker_budget, {}}, L"refresh", L"root", L"retired", L"worker-budget", L"unobserved"},
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::none, static_cast<int32_t>(E_ACCESSDENIED)}, L"first", L"root", L"healthy", L"none", L"access_denied"},
+      {{OverlayDriverLookup::refresh, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::none, static_cast<int32_t>(RPC_E_DISCONNECTED)}, L"refresh", L"root", L"healthy", L"none", L"rpc"},
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::none, static_cast<int32_t>(UIA_E_ELEMENTNOTAVAILABLE)}, L"first", L"root", L"healthy", L"none", L"not_found"},
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::hit, true, WindowsUiaExpiry::none, static_cast<int32_t>(E_FAIL)}, L"first", L"hit", L"healthy", L"none", L"other"},
+      {{OverlayDriverLookup::refresh, OverlayDriverUiaCall::hit, false, WindowsUiaExpiry::none, {}}, L"refresh", L"hit", L"retired", L"none", L"unobserved"}};
+    for (const auto& item : cases) {
+      try { throw Failure{L"no_ui_tree", L"PRIVATE NATIVE CONTENT"}; }
+      catch (...) {
+        const auto result = overlay_driver_caught(OverlayDriverMode::stop, *stage, std::current_exception(), item.failure);
+        require(!result.ok && !result.skipped && result.exit_code() == 1 && result.reason == L"native_failure" && result.cause == L"core_failure:no_ui_tree" && result.stage == L"uia-root-element", "overlay-driver.uia-detail-keeps-the-original-failure");
+        const auto wire = result.wire(); const auto document = winrt::to_string(wire.Stringify());
+        require(wire.Size() == 8 && wire.HasKey(L"uia"), "overlay-driver.uia-detail-reaches-the-result-frame");
+        const auto detail = wire.GetNamedObject(L"uia");
+        require(wire_keys(detail) == std::set<std::wstring>{L"lookup", L"call", L"actor", L"expiry", L"hresult"} && named(detail, L"lookup") == item.lookup && named(detail, L"call") == item.call && named(detail, L"actor") == item.actor && named(detail, L"expiry") == item.expiry && named(detail, L"hresult") == item.hresult, "overlay-driver.uia-detail-is-closed");
+        for (const auto banned : {"PRIVATE", "0x", "8007", "-2147"}) require(document.find(banned) == std::string::npos, "overlay-driver.uia-detail-carries-no-hresult-value");
+      }
+    }
+    // Incoherent or out-of-range facts drop the whole object; stage and cause are unchanged.
+    for (const auto& failure : {OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::caller_wait, {}},
+           OverlayDriverUiaFailure{static_cast<OverlayDriverLookup>(2), OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}},
+           OverlayDriverUiaFailure{OverlayDriverLookup::first, static_cast<OverlayDriverUiaCall>(2), false, WindowsUiaExpiry::caller_wait, {}},
+           OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, static_cast<WindowsUiaExpiry>(windows_uia_expiries.size()), {}}}) {
+      const OverlayDriverResult value{false, false, L"native_failure", L"uia-root-element", L"core_failure:no_ui_tree", failure}; const auto wire = value.wire();
+      require(value.exit_code() == 1 && wire.Size() == 7 && !wire.HasKey(L"uia") && named(wire, L"stage") == L"uia-root-element", "overlay-driver.incoherent-uia-detail-is-dropped");
+    }
+    // Without a stage and cause, or on success, skip or a sanitized report, the object never appears.
+    const OverlayDriverUiaFailure valid{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}};
+    for (const auto& value : {OverlayDriverResult{true, false, {}, {}, {}, valid}, OverlayDriverResult{false, true, L"noninteractive_desktop", L"desktop", L"std_exception", valid},
+           OverlayDriverResult{false, false, L"native_failure", {}, {}, valid}, OverlayDriverResult{false, true, L"input_post_failed", L"post", L"unknown", valid}, OverlayDriverResult{false, false, L"parent_invalid", L"files", L"std_exception", valid}})
+      require(!value.wire().HasKey(L"uia"), "overlay-driver.uia-detail-needs-a-reported-stage-and-cause");
+    const auto launched = overlay_driver_caught(OverlayDriverMode::launch_electron, OverlayDriverStage::files, std::make_exception_ptr(Failure{L"no_ui_tree", L"private"}), valid);
+    require(!launched.uia && !launched.wire().HasKey(L"uia"), "overlay-driver.bootstrap-record-never-carries-uia-detail");
+    const auto skipped = overlay_driver_caught(OverlayDriverMode::stop, OverlayDriverStage::uia_available, std::make_exception_ptr(DriverSkip{L"uia_unavailable"}), valid);
+    require(skipped.skipped && !skipped.uia && !skipped.wire().HasKey(L"uia"), "overlay-driver.skip-never-carries-uia-detail");
   });
   test([] {
     require(!overlay_driver_uia_stage(WindowsUiaPhase::none) && !overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(windows_uia_phases.size())), "overlay-driver.uia-unknown-phases-have-no-stage");

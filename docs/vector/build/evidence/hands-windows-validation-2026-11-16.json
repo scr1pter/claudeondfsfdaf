@@ -735,6 +735,52 @@
     "The lead's sign-off on HF-5 point 5, recorded in the HF-5 deviation entry and the lane PR description.",
     "HF-2's Windows engine-shard line: MCP_REQUIRED_ISOLATION_LAUNCH=refused with childElapsedMs, from a default-input test.yml dispatch or the lane PR run.",
     "The Windows source digest at the HF-5 source, which no step printed.",
-    "Mac lock confirmation and packaging at the merged source, and every owner gate."
-  ]
+    "Mac lock confirmation and packaging at the merged source, and every owner gate.",
+    "HF-7 (1): the next Stop failure's closed uia facts, from test.yml windows dispatches at the new source, which also re-qualify it (native units, isolated Stop, x64 and ARM64)."
+  ],
+  "hf7PhaseSample": {
+    "run": 43907070848,
+    "job": 133443621242,
+    "event": "pull_request (PR #40)",
+    "testedMerge": "66164bf9",
+    "testedMergeNote": "Merge 7078232f into 2034e1da. git diff a0e2128f 7078232f and git diff d9d5afaf 7078232f show no change under packages/desktop/native.",
+    "step": "Run actual isolated medium-token Windows overlay Stop",
+    "nativeProofAt": "2026-11-16T16:49:39.8003910Z",
+    "resultAt": "2026-11-16T16:49:41.8273728Z",
+    "stop": {
+      "ok": false,
+      "reason": "native_failure",
+      "stage": "uia-root-element",
+      "cause": "core_failure:no_ui_tree"
+    },
+    "exitCode": 1,
+    "reportRows": "native-os-stop and native-capture-exclusion native_proof_invalid; every other check passed, including window-region 4/4 and every controller step; bootstrap token route restricted.",
+    "labelSource": "hands-finish's failure_phase(available) refinement. main prints stop-root-retired for a retired actor and uia-root-element only for a healthy one.",
+    "caveat": "An observation at timeout, not proof that the sampled operation caused the delay. On a retired actor a root_element sample does not show whether ElementFromHandleBuildCache was called, and the line does not show which lookup failed or whether the actor was healthy.",
+    "comparisonStops": {
+      "read": 13,
+      "uiaRootElement": ["133443621242"],
+      "observeUp": ["133286255135"],
+      "passed": [
+        "133301760101",
+        "133327849581",
+        "133331740561",
+        "133333996211",
+        "133342281087",
+        "133353004287",
+        "133372821916",
+        "133401774621",
+        "133421895080",
+        "133430545659",
+        "133467844726"
+      ],
+      "nativeProofToResultSeconds": {
+        "failure": 2.03,
+        "passMin": 1.54,
+        "passMax": 2.35
+      }
+    },
+    "diagnosticsAdded": "Closed uia object {lookup, call, actor, expiry, hresult} beside stage and cause; expiry and root status are written into the first-write timeout snapshot before cancellation. No budget, check, outcome or product behaviour change.",
+    "status": "HF-7 (1) open, cause still unidentified. A green next run is not evidence of a fix. Fixes (a) to (c) need lead review; the lead decides whether PR #40 merges with this known intermittent."
+  }
 }
